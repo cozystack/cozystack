@@ -17,10 +17,12 @@ limitations under the License.
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +98,8 @@ type REST struct {
 	singularName  string
 	releaseConfig config.ReleaseConfig
 	specSchema    *structuralschema.Structural
+	nameSchema    *applicationNameSchema
+	nameSchemaErr error
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
@@ -134,6 +138,12 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		klog.Errorf("Failed to build spec schema: %v", err)
 	}
 
+	nameSchema, nameSchemaErr := resolveNameSchema(config)
+	if nameSchemaErr != nil {
+		klog.Errorf("ApplicationDefinition for %s declares an invalid %s, refusing to create %s objects until it is fixed: %v",
+			config.Application.Kind, appsv1alpha1.NameSchemaExtension, config.Application.Kind, nameSchemaErr)
+	}
+
 	return &REST{
 		c: c,
 		w: w,
@@ -150,6 +160,8 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
 		specSchema:    specSchema,
+		nameSchema:    nameSchema,
+		nameSchemaErr: nameSchemaErr,
 	}
 }
 
@@ -575,8 +587,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	// Fetch the live HelmRelease: it backs the ResourceVersion when the
-	// converted object carries none, and runtime-managed labels are carried
-	// over from it below.
+	// converted object carries none, and runtime-managed labels and the
+	// suspension are carried over from it below.
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
@@ -631,6 +643,17 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// this API in the first place, so preserving them takes nothing away.
 	carryOverRuntimeMetadata(helmRelease, cur)
 
+	// Suspension is not part of the Application, so the rebuilt object always
+	// says suspend=false, and sending it as is resumes a release that an
+	// operator or a controller suspended. The CNPG restore driver relies on the
+	// suspension holding across its own patch of the Postgres app through this
+	// API: it purges the Cluster while the release is suspended and resumes it
+	// only once the purge is done, so the chart's next render lands
+	// bootstrap.recovery on an empty namespace. Resumed early, the release
+	// renders while the purge is still running, and the purge then deletes
+	// what it rendered.
+	helmRelease.Spec.Suspend = cur.Spec.Suspend
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
 	// Update the HelmRelease in Kubernetes.
@@ -639,9 +662,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. The HelmRelease SPEC is fully derived from the Application
-	// the caller just applied, so a stale-resourceVersion conflict is never a
-	// real spec conflict here.
+	// 409 Conflict. Apart from suspend, the HelmRelease SPEC is derived from the
+	// Application the caller just applied, so a stale-resourceVersion conflict
+	// is never a real spec conflict here.
 	//
 	// The METADATA is a different matter, and this is the window where it moves.
 	// A conflict means somebody wrote the object between the read above and this
@@ -650,7 +673,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// site-router adding its own or recording a route owner. Refreshing only the
 	// resourceVersion and re-sending the object built from the stale read would
 	// drop whatever they had just added — the exact loss the carry-over was added
-	// to stop, reappearing on the one path where it is most likely.
+	// to stop, reappearing on the one path where it is most likely. Suspend is
+	// refreshed with them for the same reason: the write that caused the
+	// conflict may be the one that suspended the release.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
@@ -663,6 +688,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if shard, ok := latest.Labels[fluxshard.ShardKeyLabel]; ok {
 				helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
 			}
+			helmRelease.Spec.Suspend = latest.Spec.Suspend
 		}
 		return updateErr
 	})
@@ -1362,51 +1388,173 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 // chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
-// kubernetesKind is the Application.Kind of the parent Kubernetes cluster CR,
-// whose worker pools are separate KubernetesNodes releases.
-const kubernetesKind = "Kubernetes"
-
-// maxKubernetesClusterName caps a Kubernetes cluster name so its worker pools
-// can always render. Since Phase 2 worker pools are separate KubernetesNodes
-// releases named "<cluster>-<pool>" under the "kubernetes-nodes-" prefix (17
-// chars), the smallest such child release is "kubernetes-nodes-<cluster>-md0".
-// The parent's own "kubernetes-" prefix would let the cluster name reach 42,
-// but that leaves no room for even the default "md0" pool's child release
-// (17 + len(cluster) + len("-md0") <= 53 => len(cluster) <= 32). Capping the
-// parent name at admission surfaces the overflow on the Kubernetes CR the
-// operator is editing, instead of at render time on a child that can never be
-// created (the migration pins and skips such a pool, leaving no way to add
-// workers).
-const maxKubernetesClusterName = maxHelmReleaseName - len("kubernetes-nodes-") - len("-md0")
-
-// kafkaKind is the Application.Kind of a Kafka cluster. Its KRaft controller
-// pods are named "<release>-c-<hash>-<id>" (hash is 8 hex; id is at least one
-// digit for the smallest cluster), and that derived pod hostname must fit the
-// 63-char DNS-1123 label limit. The controller-node suffix beyond the release
-// name — "-c-" (3) + 8 (hash) + "-" (1) + 1 (smallest id) = 13 — is stricter
-// than the 53-char release-name budget, so cap the name at admission. This
-// surfaces the overflow on the Kafka CR the operator is editing instead of at
-// render time on a pod Strimzi can never create (its render guard,
-// kafka.assertNameLength, is the second line of defense and also catches larger
-// clusters whose higher node ids need more digits).
-const kafkaKind = "Kafka"
-const kafkaControllerNodeOverhead = len("-c-") + 8 + len("-") + 1
-
 // maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
 // The tenant Helm chart creates a Namespace whose name is the computed
 // workload namespace (parent namespace + "-" + tenant name), so the total
 // must fit inside a single 63-char DNS-1123 label.
 const maxNamespaceName = 63
 
-// validateNameFormat checks an Application name against DNS-1035 and any
-// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
-// validation.ValidateApplicationName for the reasoning).
-func (r *REST) validateNameFormat(name string) field.ErrorList {
-	return validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+// applicationNameSchema is an application's own declaration of what its name
+// may look like. A chart's naming budget follows from the sub-resources the
+// chart renders and the names they take — facts that live in the chart and
+// nowhere else — so the budget travels with the chart's schema instead of
+// being a branch on Kind here.
+type applicationNameSchema struct {
+	Type        string `json:"type,omitempty"`
+	Description string `json:"description,omitempty"`
+	MinLength   *int64 `json:"minLength,omitempty"`
+	MaxLength   *int64 `json:"maxLength,omitempty"`
+	Pattern     string `json:"pattern,omitempty"`
+
+	compiledPattern *regexp.Regexp
 }
 
-// validateNameLength checks that the application name won't exceed Kubernetes limits.
-// prefix + name must fit within the Helm release name limit (53 chars).
+// legacyNameCaps are the caps this server enforced in code before applications
+// declared their own. An upgrade brings cozystack-api up before the
+// application definitions it serves are re-rendered, so for that window a
+// definition can predate its chart's declaration, and without these a name
+// admitted then renders sub-resources that cannot exist. They apply only to a
+// definition that declares nothing, and go once no supported upgrade starts
+// from a definition without the declaration.
+var legacyNameCaps = map[string]applicationNameSchema{
+	"Kubernetes": {
+		MaxLength:   new(int64(32)),
+		Description: "worker pools are KubernetesNodes releases named `kubernetes-nodes-<name>-<pool>`, which must fit the 53-character Helm release name limit",
+	},
+	"Kafka": {
+		MaxLength:   new(int64(44)),
+		Description: "the KRaft controller pod hostname `kafka-<name>-c-<hash>-<id>` must fit the 63-character DNS-1123 label limit",
+	},
+}
+
+// resolveNameSchema returns the name constraints for the kind cfg describes.
+// An error means the declaration exists but cannot be enforced as written;
+// the caller refuses creates for that kind rather than guess, since guessing
+// either admits names the chart cannot render or rejects names it can.
+func resolveNameSchema(cfg *config.Resource) (*applicationNameSchema, error) {
+	declared, err := parseNameSchema(cfg.Application.OpenAPISchema)
+	if err != nil {
+		return nil, err
+	}
+	if declared == nil {
+		if legacy, ok := legacyNameCaps[cfg.Application.Kind]; ok {
+			return &legacy, nil
+		}
+		return nil, nil
+	}
+	if budget := maxHelmReleaseName - len(cfg.Release.Prefix); declared.MinLength != nil && *declared.MinLength > int64(budget) {
+		return nil, fmt.Errorf("minLength %d exceeds the %d characters the release prefix %q leaves, so no name fits",
+			*declared.MinLength, budget, cfg.Release.Prefix)
+	}
+	return declared, nil
+}
+
+// parseNameSchema extracts the x-cozystack-name declaration from an
+// ApplicationDefinition's openAPISchema. Returns (nil, nil) when the schema is
+// empty or declares nothing about the name. The openAPISchema is untrusted
+// input — definitions from other repositories are written by hand — so an
+// unknown keyword, a wrong type or a declaration no name can satisfy is an
+// error rather than a constraint silently dropped.
+func parseNameSchema(raw string) (*applicationNameSchema, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, fmt.Errorf("unmarshal OpenAPI schema: %w", err)
+	}
+	declared, ok := doc[appsv1alpha1.NameSchemaExtension]
+	if !ok {
+		return nil, nil
+	}
+
+	// encoding/json decodes null as "leave unset", which would turn a null
+	// declaration into an empty one that skips legacyNameCaps, and a null
+	// keyword into a dropped constraint.
+	var keywords map[string]json.RawMessage
+	if err := json.Unmarshal(declared, &keywords); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if keywords == nil {
+		return nil, fmt.Errorf("declaration is null")
+	}
+	for k, v := range keywords {
+		if string(bytes.TrimSpace(v)) == "null" {
+			return nil, fmt.Errorf("%s is null", k)
+		}
+	}
+
+	var ns applicationNameSchema
+	dec := json.NewDecoder(bytes.NewReader(declared))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ns); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	switch {
+	case ns.Type != "" && ns.Type != "string":
+		return nil, fmt.Errorf("type %q: a name is a string", ns.Type)
+	case ns.MaxLength != nil && *ns.MaxLength < 1:
+		return nil, fmt.Errorf("maxLength %d admits no name", *ns.MaxLength)
+	case ns.MinLength != nil && *ns.MinLength < 0:
+		return nil, fmt.Errorf("minLength %d is negative", *ns.MinLength)
+	case ns.MinLength != nil && ns.MaxLength != nil && *ns.MinLength > *ns.MaxLength:
+		return nil, fmt.Errorf("minLength %d exceeds maxLength %d", *ns.MinLength, *ns.MaxLength)
+	}
+	if ns.Pattern != "" {
+		re, err := regexp.Compile(ns.Pattern)
+		if err != nil {
+			return nil, fmt.Errorf("pattern %q does not compile as RE2: %w", ns.Pattern, err)
+		}
+		ns.compiledPattern = re
+	}
+	return &ns, nil
+}
+
+// validateNameFormat checks an Application name against DNS-1035, any
+// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
+// validation.ValidateApplicationName for the reasoning), and the format the
+// application declares for itself in its schema.
+func (r *REST) validateNameFormat(name string) field.ErrorList {
+	allErrs := validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+	return append(allErrs, r.validateNameAgainstSchema(name)...)
+}
+
+// validateNameAgainstSchema applies the minLength and pattern the application
+// declares for its name; maxLength is applied in validateNameLength, together
+// with the Helm budget it shares. The pattern is unanchored, as JSON Schema
+// specifies: a declaration that means the whole name writes ^...$.
+func (r *REST) validateNameAgainstSchema(name string) field.ErrorList {
+	if r.nameSchema == nil {
+		return nil
+	}
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	if minLen := r.nameSchema.MinLength; minLen != nil && int64(len(name)) < *minLen {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be at least %d characters (%s)", *minLen, r.declaredReason())))
+	}
+	if re := r.nameSchema.compiledPattern; re != nil && !re.MatchString(name) {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must match %q (%s)", r.nameSchema.Pattern, r.declaredReason())))
+	}
+	return allErrs
+}
+
+// declaredReason is what a name rejected by the application's own
+// declaration is told: the chart's explanation when it gives one.
+func (r *REST) declaredReason() string {
+	if r.nameSchema.Description != "" {
+		return r.nameSchema.Description
+	}
+	return fmt.Sprintf("limit declared by the %s application", r.kindName)
+}
+
+// validateNameLength checks that the application name fits both the Helm
+// release name limit (prefix + name <= 53) and any stricter budget the
+// application declares for itself. The tighter one wins and reports itself; a
+// declaration can never widen the Helm budget.
 func (r *REST) validateNameLength(name string) field.ErrorList {
 	fldPath := field.NewPath("metadata").Child("name")
 	allErrs := field.ErrorList{}
@@ -1418,37 +1566,21 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)))
 		return allErrs
 	}
-
-	// A Kubernetes cluster's worker pools are separate KubernetesNodes releases
-	// named "<cluster>-<pool>", so the parent name must leave room for at least
-	// the default "md0" pool's child release. This is stricter than the parent's
-	// own Helm-prefix budget and fails at admission on the parent rather than at
-	// render time on an un-creatable child (see maxKubernetesClusterName).
-	if r.kindName == kubernetesKind && maxLen > maxKubernetesClusterName {
-		if len(name) > maxKubernetesClusterName {
-			allErrs = append(allErrs, field.Invalid(fldPath, name,
-				fmt.Sprintf("must be no more than %d characters so its worker pools (KubernetesNodes releases named \"kubernetes-nodes-<cluster>-<pool>\") fit the %d-character Helm release name limit", maxKubernetesClusterName, maxHelmReleaseName)))
-		}
+	if r.nameSchemaErr != nil {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: the %s ApplicationDefinition declares an invalid %s: %v", r.kindName, appsv1alpha1.NameSchemaExtension, r.nameSchemaErr)))
 		return allErrs
 	}
 
-	// A Kafka cluster's KRaft controller pod hostname "<release>-c-<hash>-<id>"
-	// is a tighter bound than the release-name limit (see kafkaControllerNodeOverhead).
-	if r.kindName == kafkaKind {
-		maxKafkaName := maxNamespaceName - kafkaControllerNodeOverhead - len(r.releaseConfig.Prefix)
-		if maxKafkaName < 0 {
-			maxKafkaName = 0
-		}
-		if len(name) > maxKafkaName {
-			allErrs = append(allErrs, field.Invalid(fldPath, name,
-				fmt.Sprintf("must be no more than %d characters so its KRaft controller pod hostname \"<release>-c-<hash>-<id>\" fits the 63-character DNS-1123 label limit", maxKafkaName)))
-		}
-		return allErrs
+	reason := fmt.Sprintf("release prefix %q", r.releaseConfig.Prefix)
+	if declared := r.nameSchema; declared != nil && declared.MaxLength != nil && *declared.MaxLength < int64(maxLen) {
+		maxLen = int(*declared.MaxLength)
+		reason = r.declaredReason()
 	}
 
 	if len(name) > maxLen {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
-			fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)))
+			fmt.Sprintf("must be no more than %d characters (%s)", maxLen, reason)))
 	}
 	return allErrs
 }
@@ -2047,6 +2179,10 @@ func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
 		klog.Warning(msg)
 	}
 }
+
+// kubernetesKind is the Application.Kind of the Kubernetes cluster CR whose
+// Phase 2-removed value keys the warning below reports on.
+const kubernetesKind = "Kubernetes"
 
 // removedKubernetesFields are Kubernetes CR value keys that Phase 2 moved to the
 // separate KubernetesNodes resource. They are still accepted and stored -- an

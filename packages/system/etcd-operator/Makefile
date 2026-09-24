@@ -8,7 +8,7 @@ include ../../../hack/package.mk
 # domain, VPA), so only the RBAC role is re-vendored; refresh templates/rbac.yaml
 # by hand from charts/etcd-operator/files/manager-role-rules.yaml at this ref.
 # CRDs live in the sibling etcd-operator-crds package.
-ETCD_OPERATOR_REF ?= v0.5.5
+ETCD_OPERATOR_REF ?= v0.5.6
 
 update:
 	@echo "etcd-operator is a cozystack-authored chart; refresh templates/rbac.yaml"

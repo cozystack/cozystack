@@ -130,7 +130,9 @@ kubectl apply -f "$SCRIPT_DIR/04-backupclass.yaml"
 # --- Source application + sentinel -------------------------------------------
 log_step "Provisioning source RabbitMQ '$RABBITMQ_SRC_NAME'"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/05-rabbitmq-src.yaml"
-wait_hr_ready "$RABBITMQ_SRC_CR" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "$RABBITMQ_SRC_CR" 660
 wait_rabbitmq_ready "$RABBITMQ_SRC_CR" 600
 
 SENTINEL="sentinel-$(date +%s)-$$"
@@ -176,7 +178,7 @@ log_success "in-place restore round-tripped the sentinel"
 # --- Restore-to-copy ---------------------------------------------------------
 log_step "Provisioning target RabbitMQ '$RABBITMQ_TARGET_NAME' and restoring the source's definitions into it"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/20-rabbitmq-target.yaml"
-wait_hr_ready "$RABBITMQ_TARGET_CR" 300
+wait_hr_ready "$RABBITMQ_TARGET_CR" 660
 wait_rabbitmq_ready "$RABBITMQ_TARGET_CR" 600
 rabbitmq_has_sentinel "$RABBITMQ_TARGET_CR" "$SENTINEL" \
     && { log_error "target already has the sentinel before restore — cannot prove the copy"; exit 1; }

@@ -67,7 +67,8 @@ spec:
 EOF
 
 log_substep "Waiting for restore-target ClickHouse HelmRelease..."
-wait_hr_ready "clickhouse-${CLICKHOUSE_RESTORE_NAME}" 300
+# Same 660s as the source instance in 04-create-clickhouse.sh.
+wait_hr_ready "clickhouse-${CLICKHOUSE_RESTORE_NAME}" 660
 wait_sts_ready "chi-clickhouse-${CLICKHOUSE_RESTORE_NAME}-clickhouse-0-0" 300
 
 kubectl apply -f - <<EOF

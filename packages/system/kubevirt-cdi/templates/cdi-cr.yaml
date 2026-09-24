@@ -12,7 +12,6 @@ spec:
     {{- end }}
     featureGates:
     - HonorWaitForFirstConsumer
-    - ExpandDisks
     # Resources for every worker pod CDI creates -- importer, uploader and
     # host-assisted cloner alike, not only the importer the name suggests. The
     # default below restates CDI's own built-in values, so an unset

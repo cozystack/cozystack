@@ -127,9 +127,10 @@ spec:
           ($error == null): true
     # Honest round-trip: seed a sentinel definition, back it up through
     # cozy-default, drop it, restore in place, then restore into a copy -
-    # asserting the sentinel survives object storage each time.
+    # asserting the sentinel survives object storage each time. 42m: sized
+    # with the 660s HR waits in run-all.sh (convention 6: justified in-line).
     - script:
-        timeout: 30m
+        timeout: 42m
         content: |
           set -eu
           cd ../../..

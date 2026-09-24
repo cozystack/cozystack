@@ -136,7 +136,12 @@ materialise_backup_secrets "$MARIADB_SRC_NAME"
 
 print_header "Step 05b: Deploy source MariaDB '${MARIADB_SRC_NAME}' and wait for it to be healthy"
 subst 05-mariadb-src.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md. hack/mariadb-first-boot-waits.bats
+# derives the floor and holds the Chainsaw op in
+# hack/e2e-chainsaw/mariadb/chainsaw-test.yaml against this wait: raise one,
+# raise both.
+wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_SRC_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 wait_app_grant_ready "$MARIADB_SRC_CR"
@@ -171,7 +176,8 @@ print_header "Step 30/40: Restore to a copy '${MARIADB_TARGET_NAME}' and wait fo
 # during a restore, so the target needs its own Secret pair (same S3 coords).
 materialise_backup_secrets "$MARIADB_TARGET_NAME"
 subst 30-mariadb-target.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 300
+# Same 660s as the source above, held against the same Chainsaw op.
+wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_TARGET_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/40-restorejob-to-copy.yaml"

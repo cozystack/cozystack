@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 )
 
 // diffSchema walks a base and head OpenAPIv3Schema node in lockstep and
@@ -36,6 +38,32 @@ func diffSchema(path string, base, head Schema) []string {
 	var out []string
 	diffNode(path, base, head, &out)
 	sort.Strings(out)
+	return out
+}
+
+// diffNameSchema reports a tightened constraint on metadata.name. An
+// application declares those beside "properties" at the schema root, where the
+// walk over spec never looks. The type is left out: a name is a string whether
+// or not the declaration says so.
+func diffNameSchema(base, head Schema) []string {
+	headName := nameDeclaration(head)
+	if headName == nil {
+		return nil
+	}
+	return diffSchema("metadata.name", nameDeclaration(base), headName)
+}
+
+func nameDeclaration(s Schema) Schema {
+	declared, ok := s[appsv1alpha1.NameSchemaExtension].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := Schema{}
+	for k, v := range declared {
+		if k != "type" {
+			out[k] = v
+		}
+	}
 	return out
 }
 

@@ -1,3 +1,6 @@
+## @name {string} - Kafka cluster name. The KRaft controller pods are named `kafka-<name>-c-<hash>-<id>` with an 8-character hash, and that pod hostname must fit the 63-character DNS-1123 label limit even for the smallest cluster.
+## @maxLength 44
+
 ##
 ## @section Common parameters
 ##

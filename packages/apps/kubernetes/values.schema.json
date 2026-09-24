@@ -1,6 +1,11 @@
 {
   "title": "Chart Values",
   "type": "object",
+  "x-cozystack-name": {
+    "type": "string",
+    "description": "Cluster name. Every worker pool is a separate KubernetesNodes release named `kubernetes-nodes-\u003cname\u003e-\u003cpool\u003e`, so the name must leave room for the default `md0` pool inside the 53-character Helm release name limit.",
+    "maxLength": 32
+  },
   "properties": {
     "storageClass": {
       "description": "Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.",

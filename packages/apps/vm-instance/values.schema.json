@@ -162,12 +162,12 @@
       }
     },
     "resources": {
-      "description": "Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; cpu or sockets on its own sizes nothing and is ignored.",
+      "description": "Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; a whole-number cpu or sockets on its own sizes nothing and is ignored.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "Number of CPU cores allocated.",
+          "description": "Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -180,7 +180,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Amount of memory allocated.",
+          "description": "Amount of memory allocated, as a positive quantity such as `8Gi`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -193,7 +193,7 @@
           "x-kubernetes-int-or-string": true
         },
         "sockets": {
-          "description": "Number of CPU sockets (vCPU topology).",
+          "description": "Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

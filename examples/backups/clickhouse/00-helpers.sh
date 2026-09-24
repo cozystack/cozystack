@@ -132,34 +132,74 @@ wait_hr_ready() {
     local name="$1"
     local timeout="${2:-300}"
     local elapsed=0
+    local lookup state seen=0
 
     log_substep "Waiting for HelmRelease/$name to become Ready..."
     while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
+        # --ignore-not-found makes an absent release exit 0, so a non-zero exit
+        # is kubectl failing to answer. Presence is read off the name line,
+        # because a warning on stderr lands in the same string.
+        if ! lookup=$(kubectl -n "$NAMESPACE" get hr "$name" --ignore-not-found -o name 2>&1); then
+            state=error
+        elif [[ $'\n'"$lookup"$'\n' != *"/$name"$'\n'* ]]; then
+            state=absent
+        else
+            state=present
+            seen=1
             local ready stalled
             ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || true)
             if [[ "$ready" == "True" ]]; then
                 log_success "HelmRelease/$name is Ready"
                 return 0
             fi
             stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
+                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' || true)
             if [[ "$stalled" == "True" ]]; then
-                log_error "HelmRelease/$name is Stalled (terminal): $(kubectl -n "$NAMESPACE" get hr "$name" \
-                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
-                return 1
+                log_error "HelmRelease/$name is Stalled (terminal):"
+                break
             fi
         fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for HelmRelease/$name to become Ready:"
-            kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
-            return 1
+            case "$state" in
+                error)
+                    echo "  could not look up HelmRelease/$name: $lookup" >&2
+                    # Seen earlier: the reads below may answer where this lookup
+                    # did not.
+                    [[ $seen -eq 1 ]] || return 1
+                    ;;
+                absent)
+                    if [[ $seen -eq 1 ]]; then
+                        echo "  HelmRelease/$name was deleted from $NAMESPACE while waiting" >&2
+                    else
+                        echo "  HelmRelease/$name never appeared in $NAMESPACE" >&2
+                    fi
+                    return 1
+                    ;;
+            esac
+            break
         fi
         sleep 5
         elapsed=$((elapsed + 5))
     done
+    # Reached on Stalled or on timeout. Conditions and history rather than the
+    # Ready message alone: a failed install is retried on an interval, so Ready
+    # may describe the retry rather than the failure behind it.
+    kubectl -n "$NAMESPACE" get hr "$name" \
+        -o jsonpath='{range .status.conditions[*]}  {.type}={.status} ({.reason}): {.message}{"\n"}{end}' >&2 || true
+    local hist
+    if ! hist=$(kubectl -n "$NAMESPACE" get hr "$name" \
+        -o jsonpath='{range .status.history[*]}  history: {.status} {.chartVersion} {.lastDeployed}{"\n"}{end}'); then
+        echo "  history: kubectl could not read it" >&2
+    elif [[ -n "${hist//[[:space:]]/}" ]]; then
+        printf '%s\n' "$hist" >&2
+    else
+        # A release with no history prints nothing and exits 0; say so,
+        # because a blank in a failure dump reads as a dump that broke.
+        echo "  history: (none recorded)" >&2
+    fi
+    return 1
 }
 
 # Wait for a StatefulSet to report a ready replica, tolerating its asynchronous

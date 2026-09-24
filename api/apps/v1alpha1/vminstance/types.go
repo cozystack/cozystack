@@ -56,7 +56,7 @@ type ConfigSpec struct {
 	// Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).
 	// +kubebuilder:default:={}
 	Firmware Firmware `json:"firmware,omitempty"`
-	// Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; cpu or sockets on its own sizes nothing and is ignored.
+	// Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; a whole-number cpu or sockets on its own sizes nothing and is ignored.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// List of SSH public keys for authentication.
@@ -97,11 +97,11 @@ type Network struct {
 }
 
 type Resources struct {
-	// Number of CPU cores allocated.
+	// Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
-	// Amount of memory allocated.
+	// Amount of memory allocated, as a positive quantity such as `8Gi`.
 	Memory resource.Quantity `json:"memory,omitempty"`
-	// Number of CPU sockets (vCPU topology).
+	// Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.
 	Sockets resource.Quantity `json:"sockets,omitempty"`
 }
 

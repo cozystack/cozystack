@@ -1,0 +1,32 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "uploadProxyURL": {
+      "description": "Upload proxy URL, set as uploadProxyURLOverride on the CDI object. Empty leaves it unset.",
+      "type": "string",
+      "default": ""
+    },
+    "cloneStrategyOverride": {
+      "description": "Strategy CDI uses to clone DataVolumes (golden image -\u003e VM disk): csi-clone, snapshot, copy, or empty.",
+      "type": "string",
+      "default": "csi-clone",
+      "pattern": "^(|copy|snapshot|csi-clone)$"
+    },
+    "importerResources": {
+      "description": "Resources for CDI's importer/uploader/cloner worker pods.",
+      "type": "object",
+      "default": {
+        "limits": {
+          "cpu": "750m",
+          "memory": "600M"
+        },
+        "requests": {
+          "cpu": "100m",
+          "memory": "60M"
+        }
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    }
+  }
+}

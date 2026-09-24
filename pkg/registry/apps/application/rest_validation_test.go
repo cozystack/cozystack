@@ -221,12 +221,17 @@ func TestConvertHelmReleaseToApplication_TenantNamespaceKindGate(t *testing.T) {
 }
 
 func TestValidateNameLength(t *testing.T) {
+	declaredCap := func(maxLen int64, description string) *applicationNameSchema {
+		return &applicationNameSchema{MaxLength: &maxLen, Description: description}
+	}
+
 	tests := []struct {
-		name      string
-		kindName  string
-		prefix    string
-		appName   string
-		wantError bool
+		name       string
+		kindName   string
+		prefix     string
+		nameSchema *applicationNameSchema
+		appName    string
+		wantError  bool
 	}{
 		{
 			name:      "short name passes",
@@ -263,53 +268,39 @@ func TestValidateNameLength(t *testing.T) {
 			appName:   strings.Repeat("a", 53-len("tenant-")+1), // 47 chars
 			wantError: true,
 		},
-		// Kubernetes clusters carry a stricter cap than their own Helm prefix
-		// allows, so a worker pool's KubernetesNodes child release
-		// ("kubernetes-nodes-<cluster>-<pool>") still fits the 53-char limit.
+		// An application may declare a cap stricter than its own Helm prefix
+		// budget allows. The declaration wins, whatever the kind is.
 		{
-			name:      "kubernetes short name passes",
-			kindName:  "Kubernetes",
-			prefix:    "kubernetes-",
-			appName:   "prod",
-			wantError: false,
+			name:       "declared cap leaves short names alone",
+			kindName:   "Kubernetes",
+			prefix:     "kubernetes-",
+			nameSchema: declaredCap(32, "worker pools need the room"),
+			appName:    "prod",
+			wantError:  false,
 		},
 		{
-			name:      "kubernetes at pool cap passes",
-			kindName:  "Kubernetes",
-			prefix:    "kubernetes-",
-			appName:   strings.Repeat("a", maxKubernetesClusterName), // 32 chars
-			wantError: false,
+			name:       "at declared cap passes",
+			kindName:   "Kubernetes",
+			prefix:     "kubernetes-",
+			nameSchema: declaredCap(32, "worker pools need the room"),
+			appName:    strings.Repeat("a", 32),
+			wantError:  false,
 		},
 		{
-			name:      "kubernetes exceeding pool cap fails even though it fits the parent prefix",
-			kindName:  "Kubernetes",
-			prefix:    "kubernetes-",
-			appName:   strings.Repeat("a", maxKubernetesClusterName+1), // 33 chars, still <= 42
-			wantError: true,
-		},
-		// Kafka clusters carry a stricter cap than their own Helm prefix allows,
-		// so the derived KRaft controller pod hostname "<release>-c-<hash>-<id>"
-		// fits the 63-char DNS-1123 label limit.
-		{
-			name:      "kafka short name passes",
-			kindName:  "Kafka",
-			prefix:    "kafka-",
-			appName:   "events",
-			wantError: false,
+			name:       "exceeding declared cap fails even though it fits the prefix budget",
+			kindName:   "Kubernetes",
+			prefix:     "kubernetes-",
+			nameSchema: declaredCap(32, "worker pools need the room"),
+			appName:    strings.Repeat("a", 33), // still <= 42, the prefix budget
+			wantError:  true,
 		},
 		{
-			name:      "kafka at controller-hostname cap passes",
-			kindName:  "Kafka",
-			prefix:    "kafka-",
-			appName:   strings.Repeat("a", maxNamespaceName-kafkaControllerNodeOverhead-len("kafka-")), // 44 chars
-			wantError: false,
-		},
-		{
-			name:      "kafka exceeding controller-hostname cap fails even though it fits the helm prefix",
-			kindName:  "Kafka",
-			prefix:    "kafka-",
-			appName:   strings.Repeat("a", maxNamespaceName-kafkaControllerNodeOverhead-len("kafka-")+1), // 45 chars, still <= 47
-			wantError: true,
+			name:       "declaration looser than the Helm budget does not widen it",
+			kindName:   "MySQL",
+			prefix:     "mysql-",
+			nameSchema: declaredCap(60, "a chart cannot buy itself more room"),
+			appName:    strings.Repeat("a", 53-len("mysql-")+1), // 48 chars
+			wantError:  true,
 		},
 		{
 			name:      "prefix consuming all helm capacity returns config error",
@@ -334,6 +325,7 @@ func TestValidateNameLength(t *testing.T) {
 				releaseConfig: config.ReleaseConfig{
 					Prefix: tt.prefix,
 				},
+				nameSchema: tt.nameSchema,
 			}
 
 			errs := r.validateNameLength(tt.appName)

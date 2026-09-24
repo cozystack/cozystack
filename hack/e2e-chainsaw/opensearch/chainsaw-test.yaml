@@ -166,8 +166,8 @@ spec:
           kind: Secret
           metadata:
             name: opensearch-test.tenant-ca
-    # Longer than the 5-6m standard (e2e-testing.md reviewer checklist, item 6):
-    # this is a first boot, so it
+    # Longer than the waits around it, so justified in-line (e2e-testing.md
+    # reviewer checklist, item 6): this is a first boot, so it
     # covers the OpenSearch image pull, the operator's bootstrap pod and the
     # securityadmin job before the nodePool pod reports ready.
     #

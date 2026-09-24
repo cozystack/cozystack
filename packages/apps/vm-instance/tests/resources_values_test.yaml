@@ -1,0 +1,364 @@
+suite: vm-instance resources values
+
+# resources.cpu and resources.sockets are typed as quantities, but they land in
+# domain.cpu.cores and domain.cpu.sockets, which KubeVirt declares as uint32.
+# Only a whole number has a meaning there, so anything else has to stop the
+# render rather than truncate to 0 and leave KubeVirt to boot one core. Memory
+# is a quantity on the KubeVirt side too, but a zero or negative amount sizes
+# nothing, so it stops the render as well.
+
+templates:
+  - templates/vm.yaml
+release:
+  name: test-vm
+  namespace: tenant-test
+set:
+  fullnameOverride: test-vm
+  _cluster: {}
+  instanceType: ""
+  instanceProfile: ""
+tests:
+  - it: renders a quoted whole cpu as an integer core count
+    set:
+      resources:
+        cpu: "2"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an unquoted integer cpu as the same core count
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4
+
+  - it: renders a whole float cpu as an integer core count
+    set:
+      resources:
+        cpu: 2.0
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders a quoted whole decimal cpu as the same core count
+    set:
+      resources:
+        cpu: "2.0"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an explicit plus sign on cpu as the same core count
+    set:
+      resources:
+        cpu: "+2"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an exponent spelling of cpu as the core count it decodes to
+    set:
+      resources:
+        cpu: "1e1"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 10
+
+  - it: renders a trailing-dot spelling of cpu as the core count it decodes to
+    set:
+      resources:
+        cpu: "2."
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: refuses a millicore cpu instead of truncating it to no cores
+    set:
+      resources:
+        cpu: 500m
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(500m\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses a millicore spelling of whole cores
+    set:
+      resources:
+        cpu: 2000m
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(2000m\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses a fractional cpu
+    set:
+      resources:
+        cpu: "1.5"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(1\.5\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses an unquoted zero cpu instead of treating it as unset
+    set:
+      resources:
+        cpu: 0
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses a quoted zero cpu
+    set:
+      resources:
+        cpu: "0"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses a negative cpu
+    set:
+      resources:
+        cpu: "-2"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(-2\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: refuses a cpu with a leading zero, which YAML reads as octal
+    set:
+      resources:
+        cpu: "010"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(010\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: renders the largest cpu that fits in uint32
+    set:
+      resources:
+        cpu: "4294967295"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.cores
+          value: 4294967295
+
+  - it: refuses a cpu past the uint32 range
+    set:
+      resources:
+        cpu: "4294967296"
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(4294967296\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: renders a quoted whole sockets as an integer socket count
+    set:
+      resources:
+        cpu: 4
+        sockets: "2"
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 2
+
+  - it: renders a whole float sockets as an integer socket count
+    set:
+      resources:
+        cpu: 4
+        sockets: 2.0
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.cpu.sockets
+          value: 2
+
+  - it: refuses a millicore sockets instead of truncating it to none
+    set:
+      resources:
+        cpu: 4
+        sockets: 500m
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(500m\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses a fractional sockets
+    set:
+      resources:
+        cpu: 4
+        sockets: "1.5"
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(1\.5\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses an unquoted zero sockets
+    set:
+      resources:
+        cpu: 4
+        sockets: 0
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses a sockets with a leading zero
+    set:
+      resources:
+        cpu: 4
+        sockets: "010"
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(010\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses a negative sockets
+    set:
+      resources:
+        cpu: 4
+        sockets: "-2"
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(-2\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses a sockets past the uint32 range
+    set:
+      resources:
+        cpu: 4
+        sockets: "4294967296"
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.sockets \(4294967296\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+
+  - it: refuses a suffixed cpu even when it is a whole count
+    set:
+      resources:
+        cpu: 1k
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(1k\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+
+  - it: passes a binary-suffixed memory through unchanged
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8Gi
+
+  - it: passes a fractional memory quantity through unchanged
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 1.5Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 1.5Gi
+
+  - it: passes an unquoted byte count through unchanged
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 8589934592
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 8589934592
+
+  - it: refuses a quoted zero memory instead of requesting none
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(0\) must be a positive quantity'
+
+  - it: refuses an unquoted zero memory instead of treating it as unset
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(0\) must be a positive quantity'
+
+  - it: refuses a zero memory written with a suffix
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 0Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(0Gi\) must be a positive quantity'
+
+  - it: refuses a negative memory
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: "-1Gi"
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(-1Gi\) must be a positive quantity'
+
+  # A cpu or sockets on its own emits no domain.cpu, so beside an instance type
+  # it used to be ignored whatever it held. A value that cannot be a count is
+  # refused there as well, before it can wait for the day sockets is filled in.
+  - it: refuses a millicore cpu on its own beside an instance type
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 500m
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(500m\) must be a positive whole number'

@@ -41,10 +41,11 @@ import (
 // Flux's helm-controller continuously rewrites a HelmRelease's status, which
 // shares the object's resourceVersion. When a caller updates an Application CR
 // while a prior reconcile is still in flight, the resourceVersion read by
-// Update goes stale and the write is rejected with a 409 Conflict. The
-// HelmRelease spec is fully derived from the Application the caller just
-// applied, so a stale-resourceVersion conflict is never a real spec conflict:
-// Update must refresh the resourceVersion and retry rather than surface the 409.
+// Update goes stale and the write is rejected with a 409 Conflict. Apart from
+// suspend, which TestUpdate_RefreshesSuspendOnConflictRetry covers, the
+// HelmRelease spec is derived from the Application the caller just applied, so
+// a stale-resourceVersion conflict is never a real spec conflict: Update must
+// refresh the resourceVersion and retry rather than surface the 409.
 //
 // The fake client returns one Conflict on the first HelmRelease Update, then
 // lets the second through. A regression that drops the retry makes the first

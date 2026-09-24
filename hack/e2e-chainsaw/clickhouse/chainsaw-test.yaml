@@ -337,20 +337,22 @@ spec:
     # generously — the whole bucket suite completes in ~37s and a backup-enabled
     # ClickHouse plus Keeper reaches Ready in ~98s (measured on run 30353894332):
     #   03  750s = 300 bucket HR + 180 claim + 180 access + 90 S3 preflight
-    #   04  600s = 300 HR + 300 StatefulSet
+    #   04  960s = 660 HR + 300 StatefulSet
     #   05  480s = BackupJob to Succeeded
     #   06  480s = in-place RestoreJob
-    #   07 1080s = 300 HR + 300 StatefulSet + 480 to-copy RestoreJob
-    #        sum = 3390s (56m30s)
-    # 60m therefore leaves ~3m30s of headroom for the kubectl apply / exec SQL
+    #   07 1440s = 660 HR + 300 StatefulSet + 480 to-copy RestoreJob
+    #        sum = 4110s (68m30s)
+    # 72m therefore leaves ~3m30s of headroom for the kubectl apply / exec SQL
     # calls interleaved between those waits (convention 6: justified in-line).
+    # The 660s HR waits are sized in "Sizing an HR-Ready budget",
+    # docs/agents/e2e-testing.md.
     #
     # Reaching the ceiling at all takes a pathological hang: every wait fails
     # fast on a terminal state — wait_for_field bails on phase=Failed and
     # wait_hr_ready on Stalled=True — so a genuinely broken backup reports in
     # seconds. The happy path is minutes.
     - script:
-        timeout: 60m
+        timeout: 72m
         content: |
           set -eu
           cd ../../..

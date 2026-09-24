@@ -126,3 +126,40 @@ func TestClassify(t *testing.T) {
 		}
 	})
 }
+
+// TestClassifyNameDeclaration covers the constraints an application declares
+// on its own metadata.name at the schema root: tightening one rejects names
+// the base accepted, loosening or dropping one does not.
+func TestClassifyNameDeclaration(t *testing.T) {
+	kube := func(declaration map[string]any) Resource {
+		s := Schema{"type": "object", "properties": map[string]any{}}
+		if declaration != nil {
+			s["x-cozystack-name"] = declaration
+		}
+		return res("apps.cozystack.io", "Kubernetes", "kuberneteses", SourceCozyRD, s)
+	}
+	capAt := func(n float64) map[string]any { return map[string]any{"type": "string", "maxLength": n} }
+
+	for _, tc := range []struct {
+		name       string
+		base, head Resource
+		breaking   bool
+	}{
+		{"cap added", kube(nil), kube(capAt(32)), true},
+		{"cap lowered", kube(capAt(32)), kube(capAt(30)), true},
+		{"pattern added", kube(capAt(32)), kube(map[string]any{"type": "string", "maxLength": 32.0, "pattern": "^[a-z]+$"}), true},
+		{"cap raised", kube(capAt(32)), kube(capAt(40)), false},
+		{"cap dropped", kube(capAt(32)), kube(nil), false},
+		{"unchanged", kube(capAt(32)), kube(capAt(32)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := countCategory(Classify(snap(tc.base), snap(tc.head)), Breaking)
+			if tc.breaking && got != 1 {
+				t.Fatalf("expected 1 breaking finding, got %d", got)
+			}
+			if !tc.breaking && got != 0 {
+				t.Fatalf("expected no breaking finding, got %d", got)
+			}
+		})
+	}
+}

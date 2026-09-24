@@ -1,3 +1,6 @@
+## @name {string} - Cluster name. Every worker pool is a separate KubernetesNodes release named `kubernetes-nodes-<name>-<pool>`, so the name must leave room for the default `md0` pool inside the 53-character Helm release name limit.
+## @maxLength 32
+
 ##
 ## @section Common Parameters
 ##
