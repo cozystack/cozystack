@@ -112,7 +112,7 @@ spec:
 
 ## Step 3 — Attach the VM and assign a static address
 
-Reference the NAD by name in the `vm-instance` values. Because the chart does not support `networkData`, the static address goes into cloud-init `userData` (`cloudInit`), written by the guest at first boot:
+Reference the NAD by name in the `vm-instance` values. The chart's own `networkData` only asks every ethernet for DHCP, and this VLAN has no DHCP server, so the static address goes into cloud-init `userData` (`cloudInit`), written by the guest at first boot:
 
 ```yaml
 # vm-instance values
@@ -145,7 +145,7 @@ The VM ends up with two interfaces: the always-present **pod-network** NIC (`def
 ## Gotchas
 
 - **VMs are dual-homed.** The `vm-instance` chart always adds the pod-network NIC in addition to any `networks` you declare; there is no single-homed (VLAN-only) option today. Address the VLAN NIC inside the guest and leave the pod NIC to the cluster.
-- **No `networkData`.** The chart wires cloud-init through `userData` only, so in-guest static configuration (netplan `write_files` + `netplan apply`, as above) is the way to assign the VLAN address.
+- **`networkData` is the chart's, not yours.** For a guest whose `instanceProfile` is `ubuntu` or `debian` the chart supplies its own cloud-init network-data, asking every `en*` and `eth*` interface for DHCP, and there is no value that replaces it. It does not conflict with the recipe above — netplan merges `/etc/netplan/*.yaml`, and a higher-numbered file wins — but a static address still has to come from `userData`, as above.
 - **MAC changes on VM re-creation.** KubeVirt generates a fresh guest MAC each time the VM object is re-created, and `vm-instance` exposes no way to pin it, so re-creating a VM changes its MAC. The upstream gateway then holds a stale ARP entry for the old MAC for a few minutes, so "gateway unreachable" immediately after re-creating a VM is expected — wait for the ARP entry to age out (~5 min) rather than treating it as a fault.
 - **Host ↔ VM traffic.** If the host must talk to the VMs (a proxy, a health check), give the bridge a host address on the VLAN (step 1) — traffic through a bare VLAN sub-interface to bridge-attached guests will not work the way `macvlan` users expect.
 

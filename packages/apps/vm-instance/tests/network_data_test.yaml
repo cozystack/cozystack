@@ -1,0 +1,148 @@
+suite: vm-instance cloud-init network-data for netplan guests
+
+# A netplan guest configures only the interface cloud-init's fallback covers and
+# keeps none of the DHCP-supplied search domains, so the assertions below are on
+# the two properties that change that: every ethernet asks for DHCP, and the
+# link keeps the domains it is offered. Naming an interface instead of matching
+# a glob would satisfy a field assertion and still leave a guest whose NICs
+# enumerate differently unconfigured, which is why the match stanza is asserted
+# rather than the presence of the key.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+  - templates/secret-network-config.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterPreference":
+      gvr:
+        group: instancetype.kubevirt.io
+        version: v1beta1
+        resource: virtualmachineclusterpreferences
+      namespaced: false
+  objects:
+    - apiVersion: instancetype.kubevirt.io/v1beta1
+      kind: VirtualMachineClusterPreference
+      metadata:
+        name: ubuntu
+    - apiVersion: instancetype.kubevirt.io/v1beta1
+      kind: VirtualMachineClusterPreference
+      metadata:
+        name: debian
+    - apiVersion: instancetype.kubevirt.io/v1beta1
+      kind: VirtualMachineClusterPreference
+      metadata:
+        name: windows.2k22
+    - apiVersion: instancetype.kubevirt.io/v1beta1
+      kind: VirtualMachineClusterPreference
+      metadata:
+        name: rhel.9
+tests:
+  - it: gives an ubuntu guest DHCP on every ethernet and keeps the offered search domains
+    set:
+      instanceProfile: ubuntu
+    asserts:
+      - template: templates/secret-network-config.yaml
+        equal:
+          path: stringData.networkdata
+          value: |
+            network:
+              version: 2
+              ethernets:
+                cozy-en:
+                  match:
+                    name: "en*"
+                  dhcp4: true
+                  dhcp4-overrides:
+                    use-domains: true
+                cozy-eth:
+                  match:
+                    name: "eth*"
+                  dhcp4: true
+                  dhcp4-overrides:
+                    use-domains: true
+
+  - it: attaches the network-data to the VM even when no user-data is requested
+    set:
+      instanceProfile: ubuntu
+    asserts:
+      - template: templates/vm.yaml
+        equal:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.networkDataSecretRef.name
+          value: test-vm-network-config
+      - template: templates/vm.yaml
+        notExists:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.secretRef
+      - template: templates/vm.yaml
+        equal:
+          path: spec.template.spec.domain.devices.disks[?(@.name=="cloudinitdisk")].disk
+          value: {}
+
+  - it: carries user-data and network-data side by side
+    set:
+      instanceProfile: ubuntu
+      cloudInit: |
+        #cloud-config
+        packages:
+          - htop
+    asserts:
+      - template: templates/vm.yaml
+        equal:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.secretRef.name
+          value: test-vm-cloud-init
+      - template: templates/vm.yaml
+        equal:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.networkDataSecretRef.name
+          value: test-vm-network-config
+
+  - it: covers debian, which netplan renders the same way
+    set:
+      instanceProfile: debian
+    asserts:
+      - template: templates/secret-network-config.yaml
+        hasDocuments:
+          count: 1
+
+  - it: leaves a windows guest untouched
+    set:
+      instanceProfile: windows.2k22
+    asserts:
+      - template: templates/secret-network-config.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vm.yaml
+        notExists:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")]
+
+  - it: leaves a guest rendered by sysconfig untouched
+    set:
+      instanceProfile: rhel.9
+    asserts:
+      - template: templates/secret-network-config.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vm.yaml
+        notExists:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.networkDataSecretRef
+
+  - it: keeps a sysconfig guest's user-data disk
+    set:
+      instanceProfile: rhel.9
+      cloudInit: |
+        #cloud-config
+    asserts:
+      - template: templates/vm.yaml
+        equal:
+          path: spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.secretRef.name
+          value: test-vm-cloud-init
