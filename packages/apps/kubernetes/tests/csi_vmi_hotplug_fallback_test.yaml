@@ -1,0 +1,27 @@
+suite: KubeVirt CSI controller VMI hotplug fallback
+
+templates:
+  - templates/csi/deploy.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  # The driver defaults the flag to true, which is what the KubeVirt CR needs
+  # while it enables HotplugVolumes. Rendering it anyway would crash a driver
+  # image built before the flag existed: Go's flag package exits on an
+  # unknown flag. This test does not read that CR; the two change together.
+  - it: leaves the VMI hotplug fallback at the driver default while the KubeVirt CR enables HotplugVolumes
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: csi-driver
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--enable-vmi-hotplug-fallback/)]

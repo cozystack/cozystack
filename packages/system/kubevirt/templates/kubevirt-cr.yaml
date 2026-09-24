@@ -101,6 +101,8 @@ spec:
       # HotplugVolumes: deprecated in 1.9, replaced by DeclarativeHotplugVolumes.
       # Kept because virt-api accepts kubevirt-csi's VMI-level removevolume on a
       # VM-owned VMI only while it is on — which also keeps the replacement inert.
+      # Dropping it means setting --enable-vmi-hotplug-fallback=false in
+      # packages/apps/kubernetes/templates/csi/deploy.yaml in the same change.
       - HotplugVolumes
       - ExpandDisks
       - LiveMigration
