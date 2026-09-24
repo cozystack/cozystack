@@ -1759,3 +1759,55 @@ func TestTryStartDataVolumeWatch_FailedWatchLeavesNoReader(t *testing.T) {
 		t.Fatalf("done=%v err=%v reader=%v, want an error, not done, no reader", done, err, readerOf(r))
 	}
 }
+
+// While the DataVolume watch syncs, every monitor is requeued every few
+// seconds, so a pass that changes nothing must not write status.
+func TestReconcile_UnchangedStatusIsNotWritten(t *testing.T) {
+	settled := cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true), AvailableReplicas: 1, ObservedReplicas: 1}
+	for _, tc := range []struct {
+		name   string
+		status cozyv1alpha1.WorkloadMonitorStatus
+		writes int
+	}{
+		{"unchanged", settled, 0},
+		{"changed", cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true)}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestScheme()
+			selector := map[string]string{"app.kubernetes.io/instance": "m"}
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
+				Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector, MinReplicas: ptr.To[int32](1)},
+				Status:     tc.status,
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "m-0", Namespace: "default", Labels: selector},
+				Status: corev1.PodStatus{Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				}},
+			}
+			writes := 0
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(monitor, pod).
+				WithStatusSubresource(monitor).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						if _, ok := obj.(*cozyv1alpha1.WorkloadMonitor); ok {
+							writes++
+						}
+						return c.SubResource(subResourceName).Update(ctx, obj, opts...)
+					},
+				}).
+				Build()
+			r := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s, dataVolumeWatchSyncing: true}
+			result, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "m", Namespace: "default"}})
+			if err != nil || result.RequeueAfter <= 0 {
+				t.Fatalf("Reconcile = %+v, %v, want a requeue while the watch syncs", result, err)
+			}
+			if writes != tc.writes {
+				t.Errorf("got %d status writes, want %d", writes, tc.writes)
+			}
+		})
+	}
+}
