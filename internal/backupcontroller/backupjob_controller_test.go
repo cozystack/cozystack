@@ -175,7 +175,7 @@ func TestReconcile_SkipsProjection_ForeignAPIGroup(t *testing.T) {
 			Strategies: []backupsv1alpha1.BackupClassStrategy{
 				{
 					Application: backupsv1alpha1.ApplicationSelector{
-						APIGroup: stringPtr("apps.cozystack.io"),
+						APIGroup: new("apps.cozystack.io"),
 						Kind:     "Postgres",
 					},
 					StrategyRef: corev1.TypedLocalObjectReference{
@@ -192,7 +192,7 @@ func TestReconcile_SkipsProjection_ForeignAPIGroup(t *testing.T) {
 		Spec: backupsv1alpha1.BackupJobSpec{
 			BackupClassName: "foreign-class",
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "Postgres",
 				Name:     "pg",
 			},
@@ -248,7 +248,7 @@ func TestReconcile_NoMatchingStrategy_IsTerminal(t *testing.T) {
 				{
 					Application: backupsv1alpha1.ApplicationSelector{APIGroup: &appsGroup, Kind: "Postgres"},
 					StrategyRef: corev1.TypedLocalObjectReference{
-						APIGroup: stringRef(strategyv1alpha1.GroupVersion.Group), Kind: "CNPG", Name: "cozy-default-cnpg",
+						APIGroup: new(strategyv1alpha1.GroupVersion.Group), Kind: "CNPG", Name: "cozy-default-cnpg",
 					},
 				},
 			},
@@ -283,8 +283,6 @@ func TestReconcile_NoMatchingStrategy_IsTerminal(t *testing.T) {
 		t.Errorf("expected misbinding message, got %q", got.Status.Message)
 	}
 }
-
-func stringRef(s string) *string { return &s }
 
 // TestReconcile_BackupClassNotFound_IsTransient covers round-12 blocker
 // #3: a BackupJob referencing a BackupClass that does not exist must

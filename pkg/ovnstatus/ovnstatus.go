@@ -334,7 +334,7 @@ func parseServersFromTextWithThreshold(text string, freshThreshold time.Duration
 
 	cs := ClusterStatus{}
 	section := extractServersBlock(text)
-	for _, ln := range strings.Split(section, "\n") {
+	for ln := range strings.SplitSeq(section, "\n") {
 		ln = strings.TrimRight(ln, "\r")
 		if ln == "" {
 			continue

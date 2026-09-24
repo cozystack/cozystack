@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -349,37 +350,37 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 
 	// Create or update CiliumNetworkPolicy allowing egress to NFS server
 	cnpName := fmt.Sprintf("csi-nfs-%s", dvName)
-	vmiOwnerRef := map[string]interface{}{
+	vmiOwnerRef := map[string]any{
 		"apiVersion": "kubevirt.io/v1",
 		"kind":       "VirtualMachineInstance",
 		"name":       vmName,
 		"uid":        string(vmi.UID),
 	}
 	cnp := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "cilium.io/v2",
 			"kind":       "CiliumNetworkPolicy",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":            cnpName,
 				"namespace":       vmNamespace,
-				"ownerReferences": []interface{}{vmiOwnerRef},
+				"ownerReferences": []any{vmiOwnerRef},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"endpointSelector": buildEndpointSelector([]string{vmName}),
-				"egress": []interface{}{
-					map[string]interface{}{
-						"toEndpoints": []interface{}{
-							map[string]interface{}{
-								"matchLabels": map[string]interface{}{
+				"egress": []any{
+					map[string]any{
+						"toEndpoints": []any{
+							map[string]any{
+								"matchLabels": map[string]any{
 									"k8s:app.kubernetes.io/component": "linstor-csi-nfs-server",
 									"k8s:io.kubernetes.pod.namespace": "cozy-linstor",
 								},
 							},
 						},
-						"toPorts": []interface{}{
-							map[string]interface{}{
-								"ports": []interface{}{
-									map[string]interface{}{
+						"toPorts": []any{
+							map[string]any{
+								"ports": []any{
+									map[string]any{
 										"port":     port,
 										"protocol": "TCP",
 									},
@@ -524,7 +525,7 @@ func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, r
 }
 
 // addCNPOwnerReference adds a VMI ownerReference to an existing CiliumNetworkPolicy.
-func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, namespace, cnpName string, ownerRef map[string]interface{}) error {
+func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, namespace, cnpName string, ownerRef map[string]any) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
 		if err != nil {
@@ -534,7 +535,7 @@ func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, nam
 		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
 		uid, _, _ := unstructured.NestedString(ownerRef, "uid")
 		for _, ref := range ownerRefs {
-			if refMap, ok := ref.(map[string]interface{}); ok {
+			if refMap, ok := ref.(map[string]any); ok {
 				if refMap["uid"] == uid {
 					return nil // already present
 				}
@@ -573,9 +574,9 @@ func (w *WrappedControllerService) removeCNPOwnerReference(ctx context.Context, 
 		}
 
 		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
-		var remaining []interface{}
+		var remaining []any
 		for _, ref := range ownerRefs {
-			if refMap, ok := ref.(map[string]interface{}); ok {
+			if refMap, ok := ref.(map[string]any); ok {
 				if refMap["name"] == vmName {
 					continue
 				}
@@ -614,14 +615,14 @@ func (w *WrappedControllerService) removeCNPOwnerReference(ctx context.Context, 
 
 // buildEndpointSelector returns an endpointSelector using matchExpressions
 // so that multiple VMs can be listed in a single selector.
-func buildEndpointSelector(vmNames []string) map[string]interface{} {
-	values := make([]interface{}, len(vmNames))
+func buildEndpointSelector(vmNames []string) map[string]any {
+	values := make([]any, len(vmNames))
 	for i, name := range vmNames {
 		values[i] = name
 	}
-	return map[string]interface{}{
-		"matchExpressions": []interface{}{
-			map[string]interface{}{
+	return map[string]any{
+		"matchExpressions": []any{
+			map[string]any{
 				"key":      "kubevirt.io/vm",
 				"operator": "In",
 				"values":   values,
@@ -631,10 +632,10 @@ func buildEndpointSelector(vmNames []string) map[string]interface{} {
 }
 
 // vmNamesFromOwnerRefs extracts VM names from ownerReferences.
-func vmNamesFromOwnerRefs(ownerRefs []interface{}) []string {
+func vmNamesFromOwnerRefs(ownerRefs []any) []string {
 	var names []string
 	for _, ref := range ownerRefs {
-		if refMap, ok := ref.(map[string]interface{}); ok {
+		if refMap, ok := ref.(map[string]any); ok {
 			if name, ok := refMap["name"].(string); ok {
 				names = append(names, name)
 			}
@@ -644,12 +645,7 @@ func vmNamesFromOwnerRefs(ownerRefs []interface{}) []string {
 }
 
 func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
-	for _, mode := range pvc.Spec.AccessModes {
-		if mode == corev1.ReadWriteMany {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(pvc.Spec.AccessModes, corev1.ReadWriteMany)
 }
 
 // isNFSVolume reports whether the PVC was provisioned by our CreateVolume NFS path

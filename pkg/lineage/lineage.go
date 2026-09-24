@@ -48,7 +48,7 @@ func WalkOwnershipGraph(
 	mapper meta.RESTMapper,
 	appMapper AppMapper,
 	obj *unstructured.Unstructured,
-	memory ...interface{},
+	memory ...any,
 ) (out []ObjectID) {
 
 	id := ObjectID{APIVersion: obj.GetAPIVersion(), Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}

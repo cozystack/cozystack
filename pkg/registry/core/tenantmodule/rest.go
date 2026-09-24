@@ -705,7 +705,7 @@ func (r *REST) buildTableFromTenantModules(modules []corev1alpha1.TenantModule) 
 	for i := range modules {
 		module := &modules[i]
 		row := metav1.TableRow{
-			Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
+			Cells:  []any{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
 			Object: runtime.RawExtension{Object: module},
 		}
 		table.Rows = append(table.Rows, row)
@@ -729,7 +729,7 @@ func (r *REST) buildTableFromTenantModule(module corev1alpha1.TenantModule) meta
 
 	m := module
 	row := metav1.TableRow{
-		Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
+		Cells:  []any{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
 		Object: runtime.RawExtension{Object: &m},
 	}
 	table.Rows = append(table.Rows, row)

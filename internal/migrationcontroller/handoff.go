@@ -5,6 +5,7 @@ package migrationcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
@@ -193,7 +194,7 @@ func forkliftVMClaims(vm *unstructured.Unstructured) []string {
 	volumes, _, _ := unstructured.NestedSlice(vm.Object, "spec", "template", "spec", "volumes")
 	claims := make([]string, 0, len(volumes))
 	for _, raw := range volumes {
-		vol, ok := raw.(map[string]interface{})
+		vol, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -219,11 +220,11 @@ func forkliftVMClaims(vm *unstructured.Unstructured) []string {
 // bootloader imports "successfully" and then does not boot, which is why the
 // vm-instance firmware field (cozystack/cozystack#3002) is a merge-order
 // dependency of this controller.
-func sourceFirmware(vm *unstructured.Unstructured) map[string]interface{} {
+func sourceFirmware(vm *unstructured.Unstructured) map[string]any {
 	base := []string{"spec", "template", "spec", "domain", "firmware", "bootloader"}
 
 	if efi, found, _ := unstructured.NestedMap(vm.Object, append(base, "efi")...); found {
-		fw := map[string]interface{}{"bootloader": "uefi"}
+		fw := map[string]any{"bootloader": "uefi"}
 		// secureBoot is reported by the source; persistent NVRAM is not, and is
 		// deliberately left to the tenant — it pins the VM to a node.
 		if sb, ok := efi["secureBoot"].(bool); ok && sb {
@@ -234,10 +235,10 @@ func sourceFirmware(vm *unstructured.Unstructured) map[string]interface{} {
 	// `efi: {}` renders as an empty map, but a malformed value under the key
 	// still means EFI was asked for; treat presence as the answer.
 	if _, present, _ := unstructured.NestedFieldNoCopy(vm.Object, append(base, "efi")...); present {
-		return map[string]interface{}{"bootloader": "uefi"}
+		return map[string]any{"bootloader": "uefi"}
 	}
 	if _, present, _ := unstructured.NestedFieldNoCopy(vm.Object, append(base, "bios")...); present {
-		return map[string]interface{}{"bootloader": "bios"}
+		return map[string]any{"bootloader": "bios"}
 	}
 	return nil
 }
@@ -410,9 +411,7 @@ func (r *VMImportTaskReconciler) adoptVolume(
 				l := map[string]string{
 					migrationv1alpha1.ManagedByLabel: migrationv1alpha1.ManagedByValue,
 				}
-				for k, v := range outputMarkers(task, vmID) {
-					l[k] = v
-				}
+				maps.Copy(l, outputMarkers(task, vmID))
 				return l
 			}(),
 			Annotations: map[string]string{
@@ -544,14 +543,14 @@ func (r *VMImportTaskReconciler) createDataVolume(
 		helmReleaseNsAnnotation:        task.Namespace,
 		"vm-disk.cozystack.io/optical": "false",
 	})
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"contentType": "kubevirt",
-		"source": map[string]interface{}{
-			"blank": map[string]interface{}{},
+		"source": map[string]any{
+			"blank": map[string]any{},
 		},
-		"storage": map[string]interface{}{
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{
+		"storage": map[string]any{
+			"resources": map[string]any{
+				"requests": map[string]any{
 					"storage": size.String(),
 				},
 			},
@@ -603,7 +602,7 @@ func (r *VMImportTaskReconciler) ensureVMDisk(
 	obj.SetName(diskName)
 	obj.SetNamespace(task.Namespace)
 	stampOutput(obj, task, vmID)
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"storage": size.String(),
 		"optical": false,
 	}
@@ -652,12 +651,12 @@ func (r *VMImportTaskReconciler) createVMInstance(
 		return err
 	}
 
-	disks := make([]interface{}, 0, len(diskNames))
+	disks := make([]any, 0, len(diskNames))
 	for i, d := range diskNames {
-		disks = append(disks, map[string]interface{}{"name": d, "bus": importedDiskBus(i)})
+		disks = append(disks, map[string]any{"name": d, "bus": importedDiskBus(i)})
 	}
 
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"disks": disks,
 		// Halted, not Always: a freshly imported guest may need its network or
 		// drivers adjusted, and booting it the instant the import finishes can
@@ -669,7 +668,7 @@ func (r *VMImportTaskReconciler) createVMInstance(
 		spec["instanceType"] = req.InstanceType
 	} else {
 		cores, sockets, memory := sourceVMResources(vm)
-		resources := map[string]interface{}{}
+		resources := map[string]any{}
 		if cores != "" {
 			resources["cpu"] = cores
 		}

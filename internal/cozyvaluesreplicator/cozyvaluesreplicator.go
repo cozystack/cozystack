@@ -18,6 +18,7 @@ package cozyvaluesreplicator
 
 import (
 	"context"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -237,9 +238,7 @@ func (r *SecretReplicatorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, replicatedSecret, func() error {
 		// Copy the secret data and type from the source
 		replicatedSecret.Data = make(map[string][]byte)
-		for k, v := range originalSecret.Data {
-			replicatedSecret.Data[k] = v
-		}
+		maps.Copy(replicatedSecret.Data, originalSecret.Data)
 		replicatedSecret.Type = originalSecret.Type
 
 		// Copy labels and annotations from source (if any)
@@ -247,17 +246,13 @@ func (r *SecretReplicatorReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			if replicatedSecret.Labels == nil {
 				replicatedSecret.Labels = make(map[string]string)
 			}
-			for k, v := range originalSecret.Labels {
-				replicatedSecret.Labels[k] = v
-			}
+			maps.Copy(replicatedSecret.Labels, originalSecret.Labels)
 		}
 		if originalSecret.Annotations != nil {
 			if replicatedSecret.Annotations == nil {
 				replicatedSecret.Annotations = make(map[string]string)
 			}
-			for k, v := range originalSecret.Annotations {
-				replicatedSecret.Annotations[k] = v
-			}
+			maps.Copy(replicatedSecret.Annotations, originalSecret.Annotations)
 		}
 
 		return nil

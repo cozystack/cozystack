@@ -336,10 +336,7 @@ func (r *KubeOVNPlunger) WriteMemberMetrics(db string, snaps []ovnstatus.HealthS
 		r.metrics.memberIndex.WithLabelValues(db, cid, sid).Set(float64(s.Local.Index))
 
 		if lIdx != nil && s.Local.Index >= 0 {
-			gap := *lIdx - s.Local.Index
-			if gap < 0 {
-				gap = 0
-			}
+			gap := max(*lIdx-s.Local.Index, 0)
 			r.metrics.memberIndexGap.WithLabelValues(db, cid, sid).Set(float64(gap))
 		}
 

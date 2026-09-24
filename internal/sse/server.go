@@ -232,8 +232,8 @@ func (c *client) pump() {
 
 func writeSSE(w http.ResponseWriter, msg string) {
 	// Split on lines; each needs its own "data:" field per the SSE spec
-	lines := strings.Split(strings.TrimRight(msg, "\n"), "\n")
-	for _, ln := range lines {
+	lines := strings.SplitSeq(strings.TrimRight(msg, "\n"), "\n")
+	for ln := range lines {
 		fmt.Fprintf(w, "data: %s\n", ln)
 	}
 	fmt.Fprint(w, "\n")

@@ -319,7 +319,7 @@ func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
 	for _, group := range []string{"pciHostDevices", "mediatedDevices"} {
 		devices, _, _ := unstructured.NestedSlice(kv.Object, "spec", "configuration", "permittedHostDevices", group)
 		for _, d := range devices {
-			dm, ok := d.(map[string]interface{})
+			dm, ok := d.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -371,14 +371,14 @@ func storagePoolProvider(dyn dynamic.Interface) providerFunc {
 			if !ok {
 				continue
 			}
-			volume, ok := values["volume"].(map[string]interface{})
+			volume, ok := values["volume"].(map[string]any)
 			if !ok {
 				continue
 			}
 			collectPoolKeys(volume["pools"], pools)
-			if zones, ok := volume["zones"].(map[string]interface{}); ok {
+			if zones, ok := volume["zones"].(map[string]any); ok {
 				for _, z := range zones {
-					if zm, ok := z.(map[string]interface{}); ok {
+					if zm, ok := z.(map[string]any); ok {
 						collectPoolKeys(zm["pools"], pools)
 					}
 				}
@@ -393,8 +393,8 @@ func storagePoolProvider(dyn dynamic.Interface) providerFunc {
 	}
 }
 
-func collectPoolKeys(v interface{}, out map[string]struct{}) {
-	m, ok := v.(map[string]interface{})
+func collectPoolKeys(v any, out map[string]struct{}) {
+	m, ok := v.(map[string]any)
 	if !ok {
 		return
 	}

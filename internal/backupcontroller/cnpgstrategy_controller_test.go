@@ -20,7 +20,6 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -64,7 +63,7 @@ func TestBuildBarmanObjectStore_AllFields(t *testing.T) {
 			SecretAccessKey: &cnpgtypes.SecretKeySelector{Name: "creds", Key: defaultS3SecretAccessKeyKey},
 		},
 		Wal:  &cnpgtypes.WalBackupConfiguration{Compression: "gzip"},
-		Data: &cnpgtypes.DataBackupConfiguration{Compression: "gzip", Jobs: ptr.To(int32(4))},
+		Data: &cnpgtypes.DataBackupConfiguration{Compression: "gzip", Jobs: new(int32(4))},
 	}
 	if !apiequality.Semantic.DeepEqual(got, want) {
 		t.Fatalf("buildBarmanObjectStore mismatch\n got: %#v\nwant: %#v", got, want)
@@ -1249,7 +1248,7 @@ func TestSetCNPGRestoreHRSuspended(t *testing.T) {
 		hr.SetGroupVersionKind(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"})
 		hr.SetNamespace(ns)
 		hr.SetName(name)
-		spec := map[string]interface{}{}
+		spec := map[string]any{}
 		if suspended != nil {
 			spec["suspend"] = *suspended
 		}
@@ -1510,7 +1509,7 @@ func TestRecoveryPodsToInspect(t *testing.T) {
 		// result must be exactly the cap-many newest recovery pods, newest-first.
 		n := cnpgRecoveryMaxInspectPods + 2
 		var pods []corev1.Pod
-		for i := 0; i < n; i++ {
+		for i := range n {
 			// age i*100 so higher i == newer.
 			pods = append(pods, recoveryPod(fmt.Sprintf("rec-%d", i), int64(i*100)))
 		}
@@ -1520,7 +1519,7 @@ func TestRecoveryPodsToInspect(t *testing.T) {
 		})
 		got := recoveryPodsToInspect(pods)
 		want := make([]string, 0, cnpgRecoveryMaxInspectPods)
-		for i := 0; i < cnpgRecoveryMaxInspectPods; i++ {
+		for i := range cnpgRecoveryMaxInspectPods {
 			want = append(want, fmt.Sprintf("rec-%d", n-1-i)) // newest-first
 		}
 		if gotNames := names(got); !equalStrings(gotNames, want) {

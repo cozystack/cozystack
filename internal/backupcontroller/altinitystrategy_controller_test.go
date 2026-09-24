@@ -70,18 +70,18 @@ func newAltinityTestEnv(t *testing.T, app *unstructured.Unstructured, builder *c
 		Build()
 
 	return &BackupJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}, &RestoreJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}, testScheme
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}, &RestoreJobReconciler{
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}, testScheme
 }
 
 func newAltinityStrategy(name string) *strategyv1alpha1.Altinity {
@@ -108,7 +108,7 @@ func newAltinityStrategy(name string) *strategyv1alpha1.Altinity {
 
 func newAltinityClickHouseRef(name string) corev1.TypedLocalObjectReference {
 	return corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+		APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 		Kind:     "ClickHouse",
 		Name:     name,
 	}
@@ -128,7 +128,7 @@ func TestReconcileAltinity_CreatesBatchJob(t *testing.T) {
 
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.AltinityStrategyKind,
 			Name:     "clickhouse-strategy",
 		},
@@ -224,7 +224,7 @@ func TestReconcileAltinity_CompletesAndCreatesBackup(t *testing.T) {
 
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.AltinityStrategyKind,
 			Name:     "clickhouse-strategy",
 		},
@@ -304,7 +304,7 @@ func TestReconcileAltinity_FailsOnJobFailed(t *testing.T) {
 
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.AltinityStrategyKind,
 			Name:     "clickhouse-strategy",
 		},
@@ -357,7 +357,7 @@ func TestReconcileAltinityRestore_CreatesBatchJobInTargetNamespace(t *testing.T)
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newAltinityClickHouseRef("ch-test"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.AltinityStrategyKind,
 				Name:     "clickhouse-strategy",
 			},
@@ -370,7 +370,7 @@ func TestReconcileAltinityRestore_CreatesBatchJobInTargetNamespace(t *testing.T)
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: backup.Name},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     "ClickHouse",
 				Name:     "ch-restore",
 			},
@@ -427,7 +427,7 @@ func TestReconcileAltinity_RenderedBackupJobOwnedByBackupJob(t *testing.T) {
 	}
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.AltinityStrategyKind,
 			Name:     "clickhouse-strategy",
 		},
@@ -474,7 +474,7 @@ func TestReconcileAltinityRestore_RenderedRestoreJobOwnedByRestoreJob(t *testing
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newAltinityClickHouseRef("ch-test"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.AltinityStrategyKind,
 				Name:     "clickhouse-strategy",
 			},
@@ -486,7 +486,7 @@ func TestReconcileAltinityRestore_RenderedRestoreJobOwnedByRestoreJob(t *testing
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: backup.Name},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     "ClickHouse",
 				Name:     "ch-restore",
 			},
@@ -552,7 +552,7 @@ func TestReconcileAltinityRestore_TargetNamespaceIsRestoreJobNamespace(t *testin
 		{
 			name: "full triple targetRef -> to-copy explicit",
 			targetRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     "ClickHouse",
 				Name:     "ch-copy",
 			},
@@ -570,7 +570,7 @@ func TestReconcileAltinityRestore_TargetNamespaceIsRestoreJobNamespace(t *testin
 				Spec: backupsv1alpha1.BackupSpec{
 					ApplicationRef: newAltinityClickHouseRef("ch-source"),
 					StrategyRef: corev1.TypedLocalObjectReference{
-						APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+						APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 						Kind:     strategyv1alpha1.AltinityStrategyKind,
 						Name:     "clickhouse-strategy",
 					},
@@ -647,7 +647,7 @@ func TestReconcileAltinityRestore_ExposesSourceApplicationRef(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newAltinityClickHouseRef("ch-source"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.AltinityStrategyKind,
 				Name:     "clickhouse-strategy",
 			},
@@ -659,7 +659,7 @@ func TestReconcileAltinityRestore_ExposesSourceApplicationRef(t *testing.T) {
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: backup.Name},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     "ClickHouse",
 				Name:     "ch-restore",
 			},

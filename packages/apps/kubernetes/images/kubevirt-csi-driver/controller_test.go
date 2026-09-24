@@ -280,12 +280,12 @@ func TestGetNFSExport(t *testing.T) {
 
 func TestBuildEndpointSelectorListsEveryVM(t *testing.T) {
 	got := buildEndpointSelector([]string{"vm-a", "vm-b"})
-	want := map[string]interface{}{
-		"matchExpressions": []interface{}{
-			map[string]interface{}{
+	want := map[string]any{
+		"matchExpressions": []any{
+			map[string]any{
 				"key":      "kubevirt.io/vm",
 				"operator": "In",
-				"values":   []interface{}{"vm-a", "vm-b"},
+				"values":   []any{"vm-a", "vm-b"},
 			},
 		},
 	}

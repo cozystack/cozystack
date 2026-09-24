@@ -9,7 +9,6 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -64,7 +63,7 @@ func TestGetWorkloadsOperational_AllOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 	m2 := &cozyv1alpha1.WorkloadMonitor{
@@ -78,7 +77,7 @@ func TestGetWorkloadsOperational_AllOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 
@@ -107,7 +106,7 @@ func TestGetWorkloadsOperational_SomeNotOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 	m2 := &cozyv1alpha1.WorkloadMonitor{
@@ -121,7 +120,7 @@ func TestGetWorkloadsOperational_SomeNotOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 
@@ -179,7 +178,7 @@ func TestGetWorkloadsOperational_MixedNilAndOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 	m2 := &cozyv1alpha1.WorkloadMonitor{
@@ -219,7 +218,7 @@ func TestGetWorkloadsOperational_MixedFailedAndPending(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false), // Confirmed failure
+			Operational: new(false), // Confirmed failure
 		},
 	}
 	m2 := &cozyv1alpha1.WorkloadMonitor{
@@ -262,7 +261,7 @@ func TestConvertConditions_MixedFailedAndPendingShowsFalse(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 	mPending := &cozyv1alpha1.WorkloadMonitor{
@@ -323,7 +322,7 @@ func TestGetWorkloadsOperational_DifferentApp_NotFound(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 
@@ -339,4 +338,3 @@ func TestGetWorkloadsOperational_DifferentApp_NotFound(t *testing.T) {
 		t.Error("expected operational=true when no matching monitors found")
 	}
 }
-

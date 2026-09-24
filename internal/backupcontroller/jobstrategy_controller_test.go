@@ -52,7 +52,7 @@ func newJobStrategyApp(name, namespace string) *unstructured.Unstructured {
 
 func newJobStrategyAppRef(name string) corev1.TypedLocalObjectReference {
 	return corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+		APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 		Kind:     jobStrategyTestKind,
 		Name:     name,
 	}
@@ -91,18 +91,18 @@ func newJobStrategyTestEnv(t *testing.T, app *unstructured.Unstructured, builder
 		Build()
 
 	return &BackupJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}, &RestoreJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}, &RestoreJobReconciler{
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}
 }
 
 // newJobStrategy returns a Job strategy whose template exercises every key the
@@ -134,7 +134,7 @@ func newJobStrategy(name string) *strategyv1alpha1.Job {
 func newJobStrategyResolved(strategyName string, params map[string]string) *ResolvedBackupConfig {
 	return &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.JobStrategyKind,
 			Name:     strategyName,
 		},
@@ -400,7 +400,7 @@ func TestReconcileJobRestore_CreatesBatchJobInTargetNamespace(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newJobStrategyAppRef("app-test"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.JobStrategyKind,
 				Name:     "generic-strategy",
 			},
@@ -413,7 +413,7 @@ func TestReconcileJobRestore_CreatesBatchJobInTargetNamespace(t *testing.T) {
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: backup.Name},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     jobStrategyTestKind,
 				Name:     "app-restore",
 			},
@@ -464,7 +464,7 @@ func TestReconcileJobRestore_CompletesSucceeds(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newJobStrategyAppRef("app-test"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.JobStrategyKind,
 				Name:     "generic-strategy",
 			},
@@ -607,7 +607,7 @@ func TestReconcileJobRestore_FailsOnUnmappableTargetKind(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newJobStrategyAppRef("app-test"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.JobStrategyKind,
 				Name:     "generic-strategy",
 			},

@@ -484,8 +484,8 @@ func parseRefSpec(refSpec string) (map[string]string, error) {
 		return result, nil
 	}
 
-	pairs := strings.Split(refSpec, ",")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(refSpec, ",")
+	for pair := range pairs {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue

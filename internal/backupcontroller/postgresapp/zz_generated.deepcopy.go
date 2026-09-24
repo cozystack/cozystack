@@ -7,6 +7,8 @@
 package postgresapp
 
 import (
+	"maps"
+
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -73,9 +75,7 @@ func (in *PostgresSpec) DeepCopyInto(out *PostgresSpec) {
 	}
 	if in.Users != nil {
 		out.Users = make(map[string]User, len(in.Users))
-		for k, v := range in.Users {
-			out.Users[k] = v
-		}
+		maps.Copy(out.Users, in.Users)
 	}
 }
 

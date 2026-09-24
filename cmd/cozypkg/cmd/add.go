@@ -181,9 +181,9 @@ func readPackagesFromYAMLFile(filePath string) ([]string, error) {
 	var packages []string
 
 	// Split YAML documents (in case of multiple resources)
-	documents := strings.Split(string(data), "---")
+	documents := strings.SplitSeq(string(data), "---")
 
-	for _, doc := range documents {
+	for doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
 			continue
@@ -220,8 +220,8 @@ func readPackagesFromYAMLFile(filePath string) ([]string, error) {
 			items, found, err := unstructured.NestedSlice(obj.Object, "items")
 			if err == nil && found {
 				for _, item := range items {
-					if itemMap, ok := item.(map[string]interface{}); ok {
-						if metadata, ok := itemMap["metadata"].(map[string]interface{}); ok {
+					if itemMap, ok := item.(map[string]any); ok {
+						if metadata, ok := itemMap["metadata"].(map[string]any); ok {
 							if name, ok := metadata["name"].(string); ok && name != "" {
 								packages = append(packages, name)
 							}
@@ -357,9 +357,9 @@ func createPackageFromFile(ctx context.Context, k8sClient client.Client, filePat
 	}
 
 	// Split YAML documents
-	documents := strings.Split(string(data), "---")
+	documents := strings.SplitSeq(string(data), "---")
 
-	for _, doc := range documents {
+	for doc := range documents {
 		doc = strings.TrimSpace(doc)
 		if doc == "" {
 			continue

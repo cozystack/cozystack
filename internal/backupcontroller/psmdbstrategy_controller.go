@@ -937,7 +937,7 @@ func renderMongoDBTemplate(t strategyv1alpha1.MongoDBTemplate, app *mongodbapp.M
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -948,12 +948,12 @@ func renderMongoDBTemplate(t strategyv1alpha1.MongoDBTemplate, app *mongodbapp.M
 // user-authored go-templates address fields by their JSON names (e.g.
 // .Application.metadata.name). Mirrors the MariaDB controller's helper; scoped
 // here to avoid cross-strategy import.
-func toJSONMapMongoDB(obj interface{}) (map[string]interface{}, error) {
+func toJSONMapMongoDB(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

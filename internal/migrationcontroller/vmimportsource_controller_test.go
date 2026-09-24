@@ -273,7 +273,7 @@ func TestSourceReportsMissingForkliftInsteadOfLoopingOnAnError(t *testing.T) {
 func TestSourceMirrorsForkliftVerdict(t *testing.T) {
 	cases := []struct {
 		name       string
-		conditions []interface{}
+		conditions []any
 		wantReady  metav1.ConditionStatus
 		wantInMsg  string
 	}{
@@ -285,15 +285,15 @@ func TestSourceMirrorsForkliftVerdict(t *testing.T) {
 		},
 		{
 			name: "forklift says ready",
-			conditions: []interface{}{
-				map[string]interface{}{"type": "Ready", "status": "True"},
+			conditions: []any{
+				map[string]any{"type": "Ready", "status": "True"},
 			},
 			wantReady: metav1.ConditionTrue,
 		},
 		{
 			name: "forklift reports a critical problem",
-			conditions: []interface{}{
-				map[string]interface{}{
+			conditions: []any{
+				map[string]any{
 					"type": "ConnectionTestFailed", "status": "True",
 					"category": "Critical", "message": "host is unreachable",
 				},

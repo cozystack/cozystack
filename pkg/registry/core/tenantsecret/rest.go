@@ -600,7 +600,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	now := time.Now()
 	row := func(o *corev1alpha1.TenantSecret) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{o.Name, o.Type, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
+			Cells:  []any{o.Name, o.Type, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}

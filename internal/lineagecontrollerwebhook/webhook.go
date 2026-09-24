@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
@@ -22,10 +23,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
-	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 )
 
 var (
@@ -196,9 +197,7 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 	if existing == nil {
 		existing = make(map[string]string)
 	}
-	for k, v := range labels {
-		existing[k] = v
-	}
+	maps.Copy(existing, labels)
 	o.SetLabels(existing)
 }
 

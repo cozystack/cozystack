@@ -58,7 +58,7 @@ func TestObservationSurvivesBurstOfFabricatedIssuers(t *testing.T) {
 	var l observationLimiter
 	base := time.Now()
 
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		l.allow(base)
 	}
 	if !l.allow(base.Add(observationInterval)) {
@@ -73,16 +73,14 @@ func TestObservationLimiterIsConcurrencySafe(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	allowed := 0
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			if l.allow(now) {
 				mu.Lock()
 				allowed++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -161,7 +159,7 @@ func TestLogClientCertBranchesAreLimitedIndependently(t *testing.T) {
 	h := logClientCert(false, next)
 
 	out := captureLog(t, func() {
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			h.ServeHTTP(httptest.NewRecorder(), request("flooding-ca"))
 		}
 		h.ServeHTTP(httptest.NewRecorder(), request(""))

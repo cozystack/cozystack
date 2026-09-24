@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -171,7 +172,7 @@ func kafkaRunDeadline(parameters map[string]string) (time.Duration, string) {
 // carries .BackupName (the per-run identity) so the strategy can scope the S3
 // object key and a restore reads the exact object its Backup wrote.
 func kafkaRenderContext(
-	app map[string]interface{},
+	app map[string]any,
 	releaseName, releaseNamespace, mode, backupName, artifactURI, clientImage string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
@@ -452,9 +453,7 @@ func (r *BackupJobReconciler) ensureKafkaJob(
 	}
 
 	labels := map[string]string{kafkaStrategyLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
 	// Bound the run at the Job layer: Kubernetes fails an unschedulable or wedged
@@ -591,7 +590,7 @@ func (r *RestoreJobReconciler) reconcileKafkaRestore(ctx context.Context, restor
 		}
 	}
 	targetRef := corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(targetAPIGroup),
+		APIGroup: new(targetAPIGroup),
 		Kind:     targetAppKind,
 		Name:     targetAppName,
 	}
@@ -751,9 +750,7 @@ func (r *RestoreJobReconciler) ensureKafkaRestoreJob(
 	}
 
 	labels := map[string]string{kafkaStrategyLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
 	setKafkaJobDeadline(desired, deadline)
@@ -912,10 +909,7 @@ func (r *BackupReconciler) releaseKafkaCleanup(ctx context.Context, backup *back
 // condition (to create the Backup, or mark the owner Failed) before it is
 // collected, and the owning BackupJob/RestoreJob garbage-collects it.
 func setKafkaJobDeadline(job *batchv1.Job, deadline time.Duration) {
-	secs := int64(deadline / time.Second)
-	if secs < 1 {
-		secs = 1
-	}
+	secs := max(int64(deadline/time.Second), 1)
 	job.Spec.ActiveDeadlineSeconds = &secs
 }
 

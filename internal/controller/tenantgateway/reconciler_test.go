@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -168,7 +169,7 @@ func TestReconcile_IsIdempotent(t *testing.T) {
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
 			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
 		}); err != nil {
@@ -396,12 +397,7 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 }
 
 func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // TestReconcile_LabelsAttachedNamespaces pins the controller-side

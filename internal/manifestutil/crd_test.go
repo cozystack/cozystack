@@ -37,25 +37,25 @@ import (
 
 func TestCollectCRDNames(t *testing.T) {
 	objects := []*unstructured.Unstructured{
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
-			"metadata":   map[string]interface{}{"name": "test-ns"},
+			"metadata":   map[string]any{"name": "test-ns"},
 		}},
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "apiextensions.k8s.io/v1",
 			"kind":       "CustomResourceDefinition",
-			"metadata":   map[string]interface{}{"name": "packages.cozystack.io"},
+			"metadata":   map[string]any{"name": "packages.cozystack.io"},
 		}},
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata":   map[string]interface{}{"name": "test-deploy"},
+			"metadata":   map[string]any{"name": "test-deploy"},
 		}},
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "apiextensions.k8s.io/v1",
 			"kind":       "CustomResourceDefinition",
-			"metadata":   map[string]interface{}{"name": "packagesources.cozystack.io"},
+			"metadata":   map[string]any{"name": "packagesources.cozystack.io"},
 		}},
 	}
 
@@ -73,15 +73,15 @@ func TestCollectCRDNames(t *testing.T) {
 
 func TestCollectCRDNames_ignoresWrongAPIVersion(t *testing.T) {
 	objects := []*unstructured.Unstructured{
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "apiextensions.k8s.io/v1",
 			"kind":       "CustomResourceDefinition",
-			"metadata":   map[string]interface{}{"name": "real.crd.io"},
+			"metadata":   map[string]any{"name": "real.crd.io"},
 		}},
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "apiextensions.k8s.io/v1beta1",
 			"kind":       "CustomResourceDefinition",
-			"metadata":   map[string]interface{}{"name": "legacy.crd.io"},
+			"metadata":   map[string]any{"name": "legacy.crd.io"},
 		}},
 	}
 
@@ -96,10 +96,10 @@ func TestCollectCRDNames_ignoresWrongAPIVersion(t *testing.T) {
 
 func TestCollectCRDNames_noCRDs(t *testing.T) {
 	objects := []*unstructured.Unstructured{
-		{Object: map[string]interface{}{
+		{Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "Namespace",
-			"metadata":   map[string]interface{}{"name": "test"},
+			"metadata":   map[string]any{"name": "test"},
 		}},
 	}
 
@@ -118,10 +118,10 @@ func TestWaitForCRDsEstablished_success(t *testing.T) {
 	}
 
 	// Create a CRD object in the fake client
-	crd := &unstructured.Unstructured{Object: map[string]interface{}{
+	crd := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apiextensions.k8s.io/v1",
 		"kind":       "CustomResourceDefinition",
-		"metadata":   map[string]interface{}{"name": "packages.cozystack.io"},
+		"metadata":   map[string]any{"name": "packages.cozystack.io"},
 	}}
 
 	fakeClient := fake.NewClientBuilder().
@@ -137,8 +137,8 @@ func TestWaitForCRDsEstablished_success(t *testing.T) {
 					return nil
 				}
 				if u.GetKind() == "CustomResourceDefinition" {
-					_ = unstructured.SetNestedSlice(u.Object, []interface{}{
-						map[string]interface{}{
+					_ = unstructured.SetNestedSlice(u.Object, []any{
+						map[string]any{
 							"type":   "Established",
 							"status": "True",
 						},
@@ -168,10 +168,10 @@ func TestWaitForCRDsEstablished_timeout(t *testing.T) {
 	}
 
 	// CRD exists but never gets Established condition
-	crd := &unstructured.Unstructured{Object: map[string]interface{}{
+	crd := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apiextensions.k8s.io/v1",
 		"kind":       "CustomResourceDefinition",
-		"metadata":   map[string]interface{}{"name": "packages.cozystack.io"},
+		"metadata":   map[string]any{"name": "packages.cozystack.io"},
 	}}
 
 	fakeClient := fake.NewClientBuilder().
@@ -201,24 +201,24 @@ func TestWaitForCRDsEstablished_timeout(t *testing.T) {
 // conditions leaves status unset, which is one of the two shapes the wait reads
 // as "not established yet"; the other is a status carrying conditions that do
 // not include an established one.
-func crdObject(name string, conditions []interface{}) *unstructured.Unstructured {
-	obj := map[string]interface{}{
+func crdObject(name string, conditions []any) *unstructured.Unstructured {
+	obj := map[string]any{
 		"apiVersion": "apiextensions.k8s.io/v1",
 		"kind":       "CustomResourceDefinition",
-		"metadata":   map[string]interface{}{"name": name},
+		"metadata":   map[string]any{"name": name},
 	}
 	if conditions != nil {
-		obj["status"] = map[string]interface{}{"conditions": conditions}
+		obj["status"] = map[string]any{"conditions": conditions}
 	}
 	return &unstructured.Unstructured{Object: obj}
 }
 
-func establishedConditions() []interface{} {
-	return []interface{}{map[string]interface{}{"type": "Established", "status": "True"}}
+func establishedConditions() []any {
+	return []any{map[string]any{"type": "Established", "status": "True"}}
 }
 
-func unestablishedConditions() []interface{} {
-	return []interface{}{map[string]interface{}{"type": "NamesAccepted", "status": "True"}}
+func unestablishedConditions() []any {
+	return []any{map[string]any{"type": "NamesAccepted", "status": "True"}}
 }
 
 // cancellationScheme returns the scheme the cancellation tests share.
@@ -328,7 +328,7 @@ func TestWaitForCRDsEstablished_cancelledAfterPollKeepsName(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
-		conditions []interface{}
+		conditions []any
 	}{
 		{name: "status absent", conditions: nil},
 		{name: "no established condition", conditions: unestablishedConditions()},

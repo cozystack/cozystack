@@ -251,8 +251,7 @@ func (r *VMImportTaskReconciler) reconcileVM(
 	// the VMs that are unmapped, never the networks or datastores they use.
 	// Scoped to this VM so a bad reference fails it alone (see sourceTopology).
 	if learned, err := r.populateMaps(ctx, task, src, req); err != nil {
-		var nf *notFoundError
-		if errors.As(err, &nf) {
+		if nf, ok := errors.AsType[*notFoundError](err); ok {
 			status.Phase = migrationv1alpha1.VMImportTaskPhaseFailed
 			status.Reason = migrationv1alpha1.ReasonVMNotFound
 			status.Message = nf.Error()

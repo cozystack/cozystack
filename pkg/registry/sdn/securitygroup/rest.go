@@ -11,7 +11,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,8 +133,8 @@ func sgFromSelector(sel metav1.LabelSelector) (string, bool) {
 		return "", false
 	}
 	for k := range sel.MatchLabels {
-		if strings.HasPrefix(k, sdnv1alpha1.MembershipLabelPrefix) {
-			return strings.TrimPrefix(k, sdnv1alpha1.MembershipLabelPrefix), true
+		if after, ok := strings.CutPrefix(k, sdnv1alpha1.MembershipLabelPrefix); ok {
+			return after, true
 		}
 	}
 	return "", false
@@ -324,12 +326,7 @@ func stripInternalAnnotations(m map[string]string) map[string]string {
 
 // hasFinalizer reports whether list contains the named finalizer.
 func hasFinalizer(list []string, name string) bool {
-	for _, f := range list {
-		if f == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, name)
 }
 
 // dryRunDeleteResult derives the object and synchronous-delete result that the
@@ -438,9 +435,7 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// Kubernetes PUT semantics — a label or annotation the caller drops must
 	// disappear, not linger from the previous object.
 	out.Labels = make(map[string]string, len(sg.Labels)+1)
-	for k, v := range sg.Labels {
-		out.Labels[k] = v
-	}
+	maps.Copy(out.Labels, sg.Labels)
 	// The marker label is owned by the storage and must always win, so it is set
 	// last. Otherwise a tenant could submit spec labels that overwrite it and
 	// orphan an enforced policy — created and applied by Cilium, but invisible
@@ -452,9 +447,7 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// spec.attachments — so the tenant cannot set or clobber it directly, and a
 	// cleared attachments list drops the annotation rather than leaving it stale.
 	out.Annotations = make(map[string]string, len(sg.Annotations)+1)
-	for k, v := range sg.Annotations {
-		out.Annotations[k] = v
-	}
+	maps.Copy(out.Annotations, sg.Annotations)
 	if enc := encodeAttachments(sg.Spec.Attachments); enc != "" {
 		out.Annotations[attachmentsAnnotation] = enc
 	} else {
@@ -1102,7 +1095,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	now := time.Now()
 	row := func(o *sdnv1alpha1.SecurityGroup) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
+			Cells:  []any{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}

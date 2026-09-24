@@ -27,8 +27,6 @@ import (
 	"github.com/cozystack/cozystack/internal/backupcontroller/kafkatypes"
 )
 
-func strp(s string) *string { return &s }
-
 func TestValidateKafkaApplicationRef(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -36,9 +34,9 @@ func TestValidateKafkaApplicationRef(t *testing.T) {
 		wantErr bool
 	}{
 		{"kind Kafka, empty group", corev1.TypedLocalObjectReference{Kind: "Kafka"}, false},
-		{"kind Kafka, default group", corev1.TypedLocalObjectReference{Kind: "Kafka", APIGroup: strp("apps.cozystack.io")}, false},
+		{"kind Kafka, default group", corev1.TypedLocalObjectReference{Kind: "Kafka", APIGroup: new("apps.cozystack.io")}, false},
 		{"wrong kind", corev1.TypedLocalObjectReference{Kind: "Postgres"}, true},
-		{"wrong group", corev1.TypedLocalObjectReference{Kind: "Kafka", APIGroup: strp("kafka.strimzi.io")}, true},
+		{"wrong group", corev1.TypedLocalObjectReference{Kind: "Kafka", APIGroup: new("kafka.strimzi.io")}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,7 +127,7 @@ func TestReconcileKafka_RejectsWrongKind(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
 		Spec: backupsv1alpha1.BackupJobSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: strp("apps.cozystack.io"), Kind: "Postgres", Name: "pg",
+				APIGroup: new("apps.cozystack.io"), Kind: "Postgres", Name: "pg",
 			},
 			BackupClassName: "cozy-default",
 		},
@@ -199,7 +197,7 @@ func newKafkaStrategy(name string) *strategyv1alpha1.Kafka {
 }
 
 func kafkaAppRef(name string) corev1.TypedLocalObjectReference {
-	return corev1.TypedLocalObjectReference{APIGroup: strp(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Kafka", Name: name}
+	return corev1.TypedLocalObjectReference{APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Kafka", Name: name}
 }
 
 // TestReconcileKafka_WaitsForNotReadyCluster: while the Strimzi Kafka cluster is
@@ -303,7 +301,7 @@ func restoreJobRunning(name, namespace string, target *corev1.TypedLocalObjectRe
 // absent source "src" and fail.
 func TestReconcileKafkaRestore_ToCopy(t *testing.T) {
 	rj := restoreJobRunning("rj", "tenant",
-		&corev1.TypedLocalObjectReference{APIGroup: strp(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Kafka", Name: "dst"})
+		&corev1.TypedLocalObjectReference{APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Kafka", Name: "dst"})
 	backup := kafkaBackup("bk", "tenant") // source "src", artifact URI recorded
 	completed := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj-restore"},

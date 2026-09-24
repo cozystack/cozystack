@@ -80,8 +80,7 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	secretName, err := projectCredentials(ctx, r.Client, src)
 	if err != nil {
-		var perr *ProjectionError
-		if errors.As(err, &perr) {
+		if perr, ok := errors.AsType[*ProjectionError](err); ok {
 			return r.fail(ctx, src, perr.Reason, perr.Message)
 		}
 		return ctrl.Result{}, err
@@ -107,8 +106,7 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// a Host against its provider, so creating one first only produces an
 	// object that cannot validate yet.
 	if err := r.ensureHosts(ctx, src); err != nil {
-		var perr *ProjectionError
-		if errors.As(err, &perr) {
+		if perr, ok := errors.AsType[*ProjectionError](err); ok {
 			return r.fail(ctx, src, perr.Reason, perr.Message)
 		}
 		return ctrl.Result{}, err
@@ -150,16 +148,16 @@ func (r *VMImportSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 func (r *VMImportSourceReconciler) ensureProviders(ctx context.Context, src *migrationv1alpha1.VMImportSource, secretName string) error {
 	owner := ownerRef(migrationv1alpha1.GroupVersion.WithKind("VMImportSource"), src.Name, src.UID)
 
-	sourceSpec := map[string]interface{}{
+	sourceSpec := map[string]any{
 		"type": string(src.Spec.Type),
 		"url":  src.Spec.URL,
-		"secret": map[string]interface{}{
+		"secret": map[string]any{
 			"name":      secretName,
 			"namespace": src.Namespace,
 		},
 	}
 	if src.Spec.Type == migrationv1alpha1.ProviderVSphere && r.VDDKImage != "" {
-		sourceSpec["settings"] = map[string]interface{}{
+		sourceSpec["settings"] = map[string]any{
 			"vddkInitImage": r.VDDKImage,
 		}
 	}
@@ -167,10 +165,10 @@ func (r *VMImportSourceReconciler) ensureProviders(ctx context.Context, src *mig
 		return err
 	}
 
-	destSpec := map[string]interface{}{
+	destSpec := map[string]any{
 		"type":   "openshift",
 		"url":    "",
-		"secret": map[string]interface{}{},
+		"secret": map[string]any{},
 	}
 	return r.applyProvider(ctx, src, destinationProviderName(src.Name), destSpec, owner)
 }
@@ -193,14 +191,14 @@ func (r *VMImportSourceReconciler) ensureHosts(ctx context.Context, src *migrati
 			return err
 		}
 
-		spec := map[string]interface{}{
+		spec := map[string]any{
 			"id":        h.ID,
 			"ipAddress": h.Address,
-			"provider": map[string]interface{}{
+			"provider": map[string]any{
 				"name":      sourceProviderName(src.Name),
 				"namespace": src.Namespace,
 			},
-			"secret": map[string]interface{}{
+			"secret": map[string]any{
 				"name":      secretName,
 				"namespace": src.Namespace,
 			},
@@ -310,7 +308,7 @@ func (r *VMImportSourceReconciler) applyProvider(
 	ctx context.Context,
 	src *migrationv1alpha1.VMImportSource,
 	name string,
-	spec map[string]interface{},
+	spec map[string]any,
 	owner metav1.OwnerReference,
 ) error {
 	existing := newObject(providerGVK)
@@ -367,7 +365,7 @@ func (r *VMImportSourceReconciler) providerVerdict(ctx context.Context, src *mig
 	conditions, _, _ := unstructured.NestedSlice(provider.Object, "status", "conditions")
 	var critical []string
 	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
+		cond, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -427,7 +425,7 @@ func conditionChanged(existing []metav1.Condition, cond metav1.Condition) bool {
 		current.ObservedGeneration != cond.ObservedGeneration
 }
 
-func specEqual(a, b map[string]interface{}) bool {
+func specEqual(a, b map[string]any) bool {
 	return equality.Semantic.DeepEqual(a, b)
 }
 
