@@ -8,6 +8,7 @@ import (
 type WorkloadMonitorSpec struct {
 	// Selector is a label selector to find workloads to monitor
 	// +required
+	// +kubebuilder:validation:MinProperties=1
 	Selector map[string]string `json:"selector"`
 
 	// Kind specifies the kind of the workload
