@@ -178,7 +178,8 @@ validate_graph() {
   # One awk pass checks every reference and walks every node once. The former
   # shell cycle walk restarted from each owner and the dangling check spawned a
   # grep per edge, both too expensive once ordinary output shared validation.
-  if graph_errors=$(printf '%s\n' "$FORWARD" | awk -v known_nodes="$NODES" -F'\t' '
+  # BWK awk rejects literal newlines in -v assignments.
+  if graph_errors=$(printf '%s\n' "$FORWARD" | SELECT_INSTALL_NODES="$NODES" awk -F'\t' '
     function visit(node, i, next_node) {
       if (state[node] == 1) {
         cycle = node
@@ -196,7 +197,7 @@ validate_graph() {
       return 0
     }
     BEGIN {
-      count = split(known_nodes, known_list, "\n")
+      count = split(ENVIRON["SELECT_INSTALL_NODES"], known_list, "\n")
       for (i = 1; i <= count; i++)
         known[known_list[i]] = 1
     }
