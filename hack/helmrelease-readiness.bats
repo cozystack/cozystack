@@ -142,6 +142,43 @@ helmrelease_snapshot() {
     fi
 }
 
+@test "a failed read invalidates a stability window already in progress" {
+    # The list-error branch resets stable_fingerprint and stable_since, and the
+    # "transient list error" case above does not pin that: its read fails on the
+    # first call, when there is no window to invalidate. Reverting the reset left
+    # the suite green. Here the failure lands mid-window, so a gate that kept
+    # counting through it returns at the original start plus quiet_seconds
+    # instead of restarting the clock -- which would accept a set that was never
+    # observed stable across the gap.
+    . hack/e2e-wait-helmreleases.sh
+    clock=$(mktemp)
+    calls=$(mktemp)
+    printf '0\n' > "$clock"
+    date() { sed -n '1p' "$clock"; }
+    sleep() {
+        now=$(sed -n '1p' "$clock")
+        printf '%s\n' "$(( now + $1 ))" > "$clock"
+    }
+    kubectl() {
+        count=$(wc -l < "$calls")
+        printf 'call\n' >> "$calls"
+        # Ready on the first read, unreadable on the second, Ready again after:
+        # the window opens at t=0, is broken at t=2, and may only complete a
+        # full quiet period measured from the read that reopened it.
+        if [ "$count" -eq 1 ]; then
+            echo 'temporary apiserver error' >&2
+            return 1
+        fi
+        helmrelease_snapshot 11
+    }
+
+    cozy_wait_all_helmreleases_ready 60 11 6 2 >/dev/null 2>&1
+    if [ "$(sed -n '1p' "$clock")" -lt 10 ]; then
+        echo "the gate counted the broken read as part of the stability window" >&2
+        exit 1
+    fi
+}
+
 @test "a read slower than the poll interval is charged against the deadline" {
     # `now` is sampled after the list read, not before it. Sampled before, a read
     # that costs more than the poll interval is priced at zero and the loop buys
