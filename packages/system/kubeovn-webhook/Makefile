@@ -18,8 +18,6 @@ image:
 # and SKIPS any package that has no such target. This package carried three
 # suites under tests/ that consequently never ran in CI -- including the port
 # agreement guard, whose whole purpose is to catch a drift that fails open.
-# --with-subchart=false matches the other packages: run only our own suites.
-#
 # Declared phony because hack/package.mk's .PHONY line does not carry `test`:
 # without this a path named `test` next to the Makefile would make the target
 # up to date and skip the recipe, which is the same fail-open shape the port
@@ -27,4 +25,4 @@ image:
 # fact; this prevents it here.
 .PHONY: test
 test:
-	helm unittest --with-subchart=false .
+	helm unittest .

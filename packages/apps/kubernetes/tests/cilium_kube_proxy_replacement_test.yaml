@@ -1,17 +1,16 @@
 suite: tenant cilium kube-proxy-replacement override beacon
 # addons.cilium.valuesOverride is x-kubernetes-preserve-unknown-fields, so a
 # tenant can set cilium.kubeProxyReplacement: false for its own cluster. That is
-# the one path by which the value reaches a live cluster without a cozystack
-# commit, and it silently reopens the ClusterIP path to the guest cluster's own
-# ingress-nginx admission webhook -- the source-side deny there names the
-# backend port only, which covers the ClusterIP solely because Cilium performs
-# the service DNAT ahead of its own egress hook.
+# the one path by which the unsupported value reaches a live cluster without a
+# cozystack commit. It can break ClusterIP routing and removes the ingress-nginx
+# policy's source-side pre-DNAT match, but the target-side ingressDeny remains;
+# the override does not imply that the webhook becomes reachable.
 #
 # The override is assembled on the MANAGEMENT cluster, in this chart, which is
 # why the mismatch is detectable here at all. Same beacon mechanism as the
 # -awaiting-etcd ConfigMap in templates/cluster.yaml: something an operator and
-# an alert can both see, rather than a fail() that would take the tenant's only
-# CNI down over a weakened defence-in-depth control.
+# an alert can both see. It diagnoses an unsupported override rather than
+# defining an alternative compatibility mode.
 templates:
   - templates/helmreleases/cilium.yaml
 values:
@@ -61,7 +60,7 @@ tests:
           value: ConfigMap
       - matchRegex:
           path: data.message
-          pattern: "will not perform the ClusterIP DNAT ahead of"
+          pattern: "supports guest cluster networking only when"
         documentSelector:
           path: kind
           value: ConfigMap
