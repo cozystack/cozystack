@@ -1,0 +1,11 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: unreachable
+spec:
+  source:
+    http:
+      url: http://vm-disk-e2e.invalid/disk.img
+  optical: false
+  storage: 1Gi
+  storageClass: ($values.storageClass)

@@ -84,6 +84,7 @@ spec:
                 additionalProperties:
                   type: string
                 description: Selector is a label selector to find workloads to monitor
+                minProperties: 1
                 type: object
               type:
                 description: Type specifies the type of the workload
@@ -101,6 +102,11 @@ spec:
                 description: AvailableReplicas is the number of ready replicas
                 format: int32
                 type: integer
+              message:
+                description: |-
+                  Message names what keeps the workload from being operational, when the
+                  controller can tell.
+                type: string
               observedReplicas:
                 description: ObservedReplicas is the total number of pods observed
                 format: int32
@@ -109,6 +115,11 @@ spec:
                 description: Operational indicates if the workload meets all operational
                   requirements
                 type: boolean
+              reason:
+                description: |-
+                  Reason is a machine-readable cause for Message, such as
+                  DataVolumeNotReady.
+                type: string
             type: object
         type: object
     served: true

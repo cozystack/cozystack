@@ -340,3 +340,85 @@ func TestGetWorkloadsOperational_DifferentApp_NotFound(t *testing.T) {
 	}
 }
 
+func TestConvertConditions_WorkloadsReadyCarriesMonitorMessages(t *testing.T) {
+	monitor := func(name string, operational bool, message, reason string) *cozyv1alpha1.WorkloadMonitor {
+		return &cozyv1alpha1.WorkloadMonitor{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "default",
+				Labels: map[string]string{
+					appsv1alpha1.ApplicationKindLabel:  "PostgreSQL",
+					appsv1alpha1.ApplicationGroupLabel: "apps.cozystack.io",
+					appsv1alpha1.ApplicationNameLabel:  "mydb",
+				},
+			},
+			Status: cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(operational), Message: message, Reason: reason},
+		}
+	}
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "postgresql-mydb",
+			Namespace: "default",
+			Labels: map[string]string{
+				ApplicationKindLabel:  "PostgreSQL",
+				ApplicationGroupLabel: "apps.cozystack.io",
+				ApplicationNameLabel:  "mydb",
+			},
+		},
+	}
+	hr.Status.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "ok"},
+	}
+
+	cases := []struct {
+		name     string
+		monitors []runtime.Object
+		want     string
+		reason   string
+	}{
+		{
+			"messages of the monitors that are not operational, sorted",
+			[]runtime.Object{
+				monitor("mon-b", false, "DataVolume b is ImportInProgress", cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady),
+				monitor("mon-a", false, "DataVolume a is Failed", cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady),
+				monitor("mon-c", true, "", ""),
+			},
+			"DataVolume a is Failed; DataVolume b is ImportInProgress",
+			cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
+		},
+		{
+			"a named cause beside a monitor that names none",
+			[]runtime.Object{
+				monitor("mon-a", false, "", ""),
+				monitor("mon-b", false, "DataVolume b is Failed", cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady),
+			},
+			"DataVolume b is Failed",
+			cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
+		},
+		{
+			"generic message when no monitor names a cause",
+			[]runtime.Object{monitor("mon-a", false, "", "")},
+			"One or more workloads are not operational",
+			"WorkloadMonitorCheck",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRESTWithSchemes(tc.monitors...)
+			app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			wc := findCondition(app.GetConditions(), "WorkloadsReady")
+			if wc == nil || wc.Status != metav1.ConditionFalse {
+				t.Fatalf("WorkloadsReady = %+v, want False", wc)
+			}
+			if wc.Message != tc.want {
+				t.Errorf("message = %q, want %q", wc.Message, tc.want)
+			}
+			if wc.Reason != tc.reason {
+				t.Errorf("reason = %q, want %q", wc.Reason, tc.reason)
+			}
+		})
+	}
+}

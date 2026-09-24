@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1535,6 +1536,12 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			// Concrete failure takes priority over unknown/pending state
 			workloadsCondition.Status = metav1.ConditionFalse
 			workloadsCondition.Message = "One or more workloads are not operational"
+			if len(ws.messages) > 0 {
+				workloadsCondition.Message = strings.Join(ws.messages, "; ")
+			}
+			if ws.reason != "" {
+				workloadsCondition.Reason = ws.reason
+			}
 		case ws.unknown:
 			workloadsCondition.Status = metav1.ConditionUnknown
 			workloadsCondition.Reason = "Pending"
@@ -1577,6 +1584,12 @@ type workloadsStatus struct {
 	operational bool
 	found       bool
 	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// messages are the non-empty status messages of the monitors that are not
+	// operational, sorted so repeated conversions produce identical content.
+	messages []string
+	// reason is the status Reason of a monitor that is not operational and
+	// names its cause, such as DataVolumeNotReady; empty when none does.
+	reason string
 	// transitionTime is the most recent metadata update time across the
 	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
 	// repeated conversions for the same underlying state produce stable
@@ -1623,19 +1636,32 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 	}
 	operational := true
 	unknown := false
+	var messages, reasons []string
 	var latest metav1.Time
 	for _, m := range monitors.Items {
 		if m.Status.Operational == nil {
 			unknown = true
 		} else if !*m.Status.Operational {
 			operational = false
+			if m.Status.Message != "" {
+				messages = append(messages, m.Status.Message)
+			}
+			if m.Status.Reason != "" {
+				reasons = append(reasons, m.Status.Reason)
+			}
 		}
 		// Pick the most recent monitor mtime as a stable transition time.
 		if t := latestMonitorTime(&m); t.After(latest.Time) {
 			latest = t
 		}
 	}
-	return workloadsStatus{operational: operational, found: true, unknown: unknown, transitionTime: latest}, nil
+	sort.Strings(messages)
+	sort.Strings(reasons)
+	var reason string
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, reason: reason, transitionTime: latest}, nil
 }
 
 // latestMonitorTime returns the most recent timestamp associated with a
@@ -1822,6 +1848,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1832,7 +1859,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	for i := range apps {
 		app := &apps[i]
 		row := metav1.TableRow{
-			Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
@@ -1847,6 +1874,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1856,7 +1884,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 
 	a := app
 	row := metav1.TableRow{
-		Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)
@@ -1886,10 +1914,11 @@ func computeAge(creationTime, currentTime time.Time) string {
 	return duration.HumanDuration(ageDuration)
 }
 
-// getReadyStatus returns the ready status based on conditions
-func getReadyStatus(conditions []metav1.Condition) string {
+// conditionStatus returns the status of the condition of the given type, or
+// absent when there is none.
+func conditionStatus(conditions []metav1.Condition, conditionType, absent string) string {
 	for _, condition := range conditions {
-		if condition.Type == "Ready" {
+		if condition.Type == conditionType {
 			switch condition.Status {
 			case metav1.ConditionTrue:
 				return "True"
@@ -1900,7 +1929,7 @@ func getReadyStatus(conditions []metav1.Condition) string {
 			}
 		}
 	}
-	return "Unknown"
+	return absent
 }
 
 // computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
