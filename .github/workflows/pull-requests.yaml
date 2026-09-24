@@ -642,9 +642,13 @@ jobs:
       # A base that is neither main nor a line (a stacked PR's feature branch) has
       # no artifact, and a `/` in it is not even a valid OCI tag. It reads the
       # artifact of whichever of main and the lines it has the fewest commits on
-      # top of. A tie goes to main, so a stack on a line keeps that line's
-      # generation only once the line has a commit of its own: a line fresh off
-      # main is topologically the same as main at that commit.
+      # top of. A tie goes to main. A line with no commit of its own yet is, in
+      # the graph, main at the cut commit, so a stack on it ties and reads the
+      # artifact built from main's tip. That artifact carries newer images than
+      # the line once main moves past the cut. The stack keeps reading it until
+      # it contains a commit of the line's own. Breaking the tie towards the
+      # line instead would misroute the far more common branch forked from main
+      # before the cut, which ties the same way.
       #
       # A missing artifact stays a no-op (packages keep their committed refs), which
       # also covers a line whose first build-release run has not landed yet.
