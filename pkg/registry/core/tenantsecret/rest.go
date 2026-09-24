@@ -472,10 +472,10 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return watch.NewProxyWatcher(ch), nil
 	}
 
-	// For a SendInitialEvents (WatchList) request, ask the backing watch for
-	// bookmarks — the apiserver omits them by default, which would leave the
-	// terminating initial-events-end bookmark with no reliable trigger.
-	sendInitialEvents := opts.SendInitialEvents != nil && *opts.SendInitialEvents
+	// For a WatchList request, ask the backing watch for bookmarks — the
+	// apiserver omits them by default, which would leave the terminating
+	// initial-events-end bookmark with no reliable trigger.
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(opts)
 
 	secList := &corev1.SecretList{}
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
@@ -484,7 +484,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		Raw: &metav1.ListOptions{
 			Watch:               true,
 			ResourceVersion:     opts.ResourceVersion,
-			AllowWatchBookmarks: sendInitialEvents,
+			AllowWatchBookmarks: initialEventsEnd,
 		},
 	})
 	if err != nil {
@@ -501,7 +501,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	// Emit the initial-events-end bookmark after the initial ADDED events so
 	// client-go reflectors reach HasSynced.
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, opts.ResourceVersion, func() runtime.Object {
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, opts.ResourceVersion, func() runtime.Object {
 		return &corev1alpha1.TenantSecret{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
