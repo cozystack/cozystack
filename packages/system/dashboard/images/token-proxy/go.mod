@@ -1,6 +1,6 @@
 module token-proxy
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/gorilla/securecookie v1.1.2

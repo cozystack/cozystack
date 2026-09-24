@@ -1,4 +1,4 @@
-FROM golang:1.26@sha256:6c2a5538f964f1c82f97ad14988bf05de100d922d159d0e398b54c7b0ca0c6c9 AS builder
+FROM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
 
 ARG VERSION=v1.11.2
 ARG LINSTOR_WAIT_UNTIL_VERSION=v0.3.1
@@ -13,6 +13,13 @@ COPY patches /patches
 RUN git apply /patches/*.diff
 
 RUN go mod download
+
+# Upstream pins grpc v1.81.0, which uses http2.TrailerPrefix; on Go 1.27
+# golang.org/x/net builds http2 on top of net/http and no longer defines it.
+# v1.83.2 also carries the fix for GO-2026-6443, a server panic reachable
+# through the CSI gRPC endpoint.
+RUN go get google.golang.org/grpc@v1.83.2 && \
+    go mod tidy
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 \
     go build \

@@ -2,7 +2,7 @@
 
 module github.com/cozystack/cozystack
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/cert-manager/cert-manager v1.17.4

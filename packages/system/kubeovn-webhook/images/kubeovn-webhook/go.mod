@@ -1,6 +1,6 @@
 module kube-ovn-webhook
 
-go 1.26.4
+go 1.27.1
 
 require (
 	github.com/mattbaird/jsonpatch v0.0.0-20240118010651-0ba75a80ca38
