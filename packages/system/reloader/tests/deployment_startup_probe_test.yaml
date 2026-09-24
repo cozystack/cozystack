@@ -1,0 +1,96 @@
+suite: cozy-reloader startup probe
+release:
+  name: reloader
+  namespace: cozy-reloader
+tests:
+  # The vendored Reloader chart renders no startupProbe. Reloader binds its
+  # :9090 listener as the last statement of startReloader, after a package-level
+  # GET /apis/project.openshift.io that carries no deadline, so a slow first
+  # start answers every probe with a connection refused and gets killed inside
+  # the ~60s liveness budget, restarting into a loop that never finishes the
+  # prologue. patches/deployment-startup-probe.diff adds the probe that gates
+  # liveness on that window. If a chart refresh drops the patch, or an upstream
+  # refactor renames the port or the endpoint, these asserts fail before the
+  # restart loop can come back.
+  - it: renders a startup probe covering the slow-start window
+    template: charts/reloader/templates/deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].startupProbe
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /live
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http
+      # Budget = periodSeconds * failureThreshold. Both values are pinned so a
+      # refresh that zeroed either one still falls out here; changing the budget
+      # on purpose means changing this test with it.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 45
+      # Pinned because the kubelet default is 1s, and at this container's 100m
+      # CPU limit a throttled process can hold the socket open while still
+      # needing longer than a second to answer. Dropping this key would burn all
+      # 45 attempts on timeouts and kill the container anyway.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 5
+
+  # The template renders the stanza under `with`, so an unset value has to emit
+  # nothing at all: the patch stays upstream-compatible only as long as that
+  # holds. A refactor to `if` plus `toYaml` without the guard would emit
+  # `startupProbe: null` and the happy-path case above would not notice.
+  - it: emits no startup probe when the value is unset
+    template: charts/reloader/templates/deployment.yaml
+    set:
+      reloader.reloader.deployment.startupProbe: null
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      # Unsetting the startup probe must not disturb what upstream renders.
+      - exists:
+          path: spec.template.spec.containers[0].livenessProbe
+
+  # The startup probe covers the pre-bind window and nothing else: once it
+  # succeeds the kubelet falls back on the upstream probes at their own cadence,
+  # so those have to survive the patch untouched.
+  #
+  # The liveness numbers are pinned, not just its endpoint, because they are the
+  # premise the startup probe is sized against: initialDelaySeconds 10 +
+  # periodSeconds 10 * failureThreshold 5 is the ~60s budget that the package
+  # values.yaml quotes as the window a slow start overruns. An upstream refresh
+  # that moved failureThreshold to 2 would tighten that window, and one that
+  # moved it to 30 would make this patch redundant; either way the documented
+  # arithmetic would silently stop describing the chart. Pin them so the
+  # rationale cannot rot without a red test.
+  - it: leaves the upstream liveness and readiness probes intact
+    template: charts/reloader/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /live
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /metrics
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
