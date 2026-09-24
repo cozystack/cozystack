@@ -322,7 +322,7 @@ spec:
 
 A `RestoreJob` restores a `Postgres` application from a `Backup`. Omit `spec.options.recoveryTime` to recover to the latest point in the WAL archive; set it (RFC3339) to recover the database to an exact instant — a point-in-time recovery (PITR). The CNPG barman-cloud plugin restores a base backup and replays archived WAL from it: up to `recoveryTime` when one is set, so the restored cluster reflects the database as of that instant and later writes are absent, and to the end of the archive otherwise.
 
-The base backup a restore starts from is the one the `Backup` refers to: the driver passes its barman backup ID to CNPG as `bootstrap.recovery.recoveryTarget.backupID`. The one exception is a `recoveryTime` earlier than one second after that backup ended, which the backup cannot serve (recovery would have to stop before the backup is consistent); for it the choice is left to the plugin, which takes the newest base backup that ended at or before `recoveryTime`. Left to itself for every restore, the plugin would start from the newest base backup in the archive whenever `recoveryTime` is empty, and from the newest one ending by `recoveryTime` otherwise, whichever `Backup` the `RestoreJob` names and on any timeline — see [Archives with several timelines](#archives-with-several-timelines) for why that matters.
+The base backup a restore starts from is the one the `Backup` refers to: the driver passes its barman backup ID to CNPG as `bootstrap.recovery.recoveryTarget.backupID`. There are two exceptions, and for both the choice is left to the plugin. The first is a `recoveryTime` earlier than one second after that backup ended, which the backup cannot serve (recovery would have to stop before the backup is consistent); the plugin then takes the newest base backup that ended at or before `recoveryTime`. The second is a `Backup` whose `cnpg.io/Backup` no longer exists: retention (`barmanObjectStore.retentionPolicy`) deletes it together with the base backup it describes, so the archive can no longer start from that backup, and the `RestoreJob` records a `BaseBackupGone` warning event. Left to itself for every restore, the plugin would start from the newest base backup in the archive whenever `recoveryTime` is empty, and from the newest one ending by `recoveryTime` otherwise, whichever `Backup` the `RestoreJob` names and on any timeline — see [Archives with several timelines](#archives-with-several-timelines) for why that matters.
 
 ```yaml
 apiVersion: backups.cozystack.io/v1alpha1
@@ -367,8 +367,7 @@ kubectl -n <ns> get backups.postgresql.cnpg.io \
   --sort-by=.status.stoppedAt \
   -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,ID:.status.backupId,START:.status.startedAt,STOP:.status.stoppedAt,BEGINWAL:.status.beginWal,ENDWAL:.status.endWal
 
-# The cozystack Backup points at its underlying cnpg.io/Backup, its barman
-# backup ID and its S3 prefix.
+# The cozystack Backup points at its underlying cnpg.io/Backup and S3 prefix.
 kubectl -n <ns> get backup.backups.cozystack.io <name> -o jsonpath='{.spec.driverMetadata}'
 ```
 
@@ -378,7 +377,7 @@ The upper bound is the timestamp of the last `COMMIT` or `ABORT` record in the a
 
 A WAL archive can hold several PostgreSQL timelines under one `serverName`. Every failover starts one, and so did every in-place restore made before restored clusters archived to a fresh prefix (`bootstrap.newServerName`): those wrote the new timeline back into the prefix they had recovered from, often without its `.history` file, so the archive ends up with branches that are siblings rather than a single line of descent.
 
-Recovery follows `recovery_target_timeline: latest`, which CNPG leaves as PostgreSQL's default: starting from the base backup's timeline, PostgreSQL looks for the history file of the next timeline, then the next, and follows the last one it finds, replaying only the segments on that line of descent. Without any history file that is the base backup's own timeline alone. Two consequences:
+Recovery follows `recovery_target_timeline: latest`, which CNPG leaves as PostgreSQL's default: starting from the base backup's timeline, PostgreSQL looks for the history file of the next timeline number, then the next, stops at the first one missing, and targets the last one it found, replaying only the segments on that line of descent. Without any history file that is the base backup's own timeline alone. When the timeline it targets does not descend from the base backup — a sibling branch whose history file happens to carry the next number — recovery does not fall back to another timeline: it stops with `FATAL: requested timeline N is not a child of this server's history` (or `... is not in this server's history`). Two consequences:
 
 - the last archived transaction that bounds a restore is the last one on the timeline that restore follows, not the newest one in the archive;
 - a restore must start from a base backup on the branch it means to bring back. The plugin's own choice ignores timelines — CNPG passes no `targetTLI` — so the newest backup, or the newest one ending by `recoveryTime`, can lie on another branch and restore that branch's data instead. The driver pins the `Backup`'s own base backup with `recoveryTarget.backupID` for that reason; a `recoveryTime` earlier than that backup's end still goes through the plugin's time-based choice, and on such an archive can land on another branch.
