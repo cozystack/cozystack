@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -282,5 +283,7 @@ func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out
 	if len(req.Object.Raw) == 0 {
 		return errors.New("empty admission object")
 	}
-	return json.Unmarshal(req.Object.Raw, &out.Object)
+	// encoding/json would turn every number into float64, and an int64 above
+	// 2^53 would come back altered in the patch computed against req.Object.Raw.
+	return utiljson.Unmarshal(req.Object.Raw, &out.Object)
 }
