@@ -34,6 +34,10 @@ spec:
 
   - name: wait-ready
     try:
+    # Deliberately under the floor: kafka-rd sets a 7h install timeout, which
+    # no budget inside the E2E job's cap can clear, so a failed install here
+    # reports as a bare assert timeout and the catch block's describe of the
+    # HelmRelease is where its state is read.
     - assert:
         timeout: 6m
         resource:
