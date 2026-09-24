@@ -452,6 +452,82 @@ kubectl() { printf '%s\n' "$*"; }
   fi
 }
 
+@test "immediate binding is requested on the DataVolume and its claim once both exist" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  calls=$(mktemp)
+  gets=$(mktemp)
+  printf '0\n' >"$gets"
+  sleep() { :; }
+  # The claim shows up two polls after the DataVolume, as CDI creates it.
+  kubectl() {
+    case "$*" in
+      *" get datavolume "*) return 0 ;;
+      *" get pvc "*)
+        n=$(( $(cat "$gets") + 1 ))
+        printf '%s\n' "$n" >"$gets"
+        [ "$n" -ge 3 ]
+        ;;
+      *" annotate "*) printf '%s\n' "$*" >>"$calls" ;;
+      *) return 1 ;;
+    esac
+  }
+
+  cozy_request_immediate_binding tenant-test vm-disk-test
+  annotated=$(cat "$calls")
+  polls=$(cat "$gets")
+  rm -f "$calls" "$gets"
+
+  if [ "$annotated" != '-n tenant-test annotate datavolume,pvc vm-disk-test cdi.kubevirt.io/storage.bind.immediate.requested= --overwrite' ]; then
+    echo "unexpected annotate call: $annotated" >&2
+    return 1
+  fi
+  if [ "$polls" != 3 ]; then
+    echo "annotated before the claim existed (claim polls: $polls)" >&2
+    return 1
+  fi
+}
+
+@test "immediate binding gives up when the claim never appears" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  calls=$(mktemp)
+  clock=$(mktemp)
+  printf '1000\n' >"$clock"
+  date() { cat "$clock"; }
+  sleep() { printf '%s\n' "$(( $(cat "$clock") + 60 ))" >"$clock"; }
+  kubectl() {
+    case "$*" in
+      *" get datavolume vm-disk-test "*) return 0 ;;
+      *" get pvc vm-disk-test "*) return 1 ;;
+      *" annotate "*) printf '%s\n' "$*" >>"$calls" ;;
+      *) return 0 ;;
+    esac
+  }
+
+  rc=0
+  cozy_request_immediate_binding tenant-test vm-disk-test 2>/dev/null || rc=$?
+  annotated=$(cat "$calls")
+  rm -f "$calls" "$clock"
+
+  if [ "$rc" -eq 0 ] || [ -n "$annotated" ]; then
+    echo "gave up without failing, or annotated anyway: rc=$rc annotated=$annotated" >&2
+    return 1
+  fi
+}
+
+@test "each vminstance disk requests immediate binding for the DataVolume its Test waits on" {
+  suite=hack/e2e-chainsaw/vminstance/chainsaw-test.yaml
+  for test_name in vmdisk vminstance; do
+    requested=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[] | select(.name == \"create-vmdisk\") | .try[] | select(has(\"script\")) | .script.env[] | select(.name == \"DISK\") | .value" "$suite")
+    asserted=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[].try[] | select(.assert.resource.kind == \"DataVolume\") | .assert.resource.metadata.name" "$suite")
+    if [ -z "$requested" ] || [ "$requested" != "$asserted" ]; then
+      echo "$test_name requests immediate binding for '$requested' but waits on DataVolume '$asserted'" >&2
+      return 1
+    fi
+  done
+}
+
 @test "the container-lane CSI override is applied last and re-checked before disk imports" {
   install_suite=hack/e2e-install-cozystack.bats
   last_test=$(grep -n '^@test ' "$install_suite" | tail -n 1)

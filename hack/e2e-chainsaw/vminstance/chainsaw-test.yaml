@@ -36,6 +36,24 @@ spec:
     try:
     - apply:
         file: vmdisk.yaml
+    # `local` binds on first consumer, and a standalone disk has none yet.
+    - script:
+        # Up to 180s for the DataVolume and its claim to appear, plus the
+        # annotate itself; the default 5m exec timeout covers both.
+        env:
+        - name: DISK
+          value: vm-disk-test
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          storage_class=$(cozy_e2e_storage_class)
+          if [ "$storage_class" != local ]; then
+            exit 0
+          fi
+          cozy_request_immediate_binding "$NAMESPACE" "$DISK"
+        check:
+          ($error == null): true
   - name: wait-vmdisk-ready
     try:
     - assert:
@@ -103,6 +121,24 @@ spec:
     try:
     - apply:
         file: vmdisk-vmi.yaml
+    # The VM that will consume this disk is created only once it is Ready.
+    - script:
+        # Up to 180s for the DataVolume and its claim to appear, plus the
+        # annotate itself; the default 5m exec timeout covers both.
+        env:
+        - name: DISK
+          value: vm-disk-vmi-test
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          storage_class=$(cozy_e2e_storage_class)
+          if [ "$storage_class" != local ]; then
+            exit 0
+          fi
+          cozy_request_immediate_binding "$NAMESPACE" "$DISK"
+        check:
+          ($error == null): true
     - assert:
         timeout: 6m
         resource:

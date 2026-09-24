@@ -628,6 +628,30 @@ cozy_cdi_worker_resources_patch() {
   printf '%s\n' '{"spec":{"config":{"podResourceRequirements":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"750m","memory":"4Gi"}}}}}'
 }
 
+# A VMDisk is populated before any VM consumes it, and on a WaitForFirstConsumer
+# class such as `local` CDI starts no worker for it until something asks for
+# immediate binding: the DataVolume sits in PendingPopulation and nothing says
+# so. The vm-disk chart asks only for upload sources, so on the container lane
+# the suite adds the request to the DataVolume and its claim once CDI has
+# created both. CDI reads the annotation by presence, so its value is empty,
+# as the chart writes it for uploads.
+cozy_request_immediate_binding() {
+  local namespace="$1"
+  local name="$2"
+  local deadline=$(( $(date +%s) + 180 ))
+  until kubectl -n "$namespace" get datavolume "$name" --request-timeout=20s >/dev/null 2>&1 \
+    && kubectl -n "$namespace" get pvc "$name" --request-timeout=20s >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "» ERROR: DataVolume and PVC ${namespace}/${name} did not both appear within 180s" >&2
+      kubectl -n "$namespace" get datavolume,pvc --request-timeout=20s 2>&1 | sed 's/^/  /' >&2 || true
+      return 1
+    fi
+    sleep 2
+  done
+  kubectl -n "$namespace" annotate datavolume,pvc "$name" \
+    cdi.kubevirt.io/storage.bind.immediate.requested= --overwrite
+}
+
 # The override lives only in the live LinstorCluster, and a linstor upgrade
 # re-renders that object from a chart that does not carry it. Called before
 # every suite that imports onto `local`, so an override that went missing
