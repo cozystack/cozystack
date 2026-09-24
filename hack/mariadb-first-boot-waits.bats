@@ -4,9 +4,7 @@
 # allow less than that release can legitimately take. The backup walkthroughs
 # of the suites in MBW_SUITES carry such waits, and each suite is checked on
 # its own; for mariadb the chainsaw suite's HR-Ready asserts are checked too.
-# The other suites' HR-Ready asserts sit under the floor by per-suite choice
-# (item 6 of the reviewer checklist in docs/agents/e2e-testing.md) and are
-# left out.
+# The other suites' HR-Ready asserts are not checked here.
 #
 # A wait has two floors and must beat the larger one by MBW_START_MARGIN. The
 # margin is a policy value, not a measurement: it stands for the time the
@@ -106,7 +104,8 @@ MBW_START_MARGIN=60
 MBW_SUITES='mariadb|"mariadb-|packages/apps/mariadb/templates/mariadb.yaml|900
 mongodb|"$MONGODB_|-|1200
 rabbitmq|"$RABBITMQ_|-|900
-clickhouse|"clickhouse-|-|2700'
+clickhouse|"clickhouse-|-|2700
+postgres|"postgres-|-|1980'
 
 # Print one "<release-arg> <timeout>" line per wait_hr_ready call in $1 whose
 # release argument starts with $2, compared as a literal string, or every call
@@ -1141,12 +1140,12 @@ ${mbw_why}: got '${mbw_got}', expected ${mbw_want}"
     #
     # What is pinned is the REMAINDER, not the sum. "The op exceeds the ceilings
     # up to and including the source wait" is the obvious form and it is vacuous here: at
-    # 2520 against 1650 it holds, and it still holds after the waits go to 960s
-    # (2520 against 1950) -- which is exactly the case that must not pass. The
-    # remainder is what the flow spends on everything the ceilings do not name,
+    # 2880 against 2010 it holds, and it still holds after the source wait goes
+    # to 960s (2880 against 2310) -- which is exactly the case that must not
+    # pass. The remainder is what the flow spends on everything the ceilings do not name,
     # and a raise paid out of it is precisely the silent breach.
     #
-    # The slack is zero today: 2520 - 1650 is exactly MBW_OP_REMAINDER, so the
+    # The slack is zero today: 2880 - 2010 is exactly MBW_OP_REMAINDER, so the
     # next raise anywhere in the prefix reds this immediately. That is the
     # intent, not an accident of the numbers.
     #
@@ -1328,6 +1327,16 @@ an op with no timeout was not refused: '${mbw_got}'" ;; esac
     [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
 }
 
+@test "the postgres walkthrough's database waits clear the floor by the start margin" {
+    mbw_err=$(mbw_suite_floor_errors postgres)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the postgres round-trip op keeps its slack once the waits it reaches are paid" {
+    mbw_err=$(mbw_suite_slack_errors postgres)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
 @test "the rabbitmq walkthrough's database waits clear the floor by the start margin" {
     mbw_err=$(mbw_suite_floor_errors rabbitmq)
     [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
@@ -1346,6 +1355,47 @@ an op with no timeout was not refused: '${mbw_got}'" ;; esac
 @test "the clickhouse round-trip op keeps its slack once the waits it reaches are paid" {
     mbw_err=$(mbw_suite_slack_errors clickhouse)
     [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "every table walkthrough's bucket wait clears the floor by the start margin" {
+    # The floor check above holds the database waits only, so a floor failure
+    # names one release. The bucket wait is held here instead, per suite, since
+    # an op check alone accepts a bucket wait that drops back: a lower wait only
+    # widens the slack. bucket-rd has to leave the floor at the server default.
+    mbw_rd=packages/system/bucket-rd/cozyrds/bucket.yaml
+    [ -f "$mbw_rd" ] || { echo "$mbw_rd not found, so the bucket floor cannot be checked against an override" >&2; exit 1; }
+    if grep -qE 'release.cozystack.io/helm-install-(timeout|disable-wait)' "$mbw_rd"; then
+        echo "$mbw_rd moves the install timeout or disables the wait; the bucket floor here assumes neither" >&2
+        exit 1
+    fi
+    mbw_install=$(mbw_install_timeout "$MBW_APISERVER")
+    mbw_fail=
+    for mbw_s in $(printf '%s\n' "$MBW_SUITES" | cut -d'|' -f1); do
+        mbw_b=
+        for mbw_f in "examples/backups/$mbw_s"/*.sh; do
+            mbw_b="$mbw_b$(mbw_db_waits "$mbw_f" '"bucket-')
+"
+        done
+        mbw_n=$(printf '%s' "$mbw_b" | grep -c . || true)
+        if [ "$mbw_n" -ne 1 ]; then
+            mbw_fail="$mbw_fail
+${mbw_s}: expected exactly 1 bucket HelmRelease wait, found ${mbw_n}"
+            continue
+        fi
+        mbw_t=$(printf '%s' "$mbw_b" | awk 'NF { print $NF }')
+        case "$mbw_t" in
+          ''|*[!0-9]*)
+            mbw_fail="$mbw_fail
+${mbw_s}: the bucket wait states no literal budget (got ${mbw_t})"
+            continue
+            ;;
+        esac
+        if [ "$(mbw_wait_clears_floor "$mbw_t" "$mbw_install")" != "ok" ]; then
+            mbw_fail="$mbw_fail
+${mbw_s}: the bucket wait allows ${mbw_t}s; the floor is the ${mbw_install}s release install timeout and a wait must exceed it by MBW_START_MARGIN=${MBW_START_MARGIN}s"
+        fi
+    done
+    [ -z "$mbw_fail" ] || { printf '%s\n' "$mbw_fail" >&2; exit 1; }
 }
 
 @test "the chainsaw suite's HelmRelease-ready asserts beat the same budget" {
@@ -1478,9 +1528,8 @@ an op with no timeout was not refused: '${mbw_got}'" ;; esac
     # bucket wait, as a ceiling the op has to contain. The reason is scope, not
     # the floor: packages/system/bucket-rd sets neither helm-install-timeout
     # nor helm-install-disable-wait, so the bucket release carries the same
-    # 600s floor and its 300s wait is under it. Holding it to the floor would
-    # report a real under-budget, but one that belongs to whoever raises the
-    # bucket waits, and keeping it out keeps a floor failure naming one cause.
+    # 600s floor, and its wait clears it; a test of its own holds that, so a
+    # database floor failure keeps naming one cause.
     mbw_all=$(mbw_all_waits "$MBW_SCRIPT")
     printf '%s\n' "$mbw_all" | grep -q '^"bucket-' || {
         echo "expected $MBW_SCRIPT to wait for a bucket release; the fixture this test reasons about is gone" >&2

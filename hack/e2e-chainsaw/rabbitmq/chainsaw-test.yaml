@@ -23,8 +23,10 @@ spec:
         file: rabbitmq.yaml
   - name: wait-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -127,10 +129,10 @@ spec:
           ($error == null): true
     # Honest round-trip: seed a sentinel definition, back it up through
     # cozy-default, drop it, restore in place, then restore into a copy -
-    # asserting the sentinel survives object storage each time. 42m: sized
+    # asserting the sentinel survives object storage each time. 48m: sized
     # with the 660s HR waits in run-all.sh (convention 6: justified in-line).
     - script:
-        timeout: 42m
+        timeout: 48m
         content: |
           set -eu
           cd ../../..

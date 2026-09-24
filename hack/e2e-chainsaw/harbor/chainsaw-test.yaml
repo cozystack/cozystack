@@ -140,16 +140,17 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
-    # 10m because harbor-test readiness is gated by the inline RedisFailover,
-    # whose three sentinels only go Ready after the freshworks-oss
-    # redis-operator elects a master and rewrites their config; normal
-    # convergence is 2-3m, but on a CPU-committed runner the tail runs long
-    # (steal-induced probe misses, documented in pull-requests.yaml). 10m is
-    # also this release's install timeout, so it is not a model to copy; see
-    # "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md. On a timeout,
-    # the catch block's redis-operator log shows which reconcile gate stalled.
+    # harbor-test readiness is gated by the inline RedisFailover, whose three
+    # sentinels only go Ready after the freshworks-oss redis-operator elects a
+    # master and rewrites their config; normal convergence is 2-3m, but on a
+    # CPU-committed runner the tail runs long (steal-induced probe misses,
+    # documented in pull-requests.yaml). 11m sits above the 600s install
+    # timeout cozystack-api gives this release, so a failed install has
+    # recorded its reason first; see "Sizing an HR-Ready budget" in
+    # docs/agents/e2e-testing.md. On a timeout, the catch block's
+    # redis-operator log shows which reconcile gate stalled.
     - assert:
-        timeout: 10m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -187,11 +188,12 @@ spec:
 
   - name: wait-system-and-deployments
     try:
-    # This release is rendered by packages/apps/harbor/templates/harbor.yaml,
-    # whose spec.timeout of 15m is its install timeout, above this 10m; see
-    # "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    # 16m: this release is rendered by
+    # packages/apps/harbor/templates/harbor.yaml, whose spec.timeout of 15m is
+    # its install timeout; see "Sizing an HR-Ready budget" in
+    # docs/agents/e2e-testing.md.
     - assert:
-        timeout: 10m
+        timeout: 16m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease

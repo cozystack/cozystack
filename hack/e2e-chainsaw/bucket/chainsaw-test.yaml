@@ -39,8 +39,10 @@ spec:
 
   - name: wait-bucket-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -254,8 +256,10 @@ spec:
 
   - name: wait-buckets-ready
     try:
+    # 11m each: above the 600s install timeout cozystack-api gives these
+    # releases; see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -265,7 +269,7 @@ spec:
             (conditions[?type == 'Ready']):
             - status: "True"
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -275,7 +279,7 @@ spec:
             (conditions[?type == 'Ready']):
             - status: "True"
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease

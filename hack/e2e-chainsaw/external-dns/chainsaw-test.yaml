@@ -23,8 +23,10 @@ spec:
         file: externaldns-inmemory.yaml
   - name: wait-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -33,8 +35,11 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    # 11m: above the 10m spec.timeout that
+    # packages/extra/external-dns/templates/external-dns.yaml gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 5m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -75,8 +80,9 @@ spec:
         file: externaldns-prefix.yaml
   - name: wait-ready
     try:
+    # Same 11m as `test` above.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -85,8 +91,9 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    # Same 11m as `test-system` above.
     - assert:
-        timeout: 5m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
