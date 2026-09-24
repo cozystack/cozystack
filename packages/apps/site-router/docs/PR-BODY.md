@@ -50,7 +50,7 @@ Full detail in `packages/apps/site-router/docs/followups.md`. Consolidated list:
 - Tunnel byte / rekey counter metrics (guest-command + parser change).
 - `_cluster.pod-cidr` derivation for `_managementCIDR` (custom-pod-CIDR clusters without manual config).
 - IPsec local-address / LB tunnel-address wiring.
-- Portal / dashboard image + configuration lock-step (external-repo hand-off).
+- Boot image + configuration lock-step for an external API consumer that advances the image (external-repo hand-off).
 - Phase 2 `site-gateway` (NAT) / Phase 3 WireGuard backend / Phase 4 HA + per-tenant egress IP + initiator model.
 
 ## Repo hygiene (pre-merge)

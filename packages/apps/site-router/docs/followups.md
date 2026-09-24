@@ -33,7 +33,7 @@ This is the consolidated list of work surfaced during the Phase-1 `site-router` 
 
 ## External repositories (hand-offs, not monorepo work)
 
-- **Portal / dashboard image + cloud-init lock-step.** A consumer that advances the app's boot image must regenerate first-boot cloud-init in the same step — the image and cloud-init are a matched pair (see `docs/image-lifecycle.md`). This is an external-repo dependency and must be filed against the consuming dashboard/portal, not this monorepo.
+- **Boot image + cloud-init lock-step for external consumers.** An external API consumer that advances the app's boot image must regenerate first-boot cloud-init in the same step — the image and cloud-init are a matched pair (see `docs/image-lifecycle.md`). This is an external-repo dependency and must be filed against that consumer, not this monorepo.
 
 ## Later-phase pointers
 
