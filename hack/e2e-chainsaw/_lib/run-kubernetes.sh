@@ -596,6 +596,43 @@ cozy_cleanup() {
   cozy_wait_linstor_pool_reclaimed 90 300 || true
 }
 
+# Without --strict-topology, external-provisioner passes every topology segment
+# as `requisite` and only prefers the node the scheduler chose, so linstor-csi
+# may place a node-pinned volume elsewhere when that node is full. A CDI
+# importer mounts two such volumes on `local`, and the scratch one is created
+# only after the pod is scheduled, so it can land on another node and leave the
+# importer unschedulable forever against a node-affinity conflict. The linstor
+# chart has no switch for the flag, so the container lane patches it onto the
+# live LinstorCluster at the end of install (hack/e2e-install-cozystack.bats).
+#
+# `args` has no patchMergeKey, so the operator's strategic merge replaces the
+# list rather than appending to it: the whole list is restated as
+# piraeus-operator v2.10.2 renders it, and must be re-checked when that
+# operator is bumped or an upstream flag is silently dropped.
+cozy_csi_strict_topology_patch() {
+  cat <<'EOF'
+[{"op":"add","path":"/spec/csiController/podTemplate/spec/containers/-","value":{"name":"csi-provisioner","args":["--v=$(VERBOSE)","--csi-address=$(ADDRESS)","--timeout=$(TIMEOUT)","--leader-election=$(LEADER_ELECTION)","--leader-election-namespace=$(NAMESPACE)","--worker-threads=$(WORKER_THREADS)","--http-endpoint=$(HTTP_ENDPOINT)","--default-fstype=$(DEFAULT_FS_TYPE)","--enable-capacity=$(ENABLE_CAPACITY)","--extra-create-metadata=$(EXTRA_CREATE_METADATA)","--capacity-ownerref-level=$(CAPACITY_OWNERREF_LEVEL)","--strict-topology"]}}]
+EOF
+}
+
+# The override lives only in the live LinstorCluster, and a linstor upgrade
+# re-renders that object from a chart that does not carry it. Called before
+# every suite that imports onto `local`, so an override that went missing
+# fails there, by name, instead of as an importer stuck at ImportScheduled.
+cozy_check_csi_strict_topology() {
+  local args
+  if ! args=$(kubectl -n cozy-linstor get deployment linstor-csi-controller \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="csi-provisioner")].args}'); then
+    echo "» ERROR: could not read the linstor-csi-controller csi-provisioner arguments" >&2
+    return 1
+  fi
+  case "${args}" in
+    *--strict-topology*) return 0 ;;
+  esac
+  echo "» ERROR: linstor-csi-controller's csi-provisioner runs without --strict-topology (args: ${args:-<none>}); the LinstorCluster override applied at install is gone" >&2
+  return 1
+}
+
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
 # Registered as an EXIT trap INSIDE run_kubernetes_test so it fires during THIS
 # test subshell's exit, before the success path (or cozy_cleanup) deletes the
@@ -652,6 +689,9 @@ run_kubernetes_test() {
     local enable_oidc="${5:-}"
     local storage_class
     storage_class=$(cozy_e2e_storage_class) || return 1
+    if [ "$storage_class" = local ]; then
+      cozy_check_csi_strict_topology || return 1
+    fi
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 

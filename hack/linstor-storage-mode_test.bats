@@ -308,23 +308,144 @@ kubectl() { printf '%s\n' "$*"; }
   # shellcheck source=/dev/null
   . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
   COZY_E2E_STORAGE_CLASS=local
+  calls=$(mktemp)
   yq() { printf 'v1.33.12\n'; }
-  kubectl() { return 0; }
+  # The first `kubectl apply` creates the tenant cluster. Reaching it means the
+  # suite went on past the baseline, and the subshell below keeps the exit from
+  # ending the test itself.
+  kubectl() {
+    if [ "$1" = apply ]; then printf 'applied\n' >>"$calls"; exit 7; fi
+    return 0
+  }
+  cozy_check_csi_strict_topology() { return 0; }
   cozy_wait_tenant_drained() { return 0; }
   cozy_capture_linstor_pool_baseline() { return 42; }
-  helm() { printf 'UNEXPECTED_HELM_CALL\n'; return 99; }
 
   rc=0
-  output=$(run_kubernetes_test '.' test-latest-version 59991) || rc=$?
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || rc=$?
+  continued=$(cat "$calls")
+  rm -f "$calls"
 
   if [ "$rc" -eq 0 ]; then
     echo "suite accepted a failed local LINSTOR baseline capture" >&2
     return 1
   fi
-  if printf '%s\n' "$output" | grep -Fq UNEXPECTED_HELM_CALL; then
-    echo "suite continued into Helm after the baseline capture failed" >&2
+  if [ -n "$continued" ]; then
+    echo "suite went on to create the tenant cluster after the baseline capture failed" >&2
     return 1
   fi
+}
+
+@test "local Kubernetes suite refuses to start without CSI strict topology" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=local
+  calls=$(mktemp)
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() { printf 'kubectl %s\n' "$*" >>"$calls"; exit 7; }
+  cozy_check_csi_strict_topology() { return 42; }
+
+  rc=0
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || rc=$?
+  touched=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ "$rc" -ne 1 ]; then
+    echo "suite did not stop on a provisioner without --strict-topology (rc=$rc)" >&2
+    return 1
+  fi
+  if [ -n "$touched" ]; then
+    echo "suite touched the cluster before the topology check failed: $touched" >&2
+    return 1
+  fi
+}
+
+@test "replicated Kubernetes suites do not depend on the container-lane CSI override" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_E2E_STORAGE_CLASS=replicated
+  calls=$(mktemp)
+  yq() { printf 'v1.33.12\n'; }
+  kubectl() { exit 7; }
+  cozy_check_csi_strict_topology() { printf 'checked\n' >>"$calls"; return 0; }
+
+  ( run_kubernetes_test '.' test-latest-version 59991 ) >/dev/null 2>&1 || true
+  checked=$(cat "$calls")
+  rm -f "$calls"
+
+  if [ -n "$checked" ]; then
+    echo "the QEMU lane consulted the container-lane CSI override" >&2
+    return 1
+  fi
+}
+
+@test "the strict-topology patch restates the provisioner arguments and appends the flag" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  patch=$(cozy_csi_strict_topology_patch)
+
+  [ "$(printf '%s\n' "$patch" | jq -r 'length')" = 1 ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].op')" = add ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].path')" = /spec/csiController/podTemplate/spec/containers/- ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.name')" = csi-provisioner ]
+  # Eleven flags as piraeus-operator v2.10.2 renders them, plus the one this
+  # exists for. The count catches an edit to this list, not an upstream flag
+  # added on an operator bump: nothing in-tree carries the operator defaults.
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.args | length')" = 12 ]
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value.args[-1]')" = --strict-topology ]
+  printf '%s\n' "$patch" | jq -e '.[0].value.args | index("--enable-capacity=$(ENABLE_CAPACITY)")' >/dev/null
+  # The only key besides the name, so the operator's strategic merge replaces
+  # the arguments and leaves the rest of the upstream container alone.
+  [ "$(printf '%s\n' "$patch" | jq -r '.[0].value | keys | join(",")')" = args,name ]
+}
+
+@test "the CSI topology re-check passes only on a provisioner observed with the flag" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  kubectl() { printf '%s' "$STUB_ARGS"; return "$STUB_RC"; }
+
+  STUB_RC=0 STUB_ARGS='["--v=$(VERBOSE)","--strict-topology"]'
+  cozy_check_csi_strict_topology 2>/dev/null
+  STUB_RC=0 STUB_ARGS='["--v=$(VERBOSE)","--csi-address=$(ADDRESS)"]'
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a provisioner without --strict-topology passed" >&2
+    return 1
+  fi
+  STUB_RC=0 STUB_ARGS=''
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a provisioner with no argument override passed" >&2
+    return 1
+  fi
+  STUB_RC=1 STUB_ARGS='["--strict-topology"]'
+  if cozy_check_csi_strict_topology 2>/dev/null; then
+    echo "a failed read passed" >&2
+    return 1
+  fi
+}
+
+@test "the container-lane CSI override is applied last and re-checked before disk imports" {
+  install_suite=hack/e2e-install-cozystack.bats
+  last_test=$(grep -n '^@test ' "$install_suite" | tail -n 1)
+  oidc_line=$(grep -n '^@test "Keycloak OIDC stack is healthy"' "$install_suite" | cut -d: -f1)
+
+  case "$last_test" in
+    *'"Container lane: apply the storage settings the charts do not carry"'*) ;;
+    *)
+      echo "the container-lane storage settings are not the last install test: $last_test" >&2
+      return 1
+      ;;
+  esac
+  if [ -z "$oidc_line" ] || [ "$oidc_line" -ge "${last_test%%:*}" ]; then
+    echo "the storage settings must follow the last platform-values change: oidc=$oidc_line last=$last_test" >&2
+    return 1
+  fi
+  for test_name in vmdisk vminstance; do
+    first_step=$(yq "select(.metadata.name == \"$test_name\") | .spec.steps[0].name" hack/e2e-chainsaw/vminstance/chainsaw-test.yaml)
+    if [ "$first_step" != container-lane-csi-topology ]; then
+      echo "the $test_name Test does not re-check CSI strict topology first: $first_step" >&2
+      return 1
+    fi
+  done
 }
 
 @test "Kubernetes cleanup operations outlive their bounded reclamation stages" {

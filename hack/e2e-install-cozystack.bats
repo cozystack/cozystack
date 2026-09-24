@@ -573,3 +573,52 @@ data:
   version: "${version}"
 EOF
 }
+
+@test "Container lane: apply the storage settings the charts do not carry" {
+  # Last on purpose. The earlier tests that change platform values (tenant
+  # configuration, Keycloak OIDC) upgrade every release, linstor and
+  # kubevirt-cdi included, and an upgrade re-renders the objects patched here
+  # from charts that do not carry these settings. Nothing after this file
+  # changes platform values, and the tenant suites re-check the CSI flag before
+  # they import.
+  local storage_class
+  storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"
+  case "$storage_class" in
+    replicated)
+      echo "QEMU lane: the charts' own storage settings stay in force"
+      return 0
+      ;;
+    local) ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '$storage_class'" >&2
+      return 1
+      ;;
+  esac
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+
+  local provisioner_args
+  provisioner_args=$(kubectl get linstorcluster linstorcluster \
+    -o jsonpath='{.spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args}')
+  case "$provisioner_args" in
+    *--strict-topology*)
+      echo "LinstorCluster already constrains CSI provisioning to the scheduler's node"
+      ;;
+    '')
+      kubectl patch linstorcluster linstorcluster --type json -p "$(cozy_csi_strict_topology_patch)"
+      ;;
+    *)
+      echo "LinstorCluster overrides csi-provisioner arguments without --strict-topology: $provisioner_args" >&2
+      return 1
+      ;;
+  esac
+  # piraeus-operator re-derives the Deployment from the LinstorCluster on its own
+  # schedule, and until it does `rollout status` passes against the old
+  # template.
+  if ! timeout 300 sh -ec 'until kubectl -n cozy-linstor get deployment linstor-csi-controller -o jsonpath="{.spec.template.spec.containers[?(@.name==\"csi-provisioner\")].args}" | grep -q -- --strict-topology; do sleep 2; done'; then
+    echo "piraeus-operator did not carry --strict-topology into linstor-csi-controller within 5m" >&2
+    kubectl -n cozy-linstor get deployment linstor-csi-controller -o yaml >&2 || true
+    return 1
+  fi
+  kubectl -n cozy-linstor rollout status deployment/linstor-csi-controller --timeout=5m
+  cozy_check_csi_strict_topology
+}
