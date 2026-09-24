@@ -1,0 +1,26 @@
+suite: kube-state-metrics carries a memory limit sized above its measured peak
+# Without a memory limit the container sets no memory.max on its pod cgroup, and
+# the Talos userspace OOM handler only ever selects cgroups that lack one, so it
+# is an eviction candidate on every node regardless of what caused the pressure.
+# The numbers come from a measured 14d peak of 307Mi on the smallest cluster we
+# run; the limit carries headroom because this component scales with object
+# count. A CPU limit is deliberately absent: it does not affect the OOM ranking
+# and a binding ceiling turns into scrape timeouts.
+templates:
+  - charts/kube-state-metrics/templates/deployment.yaml
+tests:
+  - it: sets a memory limit above the measured peak and a request above the mean
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 2Gi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 192Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 50m
+  - it: sets no CPU limit
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
