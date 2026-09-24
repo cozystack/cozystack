@@ -951,6 +951,10 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 	if dataVolumesErr != nil {
 		logger.Error(dataVolumesErr, "Unable to read DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "DataVolumesUnavailable",
+				"Failed to read DataVolumes, keeping the last DataVolume verdict: %v", dataVolumesErr)
+		}
 	}
 
 	// Update WorkloadMonitor status based on observed pods

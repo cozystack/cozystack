@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/ptr"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
@@ -1422,6 +1423,12 @@ func TestReconcile_DataVolumeKindNotServedIsNoDataVolumes(t *testing.T) {
 // syncing marks the DataVolume watch as started and not yet synced.
 func reconcileWithUnreadableDataVolumes(t *testing.T, withReader, syncing bool, status cozyv1alpha1.WorkloadMonitorStatus) (*cozyv1alpha1.WorkloadMonitor, reconcile.Result, error) {
 	t.Helper()
+	got, result, _, err := reconcileWithUnreadableDataVolumesEvents(t, withReader, syncing, status)
+	return got, result, err
+}
+
+func reconcileWithUnreadableDataVolumesEvents(t *testing.T, withReader, syncing bool, status cozyv1alpha1.WorkloadMonitorStatus) (*cozyv1alpha1.WorkloadMonitor, reconcile.Result, []string, error) {
+	t.Helper()
 	s := newTestScheme()
 	selector := map[string]string{"app.kubernetes.io/instance": "m"}
 	monitor := &cozyv1alpha1.WorkloadMonitor{
@@ -1448,7 +1455,8 @@ func reconcileWithUnreadableDataVolumes(t *testing.T, withReader, syncing bool, 
 			},
 		}).
 		Build()
-	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	recorder := record.NewFakeRecorder(10)
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s, Recorder: recorder}
 	if withReader {
 		reconciler.DataVolumeReader = fakeClient
 	}
@@ -1459,13 +1467,21 @@ func reconcileWithUnreadableDataVolumes(t *testing.T, withReader, syncing bool, 
 	if gerr := fakeClient.Get(context.TODO(), req.NamespacedName, updated); gerr != nil {
 		t.Fatalf("Failed to get updated WorkloadMonitor: %v", gerr)
 	}
-	return updated, result, err
+	close(recorder.Events)
+	var events []string
+	for e := range recorder.Events {
+		events = append(events, e)
+	}
+	return updated, result, events, err
 }
 
 func TestReconcile_DataVolumeListErrorStillPublishesStatus(t *testing.T) {
-	got, _, err := reconcileWithUnreadableDataVolumes(t, true, false, cozyv1alpha1.WorkloadMonitorStatus{})
+	got, _, events, err := reconcileWithUnreadableDataVolumesEvents(t, true, false, cozyv1alpha1.WorkloadMonitorStatus{})
 	if err == nil {
 		t.Error("Reconcile returned nil on a DataVolume list failure, want the error so the request is retried")
+	}
+	if len(events) != 1 || !strings.HasPrefix(events[0], "Warning DataVolumesUnavailable ") || !strings.Contains(events[0], "apiserver unavailable") {
+		t.Errorf("events = %q, want one Warning DataVolumesUnavailable event carrying the List error", events)
 	}
 	if got.Status.ObservedReplicas != 1 || got.Status.AvailableReplicas != 1 {
 		t.Errorf("replicas observed=%d available=%d, want 1 and 1", got.Status.ObservedReplicas, got.Status.AvailableReplicas)
@@ -1496,13 +1512,13 @@ func TestReconcile_UnreadDataVolumesKeepTheLastVerdict(t *testing.T) {
 
 func TestReconcile_SyncingDataVolumeWatchPublishesAndRequeues(t *testing.T) {
 	const stuck = "DataVolume m is Failed"
-	got, result, err := reconcileWithUnreadableDataVolumes(t, false, true, cozyv1alpha1.WorkloadMonitorStatus{
+	got, result, events, err := reconcileWithUnreadableDataVolumesEvents(t, false, true, cozyv1alpha1.WorkloadMonitorStatus{
 		Operational: ptr.To(false),
 		Message:     stuck,
 		Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 	})
-	if err != nil || result.RequeueAfter <= 0 {
-		t.Errorf("Reconcile = %+v, %v while the DataVolume watch syncs, want a requeue and no error: the window is expected, not a failure", result, err)
+	if err != nil || result.RequeueAfter <= 0 || len(events) != 0 {
+		t.Errorf("Reconcile = %+v, %v, events %q while the DataVolume watch syncs, want a requeue, no error and no event: the window is expected, not a failure", result, err, events)
 	}
 	if got.Status.ObservedReplicas != 1 || got.Status.AvailableReplicas != 1 {
 		t.Errorf("replicas observed=%d available=%d, want 1 and 1", got.Status.ObservedReplicas, got.Status.AvailableReplicas)
