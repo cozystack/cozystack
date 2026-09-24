@@ -9,7 +9,7 @@ _cluster: {}
 # cpuAllocationRatio: 10
 
 # Feature gates appended after the static defaults
-# (HotplugVolumes/ExpandDisks/LiveMigration/AutoResourceLimitsGate/CPUManager/GPU/VMExport).
+# (DeclarativeHotplugVolumes/ExpandDisks/LiveMigration/AutoResourceLimitsGate/CPUManager/GPU/VMExport).
 # Empty by default. Filled by the platform with "HostDevices" when the
 # gpu-operator package is enabled with the passthrough variant — the
 # admission webhook rejects spec.template.spec.domain.devices.hostDevices

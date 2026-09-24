@@ -36,6 +36,9 @@ spec:
             - "--infra-cluster-namespace=$(INFRACLUSTER_NAMESPACE)"
             - "--infra-cluster-labels=$(INFRACLUSTER_LABELS)"
             - "--run-node-service=false"
+            # false while packages/system/kubevirt leaves HotplugVolumes off:
+            # without that gate virt-api rejects removevolume on a VM-owned VMI.
+            - "--enable-vmi-hotplug-fallback=false"
             - "--v=5"
           ports:
             - name: healthz
