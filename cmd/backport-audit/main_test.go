@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -185,5 +186,288 @@ v1.8.0-alpha.1 2026-10-02T12:00:00+05:00
 	}
 	if len(frozen) != 1 {
 		t.Errorf("expected exactly one frozen line, got %d: %v", len(frozen), frozen)
+	}
+}
+
+// Bodies are the ones real backport PRs carry, trimmed, so a change to the
+// grammar is judged against how people actually write them.
+func TestBodyOrigins(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []int
+	}{
+		{
+			name: "the plain form",
+			body: "Backport of #3742 to `release-1.6`.\n\nCherry-picked clean with `-x`.",
+			want: []int{3742},
+		},
+		{
+			name: "two originals in one phrase, and an issue further on that is not one",
+			body: "Backport of #3938 and #4280 to `release-1.6`, together, because #3938 alone breaks every Kafka deletion (#4276) and #4280 is what fixes that.",
+			want: []int{3938, 4280},
+		},
+		{
+			name: "a list without the serial comma",
+			body: "Backport of #1, #2 and #3 to `release-1.6`.",
+			want: []int{1, 2, 3},
+		},
+		{
+			name: "a list with the serial comma",
+			body: "Backport of #1, #2, and #3.",
+			want: []int{1, 2, 3},
+		},
+		{
+			name: "a list ending the line",
+			body: "Backport of #1, #2 and #3\n\nAll cherry-picked with `-x`.",
+			want: []int{1, 2, 3},
+		},
+		{
+			name: "a list ending the body",
+			body: "Backport of #1 and #2",
+			want: []int{1, 2},
+		},
+		{
+			name: "a list running on into a clause about its items keeps only the first",
+			body: "Backport of #10, #20 is not included.",
+			want: []int{10},
+		},
+		{
+			name: "a list running into a parenthesis keeps only the first",
+			body: "Backport of #10 and #20 (the second only in part).",
+			want: []int{10},
+		},
+		{
+			name: "a to that does not name a release line does not close a list",
+			body: "Backport of #10, #20 to follow in a separate PR.",
+			want: []int{10},
+		},
+		{
+			name: "an unquoted release line closes a list, whichever line it names",
+			body: "Backport of #1 and #2 to release-1.5, both clean.",
+			want: []int{1, 2},
+		},
+		{
+			name: "an unquoted release line before a full stop closes a list",
+			body: "Backport of #1 and #2 to release-1.5.",
+			want: []int{1, 2},
+		},
+		{
+			name: "an unquoted release line ending the body closes a list",
+			body: "Backport of #1 and #2 to release-1.5",
+			want: []int{1, 2},
+		},
+		{
+			name: "a branch that only starts with a release line does not close a list",
+			body: "Backport of #10, #20 to release-1.6-fixes will follow later.",
+			want: []int{10},
+		},
+		{
+			name: "a patch version is not a release line",
+			body: "Backport of #10, #20 to release-1.6.1 later.",
+			want: []int{10},
+		},
+		{
+			name: "a dotted suffix is not a release line",
+			body: "Backport of #10, #20 to release-1.6.fixes will follow later.",
+			want: []int{10},
+		},
+		{
+			name: "a full stop and a space after the release line close a list",
+			body: "Backport of #10, #20 to release-1.6. Next, the tests.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a quoted release line running on into a word does not close a list",
+			body: "Backport of #10, #20 to `release-1.6`-ish branches.",
+			want: []int{10},
+		},
+		{
+			name: "an ampersand is not a separator",
+			body: "Backport of #1 & #2.",
+			want: []int{1},
+		},
+		{
+			name: "repository-qualified references, alone and in a list",
+			body: "Backport of cozystack/cozystack#3471 and #3472 to `release-1.6` (clean cherry-pick).",
+			want: []int{3471, 3472},
+		},
+		{
+			name: "this repository's qualifier matches case-insensitively",
+			body: "Backport of CozyStack/Cozystack#7.",
+			want: []int{7},
+		},
+		{
+			name: "another repository's reference in a list is skipped",
+			body: "Backport of #10 and other/repo#20.",
+			want: []int{10},
+		},
+		{
+			name: "another repository's reference alone is skipped",
+			body: "Backport of cozystack/website#20 to `release-1.6`.",
+			want: nil,
+		},
+		{
+			name: "another repository's reference first does not hide the rest of a closed list",
+			body: "Backport of other/repo#20 and #10.",
+			want: []int{10},
+		},
+		{
+			name: "a dependency pulled along with together-with, as #4328 writes it",
+			body: "Backport of #4253 to `release-1.6`, together with #3460 which it depends on. On 1.6 kube-ovn #99 differs.",
+			want: []int{4253, 3460},
+		},
+		{
+			name: "the same as #4377 writes it",
+			body: "Backport of #4333 to `release-1.6`, together with #4231 which it depends on. 1.6 has no in-tree chart.",
+			want: []int{4333, 4231},
+		},
+		{
+			name: "the same as #4421 writes it",
+			body: "## What this PR does\n\nManual backport of #3938 to `release-1.6`, together with #4280.\n\n#3938 cannot go to 1.6 on its own.",
+			want: []int{3938, 4280},
+		},
+		{
+			name: "together-with and an unquoted branch",
+			body: "Manual backport of #3938 to release-1.6, together with #4280.",
+			want: []int{3938, 4280},
+		},
+		{
+			name: "a closed together-with list keeps every item",
+			body: "Backport of #10 to `release-1.6`, together with #20 and #30.",
+			want: []int{10, 20, 30},
+		},
+		{
+			name: "a together-with list running on into a clause keeps only its first",
+			body: "Backport of #10 to release-1.6, together with #20, #30 is tracked separately.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list running into a to that is not a release line keeps only its first",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to follow later.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list running into a branch that only starts with a release line keeps only its first",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to release-1.6-fixes later.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list running into a patch version keeps only its first",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to release-1.6.1 later.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list running into a dotted suffix keeps only its first",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to release-1.6.fixes later.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list closed by a release line, a full stop and a space keeps every item",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to release-1.6. Next, the tests.",
+			want: []int{10, 20, 30},
+		},
+		{
+			name: "a together-with list running into a quoted release line and a word keeps only its first",
+			body: "Backport of #10 to `release-1.6`, together with #20, #30 to `release-1.6`-ish branches.",
+			want: []int{10, 20},
+		},
+		{
+			name: "a together-with list closed by a quoted release line keeps every item",
+			body: "Backport of #10 to `release-1.6`, together with #20 and #30 to `release-1.5` as well.",
+			want: []int{10, 20, 30},
+		},
+		{
+			name: "together-with in a later sentence is not part of the phrase",
+			body: "Backport of #7 to `release-1.6`. Together with #8 it fixes the flake.",
+			want: []int{7},
+		},
+		{
+			name: "a hyphenated prefix still anchors",
+			body: "Hand-backport of #3034 to `release-1.5`. Fixes #12 and #13.",
+			want: []int{3034},
+		},
+		{
+			name: "a list that turns into prose stops at the prose",
+			body: "Backport of #1, which fixes #2, and #3.",
+			want: []int{1},
+		},
+		{
+			name: "and followed by prose stops at the prose",
+			body: "Backport of #1 and the follow-up to #2.",
+			want: []int{1},
+		},
+		{
+			name: "every phrase in the body counts, each number once",
+			body: "Backport of #10 to `release-1.6`.\n\nThe second commit is a backport of #11 and #10.",
+			want: []int{10, 11},
+		},
+		{
+			name: "an article between the phrase and the number is not a reference",
+			body: "Hand-redone backport of the **kube-ovn-webhook half** of #3997.",
+			want: nil,
+		},
+		{
+			name: "no phrase at all",
+			body: "Fixes #4276 on this branch.",
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bodyOrigins(tc.body, "cozystack/cozystack"); !slices.Equal(got, tc.want) {
+				t.Errorf("bodyOrigins = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClaimedOrigins(t *testing.T) {
+	cases := []struct {
+		name string
+		pr   backportPR
+		want []int
+	}{
+		{
+			name: "a hand backport reusing the bot's head naming is counted once",
+			pr:   backportPR{HeadRefName: "backport-3938-to-release-1.6", Body: "Backport of #3938 and #4280 to `release-1.6`."},
+			want: []int{3938, 4280},
+		},
+		{
+			name: "a head naming another branch says nothing about this one",
+			pr:   backportPR{HeadRefName: "backport-3455-to-release-1.5"},
+			want: nil,
+		},
+		{
+			name: "a head off the bot's pattern leaves only the body",
+			pr:   backportPR{HeadRefName: "backport-3938-release-1.6", Body: "Manual backport of #3938 to `release-1.6`, together with #4280."},
+			want: []int{3938, 4280},
+		},
+		{
+			name: "qualifiers are read against the repository the PR is in",
+			pr: backportPR{URL: "https://github.com/example/fork/pull/5",
+				Body: "Backport of example/fork#3 and cozystack/cozystack#4."},
+			want: []int{3},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claimedOrigins(tc.pr, "release-1.6"); !slices.Equal(got, tc.want) {
+				t.Errorf("claimedOrigins = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepoOf(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/cozystack/cozystack/pull/4431": "cozystack/cozystack",
+		"https://github.com/example/fork/pull/5":           "example/fork",
+		"":                                                 upstreamRepo,
+	}
+	for url, want := range cases {
+		if got := repoOf(url); got != want {
+			t.Errorf("repoOf(%q) = %q, want %q", url, got, want)
+		}
 	}
 }

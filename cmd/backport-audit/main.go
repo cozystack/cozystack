@@ -76,10 +76,39 @@ Options:
   -h, --help            Show this help
 `
 
+// A reference to a PR, optionally qualified by its repository, and a list of
+// them as prose writes one: "#1 and #2", "#1, #2 and #3", "#1, #2, and #3".
+const (
+	prRef     = `(?:[\w.-]+/[\w.-]+)?#\d+`
+	prRefList = prRef + `(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)` + prRef + `)*`
+)
+
+// A release line named in prose, bare or in backticks, as a whole word:
+// release-1.6-fixes, release-1.6.1 and release-1.6.fixes start with a line name
+// without being one, so punctuation ends the name only when a space or the end
+// of the text follows it.
+const releaseLineName = `(?:\x60release-\d+\.\d+\x60|release-\d+\.\d+)(?:$|\s|\)|[.,;:](?:\s|$))`
+
+// upstreamRepo is the repository an unqualified reference is read against when
+// a PR's URL does not say which repository it belongs to.
+const upstreamRepo = "cozystack/cozystack"
+
 var (
 	releaseLineRE  = regexp.MustCompile(`^release-(\d+)\.(\d+)$`)
 	backportHeadRE = regexp.MustCompile(`^backport-(\d+)-to-(release-\d+\.\d+)$`)
-	backportBodyRE = regexp.MustCompile(`[Bb]ackport of\s+(?:[\w.-]+/[\w.-]+)?#(\d+)`)
+	// A hand backport that carries more than one change names all of them in
+	// its "Backport of" phrase, either as a list or as the "to release-X.Y,
+	// together with #N" this repository writes for a dependency pulled along.
+	backportOfRE = regexp.MustCompile(`[Bb]ackport of\s+(` + prRefList + `)` +
+		`(?:\s+to\s+\x60?release-\d+\.\d+\x60?,?\s+together with\s+(` + prRefList + `))?`)
+	// What a list of references may be followed by for every item in it to be
+	// an original: the end of the line, the end of a sentence, or the "to
+	// release-X.Y" that names the target. Anything else may be the list going
+	// on to say something about its later items -- "#10, #20 is not included",
+	// "#10, #20 to follow in a separate PR" -- so an unterminated list keeps
+	// only its first item, the one the phrase names directly.
+	prRefListEndRE = regexp.MustCompile(`^(?:[ \t]*(?:\r?\n|$)|\.(?:\s|$)|\s+to\s+` + releaseLineName + `)`)
+	prRefRE        = regexp.MustCompile(`(?:([\w.-]+/[\w.-]+))?#(\d+)`)
 	cherryPickRE   = regexp.MustCompile(`cherry picked from commit ([0-9a-f]{7,40})`)
 	releaseTagRE   = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 	// The tag whose cut creates release-X.Y. cut-prerelease.yaml gates the
@@ -737,9 +766,8 @@ func (h *branchHistory) hasCherryPickOf(oids []string) bool {
 	return false
 }
 
-// backportPRsFor indexes the PRs on branch by the main PR number each claims to
-// backport, read from the bot's head branch name and from the body reference a
-// hand-written backport carries.
+// backportPRsFor indexes every PR on branch by the main PRs it claims to
+// backport; see claimedOrigins.
 func backportPRsFor(branch string) (map[int][]backportPR, error) {
 	var prs []backportPR
 	if err := ghJSON(&prs, "pr", "list", "--base", branch, "--state", "all", "--limit", strconv.Itoa(branchPRCap),
@@ -750,23 +778,82 @@ func backportPRsFor(branch string) (map[int][]backportPR, error) {
 		"raise branchPRCap in cmd/backport-audit"); err != nil {
 		return nil, err
 	}
+	return indexByOrigin(prs, branch), nil
+}
 
+func indexByOrigin(prs []backportPR, branch string) map[int][]backportPR {
 	index := map[int][]backportPR{}
 	for _, pr := range prs {
-		origins := map[int]bool{}
-		if m := backportHeadRE.FindStringSubmatch(pr.HeadRefName); m != nil && m[2] == branch {
-			n, _ := strconv.Atoi(m[1])
-			origins[n] = true
-		}
-		for _, m := range backportBodyRE.FindAllStringSubmatch(pr.Body, -1) {
-			n, _ := strconv.Atoi(m[1])
-			origins[n] = true
-		}
-		for n := range origins {
+		for _, n := range claimedOrigins(pr, branch) {
 			index[n] = append(index[n], pr)
 		}
 	}
-	return index, nil
+	return index
+}
+
+// claimedOrigins reads the main PRs a PR on branch says it backports: the one
+// in the bot's head branch name, and every one in the body's "Backport of"
+// phrases, which is what a hand-written backport carries. Hand backports often
+// reuse the bot's head naming, so the two usually agree and are counted once.
+func claimedOrigins(pr backportPR, branch string) []int {
+	var origins []int
+	if m := backportHeadRE.FindStringSubmatch(pr.HeadRefName); m != nil && m[2] == branch {
+		n, _ := strconv.Atoi(m[1])
+		origins = append(origins, n)
+	}
+	for _, n := range bodyOrigins(pr.Body, repoOf(pr.URL)) {
+		if !slices.Contains(origins, n) {
+			origins = append(origins, n)
+		}
+	}
+	return origins
+}
+
+// bodyOrigins returns the PR numbers named in a body's "Backport of" phrases, in
+// order of appearance and without repeats.
+//
+// A reference qualified with any repository but repo is skipped rather than
+// read as a local number: "other/repo#20" linked as #20 would let an unrelated
+// backport vouch for whatever local PR happens to carry that number, and a
+// merged one would turn its MISSING verdict into backported.
+func bodyOrigins(body, repo string) []int {
+	var origins []int
+	for _, m := range backportOfRE.FindAllStringSubmatchIndex(body, -1) {
+		for g := 1; 2*g+1 < len(m); g++ {
+			start, end := m[2*g], m[2*g+1]
+			if start < 0 {
+				continue
+			}
+			refs := prRefRE.FindAllStringSubmatch(body[start:end], -1)
+			if !prRefListEndRE.MatchString(body[end:]) {
+				refs = refs[:1]
+			}
+			for _, ref := range refs {
+				if ref[1] != "" && !strings.EqualFold(ref[1], repo) {
+					continue
+				}
+				n, _ := strconv.Atoi(ref[2])
+				if !slices.Contains(origins, n) {
+					origins = append(origins, n)
+				}
+			}
+		}
+	}
+	return origins
+}
+
+// repoOf is the owner/name of the repository a PR URL, as gh prints it, points
+// into.
+func repoOf(prURL string) string {
+	i := strings.LastIndex(prURL, "/pull/")
+	if i < 0 {
+		return upstreamRepo
+	}
+	parts := strings.Split(prURL[:i], "/")
+	if len(parts) < 2 {
+		return upstreamRepo
+	}
+	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
 
 // lastHumanComment is the last comment on a PR not written by the backport bot.

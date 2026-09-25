@@ -86,6 +86,8 @@ Three independent kinds of evidence, strongest first:
 
 1. **Reachability.** The PR's merge commit is reachable from the release branch, i.e. it merged before the branch was cut (or `main` was later merged in). Nothing was ever needed.
 2. **A linked backport PR.** Found by the bot's head branch `backport-<N>-to-release-X.Y`, or by a `Backport of #N` reference in the body, which is what a hand-written backport carries. `MERGED` settles it; `OPEN` is `pending`; `CLOSED` is `dropped`.
+
+   A backport carrying several changes links to every original its `Backport of` phrase names: a list (`Backport of #3938 and #4280`, `Backport of #1, #2, and #3`), and the `Backport of #4253 to release-1.6, together with #3460` form used for a dependency pulled along. Only that phrase is read, so the issue a backport fixes or a CI run it cites further on is never taken for an original. A list counts in full only when it visibly ends — at the end of the line or the sentence, or where the `to release-X.Y` clause starts. One that runs on into anything else (`Backport of #10, #20 is not included`) may be saying something about its later items, so only its first reference counts. A reference qualified with this repository (`cozystack/cozystack#N`, any case) counts like a bare `#N`, and one qualified with any other repository is skipped, because reading `other/repo#20` as local #20 would let an unrelated backport vouch for whichever local PR carries that number.
 3. **The branch's own history.** The bot's `[Backport release-X.Y] <title>` merge subject, a commit subject identical to one of the PR's, or an `-x` cherry-pick reference to one of its commits. This is what catches a hand-backport nobody linked.
 
 ## Machine-readable output
