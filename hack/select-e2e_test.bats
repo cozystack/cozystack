@@ -274,6 +274,17 @@ assert_full_suite() {
     [ "$output" = "postgres" ]
 }
 
+@test "vmi/vmdisk backup harness edit selects the vminstance suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for f in examples/backups/vmi/run-all.sh examples/backups/vmdisk/run-all.sh; do
+        echo "$f" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        [ "$output" = "vminstance" ]
+    done
+    rm -rf "$tmp"
+}
+
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

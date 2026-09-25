@@ -409,6 +409,12 @@ while IFS= read -r file || [ -n "$file" ]; do
       # selected_apps would empty the final intersection and trip the
       # full-suite safety net).
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
+      # The vmi and vmdisk backup demos are both harnessed by the vminstance
+      # suite, which owns VMDisk coverage too (see vm-disk-application in
+      # src_to_suites), so their dirs need the same source-style translation.
+      case "$app" in
+        vmi|vmdisk) app=vminstance ;;
+      esac
       if echo "$all_apps" | grep -Fxq "$app"; then
         selected_apps="$selected_apps $app"
         trigger_any=1

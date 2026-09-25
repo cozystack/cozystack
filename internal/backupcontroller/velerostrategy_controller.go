@@ -359,13 +359,27 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 // Returns nil if the application type has no underlying resources to collect.
 func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, app *unstructured.Unstructured, appKind, ns string) (*runtime.RawExtension, error) {
 	logger := getLogger(ctx)
+	appName := app.GetName()
 
-	if appKind != vmInstanceKind {
-		logger.Debug("application is not a VMInstance, skipping underlying resource collection", "kind", appKind)
-		return nil, nil
+	// A standalone VMDisk is its own underlying disk. Capturing it lets the
+	// restore controller suspend the VMDisk's HelmRelease and delete its
+	// DataVolume before the data mover repopulates the PVC; without it Flux
+	// reinstalls the restored HelmRelease and CDI recreates the DataVolume,
+	// racing the data mover over the same PVC name and wedging the restore. A
+	// standalone VMDisk has no VM, so there is no IP/MAC to collect.
+	if appKind == vmDiskAppKind {
+		return marshalUnderlyingResources(vmInstanceResources{
+			DataVolumes: []backupsv1alpha1.DataVolumeResource{{
+				DataVolumeName:  vmDiskNamePrefix + appName,
+				ApplicationName: appName,
+			}},
+		})
 	}
 
-	appName := app.GetName()
+	if appKind != vmInstanceKind {
+		logger.Debug("application has no underlying resources to collect", "kind", appKind)
+		return nil, nil
+	}
 
 	// Extract disk names from VMInstance spec.disks[].name
 	disks, found, err := unstructured.NestedSlice(app.Object, "spec", "disks")

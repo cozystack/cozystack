@@ -486,6 +486,38 @@ func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
 	}
 }
 
+func TestCollectUnderlyingResources_VMDisk(t *testing.T) {
+	// A standalone VMDisk must report its own disk as an underlying resource so
+	// the restore controller suspends the vm-disk-<name> HelmRelease and deletes
+	// its DataVolume before the data mover repopulates the PVC. Without this,
+	// prepareForRestore does nothing for a VMDisk (vmRes == nil) and Flux/CDI
+	// race the data mover over the same PVC name, wedging the restore.
+	r := &BackupJobReconciler{}
+	app := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "apps.cozystack.io/v1alpha1",
+		"kind":       "VMDisk",
+		"metadata":   map[string]interface{}{"name": "backup-src", "namespace": "tenant-root"},
+	}}
+
+	ur, err := r.collectUnderlyingResources(context.Background(), app, "VMDisk", "tenant-root")
+	if err != nil {
+		t.Fatalf("collectUnderlyingResources returned error: %v", err)
+	}
+	res := getVMInstanceResources(ur)
+	if res == nil {
+		t.Fatal("expected non-nil underlying resources for a VMDisk, got nil (prepareForRestore would skip the HR suspend and DataVolume delete)")
+	}
+	if len(res.DataVolumes) != 1 {
+		t.Fatalf("expected exactly one DataVolume, got %d", len(res.DataVolumes))
+	}
+	if got, want := res.DataVolumes[0].DataVolumeName, "vm-disk-backup-src"; got != want {
+		t.Errorf("DataVolumeName = %q, want %q", got, want)
+	}
+	if got, want := res.DataVolumes[0].ApplicationName, "backup-src"; got != want {
+		t.Errorf("ApplicationName = %q, want %q", got, want)
+	}
+}
+
 func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
 	tests := []struct {
 		name           string
