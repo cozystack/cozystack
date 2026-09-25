@@ -112,6 +112,56 @@ func TestTargetsAt(t *testing.T) {
 	}
 }
 
+// A label is read against the lines at merge time however late it was added:
+// the audit has no label timestamp. A PR merged on 2026-07-01 and labelled
+// after v1.6.0 published is still a release-1.5 candidate, even though
+// backport.yaml, running at label time, would have targeted release-1.6.
+func TestCandidateLabel(t *testing.T) {
+	live := liveTimeline(t)
+	pr := func(merged string, labels ...string) *mainPR {
+		p := &mainPR{MergedAt: ts(t, merged), labels: map[string]bool{}}
+		for _, l := range labels {
+			p.labels[l] = true
+		}
+		return p
+	}
+	cases := []struct {
+		name string
+		pr   *mainPR
+		want map[line]string
+	}{
+		{
+			name: "merged in the 1.5 era: kind/backport means release-1.5 for good",
+			pr:   pr("2026-07-01T00:00:00Z", labelCurrent),
+			want: map[line]string{{1, 4}: "", {1, 5}: labelCurrent, {1, 6}: ""},
+		},
+		{
+			name: "merged in the 1.5 era: kind/backport-previous means release-1.4 for good",
+			pr:   pr("2026-07-01T00:00:00Z", labelPrevious),
+			want: map[line]string{{1, 4}: labelPrevious, {1, 5}: "", {1, 6}: ""},
+		},
+		{
+			name: "merged in the 1.6 era, both requests",
+			pr:   pr("2026-09-01T00:00:00Z", labelCurrent, labelPrevious),
+			want: map[line]string{{1, 4}: "", {1, 5}: labelPrevious, {1, 6}: labelCurrent},
+		},
+		{
+			name: "no backport label: a candidate nowhere",
+			pr:   pr("2026-09-01T00:00:00Z"),
+			want: map[line]string{{1, 4}: "", {1, 5}: "", {1, 6}: ""},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for want, label := range tc.want {
+				if got := candidateLabel(tc.pr, live, want); got != label {
+					t.Errorf("%s: candidateLabel = %q, want %q", want.branch(), got, label)
+				}
+			}
+		})
+	}
+}
+
 // backport.yaml sorts its branch list numerically descending, so the rank is by
 // version and never by when a line opened. The two disagree as soon as a freeze
 // overlaps the previous line's stabilisation, and 1.10-versus-1.9 is where a

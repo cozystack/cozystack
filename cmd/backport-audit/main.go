@@ -52,10 +52,11 @@ limitations under the License.
 //
 // Known limits: a hand-backport that is squash-merged, rewords its subject and
 // references no original PR is unprovable from either side and reads as
-// MISSING; a `kind/backport` label added after the release line moved on
-// resolves to the newer line; and a backport PR that names its original
-// neither by the bot's head branch nor in a "Backport of" phrase is invisible
-// to the unlabelled and duplicate checks.
+// MISSING; a backport label added after the release line moved on is still
+// read against the line current at merge, while the bot targets the newer
+// one, so the audit expects the change where the bot did not put it; and a
+// backport PR that names its original neither by the bot's head branch nor in
+// a "Backport of" phrase is invisible to the unlabelled and duplicate checks.
 package main
 
 import (
@@ -1013,6 +1014,25 @@ func prCommitRange(mergeCommit string) (string, bool) {
 	return mergeCommit + "^.." + mergeCommit, true
 }
 
+// candidateLabel is the backport request under which pr is a candidate for the
+// line want, or "" when it is not one.
+//
+// The request is read against the lines as they stood when the PR merged, even
+// for a label added later: nothing the audit lists records when a label was
+// added. backport.yaml, which runs again when a label is added, resolves its
+// targets at that moment instead, so the two disagree for a label added after
+// the line moved on.
+func candidateLabel(pr *mainPR, opened []lineOpen, want line) string {
+	current, previous := targetsAt(opened, pr.MergedAt)
+	switch {
+	case pr.labels[labelCurrent] && current != nil && *current == want:
+		return labelCurrent
+	case pr.labels[labelPrevious] && previous != nil && *previous == want:
+		return labelPrevious
+	}
+	return ""
+}
+
 func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen) (*branchReport, error) {
 	hist, err := newBranchHistory(cfg.remote, branch)
 	if err != nil {
@@ -1038,14 +1058,8 @@ func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen
 	audited := map[int]string{}
 	for _, n := range numbers {
 		pr := cands[n]
-		current, previous := targetsAt(opened, pr.MergedAt)
-		label := ""
-		switch {
-		case pr.labels[labelCurrent] && current != nil && *current == want:
-			label = labelCurrent
-		case pr.labels[labelPrevious] && previous != nil && *previous == want:
-			label = labelPrevious
-		default:
+		label := candidateLabel(pr, opened, want)
+		if label == "" {
 			continue
 		}
 		audited[n] = label
