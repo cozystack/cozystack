@@ -39,7 +39,7 @@ Arguments and flags may be given in any order.
 
 ## Exit code
 
-`0` when nothing is outstanding, `1` when something is, `2` when the audit could not be completed. Outstanding means a `MISSING`, `pending` or `dropped` verdict, or any `DUPLICATE` entry; `UNLABELLED` entries never move the exit code. That is the point of the tool, so it holds in `--json` mode too:
+`0` when nothing is outstanding, `1` when something is, `2` when the audit could not be completed. Outstanding means a `MISSING`, `partial`, `unverified`, `pending` or `dropped` verdict, or any `DUPLICATE` entry; `UNLABELLED` entries never move the exit code. That is the point of the tool, so it holds in `--json` mode too:
 
 ```bash
 go build ./cmd/backport-audit
@@ -53,14 +53,17 @@ esac
 
 Use the built binary (`go build` as above, or `go install ./cmd/backport-audit`) wherever the exit code matters. `go run` does not preserve it: any non-zero exit of the program comes back as `go run`'s own `1`, after an `exit status N` line on stderr, so under `go run` an audit that could not be completed looks exactly like one that found outstanding work. `go run` is fine for reading the report.
 
-Exit `2` covers the cases where an answer cannot be trusted rather than merely being bad news, and a saturated listing is one of them: `gh` truncates at `--limit` in silence, and a truncated list does not make the audit partial, it makes it wrong — the PRs past the cut are reported nowhere and the exit code says clean. Each of the three listings is checked against its cap and fails instead, naming the cap to raise. The label listings go through GitHub search, which never returns more than 1000 results however far it is paginated, so they are checked against the lower of `--limit` and 1000: a `--limit` above 1000 cannot make a listing cut at 1000 pass for complete.
+Exit `2` covers the cases where an answer cannot be trusted rather than merely being bad news, and a saturated listing is one of them: `gh` truncates at `--limit` in silence, and a truncated list does not make the audit partial, it makes it wrong — the PRs past the cut are reported nowhere and the exit code says clean. Each of the three listings is checked against its cap and fails instead, naming the cap to raise. The label listings go through GitHub search, which never returns more than 1000 results however far it is paginated, so they are checked against the lower of `--limit` and 1000: a `--limit` above 1000 cannot make a listing cut at 1000 pass for complete. A git read that a verdict depends on is the other case: when one fails, a merge commit missing from the local repository for instance, the audit stops with `2` instead of judging the PR without it.
 
 ## Statuses
 
 | Status | Meaning | Action |
 |--------|---------|--------|
 | `in-branch` | The PR merged before the branch was cut, so its change is already there | none, no backport was ever needed |
-| `backported` | A merged backport PR, or the change is present in the branch's history | none |
+| `backported` | Every commit of the PR is on the branch, or, for a PR of a single commit, a backport PR merged | none |
+| `confirmed` | Would be `partial` or `unverified`, but a maintainer attested the backport complete on the merged backport PR; the report names who and links the comment | none |
+| `partial` | Some of the PR's commits are on the branch and some are not, listed with SHA and subject — a merged bot conflict draft, which stops at the first commit that did not apply, or a backport squashed by hand | backport the missing commits, or [attest the backport complete](#attesting-a-backport-complete) |
+| `unverified` | A backport PR merged, but none of the PR's several commits is on the branch under its own SHA, `-x` reference or subject — typically a backport squashed or reworded by hand | check it, then attest it complete or backport what is missing |
 | `pending` | A backport PR exists and is still open, including the drafts the bot opens with the conflict committed | merge it, or finish the draft |
 | `dropped` | A backport PR was closed unmerged, reported with whatever reason someone left on it | none if the reason still holds |
 | `MISSING` | No backport PR ever existed and nothing on the branch matches | cherry-pick it by hand, or drop it deliberately |
@@ -71,7 +74,7 @@ Exit `2` covers the cases where an answer cannot be trusted rather than merely b
 
 The verdicts start from labels, so on their own they cannot see a backport of a PR nobody labelled. Two further sections start from the other side: every PR on the release branch, and the originals it names by the bot's head branch or in a `Backport of` phrase (see [How landing is established](#how-landing-is-established)). The header carries their counts after a `|`, e.g. `backported=42 | DUPLICATE=3 unlabelled=13`.
 
-`UNLABELLED` lists each original that backport PRs on the branch claim although it is not a candidate for the branch, with every backport PR claiming it and that PR's state. Each entry also says what those PRs amount to: `backported here` once one of them merged, `claimed here, not merged` while the only live one is still open, and `claimed here, closed unmerged` when every one was closed. Most are hand backports of PRs that never carried a label, merged on purpose. An original that does carry a backport request, one that resolved to a different line at merge time, is listed with its labels. The section is informational and never moves the exit code: the gate answers whether everything labelled landed, and an unlabelled backport can only add to a branch, never leave a labelled change off it.
+`UNLABELLED` lists each original that backport PRs on the branch claim although it is not a candidate for the branch, with every backport PR claiming it and that PR's state. Each entry also says what those PRs amount to: `backport PR merged` once one of them merged, `claimed here, not merged` while the only live one is still open, and `claimed here, closed unmerged` when every one was closed. A merged claim is only a merged PR, since an unlabelled original is not checked commit by commit; it reads `backport PR merged, confirmed by @login` when the PR carries the [attestation marker](#attesting-a-backport-complete). Most are hand backports of PRs that never carried a label, merged on purpose. An original that does carry a backport request, one that resolved to a different line at merge time, is listed with its labels. The section is informational and never moves the exit code: the gate answers whether everything labelled landed, and an unlabelled backport can only add to a branch, never leave a labelled change off it.
 
 `DUPLICATE` lists each original claimed by more than one live backport PR, labelled or not:
 
@@ -80,7 +83,7 @@ The verdicts start from labels, so on their own they cannot see a backport of a 
 | `open-twice` | Two or more backport PRs are open for it — typically the bot's conflict draft next to a hand backport, or a fork PR next to its reopening from a branch in this repository | merge one, close the rest |
 | `open-after-merge` | A backport already merged and another one is still open | close the leftover, or merge it if it is the second half of a split backport |
 
-Both kinds make the audit exit `1`. Neither reaches a verdict, which settles on the first merged backport it finds or reports `pending` for the first open one, and in both a human has to decide what happens to the open PR before the cut. A closed PR next to an open one is the normal shape of a redone backport and is not flagged, and neither are two merged ones, which are history the branch already carries.
+Both kinds make the audit exit `1`. Neither reaches a verdict, which judges the commits on the branch and names at most one open backport PR, and in both a human has to decide what happens to the open PR before the cut. A closed PR next to an open one is the normal shape of a redone backport and is not flagged, and neither are two merged ones, which are history the branch already carries.
 
 ```console
   DUPLICATE -- one original, more than one live backport PR (3):
@@ -93,7 +96,7 @@ Both kinds make the audit exit `1`. Neither reaches a verdict, which settles on 
   UNLABELLED -- backport PRs here for originals not labelled for this line (13, informational):
     https://github.com/cozystack/cozystack/pull/4280
       #4280 fix(kafka): keep the pre-delete hook's credentials as long as its Job
-      backported here
+      backport PR merged
       backport #4421 CLOSED https://github.com/cozystack/cozystack/pull/4421
       backport #4456 MERGED https://github.com/cozystack/cozystack/pull/4456
 ```
@@ -121,13 +124,25 @@ The labels themselves were namespaced under `kind/` in 7b71053a0, which renamed 
 
 ## How landing is established
 
-Three independent kinds of evidence, strongest first:
+Evidence is weighed per commit, because a commit is what a backport can lose:
 
-1. **Reachability.** The PR's merge commit is reachable from the release branch, i.e. it merged before the branch was cut (or `main` was later merged in). Nothing was ever needed.
-2. **A linked backport PR.** Found by the bot's head branch `backport-<N>-to-release-X.Y`, or by a `Backport of #N` reference in the body, which is what a hand-written backport carries. `MERGED` settles it; `OPEN` is `pending`; `CLOSED` is `dropped`.
+1. **Reachability.** The PR's merge commit is reachable from the release branch, i.e. it merged before the branch was cut (or `main` was later merged in). Nothing was ever needed: `in-branch`.
+2. **A linked backport PR.** Found by the bot's head branch `backport-<N>-to-release-X.Y`, or by a `Backport of #N` reference in the body, which is what a hand-written backport carries. It never outranks the commits (item 3): a merged backport PR with one of the PR's commits missing is `partial`, because the bot's conflict drafts stop at the first commit that does not apply and drop the rest, so a merged draft looks finished at PR level. `MERGED` settles it alone only for a PR of a single commit, as it always has — including on a `--no-fetch` run whose local refs predate the backport's merge. For a PR of several commits, none of them found and a merged backport PR is `unverified`. `OPEN` is `pending`; `CLOSED` is `dropped`.
 
    A backport carrying several changes links to every original its `Backport of` phrase names: a list (`Backport of #3938 and #4280`, `Backport of #1, #2, and #3`), and the `Backport of #4253 to release-1.6, together with #3460` form used for a dependency pulled along. Only that phrase is read, so the issue a backport fixes or a CI run it cites further on is never taken for an original. A list counts in full only when it visibly ends — at the end of the line or the sentence, or where the `to release-X.Y` clause starts. One that runs on into anything else (`Backport of #10, #20 is not included`) may be saying something about its later items, so only its first reference counts. A reference qualified with this repository (`cozystack/cozystack#N`, any case) counts like a bare `#N`, and one qualified with any other repository is skipped, because reading `other/repo#20` as local #20 would let an unrelated backport vouch for whichever local PR carries that number.
-3. **The branch's own history.** The bot's `[Backport release-X.Y] <title>` merge subject, a commit subject identical to one of the PR's, or an `-x` cherry-pick reference to one of its commits. This is what catches a hand-backport nobody linked.
+3. **The branch's own history, commit by commit.** Every commit the PR contributed has to be on the branch; merge commits and commits that change nothing are skipped, since the backport bot drops both. A commit counts when it is reachable, when an `-x` cherry-pick reference names it, or when a commit with its subject is there. Subjects are matched one to one: two commits with the same subject, `fix tests` say, need two branch commits of that name, and a branch commit whose `-x` reference names any other commit than the PR's merge commit is evidence only through that reference. Nothing weaker is taken: not an `-x` reference to the PR's merge commit, which survives a cherry-pick later amended to drop a commit, and not matching lines, which an unrelated line of the same text satisfies. A wrong `backported` is the one answer a release gate must not give, while a false alarm costs a look and can be settled by an attestation. All commits is `backported`, some is `partial`. This is also what catches a hand backport nobody linked.
+
+### Attesting a backport complete
+
+Some complete backports cannot be shown commit by commit, most often a fork contributor's backport squashed into one commit that carries only the first commit's subject. A maintainer who has checked such a backport can say so on the merged backport PR, with a comment that consists of this single line and nothing else:
+
+```text
+backport-audit: complete
+```
+
+That turns the candidate's `partial` or `unverified` into `confirmed`, which does not fail the gate; the report names the author, links the comment, and keeps listing the commits nothing on the branch names.
+
+The marker is an explicit attestation by whoever wrote it, never something the audit infers. It counts only when it is the whole comment: exactly `backport-audit: complete`, in that case, starting at the beginning of its line, with nothing but blank lines before it and nothing but whitespace after it. Any other text makes the comment something other than an attestation, so a sentence such as "do not post backport-audit: complete yet", a quote or a code block never counts, and neither does the marker with an explanation next to it; post the explanation as a separate comment. It counts only on a backport PR that merged, since an open or closed one put nothing on the branch to vouch for. And it counts only from someone with a hand in the repository: the comment's GitHub author association has to be `OWNER`, `MEMBER` or `COLLABORATOR`, and comments from automation are ignored whatever their association — logins ending in `[bot]`, and the review and dependency bots gh reports without that suffix, such as `coderabbitai`, `dependabot`, `renovate` and `copilot`. A review bot quoting the marker, or a contributor vouching for their own backport, confirms nothing.
 
 ## Machine-readable output
 
@@ -143,12 +158,16 @@ go run ./cmd/backport-audit --json release-1.6 release-1.5 \
 go run ./cmd/backport-audit --json release-1.4 \
   | jq -r '.[].candidates[] | select(.status=="dropped") | "#\(.number)\t\(.reason)"'
 
+# commits a partial backport still lacks, one per line
+go run ./cmd/backport-audit --json release-1.6 \
+  | jq -r '.[].candidates[] | select(.status=="partial") | "#\(.number)\t\(.missing_commits[] | "\(.oid[0:9]) \(.subject)")"'
+
 # open backport PRs competing for one original, to settle before the cut
 go run ./cmd/backport-audit --json release-1.6 \
   | jq -r '.[].duplicates[] | "#\(.number) \(.kind): \([.backport_prs[] | select(.state=="OPEN") | .url] | join(" "))"'
 ```
 
-Output is an object keyed by branch, each holding three arrays: `candidates`, `unlabelled` and `duplicates`, each always present and possibly empty. A `candidates` record:
+Output is an object keyed by branch, each holding three arrays: `candidates`, `unlabelled` and `duplicates`, each always present and possibly empty. `partial`, `unverified` and `confirmed` candidates carry `missing_commits`, each an `oid` and a `subject`, and a `confirmed` one also carries `confirmation`: `by`, `url` and `backport_pr`. An `unlabelled` record carries the same `confirmation` when its merged backport PR has the marker. A `candidates` record:
 
 ```json
 {
@@ -198,7 +217,7 @@ A `duplicates` record, where `label` is the request the original was audited und
 
 ## Limits
 
-A `MISSING` verdict is a prompt to check, not proof of absence. A hand-backport that was squash-merged, reworded, and referenced no original PR is invisible to every evidence layer and reads as `MISSING`; confirm at diff level before redoing the work. And the audit reports *that* something is missing, never *why* — a run of `MISSING` entries clustered in time usually means the bot itself was failing during that window, which is worth checking before cherry-picking them one by one.
+A `MISSING`, `partial` or `unverified` verdict is a prompt to check, not proof of absence. A hand backport squashed or reworded without `-x` reads as `partial` or `unverified` until someone attests it complete, and as `MISSING` when nothing links it to its original; confirm at diff level before redoing the work. And the audit reports *that* something is missing, never *why* — a run of `MISSING` entries clustered in time usually means the bot itself was failing during that window, which is worth checking before cherry-picking them one by one.
 
 The audit reads labels as they stand when it runs. A label added afterwards is seen only by the next run, and until then its PR is either absent or, if someone already backported it, listed as `UNLABELLED` rather than audited, so run it right before the cut rather than once at the start of the day.
 

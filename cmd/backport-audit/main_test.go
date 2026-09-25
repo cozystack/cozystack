@@ -17,7 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -725,25 +728,678 @@ func TestOriginURL(t *testing.T) {
 	}
 }
 
+// A real listing, of the PR merged in f1f383626: its third commit is an empty
+// "re-trigger CI" commit, which the backport bot drops.
+const prLogWithEmptyCommit = "\x00fea40d6314424a4105d31c7ee77f818062f5bc1a\x01fix(ci): only overlay current-main images on main-based PRs\n\n" +
+	".github/workflows/pull-requests.yaml\nhack/overlay-main-images_test.bats\n" +
+	"\x002330d6f3ca42306da92190b5e9dddf0bc1054fcd\x01fix(ci): overlay images from the PR base branch, and publish per-line artifacts\n\n" +
+	".github/workflows/build-release.yaml\n.github/workflows/pull-requests.yaml\nhack/overlay-main-images_test.bats\n" +
+	"\x00007d0b1a22ec1aadca95960645d8232a5b202fcb\x01chore(ci): re-trigger CI after a label event produced a no-op run\n"
+
+func TestParsePRCommits(t *testing.T) {
+	got := parsePRCommits(prLogWithEmptyCommit)
+	want := []prCommit{
+		{"fea40d6314424a4105d31c7ee77f818062f5bc1a", "fix(ci): only overlay current-main images on main-based PRs"},
+		{"2330d6f3ca42306da92190b5e9dddf0bc1054fcd", "fix(ci): overlay images from the PR base branch, and publish per-line artifacts"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("parsePRCommits = %+v, want %+v", got, want)
+	}
+}
+
+// fakeSource serves a PR's commits from a fixture, or fails the read.
+type fakeSource struct {
+	commitsOf func(string) []prCommit
+	err       error
+}
+
+func (f fakeSource) commits(mergeCommit string) ([]prCommit, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.commitsOf(mergeCommit), nil
+}
+
+// branchCommit is one commit on a release branch in a test's history.
+type branchCommit struct {
+	oid, subject string
+	picks        []string
+}
+
+// branchOf is release-1.6 holding exactly these commits.
+func branchOf(cs ...branchCommit) *branchHistory {
+	h := &branchHistory{branch: "release-1.6", ref: "origin/release-1.6",
+		commits: map[string]bool{}, subjects: map[string][]string{}, refs: map[string][]string{}}
+	for _, c := range cs {
+		h.commits[c.oid] = true
+		h.subjects[c.subject] = append(h.subjects[c.subject], c.oid)
+		if len(c.picks) > 0 {
+			h.refs[c.oid] = c.picks
+		}
+	}
+	return h
+}
+
+// history is a release branch with one commit per given subject, one per -x
+// reference, and the given commits themselves.
+func history(subjects, picked, reachable []string) *branchHistory {
+	var cs []branchCommit
+	for i, s := range subjects {
+		cs = append(cs, branchCommit{oid: fmt.Sprintf("s%039d", i), subject: s})
+	}
+	for i, p := range picked {
+		cs = append(cs, branchCommit{oid: fmt.Sprintf("p%039d", i), subject: "cherry-pick " + p, picks: []string{p}})
+	}
+	for _, r := range reachable {
+		cs = append(cs, branchCommit{oid: r, subject: "reachable " + r})
+	}
+	return branchOf(cs...)
+}
+
+func comment(login, association, body, url string) prComment {
+	c := prComment{AuthorAssociation: association, Body: body, URL: url}
+	c.Author.Login = login
+	return c
+}
+
+const (
+	firstHalf  = "1111111111111111111111111111111111111111"
+	secondHalf = "2222222222222222222222222222222222222222"
+	emptyOne   = "3333333333333333333333333333333333333333"
+	squashOne  = "4444444444444444444444444444444444444444"
+	mergeOf    = "9999999999999999999999999999999999999999"
+)
+
+// A two-commit PR, #4399, plus an empty commit that must never count.
+func twoHalves(string) []prCommit {
+	return parsePRCommits("\x00" + firstHalf + "\x01fix(x): first half\n\nx.go\n" +
+		"\x00" + secondHalf + "\x01fix(x): second half\n\ny.go\n" +
+		"\x00" + emptyOne + "\x01chore(ci): re-trigger CI\n")
+}
+
+func pr4399() *mainPR {
+	pr := &mainPR{Number: 4399, Title: "fix(x): two halves"}
+	pr.MergeCommit.Oid = mergeOf
+	return pr
+}
+
+// The bot's conflict drafts stop at the first commit that does not apply and
+// drop the rest, so one merged draft reads as a finished backport to anything
+// that looks at the PR, or at any single commit, rather than at every commit.
+func TestClassifyJudgesEveryCommit(t *testing.T) {
+	oneCommit := func(string) []prCommit {
+		return []prCommit{{squashOne, "fix(y): the whole change (#4398)"}}
+	}
+	onlyEmpty := func(string) []prCommit {
+		return parsePRCommits("\x00" + emptyOne + "\x01chore(ci): re-trigger CI\n")
+	}
+	bpMerged := backportPR{Number: 4400, State: "MERGED"}
+	bpOpen := backportPR{Number: 4401, State: "OPEN", IsDraft: true}
+	botSubject := "[Backport release-1.6] fix(x): two halves"
+
+	cases := []struct {
+		name      string
+		hist      *branchHistory
+		linked    []backportPR
+		commitsOf func(string) []prCommit
+		status    string
+		evidence  string
+		missing   []string
+	}{
+		{
+			name:      "only the first commit carried, by -x reference: partial",
+			hist:      history(nil, []string{firstHalf}, nil),
+			commitsOf: twoHalves,
+			status:    statusPartial, evidence: "1 of 2 commits on branch", missing: []string{secondHalf},
+		},
+		{
+			name:      "both carried, one by -x reference and one by subject; the empty commit is not needed",
+			hist:      history([]string{"fix(x): second half"}, []string{firstHalf}, nil),
+			commitsOf: twoHalves,
+			status:    statusBackported, evidence: "2 of 2 commits on branch",
+		},
+		{
+			name:      "reworded on the branch, so only an abbreviated -x reference proves it, and the other is reachable",
+			hist:      history(nil, []string{firstHalf[:7]}, []string{secondHalf}),
+			commitsOf: twoHalves,
+			status:    statusBackported, evidence: "2 of 2 commits on branch",
+		},
+		{
+			name:      "a merged backport PR does not make a partial backport whole",
+			hist:      history(nil, []string{firstHalf}, nil),
+			linked:    []backportPR{bpMerged},
+			commitsOf: twoHalves,
+			status:    statusPartial, evidence: "backport PR #4400 merged, 1 of 2 commits on branch", missing: []string{secondHalf},
+		},
+		{
+			name:      "partial with the rest still open is partial, and says so",
+			hist:      history(nil, []string{firstHalf}, nil),
+			linked:    []backportPR{bpOpen},
+			commitsOf: twoHalves,
+			status:    statusPartial, evidence: "1 of 2 commits on branch; backport PR #4401 open (draft/conflict)", missing: []string{secondHalf},
+		},
+		{
+			name:      "a merged backport PR with none of several commits found proves only that something merged: unverified",
+			hist:      history(nil, nil, nil),
+			linked:    []backportPR{bpMerged},
+			commitsOf: twoHalves,
+			status:    statusUnverified, evidence: "backport PR #4400 merged, 0 of 2 commits on branch", missing: []string{firstHalf, secondHalf},
+		},
+		{
+			name:      "the bot's merge subject alone is no better for several commits",
+			hist:      history([]string{botSubject}, nil, nil),
+			commitsOf: twoHalves,
+			status:    statusUnverified, evidence: "bot merge commit on branch, 0 of 2 commits on branch", missing: []string{firstHalf, secondHalf},
+		},
+		{
+			name:      "an -x reference to the merge commit credits no commit by itself",
+			hist:      history(nil, []string{mergeOf[:12]}, nil),
+			linked:    []backportPR{bpMerged},
+			commitsOf: twoHalves,
+			status:    statusUnverified, evidence: "backport PR #4400 merged, 0 of 2 commits on branch", missing: []string{firstHalf, secondHalf},
+		},
+		{
+			name:      "nor does it lift a partial one",
+			hist:      history(nil, []string{mergeOf[:12], firstHalf}, nil),
+			commitsOf: twoHalves,
+			status:    statusPartial, evidence: "1 of 2 commits on branch", missing: []string{secondHalf},
+		},
+		{
+			name:      "no commit found and only an open backport PR: pending",
+			hist:      history(nil, nil, nil),
+			linked:    []backportPR{bpOpen},
+			commitsOf: twoHalves,
+			status:    statusPending, evidence: "backport PR #4401 open (draft/conflict)",
+		},
+		{
+			name:      "a squashed PR's one commit carried: backported",
+			hist:      history([]string{"fix(y): the whole change (#4398)"}, nil, nil),
+			commitsOf: oneCommit,
+			status:    statusBackported, evidence: "1 of 1 commit on branch",
+		},
+		{
+			name:      "a squashed PR's commit not found but its backport PR merged: backported, as before",
+			hist:      history(nil, nil, nil),
+			linked:    []backportPR{bpMerged},
+			commitsOf: oneCommit,
+			status:    statusBackported, evidence: "backport PR #4400 merged, 0 of 1 commit on branch",
+		},
+		{
+			name:      "and the bot's merge subject settles it the same way",
+			hist:      history([]string{botSubject}, nil, nil),
+			commitsOf: oneCommit,
+			status:    statusBackported, evidence: "bot merge commit on branch, 0 of 1 commit on branch",
+		},
+		{
+			name:      "nothing a backport has to carry: the merged backport PR decides",
+			hist:      history(nil, nil, nil),
+			linked:    []backportPR{bpMerged},
+			commitsOf: onlyEmpty,
+			status:    statusBackported, evidence: "backport PR #4400 merged",
+		},
+		{
+			name:      "nothing anywhere: MISSING",
+			hist:      history(nil, nil, nil),
+			commitsOf: twoHalves,
+			status:    statusMissing, evidence: "no backport PR, nothing on branch",
+		},
+		{
+			name: "merged before the cut: in-branch, without reading its commits",
+			hist: history(nil, nil, []string{mergeOf}),
+			commitsOf: func(string) []prCommit {
+				t.Fatalf("commits read for a PR whose merge commit is on the branch")
+				return nil
+			},
+			status: statusInBranch, evidence: "merged before branch cut",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := classify(pr4399(), labelCurrent, tc.hist, tc.linked, fakeSource{commitsOf: tc.commitsOf})
+			if err != nil {
+				t.Fatalf("classify: %v", err)
+			}
+			if v.Status != tc.status || v.Evidence != tc.evidence {
+				t.Errorf("got %s %q, want %s %q", v.Status, v.Evidence, tc.status, tc.evidence)
+			}
+			var missing []string
+			for _, c := range v.MissingCommits {
+				missing = append(missing, c.Oid)
+			}
+			if !slices.Equal(missing, tc.missing) {
+				t.Errorf("missing commits = %v, want %v", missing, tc.missing)
+			}
+			// Partial and unverified are outstanding, like MISSING, so they fail
+			// the gate.
+			rep := branchReport{Candidates: []verdict{v}}
+			if want := v.Status == statusBackported || v.Status == statusInBranch; rep.clean() != want {
+				t.Errorf("clean() = %v for a %s verdict, want %v", rep.clean(), v.Status, want)
+			}
+		})
+	}
+}
+
+// Only a person's explicit word, on the backport PR that merged, lifts partial
+// or unverified; nothing is inferred, and nothing else will do.
+func TestClassifyConfirmation(t *testing.T) {
+	const marker = "backport-audit: complete"
+	const url = "https://github.com/cozystack/cozystack/pull/4400#issuecomment-1"
+	onPR := func(state string, comments ...prComment) backportPR {
+		return backportPR{Number: 4400, State: state, Comments: comments}
+	}
+	cases := []struct {
+		name   string
+		hist   *branchHistory
+		linked []backportPR
+		status string
+		by     string
+	}{
+		{
+			name:   "partial, attested by a person on the merged backport PR: confirmed",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("coderabbit-reviewer", "NONE", "looks fine", ""), comment("alice", "MEMBER", marker, url))},
+			status: statusConfirmed, by: "alice",
+		},
+		{
+			name:   "unverified, attested: confirmed",
+			hist:   history(nil, nil, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "MEMBER", marker, url))},
+			status: statusConfirmed, by: "alice",
+		},
+		{
+			name:   "the marker from the backport bot is ignored",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("github-actions", "MEMBER", marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "also under the bot's [bot] login",
+			hist:   history(nil, nil, nil),
+			linked: []backportPR{onPR("MERGED", comment("github-actions[bot]", "MEMBER", marker, url))},
+			status: statusUnverified,
+		},
+		{
+			name:   "an owner's attestation confirms",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "OWNER", marker, url))},
+			status: statusConfirmed, by: "alice",
+		},
+		{
+			name:   "a collaborator's attestation confirms",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "COLLABORATOR", marker, url))},
+			status: statusConfirmed, by: "alice",
+		},
+		{
+			name:   "a contributor's marker is ignored",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "CONTRIBUTOR", marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "a first-time contributor's marker is ignored",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "FIRST_TIME_CONTRIBUTOR", marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "a marker from someone with no association is ignored",
+			hist:   history(nil, nil, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "NONE", marker, url))},
+			status: statusUnverified,
+		},
+		{
+			name:   "a review bot is ignored even as a member with a well-formed marker",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("coderabbitai", "MEMBER", marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "the marker with an explanation above it attests nothing",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "MEMBER", "Squashed by the contributor; both commits are in.\n\n"+marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "a member who only mentions the marker in a sentence attests nothing",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "MEMBER", "Do not post backport-audit: complete yet; the second commit is missing.", url))},
+			status: statusPartial,
+		},
+		{
+			name: "a maintainer's attestation counts even after a contributor's",
+			hist: history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED",
+				comment("bob", "CONTRIBUTOR", marker, "https://example.invalid/bob"), comment("alice", "MEMBER", marker, url))},
+			status: statusConfirmed, by: "alice",
+		},
+		{
+			name:   "the marker on an open backport PR is ignored",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("OPEN", comment("alice", "MEMBER", marker, url))},
+			status: statusPartial,
+		},
+		{
+			name:   "the marker on a backport PR closed unmerged is ignored, even next to a merged one",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED"), {Number: 4402, State: "CLOSED", Comments: []prComment{comment("alice", "MEMBER", marker, url)}}},
+			status: statusPartial,
+		},
+		{
+			name:   "anything short of the literal marker is not an attestation",
+			hist:   history(nil, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "MEMBER", "backport-audit complete, I think", url))},
+			status: statusPartial,
+		},
+		{
+			name:   "complete commit evidence needs no attestation",
+			hist:   history([]string{"fix(x): second half"}, []string{firstHalf}, nil),
+			linked: []backportPR{onPR("MERGED", comment("alice", "MEMBER", marker, url))},
+			status: statusBackported,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := classify(pr4399(), labelCurrent, tc.hist, tc.linked, fakeSource{commitsOf: twoHalves})
+			if err != nil {
+				t.Fatalf("classify: %v", err)
+			}
+			if v.Status != tc.status {
+				t.Fatalf("status = %s (%s), want %s", v.Status, v.Evidence, tc.status)
+			}
+			if tc.by == "" {
+				if v.Confirmation != nil {
+					t.Errorf("unexpected confirmation %+v", v.Confirmation)
+				}
+				return
+			}
+			want := confirmation{By: tc.by, URL: url, BackportPR: 4400}
+			if v.Confirmation == nil || *v.Confirmation != want {
+				t.Errorf("confirmation = %+v, want %+v", v.Confirmation, want)
+			}
+			if !strings.HasPrefix(v.Evidence, "confirmed by @"+tc.by+" on backport PR #4400; ") {
+				t.Errorf("evidence %q does not name who confirmed it", v.Evidence)
+			}
+			if rep := (branchReport{Candidates: []verdict{v}}); !rep.clean() {
+				t.Errorf("a confirmed candidate must not fail the gate")
+			}
+			if len(v.MissingCommits) == 0 {
+				t.Errorf("a confirmed candidate keeps the commits nothing on the branch names")
+			}
+		})
+	}
+}
+
+// A read of the PR's commits that fails must end the audit, not feed a verdict:
+// with a merged backport PR linked, falling back to it would say backported on
+// the strength of nothing.
+func TestClassifyFailedReadIsAnError(t *testing.T) {
+	linked := []backportPR{{Number: 4400, State: "MERGED"}}
+	_, err := classify(pr4399(), labelCurrent, history(nil, nil, nil), linked,
+		fakeSource{err: errors.New("fatal: bad object 9999999")})
+	if err == nil || !strings.Contains(err.Error(), "bad object") || !strings.Contains(err.Error(), "#4399") {
+		t.Fatalf("err = %v, want the failed read of #4399", err)
+	}
+}
+
+func TestGitSourceCommits(t *testing.T) {
+	const m = mergeOf
+	boom := errors.New("fatal: bad object")
+	cases := []struct {
+		name      string
+		merge     string
+		parents   string
+		parentErr error
+		logErr    error
+		wantRange string
+		wantN     int
+		wantErr   bool
+	}{
+		{name: "a merge commit: its second parent's side", merge: m, parents: m + " a b\n", wantRange: m + "^1.." + m + "^2", wantN: 2},
+		{name: "a squashed PR: the commit itself", merge: m, parents: m + " a\n", wantRange: m + "^.." + m, wantN: 2},
+		{name: "the merge commit is not in the repository", merge: m, parentErr: boom, wantErr: true},
+		{name: "the log fails", merge: m, parents: m + " a b\n", logErr: boom, wantRange: m + "^1.." + m + "^2", wantErr: true},
+		{name: "an octopus merge is not a PR merge", merge: m, parents: m + " a b c\n", wantErr: true},
+		{name: "no merge commit recorded", merge: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotRange := ""
+			src := gitSource{run: func(args ...string) (string, error) {
+				switch args[0] {
+				case "rev-list":
+					return tc.parents, tc.parentErr
+				case "log":
+					gotRange = args[len(args)-1]
+					return prLogWithEmptyCommit, tc.logErr
+				}
+				return "", fmt.Errorf("unexpected git %v", args)
+			}}
+			commits, err := src.commits(tc.merge)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+			if gotRange != tc.wantRange {
+				t.Errorf("log range = %q, want %q", gotRange, tc.wantRange)
+			}
+			if err != nil && commits != nil {
+				t.Errorf("a failed read must not return commits, got %v", commits)
+			}
+			if !tc.wantErr && len(commits) != tc.wantN {
+				t.Errorf("got %d commits, want %d", len(commits), tc.wantN)
+			}
+		})
+	}
+}
+
+// An unlabelled original is never checked commit by commit, so the only thing
+// that can make its merged backport read as confirmed is the same attestation.
+func TestCrossCheckCarriesConfirmation(t *testing.T) {
+	attested := bp(4456, "MERGED", "backport-3938-to-release-1.6", "Backport of #3938 to `release-1.6`.")
+	attested.Comments = []prComment{comment("alice", "MEMBER", "backport-audit: complete", "https://example.invalid/c/1")}
+	plain := bp(4431, "MERGED", "backport-3455-to-release-1.6", "Backport of #3455 to `release-1.6`.")
+	unlabelled, _ := crossCheck(indexByOrigin([]backportPR{attested, plain}, "release-1.6"), nil, nil)
+	got := map[int]*confirmation{}
+	for _, u := range unlabelled {
+		got[u.Number] = u.Confirmation
+	}
+	if c := got[3938]; c == nil || c.By != "alice" || c.BackportPR != 4456 {
+		t.Errorf("#3938: confirmation = %+v, want alice on #4456", c)
+	}
+	if c := got[3455]; c != nil {
+		t.Errorf("#3455: confirmation = %+v, want none", c)
+	}
+}
+
+func TestSameCommit(t *testing.T) {
+	full := "0123456789abcdef0123456789abcdef01234567"
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical", full, full, true},
+		{"the reference abbreviates", full, full[:7], true},
+		{"the other side abbreviates", full[:7], full, true},
+		{"different commits", full, "fff1234000000000000000000000000000000000", false},
+		{"an empty name is nobody's commit", full, "", false},
+		{"nor is it on the other side", "", full, false},
+	}
+	for _, tc := range cases {
+		if got := sameCommit(tc.a, tc.b); got != tc.want {
+			t.Errorf("%s: sameCommit(%q, %q) = %v, want %v", tc.name, tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// One branch commit is evidence for one original commit. Two commits that share
+// a subject such as "fix tests" need two branch commits of that name, and a
+// branch commit that has already said what it copies cannot stand in for
+// another commit by its subject.
+func TestMissingFrom(t *testing.T) {
+	const (
+		a     = "aaaa000000000000000000000000000000000000"
+		b     = "bbbb000000000000000000000000000000000000"
+		merge = "eeee000000000000000000000000000000000000"
+		other = "ffff000000000000000000000000000000000000"
+	)
+	pr := []prCommit{{a, "fix tests"}, {b, "fix tests"}}
+	cases := []struct {
+		name    string
+		hist    *branchHistory
+		missing []string
+	}{
+		{
+			name:    "one copy of a shared subject carries one commit, not both",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "fix tests"}),
+			missing: []string{b},
+		},
+		{
+			name:    "two copies carry both",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "fix tests"}, branchCommit{oid: "c2", subject: "fix tests"}),
+			missing: nil,
+		},
+		{
+			name:    "a copy that names the first commit with -x is spent on it, not on the second",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "fix tests", picks: []string{a[:9]}}),
+			missing: []string{b},
+		},
+		{
+			name:    "the first commit on the branch itself is spent on it, not on the second",
+			hist:    branchOf(branchCommit{oid: a, subject: "fix tests"}),
+			missing: []string{b},
+		},
+		{
+			name:    "a copy whose -x names the PR's merge commit can still carry one commit by subject",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "fix tests", picks: []string{merge[:9]}}),
+			missing: []string{b},
+		},
+		{
+			name:    "a copy whose -x names some other commit carries nothing here by its subject",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "fix tests", picks: []string{other}}),
+			missing: []string{a, b},
+		},
+		{
+			name:    "an -x reference carries its commit whatever the subject",
+			hist:    branchOf(branchCommit{oid: "c1", subject: "reworded", picks: []string{a}}, branchCommit{oid: "c2", subject: "fix tests"}),
+			missing: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, c := range tc.hist.missingFrom(pr, merge) {
+				got = append(got, c.Oid)
+			}
+			if !slices.Equal(got, tc.missing) {
+				t.Errorf("missing = %v, want %v", got, tc.missing)
+			}
+		})
+	}
+}
+
+// A shared subject with only one copy on the branch leaves the candidate
+// partial, so the gate stays shut.
+func TestClassifySharedSubject(t *testing.T) {
+	pr := pr4399()
+	commits := func(string) []prCommit {
+		return []prCommit{{firstHalf, "fix tests"}, {secondHalf, "fix tests"}}
+	}
+	v, err := classify(pr, labelCurrent, history([]string{"fix tests"}, nil, nil), nil, fakeSource{commitsOf: commits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != statusPartial || v.Evidence != "1 of 2 commits on branch" {
+		t.Errorf("got %s %q, want partial 1 of 2", v.Status, v.Evidence)
+	}
+	if (&branchReport{Candidates: []verdict{v}}).clean() {
+		t.Errorf("a partial candidate must fail the gate")
+	}
+}
+
+// The marker attests only as the whole comment. Every input that got past a
+// line-by-line markdown reading in an earlier version is here, rejected by the
+// one rule without any markdown in it.
+func TestMarkerComment(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"the bare marker", "backport-audit: complete", true},
+		{"with blank lines before it and whitespace after it", "\n\nbackport-audit: complete \t\n\n", true},
+		{"with CRLF around it", "\r\nbackport-audit: complete\r\n", true},
+		{"a sentence that says not to", "Do not post backport-audit: complete yet; the second commit is missing.", false},
+		{"mid-sentence", "I think backport-audit: complete applies here.", false},
+		{"with words after it", "backport-audit: complete, except the docs", false},
+		{"in another case", "Backport-Audit: Complete", false},
+		{"quoted", "> backport-audit: complete", false},
+		{"quoted, then a reply", "> backport-audit: complete\n\nAgreed?", false},
+		{"inside a backtick fence", "```\nbackport-audit: complete\n```", false},
+		{"inside a tilde fence", "~~~\nbackport-audit: complete\n~~~", false},
+		{"inside nested tilde fences", "~~~~\n~~~\nbackport-audit: complete\n~~~\n~~~~", false},
+		{"as an indented code block", "Post this once checked:\n\n    backport-audit: complete", false},
+		{"indented by a space and a tab after a blank line", "\n\n \tbackport-audit: complete", false},
+		{"indented by a tab", "\tbackport-audit: complete", false},
+		{"indented by two spaces", "  backport-audit: complete", false},
+		{"after a line of spaces", "   \nbackport-audit: complete", false},
+		{"with text glued in front", "xbackport-audit: complete", false},
+		{"with an explanation above it", "Checked every commit by hand.\n\nbackport-audit: complete", false},
+		{"with a note below it", "backport-audit: complete\n\nthanks!", false},
+		{"twice", "backport-audit: complete\nbackport-audit: complete", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		if got := markerComment(tc.body); got != tc.want {
+			t.Errorf("%s: markerComment(%q) = %v, want %v", tc.name, tc.body, got, tc.want)
+		}
+	}
+}
+
+func TestBotAuthor(t *testing.T) {
+	for login, want := range map[string]bool{
+		"github-actions":      true,
+		"github-actions[bot]": true,
+		"coderabbitai":        true,
+		"CodeRabbitAI":        true,
+		"coderabbitai[bot]":   true,
+		"dependabot":          true,
+		"renovate":            true,
+		"copilot":             true,
+		"some-new-app[bot]":   true,
+		"myasnikovdaniil":     false,
+		"alice":               false,
+		"renovate-fan":        false,
+		"bot-enthusiast":      false,
+	} {
+		if got := botAuthor(login); got != want {
+			t.Errorf("botAuthor(%q) = %v, want %v", login, got, want)
+		}
+	}
+}
+
 func TestClaimState(t *testing.T) {
+	alice := &confirmation{By: "alice"}
 	cases := []struct {
 		states []string
+		conf   *confirmation
 		want   string
 	}{
-		{[]string{"MERGED"}, "backported here"},
-		{[]string{"CLOSED", "MERGED"}, "backported here"},
-		{[]string{"OPEN", "MERGED"}, "backported here"},
-		{[]string{"OPEN"}, "claimed here, not merged"},
-		{[]string{"CLOSED", "OPEN"}, "claimed here, not merged"},
-		{[]string{"CLOSED"}, "claimed here, closed unmerged"},
+		{[]string{"MERGED"}, nil, "backport PR merged"},
+		{[]string{"CLOSED", "MERGED"}, nil, "backport PR merged"},
+		{[]string{"OPEN", "MERGED"}, nil, "backport PR merged"},
+		{[]string{"MERGED"}, alice, "backport PR merged, confirmed by @alice"},
+		{[]string{"OPEN"}, nil, "claimed here, not merged"},
+		{[]string{"CLOSED", "OPEN"}, nil, "claimed here, not merged"},
+		{[]string{"CLOSED"}, nil, "claimed here, closed unmerged"},
 	}
 	for _, tc := range cases {
 		var prs []linkedPR
 		for i, s := range tc.states {
 			prs = append(prs, linkedPR{Number: i + 1, State: s})
 		}
-		if got := claimState(prs); got != tc.want {
-			t.Errorf("claimState(%v) = %q, want %q", tc.states, got, tc.want)
+		if got := claimState(prs, tc.conf); got != tc.want {
+			t.Errorf("claimState(%v, %v) = %q, want %q", tc.states, tc.conf, got, tc.want)
 		}
 	}
 }

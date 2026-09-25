@@ -28,15 +28,20 @@ limitations under the License.
 // meant changed once, at the freeze contract; lineOpenDates carries both
 // rules and the reason a single cutover reproduces them faithfully.
 //
-// Landing is established from three independent kinds of evidence: the PR's
-// merge commit already being reachable from the release branch (it merged
-// before the branch was cut, so no backport was ever needed); a MERGED backport
-// PR for it on that branch; or the branch's own history carrying the change
-// (the bot's merge subject, an identical commit subject, or an -x cherry-pick
-// reference). Anything left over is reported as MISSING, pending (a backport PR
-// is open, including the draft PRs korthout/backport-action opens with the
-// conflict committed) or dropped (a backport PR was closed unmerged, with
-// whatever reason someone recorded on it).
+// Landing is established per commit. The PR's merge commit being reachable
+// from the release branch settles it outright: it merged before the branch was
+// cut, so no backport was ever needed. Otherwise every commit the PR
+// contributed has to be on the branch: reachable, named by an -x cherry-pick
+// reference, or present under its own subject; see classify. All of them is
+// backported and some of them is partial, whatever the linked backport PR says.
+// With none of them, a MERGED backport PR is taken at its word for a PR of one
+// commit, and leaves a PR of several unverified. A maintainer can confirm a
+// partial or unverified backport complete with a marker comment on the merged
+// backport PR; see confirmMarker. Anything left over is reported as MISSING,
+// pending (a backport PR is open, including the draft PRs
+// korthout/backport-action opens with the conflict committed) or dropped (a
+// backport PR was closed unmerged, with whatever reason someone recorded on
+// it).
 //
 // The labels are not the only record of what a branch received, so the backport
 // PRs on it are also read from the side of the originals they name. One whose
@@ -47,20 +52,22 @@ limitations under the License.
 // one after another already merged, is a duplicate and does count as
 // outstanding. One of them is redundant and should be closed, or the open one
 // is the unfinished half of a split backport; either way a human decides
-// before the cut, and a verdict cannot say so, because it settles on the first
-// merged backport PR it finds or reports the first open one as pending.
+// before the cut, and a verdict cannot say so, because it judges the commits on
+// the branch and names at most one open backport PR.
 //
-// Known limits: a hand-backport that is squash-merged, rewords its subject and
-// references no original PR is unprovable from either side and reads as
-// MISSING; a backport label added after the release line moved on is still
-// read against the line current at merge, while the bot targets the newer
-// one, so the audit expects the change where the bot did not put it; and a
-// backport PR that names its original neither by the bot's head branch nor in
-// a "Backport of" phrase is invisible to the unlabelled and duplicate checks.
+// Known limits: a hand-backport squashed or reworded without -x reads as partial
+// or unverified until a person confirms it, and as MISSING when nothing links
+// it to its original; a backport label added after the release line moved on
+// is still read against the line current at merge, while the bot targets the
+// newer one, so the audit expects the change where the bot did not put it; and
+// a backport PR that names its original neither by the bot's head branch nor
+// in a "Backport of" phrase is invisible to the unlabelled and duplicate
+// checks.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -203,19 +210,25 @@ var backportLabels = []struct {
 // this order that makes the audit exit non-zero.
 const (
 	statusMissing    = "MISSING"
+	statusPartial    = "partial"
+	statusUnverified = "unverified"
 	statusPending    = "pending"
 	statusDropped    = "dropped"
+	statusConfirmed  = "confirmed"
 	statusBackported = "backported"
 	statusInBranch   = "in-branch"
 )
 
 var (
-	statusOrder = []string{statusMissing, statusPending, statusDropped, statusBackported, statusInBranch}
-	outstanding = []string{statusMissing, statusPending, statusDropped}
+	statusOrder = []string{statusMissing, statusPartial, statusUnverified, statusPending, statusDropped,
+		statusConfirmed, statusBackported, statusInBranch}
+	outstanding = []string{statusMissing, statusPartial, statusUnverified, statusPending, statusDropped}
 	headings    = map[string]string{
-		statusMissing: "MISSING -- labelled for this line, no trace of it here",
-		statusPending: "PENDING -- backport PR open, not merged",
-		statusDropped: "DROPPED -- backport PR closed without merging",
+		statusMissing:    "MISSING -- labelled for this line, no trace of it here",
+		statusPartial:    "PARTIAL -- some of the PR's commits are here, not all of them",
+		statusUnverified: "UNVERIFIED -- backport PR merged, none of the PR's commits found here",
+		statusPending:    "PENDING -- backport PR open, not merged",
+		statusDropped:    "DROPPED -- backport PR closed without merging",
 	}
 )
 
@@ -274,19 +287,24 @@ type mainPR struct {
 
 // backportPR is a PR opened against a release branch.
 type backportPR struct {
-	Number      int    `json:"number"`
-	Title       string `json:"title"`
-	URL         string `json:"url"`
-	State       string `json:"state"`
-	HeadRefName string `json:"headRefName"`
-	Body        string `json:"body"`
-	IsDraft     bool   `json:"isDraft"`
-	Comments    []struct {
-		Author struct {
-			Login string `json:"login"`
-		} `json:"author"`
-		Body string `json:"body"`
-	} `json:"comments"`
+	Number      int         `json:"number"`
+	Title       string      `json:"title"`
+	URL         string      `json:"url"`
+	State       string      `json:"state"`
+	HeadRefName string      `json:"headRefName"`
+	Body        string      `json:"body"`
+	IsDraft     bool        `json:"isDraft"`
+	Comments    []prComment `json:"comments"`
+}
+
+// prComment is one comment on a backport PR.
+type prComment struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	AuthorAssociation string `json:"authorAssociation"`
+	Body              string `json:"body"`
+	URL               string `json:"url"`
 }
 
 // linkedPR is the trimmed view of a backport PR carried in the output.
@@ -314,17 +332,28 @@ type verdict struct {
 	Status      string     `json:"status"`
 	Evidence    string     `json:"evidence"`
 	Reason      string     `json:"reason,omitempty"`
+	// MissingCommits are the PR's commits a partial or unverified backport
+	// shows no trace of.
+	MissingCommits []prCommit    `json:"missing_commits,omitempty"`
+	Confirmation   *confirmation `json:"confirmation,omitempty"`
+}
+
+// prCommit is one commit a PR contributed to main.
+type prCommit struct {
+	Oid     string `json:"oid"`
+	Subject string `json:"subject"`
 }
 
 // unlabelledBackport is an original that backport PRs on the branch claim
 // although it is not a candidate for the branch. Labels holds the backport
 // requests it does carry, which then resolved to some other line.
 type unlabelledBackport struct {
-	Number      int        `json:"number"`
-	Title       string     `json:"title"`
-	URL         string     `json:"url"`
-	Labels      []string   `json:"labels"`
-	BackportPRs []linkedPR `json:"backport_prs"`
+	Number       int           `json:"number"`
+	Title        string        `json:"title"`
+	URL          string        `json:"url"`
+	Labels       []string      `json:"labels"`
+	BackportPRs  []linkedPR    `json:"backport_prs"`
+	Confirmation *confirmation `json:"confirmation,omitempty"`
 }
 
 // duplicateBackport is an original claimed by more than one live backport PR
@@ -530,13 +559,13 @@ func (cfg *config) setColors() {
 // colorFor is the accent a status is reported in.
 func (cfg *config) colorFor(status string) string {
 	switch status {
-	case statusMissing:
+	case statusMissing, statusPartial, statusUnverified:
 		return cfg.red
 	case statusPending:
 		return cfg.yellow
 	case statusDropped:
 		return cfg.cyan
-	case statusBackported, statusInBranch:
+	case statusConfirmed, statusBackported, statusInBranch:
 		return cfg.green
 	}
 	return ""
@@ -802,11 +831,14 @@ func candidates(limit int) (map[int]*mainPR, error) {
 // branchHistory is everything the audit needs to read out of one release
 // branch, collected in a single walk of its history.
 type branchHistory struct {
-	branch       string
-	ref          string
-	commits      map[string]bool
-	subjects     map[string]bool
-	cherryPicked []string
+	branch  string
+	ref     string
+	commits map[string]bool
+	// subjects maps a subject to every branch commit carrying it, so that two
+	// commits with one subject need two of them.
+	subjects map[string][]string
+	// refs maps a branch commit to the commits its -x references name.
+	refs map[string][]string
 }
 
 func newBranchHistory(remote, branch string) (*branchHistory, error) {
@@ -814,7 +846,8 @@ func newBranchHistory(remote, branch string) (*branchHistory, error) {
 		branch:   branch,
 		ref:      remote + "/" + branch,
 		commits:  map[string]bool{},
-		subjects: map[string]bool{},
+		subjects: map[string][]string{},
+		refs:     map[string][]string{},
 	}
 	// One walk yields all three things: the reachable commits (a set lookup
 	// answers exactly what `merge-base --is-ancestor` would, per commit, for
@@ -831,34 +864,82 @@ func newBranchHistory(remote, branch string) (*branchHistory, error) {
 		for len(parts) < 3 {
 			parts = append(parts, "")
 		}
-		h.commits[strings.TrimSpace(parts[0])] = true
-		h.subjects[strings.TrimSpace(parts[1])] = true
+		oid, subject := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		h.commits[oid] = true
+		h.subjects[subject] = append(h.subjects[subject], oid)
 		for _, m := range cherryPickRE.FindAllStringSubmatch(parts[2], -1) {
-			h.cherryPicked = append(h.cherryPicked, m[1])
+			h.refs[oid] = append(h.refs[oid], m[1])
 		}
 	}
 	return h, nil
 }
 
 func (h *branchHistory) hasSubject(subject string) bool {
-	return h.subjects[strings.TrimSpace(subject)]
+	return len(h.subjects[strings.TrimSpace(subject)]) > 0
 }
 
 func (h *branchHistory) contains(commit string) bool {
 	return commit != "" && h.commits[commit]
 }
 
-// hasCherryPickOf reports whether the branch records an -x cherry-pick of any
-// of the given commits. Abbreviations on either side are compared by prefix.
-func (h *branchHistory) hasCherryPickOf(oids []string) bool {
-	for _, oid := range oids {
-		for _, picked := range h.cherryPicked {
-			if strings.HasPrefix(oid, picked) || strings.HasPrefix(picked, oid) {
-				return true
+// sameCommit reports whether two object names can be the same commit: an -x
+// reference may abbreviate, so either may be a prefix of the other.
+func sameCommit(a, b string) bool {
+	return a != "" && b != "" && (strings.HasPrefix(a, b) || strings.HasPrefix(b, a))
+}
+
+// missingFrom returns the commits of the PR merged as mergeCommit that the
+// branch does not carry. A commit is carried when it is on the branch itself,
+// when a branch commit's -x reference names it, or when a branch commit with
+// its subject is left over for it.
+//
+// Subjects are spent one to one: two commits both called "fix tests" need two
+// branch commits of that name, not the one they share. One of the PR's own
+// commits on the branch is spent on itself, and a branch commit whose -x
+// reference names anything but the PR's merge commit -- one of the PR's
+// commits included -- is evidence only through that reference: it has said
+// what it is a copy of.
+func (h *branchHistory) missingFrom(commits []prCommit, mergeCommit string) []prCommit {
+	spent := map[string]bool{}
+	carried := make([]bool, len(commits))
+	for i, c := range commits {
+		if h.contains(c.Oid) {
+			carried[i], spent[c.Oid] = true, true
+		}
+		for _, refs := range h.refs {
+			for _, r := range refs {
+				if sameCommit(c.Oid, r) {
+					carried[i] = true
+				}
 			}
 		}
 	}
-	return false
+	var missing []prCommit
+	for i, c := range commits {
+		for _, b := range h.subjects[strings.TrimSpace(c.Subject)] {
+			if carried[i] {
+				break
+			}
+			if !spent[b] && h.namesOnly(b, mergeCommit) {
+				carried[i], spent[b] = true, true
+			}
+		}
+		if !carried[i] {
+			missing = append(missing, c)
+		}
+	}
+	return missing
+}
+
+// namesOnly reports whether every -x reference branch commit b carries, if it
+// carries any, names commit.
+func (h *branchHistory) namesOnly(b, commit string) bool {
+	for _, r := range h.refs[b] {
+		if !sameCommit(r, commit) {
+			return false
+		}
+	}
+	return true
 }
 
 // backportPRsFor indexes every PR on branch by the main PRs it claims to
@@ -951,11 +1032,28 @@ func repoOf(prURL string) string {
 	return parts[len(parts)-2] + "/" + parts[len(parts)-1]
 }
 
+// botAuthor reports whether a comment was written by automation rather than by
+// a person: the backport bot, a review bot, a dependency bot. gh reports some
+// of them without the "[bot]" suffix a GitHub App login otherwise carries, so
+// those are named.
+func botAuthor(login string) bool {
+	l := strings.ToLower(login)
+	if strings.HasSuffix(l, "[bot]") {
+		return true
+	}
+	switch l {
+	case "github-actions", "coderabbitai", "dependabot", "renovate", "copilot",
+		"copilot-pull-request-reviewer", "dosubot", "gemini-code-assist":
+		return true
+	}
+	return false
+}
+
 // lastHumanComment is the last comment on a PR not written by the backport bot.
 func lastHumanComment(pr backportPR) string {
 	for i := len(pr.Comments) - 1; i >= 0; i-- {
 		login := pr.Comments[i].Author.Login
-		if login == "github-actions" || login == "github-actions[bot]" {
+		if botAuthor(login) {
 			continue
 		}
 		text := strings.Join(strings.Fields(pr.Comments[i].Body), " ")
@@ -970,48 +1068,120 @@ func lastHumanComment(pr backportPR) string {
 	return "no reason recorded"
 }
 
-// prCommitSubjects returns the subjects of the commits a PR contributed, read
-// locally. main takes PRs as merge commits, so the branch side is ^1..^2. A
-// squashed or rebased merge has no second parent; then the commit itself is the
-// change.
-func prCommitSubjects(mergeCommit string) []string {
-	rng, ok := prCommitRange(mergeCommit)
-	if !ok {
-		return nil
-	}
-	out, err := git("log", "--format=%s", rng)
-	if err != nil {
-		return nil
-	}
-	var subjects []string
-	for s := range strings.SplitSeq(out, "\n") {
-		if strings.TrimSpace(s) != "" {
-			subjects = append(subjects, s)
+// confirmMarker is what a maintainer posts, as the whole of a comment on a
+// merged backport PR, to attest that it carries the whole original although
+// the audit cannot show that commit by commit, as with a backport squashed into
+// one commit. The audit never infers it.
+const confirmMarker = "backport-audit: complete"
+
+// confirmation is that attestation: who wrote it, where, on which backport PR.
+type confirmation struct {
+	By         string `json:"by"`
+	URL        string `json:"url"`
+	BackportPR int    `json:"backport_pr"`
+}
+
+// confirmedBy returns the first attestation among prs, or nil. Only a backport
+// PR that merged counts, since an open or closed one put nothing on the branch
+// to vouch for, and only a comment by someone with a hand in the repository:
+// its owner, a member of its organisation or a collaborator. A review bot
+// quoting the marker, or a drive-by contributor, confirms nothing.
+func confirmedBy(prs []backportPR) *confirmation {
+	for _, b := range prs {
+		if b.State != "MERGED" {
+			continue
+		}
+		for _, c := range b.Comments {
+			if !botAuthor(c.Author.Login) && maintains(c.AuthorAssociation) && markerComment(c.Body) {
+				return &confirmation{By: c.Author.Login, URL: c.URL, BackportPR: b.Number}
+			}
 		}
 	}
-	return subjects
+	return nil
 }
 
-func prCommitOids(mergeCommit string) []string {
-	rng, ok := prCommitRange(mergeCommit)
-	if !ok {
-		return nil
+// markerComment reports whether body is the marker and nothing else: only blank
+// lines before it, only whitespace after it, and nothing before it on its own
+// line. A comment that holds anything more -- a sentence mentioning it ("do not
+// post backport-audit: complete yet"), a quote, a code block -- is talk about
+// attesting, not an attestation, and no reading of markdown is needed to tell
+// the two apart. Leading spaces or a tab on the marker's line are rejected
+// rather than trimmed, since enough of them turn the line into code.
+func markerComment(body string) bool {
+	before, found := strings.CutSuffix(strings.TrimRight(body, " \t\r\n"), confirmMarker)
+	return found && strings.Trim(before, "\r\n") == ""
+}
+
+// maintains reports whether a comment's GitHub author association is one that
+// may vouch for a backport.
+func maintains(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
 	}
-	out, err := git("log", "--format=%H", rng)
+	return false
+}
+
+// commitSource lists the commits a PR contributed: gitSource in the audit,
+// fixtures in tests.
+type commitSource interface {
+	// commits lists, oldest first, the commits a PR contributed that a
+	// backport has to carry. A read that fails is an error, never an empty
+	// list, since a verdict built on it would be a guess.
+	commits(mergeCommit string) ([]prCommit, error)
+}
+
+// gitSource reads commits through run, which is git in the audit.
+type gitSource struct {
+	run func(args ...string) (string, error)
+}
+
+// commits reads the PR's side of its merge. main takes PRs as merge commits, so
+// that is ^1..^2; a squashed or rebased merge has a single parent, and then the
+// commit itself is the change.
+//
+// Merge commits and commits that change nothing are left out: the backport bot
+// drops both (merge_commits: skip, and an empty cherry-pick has nothing to
+// apply), so a backport without them is complete, and a "re-trigger CI" commit
+// must not make one look partial.
+func (g gitSource) commits(mergeCommit string) ([]prCommit, error) {
+	if mergeCommit == "" {
+		return nil, errors.New("no merge commit recorded")
+	}
+	parents, err := g.run("rev-list", "--parents", "-n", "1", mergeCommit)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return strings.Fields(out)
+	var rng string
+	switch f := strings.Fields(parents); len(f) {
+	case 2:
+		rng = mergeCommit + "^.." + mergeCommit
+	case 3:
+		rng = mergeCommit + "^1.." + mergeCommit + "^2"
+	default:
+		return nil, fmt.Errorf("merge commit %s has %d parents", mergeCommit, len(f)-1)
+	}
+	out, err := g.run("log", "--reverse", "--no-merges", "--name-only", "--format=%x00%H%x01%s", rng)
+	if err != nil {
+		return nil, err
+	}
+	return parsePRCommits(out), nil
 }
 
-func prCommitRange(mergeCommit string) (string, bool) {
-	if mergeCommit == "" || !gitOK("cat-file", "-e", mergeCommit+"^{commit}") {
-		return "", false
+// parsePRCommits is the half of gitSource.commits that does not need a
+// repository: `git log --name-only` output in, the commits that touched a file
+// out.
+func parsePRCommits(out string) []prCommit {
+	var commits []prCommit
+	for entry := range strings.SplitSeq(out, "\x00") {
+		head, files, _ := strings.Cut(entry, "\n")
+		oid, subject, ok := strings.Cut(head, "\x01")
+		if !ok || strings.TrimSpace(files) == "" {
+			continue
+		}
+		commits = append(commits, prCommit{Oid: oid, Subject: subject})
 	}
-	if gitOK("rev-parse", "--verify", "--quiet", mergeCommit+"^2") {
-		return mergeCommit + "^1.." + mergeCommit + "^2", true
-	}
-	return mergeCommit + "^.." + mergeCommit, true
+	return commits
 }
 
 // candidateLabel is the backport request under which pr is a candidate for the
@@ -1063,7 +1233,11 @@ func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen
 			continue
 		}
 		audited[n] = label
-		results = append(results, classify(pr, label, hist, backports[pr.Number]))
+		v, err := classify(pr, label, hist, backports[pr.Number], gitSource{run: git})
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, v)
 	}
 	unlabelled, duplicates := crossCheck(backports, audited, cands)
 	return &branchReport{Candidates: results, Unlabelled: unlabelled, Duplicates: duplicates}, nil
@@ -1106,7 +1280,7 @@ func crossCheck(index map[int][]backportPR, audited map[int]string, cands map[in
 		label, isCandidate := audited[n]
 		if !isCandidate {
 			unlabelled = append(unlabelled, unlabelledBackport{
-				Number: n, Title: title, URL: url, Labels: labels, BackportPRs: linked,
+				Number: n, Title: title, URL: url, Labels: labels, BackportPRs: linked, Confirmation: confirmedBy(claims),
 			})
 		}
 		if kind := duplicateKind(claims); kind != "" {
@@ -1231,7 +1405,25 @@ func titlesOf(numbers []int) (map[int]string, error) {
 	return titles, nil
 }
 
-func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR) verdict {
+// classify judges one candidate.
+//
+// Delivery is judged per commit: the change is on the branch only when every
+// commit a backport has to carry is, because the bot's conflict drafts stop at
+// the first commit that does not apply and drop the rest, so one merged draft
+// looks exactly like a finished backport at PR level. A commit counts as carried
+// only when the branch names it (see missingFrom). Nothing weaker is taken: a
+// wrong backported is the one answer a release gate must never give, while a
+// false alarm costs a look. Some commits carried and others not is partial,
+// whatever the linked backport PR says.
+//
+// A merged backport PR, or the bot's merge subject, settles a PR of one commit
+// alone, as it always has. For a PR of several commits it proves only that
+// something merged, so with none of them found it is unverified. A maintainer
+// can lift partial and unverified to confirmed by attesting the backport
+// complete on the merged backport PR; see confirmMarker.
+//
+// A failed read of the PR's commits is returned as an error rather than judged.
+func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR, src commitSource) (verdict, error) {
 	v := verdict{
 		Number:      pr.Number,
 		Title:       pr.Title,
@@ -1248,58 +1440,92 @@ func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR
 	mergeCommit := pr.MergeCommit.Oid
 	if hist.contains(mergeCommit) {
 		v.Status, v.Evidence = statusInBranch, "merged before branch cut"
-		return v
+		return v, nil
 	}
 
-	for _, b := range linked {
-		if b.State == "MERGED" {
-			v.Status = statusBackported
-			v.Evidence = fmt.Sprintf("backport PR #%d merged", b.Number)
-			return v
+	var merged, open *backportPR
+	for i := range linked {
+		switch b := &linked[i]; {
+		case b.State == "MERGED" && merged == nil:
+			merged = b
+		case b.State == "OPEN" && open == nil:
+			open = b
 		}
 	}
-
-	if hist.hasSubject(fmt.Sprintf("[Backport %s] %s", hist.branch, pr.Title)) {
-		v.Status, v.Evidence = statusBackported, "bot merge commit on branch"
-		return v
-	}
-	for _, s := range prCommitSubjects(mergeCommit) {
-		if hist.hasSubject(s) {
-			v.Status = statusBackported
-			v.Evidence = fmt.Sprintf("identical commit subject on branch: %q", s)
-			return v
+	openNote := ""
+	if open != nil {
+		openNote = fmt.Sprintf("backport PR #%d open", open.Number)
+		if open.IsDraft {
+			openNote += " (draft/conflict)"
 		}
 	}
-	if hist.hasCherryPickOf(prCommitOids(mergeCommit)) {
-		v.Status, v.Evidence = statusBackported, "-x cherry-pick reference"
-		return v
+	prMerged := ""
+	switch {
+	case merged != nil:
+		prMerged = fmt.Sprintf("backport PR #%d merged", merged.Number)
+	case hist.hasSubject(fmt.Sprintf("[Backport %s] %s", hist.branch, pr.Title)):
+		prMerged = "bot merge commit on branch"
 	}
 
-	for _, b := range linked {
-		if b.State == "OPEN" {
-			draft := ""
-			if b.IsDraft {
-				draft = " (draft/conflict)"
+	commits, err := src.commits(mergeCommit)
+	if err != nil {
+		return verdict{}, fmt.Errorf("reading the commits of #%d: %w", pr.Number, err)
+	}
+	missing := hist.missingFrom(commits, mergeCommit)
+	evidence := fmt.Sprintf("%d of %s on branch", len(commits)-len(missing), commitCount(len(commits)))
+	if prMerged != "" {
+		evidence = prMerged + ", " + evidence
+	}
+
+	switch {
+	case len(commits) > 0 && len(missing) == 0:
+		v.Status, v.Evidence = statusBackported, evidence
+		return v, nil
+	case len(commits) <= 1 && prMerged != "":
+		v.Status, v.Evidence = statusBackported, prMerged
+		if len(commits) == 1 {
+			v.Evidence = evidence
+		}
+		return v, nil
+	case len(missing) < len(commits): // some carried, not all
+		v.Status, v.Evidence, v.MissingCommits = statusPartial, evidence, missing
+	case prMerged != "":
+		v.Status, v.Evidence, v.MissingCommits = statusUnverified, evidence, missing
+	case open != nil:
+		v.Status, v.Evidence = statusPending, openNote
+		return v, nil
+	default:
+		for _, b := range linked {
+			if b.State == "CLOSED" {
+				// A closed backport is usually a deliberate "not needed on this
+				// line". Carry the reason someone left, so the next release does
+				// not re-open the same investigation from scratch.
+				v.Status = statusDropped
+				v.Evidence = fmt.Sprintf("backport PR #%d closed unmerged", b.Number)
+				v.Reason = lastHumanComment(b)
+				return v, nil
 			}
-			v.Status = statusPending
-			v.Evidence = fmt.Sprintf("backport PR #%d open%s", b.Number, draft)
-			return v
 		}
-	}
-	for _, b := range linked {
-		if b.State == "CLOSED" {
-			// A closed backport is usually a deliberate "not needed on this
-			// line". Carry the reason someone left, so the next release does
-			// not re-open the same investigation from scratch.
-			v.Status = statusDropped
-			v.Evidence = fmt.Sprintf("backport PR #%d closed unmerged", b.Number)
-			v.Reason = lastHumanComment(b)
-			return v
-		}
+		v.Status, v.Evidence = statusMissing, "no backport PR, nothing on branch"
+		return v, nil
 	}
 
-	v.Status, v.Evidence = statusMissing, "no backport PR, nothing on branch"
-	return v
+	// Partial or unverified from here on.
+	if openNote != "" {
+		v.Evidence += "; " + openNote
+	}
+	if c := confirmedBy(linked); c != nil {
+		v.Status, v.Confirmation = statusConfirmed, c
+		v.Evidence = fmt.Sprintf("confirmed by @%s on backport PR #%d; %s", c.By, c.BackportPR, v.Evidence)
+	}
+	return v, nil
+}
+
+func commitCount(n int) string {
+	if n == 1 {
+		return "1 commit"
+	}
+	return fmt.Sprintf("%d commits", n)
 }
 
 func (cfg *config) report(branch string, rep *branchReport) {
@@ -1340,13 +1566,7 @@ func (cfg *config) report(branch string, rep *branchReport) {
 		accent := cfg.colorFor(status)
 		fmt.Printf("\n  %s%s%s (%d):\n", accent, headings[status], cfg.reset, len(rows))
 		for _, r := range rows {
-			fmt.Printf("    %s%s%s\n", accent, r.URL, cfg.reset)
-			fmt.Printf("      %s#%d%s %s\n", cfg.bold, r.Number, cfg.reset, r.Title)
-			fmt.Printf("      %slabel=%s author=%s merged=%s -- %s%s\n",
-				cfg.dim, r.Label, r.Author, r.MergedAt[:10], r.Evidence, cfg.reset)
-			if r.Reason != "" {
-				fmt.Printf("      %sreason: %s%s\n", cfg.dim, r.Reason, cfg.reset)
-			}
+			cfg.printVerdict(accent, r)
 		}
 	}
 
@@ -1368,12 +1588,21 @@ func (cfg *config) report(branch string, rep *branchReport) {
 		fmt.Printf("  %snothing outstanding: every candidate is on this branch%s\n", cfg.green, cfg.reset)
 	}
 
+	if rows := byStatus[statusConfirmed]; len(rows) > 0 {
+		fmt.Printf("\n  %sCONFIRMED -- attested complete by a person where the commits fall short%s (%d, informational):\n",
+			cfg.green, cfg.reset, len(rows))
+		for _, r := range rows {
+			cfg.printVerdict(cfg.green, r)
+			fmt.Printf("      %sconfirmation: %s%s\n", cfg.dim, r.Confirmation.URL, cfg.reset)
+		}
+	}
+
 	if len(rep.Unlabelled) > 0 {
 		fmt.Printf("\n  %sUNLABELLED -- backport PRs here for originals not labelled for this line%s (%d, informational):\n",
 			cfg.bold, cfg.reset, len(rep.Unlabelled))
 		for _, u := range rep.Unlabelled {
 			cfg.printOrigin("", u.URL, u.Number, u.Title)
-			fmt.Printf("      %s%s%s\n", cfg.dim, claimState(u.BackportPRs), cfg.reset)
+			fmt.Printf("      %s%s%s\n", cfg.dim, claimState(u.BackportPRs, u.Confirmation), cfg.reset)
 			if len(u.Labels) > 0 {
 				fmt.Printf("      %slabels=%s, which did not target this line at merge%s\n",
 					cfg.dim, strings.Join(u.Labels, ","), cfg.reset)
@@ -1384,18 +1613,36 @@ func (cfg *config) report(branch string, rep *branchReport) {
 }
 
 // claimState says what the backport PRs claiming an original have done on the
-// branch, so an open claim does not read as a delivered one.
-func claimState(prs []linkedPR) string {
+// branch, so an open claim does not read as a delivered one. A merged one is
+// only a merged PR: an unlabelled original is never checked commit by commit,
+// so nothing here says it arrived whole unless a person attested it.
+func claimState(prs []linkedPR, conf *confirmation) string {
 	state := "claimed here, closed unmerged"
 	for _, b := range prs {
 		switch b.State {
 		case "MERGED":
-			return "backported here"
+			if conf != nil {
+				return "backport PR merged, confirmed by @" + conf.By
+			}
+			return "backport PR merged"
 		case "OPEN":
 			state = "claimed here, not merged"
 		}
 	}
 	return state
+}
+
+func (cfg *config) printVerdict(accent string, r verdict) {
+	fmt.Printf("    %s%s%s\n", accent, r.URL, cfg.reset)
+	fmt.Printf("      %s#%d%s %s\n", cfg.bold, r.Number, cfg.reset, r.Title)
+	fmt.Printf("      %slabel=%s author=%s merged=%s -- %s%s\n",
+		cfg.dim, r.Label, r.Author, r.MergedAt[:10], r.Evidence, cfg.reset)
+	if r.Reason != "" {
+		fmt.Printf("      %sreason: %s%s\n", cfg.dim, r.Reason, cfg.reset)
+	}
+	for _, c := range r.MissingCommits {
+		fmt.Printf("      %smissing: %.9s %s%s\n", cfg.dim, c.Oid, c.Subject, cfg.reset)
+	}
 }
 
 func (cfg *config) printOrigin(accent, url string, number int, title string) {
