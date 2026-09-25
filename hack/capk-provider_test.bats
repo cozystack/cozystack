@@ -50,7 +50,7 @@ EOF
   )
 }
 
-@test "CAPK OCI build stamps a discoverable ref without rewriting components" {
+@test "CAPK image build stamps a discoverable ref without rewriting components" {
   (
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
@@ -58,12 +58,9 @@ EOF
     pkg="$work/packages/system/capi-providers-infraprovider"
     PATH="$work/bin:$PATH" CAPK_BUILD_ARGS="$work/args" \
       make -C "$pkg" image COZYSTACK_VERSION=0 REGISTRY=registry.example.test/cozy \
-      IMAGE_TAG=pr-test OCI_EXPORT_DIR="$work/oci" PLATFORM=linux/amd64
+      IMAGE_TAG=pr-test PLATFORM=linux/amd64
     ref=registry.example.test/cozy/cluster-api-provider-kubevirt:pr-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     [ "$(cat "$pkg/images/cluster-api-provider-kubevirt.tag")" = "$ref" ]
-    grep -Fx -- --push=0 "$work/args"
-    grep -Fx -- --load=0 "$work/args"
-    grep -Fx -- "type=oci,dest=$work/oci/cluster-api-provider-kubevirt.oci.tar" "$work/args"
     cmp "$pkg/files/components.gz" packages/system/capi-providers-infraprovider/files/components.gz
     . hack/lib/image-refs.sh
     collect_image_refs "$work/packages" | grep -Fx "$ref"
@@ -84,7 +81,7 @@ EOF
       rc=0
       PATH="$work/bin:$PATH" CAPK_BUILD_ARGS="$work/args" CAPK_BUILD_FAIL="$fail" CAPK_TEST_DIGEST="$digest" \
         make -C "$pkg" image COZYSTACK_VERSION=0 REGISTRY=registry.example.test/cozy \
-        IMAGE_TAG=pr-test OCI_EXPORT_DIR="$work/oci" > "$work/build.log" 2>&1 || rc=$?
+        IMAGE_TAG=pr-test > "$work/build.log" 2>&1 || rc=$?
       [ "$rc" -ne 0 ]
       [ "$(cat "$pkg/images/cluster-api-provider-kubevirt.tag")" = "$pin" ]
     done
