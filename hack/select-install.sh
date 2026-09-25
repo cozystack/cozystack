@@ -128,13 +128,15 @@ suite_to_source() {
   done
 }
 
-# Backup examples create Bucket and backup CRs alongside the selected app.
+# Backup examples create Bucket and backup CRs alongside the selected app;
+# gateway's namespace-churn test also requires the pod admission webhook.
 # These requirements belong to the suites; adding application graph edges
 # would also change reverse test selection.
 suite_runtime_sources() {
   case "$1" in
     clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis)
       echo cozystack.backupstrategy-controller ;;
+    gateway) echo cozystack.kubeovn-webhook ;;
   esac
 }
 

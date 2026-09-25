@@ -192,25 +192,35 @@ assert_output_graph_error() {
     assert_contains_package "$drop" cozystack.backupstrategy-controller
 }
 
+@test "gateway keeps the pod admission webhook used by its churn test" {
+    output=$(hack/select-install.sh gateway)
+    assert_contains_package "$output" cozystack.kubeovn-webhook
+}
+
 @test "suite runtime requirements must resolve in every selector mode" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    mkdir -p "$tmp/suites/postgres"
-    : > "$tmp/suites/postgres/chainsaw-test.yaml"
-    hack/select-install.sh --validate "$tmp/sources" "$tmp/suites"
-    mv "$tmp/sources/backupstrategy-controller.yaml" "$tmp/backupstrategy-controller.yaml"
-    hack/select-install.sh kuberture "$tmp/sources" >/dev/null
-    for mode in closure disabled; do
-        assert_output_graph_error "$mode" "$tmp/sources" \
-          "'cozystack.backupstrategy-controller' is not a PackageSource"
+    for pair in "postgres backupstrategy-controller" "gateway kubeovn-webhook"; do
+        set -- $pair
+        suite=$1
+        requirement=$2
+        tmp=$(mktemp -d)
+        cp -r packages/core/platform/sources "$tmp/sources"
+        mkdir -p "$tmp/suites/$suite"
+        : > "$tmp/suites/$suite/chainsaw-test.yaml"
+        hack/select-install.sh --validate "$tmp/sources" "$tmp/suites"
+        mv "$tmp/sources/$requirement.yaml" "$tmp/$requirement.yaml"
+        hack/select-install.sh kuberture "$tmp/sources" >/dev/null
+        for mode in closure disabled; do
+            assert_output_graph_error "$mode" "$tmp/sources" \
+              "'cozystack.$requirement' is not a PackageSource" "$suite"
+        done
+        if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" >"$tmp/out" 2>"$tmp/err"; then
+            echo "expected validation to reject a missing suite runtime requirement" >&2
+            exit 1
+        fi
+        [ ! -s "$tmp/out" ]
+        grep -Fq "maps to 'cozystack.$requirement', not a PackageSource" "$tmp/err"
+        rm -rf "$tmp"
     done
-    if hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" >"$tmp/out" 2>"$tmp/err"; then
-        echo "expected validation to reject a missing suite runtime requirement" >&2
-        exit 1
-    fi
-    [ ! -s "$tmp/out" ]
-    grep -Fq "maps to 'cozystack.backupstrategy-controller', not a PackageSource" "$tmp/err"
-    rm -rf "$tmp"
 }
 
 @test "validate passes on the real source graph and suite mapping" {
