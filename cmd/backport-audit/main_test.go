@@ -495,3 +495,205 @@ func TestRepoOf(t *testing.T) {
 		}
 	}
 }
+
+func bp(n int, state, head, body string) backportPR {
+	return backportPR{
+		Number:      n,
+		State:       state,
+		URL:         originURL("https://github.com/cozystack/cozystack/pull/1", n),
+		HeadRefName: head,
+		Body:        body,
+	}
+}
+
+func numbersOf[T any](records []T, number func(T) int) []int {
+	out := []int{}
+	for _, r := range records {
+		out = append(out, number(r))
+	}
+	return out
+}
+
+// Modelled on release-1.6: hand backports of main PRs that carry no backport
+// label, one of them bundling two originals, next to a closed fork PR that had
+// claimed the same pair, and a labelled candidate whose backport merged.
+func release16(state4421, state4456 string) []backportPR {
+	return []backportPR{
+		bp(4431, "MERGED", "backport-3455-to-release-1.6", "Backport of #3455 to `release-1.6`."),
+		bp(4437, "MERGED", "backport-4020-to-release-1.6", "Backport of #4020 to `release-1.6`, without its product changes."),
+		bp(4456, state4456, "backport-3938-to-release-1.6",
+			"Backport of #3938 and #4280 to `release-1.6`, together, because #3938 alone breaks every Kafka deletion (#4276)."),
+		bp(4421, state4421, "backport-3938-release-1.6",
+			"## What this PR does\n\nManual backport of #3938 to `release-1.6`, together with #4280."),
+		bp(4474, "MERGED", "backport-4291-to-release-1.6", "Backport of #4291 to `release-1.6`."),
+	}
+}
+
+func TestCrossCheck(t *testing.T) {
+	labelled := &mainPR{Number: 4291, Title: "fix(cluster-api): live migration before host eviction",
+		URL: "https://github.com/cozystack/cozystack/pull/4291", labels: map[string]bool{labelCurrent: true}}
+	// Labelled, but for another line: it is not audited here, so a backport of
+	// it on this branch is exactly as unaccounted for as an unlabelled one.
+	elsewhere := &mainPR{Number: 3455, Title: "fix(e2e): disable guest fsync on ephemeral CI VM disks",
+		URL: "https://github.com/cozystack/cozystack/pull/3455", labels: map[string]bool{labelPrevious: true}}
+	cands := map[int]*mainPR{4291: labelled, 3455: elsewhere}
+	audited := map[int]string{4291: labelCurrent}
+
+	t.Run("merged unlabelled backports are listed, the candidate is not", func(t *testing.T) {
+		index := indexByOrigin(release16("CLOSED", "MERGED"), "release-1.6")
+		unlabelled, duplicates := crossCheck(index, audited, cands)
+
+		got := numbersOf(unlabelled, func(u unlabelledBackport) int { return u.Number })
+		if want := []int{3455, 3938, 4020, 4280}; !slices.Equal(got, want) {
+			t.Fatalf("unlabelled originals = %v, want %v", got, want)
+		}
+		if len(duplicates) != 0 {
+			t.Errorf("a closed PR next to a merged one is not a duplicate, got %+v", duplicates)
+		}
+
+		byNumber := map[int]unlabelledBackport{}
+		for _, u := range unlabelled {
+			byNumber[u.Number] = u
+		}
+		if u := byNumber[4280]; u.URL != "https://github.com/cozystack/cozystack/pull/4280" || u.Title != "" || len(u.Labels) != 0 {
+			t.Errorf("#4280: want a derived URL, no title yet and no labels, got %+v", u)
+		}
+		if u := byNumber[3455]; u.Title != elsewhere.Title || !slices.Equal(u.Labels, []string{labelPrevious}) {
+			t.Errorf("#3455: want the candidate's title and its label, got %+v", u)
+		}
+		if got := numbersOf(byNumber[3938].BackportPRs, func(l linkedPR) int { return l.Number }); !slices.Equal(got, []int{4421, 4456}) {
+			t.Errorf("#3938: backport PRs = %v, want both claims sorted", got)
+		}
+	})
+
+	t.Run("two open claims on the same pair are both duplicates", func(t *testing.T) {
+		index := indexByOrigin(release16("OPEN", "OPEN"), "release-1.6")
+		_, duplicates := crossCheck(index, audited, cands)
+		got := numbersOf(duplicates, func(d duplicateBackport) int { return d.Number })
+		if want := []int{3938, 4280}; !slices.Equal(got, want) {
+			t.Fatalf("duplicate originals = %v, want %v", got, want)
+		}
+		for _, d := range duplicates {
+			if d.Kind != dupOpenTwice || d.Label != "" {
+				t.Errorf("#%d: want kind %s and no label, got %+v", d.Number, dupOpenTwice, d)
+			}
+		}
+	})
+
+	t.Run("an open claim after a merged one is a leftover", func(t *testing.T) {
+		index := indexByOrigin(release16("OPEN", "MERGED"), "release-1.6")
+		_, duplicates := crossCheck(index, audited, cands)
+		got := numbersOf(duplicates, func(d duplicateBackport) int { return d.Number })
+		if want := []int{3938, 4280}; !slices.Equal(got, want) {
+			t.Fatalf("duplicate originals = %v, want %v", got, want)
+		}
+		for _, d := range duplicates {
+			if d.Kind != dupOpenAfterMerge {
+				t.Errorf("#%d: want kind %s, got %s", d.Number, dupOpenAfterMerge, d.Kind)
+			}
+		}
+	})
+
+	t.Run("a labelled candidate claimed twice is a duplicate carrying its label", func(t *testing.T) {
+		prs := append(release16("CLOSED", "MERGED"),
+			bp(4480, "OPEN", "fix-migration-again", "Backport of #4291 to `release-1.6`."))
+		unlabelled, duplicates := crossCheck(indexByOrigin(prs, "release-1.6"), audited, cands)
+		if len(duplicates) != 1 || duplicates[0].Number != 4291 || duplicates[0].Label != labelCurrent ||
+			duplicates[0].Kind != dupOpenAfterMerge || duplicates[0].Title != labelled.Title {
+			t.Fatalf("want one open-after-merge duplicate for #4291 under %s, got %+v", labelCurrent, duplicates)
+		}
+		for _, u := range unlabelled {
+			if u.Number == 4291 {
+				t.Errorf("an audited candidate must not also be listed as unlabelled")
+			}
+		}
+	})
+}
+
+func TestDuplicateKind(t *testing.T) {
+	cases := []struct {
+		states []string
+		want   string
+	}{
+		{[]string{"OPEN"}, ""},
+		{[]string{"MERGED"}, ""},
+		{[]string{"CLOSED", "OPEN"}, ""},
+		{[]string{"MERGED", "MERGED"}, ""},
+		{[]string{"CLOSED", "CLOSED", "MERGED"}, ""},
+		{[]string{"OPEN", "OPEN"}, dupOpenTwice},
+		{[]string{"OPEN", "CLOSED", "OPEN"}, dupOpenTwice},
+		{[]string{"MERGED", "OPEN"}, dupOpenAfterMerge},
+		{[]string{"OPEN", "MERGED", "OPEN"}, dupOpenAfterMerge},
+	}
+	for _, tc := range cases {
+		var claims []backportPR
+		for i, s := range tc.states {
+			claims = append(claims, backportPR{Number: i + 1, State: s})
+		}
+		if got := duplicateKind(claims); got != tc.want {
+			t.Errorf("duplicateKind(%v) = %q, want %q", tc.states, got, tc.want)
+		}
+	}
+}
+
+// The gate answers whether everything labelled landed. Unlabelled backports
+// can only add to a branch, so they never fail it; a duplicate needs a human
+// before the cut, so it always does.
+func TestBranchReportClean(t *testing.T) {
+	landed := []verdict{{Number: 1, Status: statusBackported}, {Number: 2, Status: statusInBranch}}
+	unlabelled := []unlabelledBackport{{Number: 3455, BackportPRs: []linkedPR{{Number: 4431, State: "OPEN"}}}}
+	duplicate := []duplicateBackport{{Number: 3938, Kind: dupOpenTwice}}
+
+	cases := []struct {
+		name string
+		rep  branchReport
+		want bool
+	}{
+		{"nothing at all", branchReport{}, true},
+		{"everything landed", branchReport{Candidates: landed}, true},
+		{"only unlabelled backports, even an open one", branchReport{Candidates: landed, Unlabelled: unlabelled}, true},
+		{"a duplicate", branchReport{Candidates: landed, Duplicates: duplicate}, false},
+		{"a missing candidate", branchReport{Candidates: append(landed, verdict{Number: 3, Status: statusMissing})}, false},
+		{"a pending candidate", branchReport{Candidates: append(landed, verdict{Number: 3, Status: statusPending})}, false},
+		{"a dropped candidate", branchReport{Candidates: append(landed, verdict{Number: 3, Status: statusDropped})}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.rep.clean(); got != tc.want {
+				t.Errorf("clean() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOriginURL(t *testing.T) {
+	if got := originURL("https://github.com/cozystack/cozystack/pull/4431", 3455); got != "https://github.com/cozystack/cozystack/pull/3455" {
+		t.Errorf("originURL = %q", got)
+	}
+	if got := originURL("not a PR URL", 3455); got != "" {
+		t.Errorf("originURL of a non-PR URL = %q, want empty", got)
+	}
+}
+
+func TestClaimState(t *testing.T) {
+	cases := []struct {
+		states []string
+		want   string
+	}{
+		{[]string{"MERGED"}, "backported here"},
+		{[]string{"CLOSED", "MERGED"}, "backported here"},
+		{[]string{"OPEN", "MERGED"}, "backported here"},
+		{[]string{"OPEN"}, "claimed here, not merged"},
+		{[]string{"CLOSED", "OPEN"}, "claimed here, not merged"},
+		{[]string{"CLOSED"}, "claimed here, closed unmerged"},
+	}
+	for _, tc := range cases {
+		var prs []linkedPR
+		for i, s := range tc.states {
+			prs = append(prs, linkedPR{Number: i + 1, State: s})
+		}
+		if got := claimState(prs); got != tc.want {
+			t.Errorf("claimState(%v) = %q, want %q", tc.states, got, tc.want)
+		}
+	}
+}

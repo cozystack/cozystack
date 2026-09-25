@@ -38,10 +38,24 @@ limitations under the License.
 // conflict committed) or dropped (a backport PR was closed unmerged, with
 // whatever reason someone recorded on it).
 //
+// The labels are not the only record of what a branch received, so the backport
+// PRs on it are also read from the side of the originals they name. One whose
+// original is not a candidate for the branch is listed as unlabelled, and does
+// not move the exit code: the gate answers whether everything labelled landed,
+// and an unlabelled backport can only add to a branch, never leave a labelled
+// change off it. An original claimed by two open backport PRs, or by an open
+// one after another already merged, is a duplicate and does count as
+// outstanding. One of them is redundant and should be closed, or the open one
+// is the unfinished half of a split backport; either way a human decides
+// before the cut, and a verdict cannot say so, because it settles on the first
+// merged backport PR it finds or reports the first open one as pending.
+//
 // Known limits: a hand-backport that is squash-merged, rewords its subject and
 // references no original PR is unprovable from either side and reads as
-// MISSING; and a `kind/backport` label added after the release line moved on
-// resolves to the newer line.
+// MISSING; a `kind/backport` label added after the release line moved on
+// resolves to the newer line; and a backport PR that names its original
+// neither by the bot's head branch nor in a "Backport of" phrase is invisible
+// to the unlabelled and duplicate checks.
 package main
 
 import (
@@ -60,6 +74,8 @@ import (
 const usageText = `Audit whether every backport-labelled PR actually landed on a release branch.
 
 Exits 0 when nothing is outstanding and 1 when something is, so it can gate a release.
+Backports of PRs that carry no label for the line are listed without affecting the
+exit code; an original with more than one live backport PR counts as outstanding.
 
 Usage:
   backport-audit [OPTIONS] [release-X.Y ...]
@@ -202,6 +218,18 @@ var (
 	}
 )
 
+// The two ways one original can be claimed by more than one live backport PR on
+// a branch. Both are outstanding.
+const (
+	dupOpenTwice      = "open-twice"
+	dupOpenAfterMerge = "open-after-merge"
+)
+
+var dupDescriptions = map[string]string{
+	dupOpenTwice:      "more than one backport PR open",
+	dupOpenAfterMerge: "a backport PR still open after another one merged",
+}
+
 type config struct {
 	remote   string
 	limit    int
@@ -265,6 +293,11 @@ type linkedPR struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
 	URL    string `json:"url"`
+	Draft  bool   `json:"draft,omitempty"`
+}
+
+func trimPR(b backportPR) linkedPR {
+	return linkedPR{Number: b.Number, State: b.State, URL: b.URL, Draft: b.IsDraft}
 }
 
 // verdict is one audited candidate. The JSON field names are the tool's
@@ -280,6 +313,47 @@ type verdict struct {
 	Status      string     `json:"status"`
 	Evidence    string     `json:"evidence"`
 	Reason      string     `json:"reason,omitempty"`
+}
+
+// unlabelledBackport is an original that backport PRs on the branch claim
+// although it is not a candidate for the branch. Labels holds the backport
+// requests it does carry, which then resolved to some other line.
+type unlabelledBackport struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	URL         string     `json:"url"`
+	Labels      []string   `json:"labels"`
+	BackportPRs []linkedPR `json:"backport_prs"`
+}
+
+// duplicateBackport is an original claimed by more than one live backport PR
+// on the branch. Label is the request it was audited under here, empty when it
+// is not a candidate for the branch.
+type duplicateBackport struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	URL         string     `json:"url"`
+	Label       string     `json:"label"`
+	Kind        string     `json:"kind"`
+	BackportPRs []linkedPR `json:"backport_prs"`
+}
+
+// branchReport is everything the audit found on one release branch.
+type branchReport struct {
+	Candidates []verdict            `json:"candidates"`
+	Unlabelled []unlabelledBackport `json:"unlabelled"`
+	Duplicates []duplicateBackport  `json:"duplicates"`
+}
+
+// clean reports whether the branch passes the gate. Unlabelled backports do not
+// enter into it; see the package comment.
+func (r *branchReport) clean() bool {
+	for _, v := range r.Candidates {
+		if slices.Contains(outstanding, v.Status) {
+			return false
+		}
+	}
+	return len(r.Duplicates) == 0
 }
 
 func main() { os.Exit(run()) }
@@ -338,25 +412,26 @@ func run() int {
 	}
 	fmt.Fprintf(os.Stderr, "%d merged PRs carry a backport label\n", len(cands))
 
-	out := map[string][]verdict{}
+	out := map[string]*branchReport{}
 	clean := true
 	for _, branch := range cfg.branches {
-		results, err := cfg.audit(branch, cands, opened)
+		rep, err := cfg.audit(branch, cands, opened)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			return 2
 		}
-		out[branch] = results
+		out[branch] = rep
 		// The exit code is the whole point of running this in a gate, so it is
 		// computed from the results, not as a side effect of printing them.
-		for _, r := range results {
-			if slices.Contains(outstanding, r.Status) {
-				clean = false
-			}
+		if !rep.clean() {
+			clean = false
 		}
-		if !cfg.asJSON {
-			cfg.report(branch, results)
-		}
+	}
+
+	// A title is decoration, so a failed lookup costs the titles and nothing
+	// else: the verdicts and the exit code are already settled above.
+	if err := fillTitles(out); err != nil {
+		fmt.Fprintf(os.Stderr, "could not look up titles of unlabelled originals: %v\n", err)
 	}
 
 	if cfg.asJSON {
@@ -367,6 +442,9 @@ func run() int {
 		}
 		fmt.Println(string(blob))
 	} else {
+		for _, branch := range cfg.branches {
+			cfg.report(branch, out[branch])
+		}
 		fmt.Println()
 	}
 
@@ -935,7 +1013,7 @@ func prCommitRange(mergeCommit string) (string, bool) {
 	return mergeCommit + "^.." + mergeCommit, true
 }
 
-func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen) ([]verdict, error) {
+func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen) (*branchReport, error) {
 	hist, err := newBranchHistory(cfg.remote, branch)
 	if err != nil {
 		return nil, err
@@ -956,7 +1034,8 @@ func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen
 	}
 	sort.Ints(numbers)
 
-	var results []verdict
+	results := []verdict{}
+	audited := map[int]string{}
 	for _, n := range numbers {
 		pr := cands[n]
 		current, previous := targetsAt(opened, pr.MergedAt)
@@ -969,9 +1048,173 @@ func (cfg *config) audit(branch string, cands map[int]*mainPR, opened []lineOpen
 		default:
 			continue
 		}
+		audited[n] = label
 		results = append(results, classify(pr, label, hist, backports[pr.Number]))
 	}
-	return results, nil
+	unlabelled, duplicates := crossCheck(backports, audited, cands)
+	return &branchReport{Candidates: results, Unlabelled: unlabelled, Duplicates: duplicates}, nil
+}
+
+// crossCheck reads the backport PRs on a branch from the side of the originals
+// they claim, which is the only side an unlabelled backport can be seen from.
+// audited maps each candidate for the branch to the request it was audited
+// under; cands supplies the title and labels of any original that carries a
+// backport label at all.
+func crossCheck(index map[int][]backportPR, audited map[int]string, cands map[int]*mainPR) ([]unlabelledBackport, []duplicateBackport) {
+	numbers := make([]int, 0, len(index))
+	for n := range index {
+		numbers = append(numbers, n)
+	}
+	sort.Ints(numbers)
+
+	unlabelled := []unlabelledBackport{}
+	duplicates := []duplicateBackport{}
+	for _, n := range numbers {
+		claims := index[n]
+		linked := make([]linkedPR, 0, len(claims))
+		for _, b := range claims {
+			linked = append(linked, trimPR(b))
+		}
+		sort.Slice(linked, func(i, j int) bool { return linked[i].Number < linked[j].Number })
+
+		// The URL is derived rather than looked up, so it is there even when the
+		// title lookup fails; GitHub redirects /pull/N to the issue when N is one.
+		title, url, labels := "", originURL(claims[0].URL, n), []string{}
+		if pr, ok := cands[n]; ok {
+			title, url = pr.Title, pr.URL
+			for _, req := range backportLabels {
+				if pr.labels[req.canonical] {
+					labels = append(labels, req.canonical)
+				}
+			}
+		}
+
+		label, isCandidate := audited[n]
+		if !isCandidate {
+			unlabelled = append(unlabelled, unlabelledBackport{
+				Number: n, Title: title, URL: url, Labels: labels, BackportPRs: linked,
+			})
+		}
+		if kind := duplicateKind(claims); kind != "" {
+			duplicates = append(duplicates, duplicateBackport{
+				Number: n, Title: title, URL: url, Label: label, Kind: kind, BackportPRs: linked,
+			})
+		}
+	}
+	return unlabelled, duplicates
+}
+
+// duplicateKind classifies the backport PRs claiming one original, returning
+// "" unless more than one of them is live. A closed PR next to an open one is
+// the normal shape of a conflicting bot backport redone by hand, and two merged
+// ones are history the branch already carries, so neither is flagged.
+func duplicateKind(claims []backportPR) string {
+	open, merged := 0, 0
+	for _, b := range claims {
+		switch b.State {
+		case "OPEN":
+			open++
+		case "MERGED":
+			merged++
+		}
+	}
+	switch {
+	case open > 0 && merged > 0:
+		return dupOpenAfterMerge
+	case open > 1:
+		return dupOpenTwice
+	}
+	return ""
+}
+
+// originURL is the URL of PR n in the repository that sibling, the URL of
+// another PR, belongs to.
+func originURL(sibling string, n int) string {
+	i := strings.LastIndex(sibling, "/pull/")
+	if i < 0 {
+		return ""
+	}
+	return sibling[:i] + "/pull/" + strconv.Itoa(n)
+}
+
+// fillTitles sets the title of every unlabelled or duplicate original that no
+// listing carried, with one request covering every branch.
+func fillTitles(out map[string]*branchReport) error {
+	var missing []int
+	for _, rep := range out {
+		for _, u := range rep.Unlabelled {
+			if u.Title == "" && !slices.Contains(missing, u.Number) {
+				missing = append(missing, u.Number)
+			}
+		}
+		for _, d := range rep.Duplicates {
+			if d.Title == "" && !slices.Contains(missing, d.Number) {
+				missing = append(missing, d.Number)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Ints(missing)
+	titles, err := titlesOf(missing)
+	for _, rep := range out {
+		for i := range rep.Unlabelled {
+			if t, ok := titles[rep.Unlabelled[i].Number]; ok && rep.Unlabelled[i].Title == "" {
+				rep.Unlabelled[i].Title = t
+			}
+		}
+		for i := range rep.Duplicates {
+			if t, ok := titles[rep.Duplicates[i].Number]; ok && rep.Duplicates[i].Title == "" {
+				rep.Duplicates[i].Title = t
+			}
+		}
+	}
+	return err
+}
+
+// titlesOf fetches the titles of the given issue or PR numbers in a single
+// GraphQL request, one alias per number, rather than one gh call each.
+//
+// gh exits non-zero when any one number fails to resolve -- a reference to a
+// deleted PR, say -- but still prints the partial response, so stdout is read
+// whatever the exit status and every title that did resolve is kept.
+func titlesOf(numbers []int) (map[int]string, error) {
+	var q strings.Builder
+	q.WriteString("query($owner:String!,$name:String!){repository(owner:$owner,name:$name){")
+	for _, n := range numbers {
+		fmt.Fprintf(&q, "n%d:issueOrPullRequest(number:%d){...on PullRequest{title} ...on Issue{title}}", n, n)
+	}
+	q.WriteString("}}")
+
+	stdout, runErr := exec.Command("gh", "api", "graphql",
+		"-F", "owner={owner}", "-F", "name={repo}", "-f", "query="+q.String()).Output()
+	if ee, ok := runErr.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+		runErr = fmt.Errorf("gh api graphql: %w: %s", runErr, strings.TrimSpace(string(ee.Stderr)))
+	}
+	var resp struct {
+		Data struct {
+			Repository map[string]*struct {
+				Title string `json:"title"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout, &resp); err != nil {
+		if runErr != nil {
+			return nil, runErr
+		}
+		return nil, err
+	}
+	titles := map[int]string{}
+	for alias, node := range resp.Data.Repository {
+		if n, err := strconv.Atoi(strings.TrimPrefix(alias, "n")); err == nil && node != nil {
+			titles[n] = node.Title
+		}
+	}
+	if runErr != nil && len(titles) < len(numbers) {
+		return titles, fmt.Errorf("%d of %d did not resolve: %w", len(numbers)-len(titles), len(numbers), runErr)
+	}
+	return titles, nil
 }
 
 func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR) verdict {
@@ -985,7 +1228,7 @@ func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR
 		BackportPRs: []linkedPR{},
 	}
 	for _, b := range linked {
-		v.BackportPRs = append(v.BackportPRs, linkedPR{Number: b.Number, State: b.State, URL: b.URL})
+		v.BackportPRs = append(v.BackportPRs, trimPR(b))
 	}
 
 	mergeCommit := pr.MergeCommit.Oid
@@ -1045,7 +1288,8 @@ func classify(pr *mainPR, label string, hist *branchHistory, linked []backportPR
 	return v
 }
 
-func (cfg *config) report(branch string, results []verdict) {
+func (cfg *config) report(branch string, rep *branchReport) {
+	results := rep.Candidates
 	byStatus := map[string][]verdict{}
 	for _, r := range results {
 		byStatus[r.Status] = append(byStatus[r.Status], r)
@@ -1060,6 +1304,16 @@ func (cfg *config) report(branch string, results []verdict) {
 	summary := strings.Join(counts, " ")
 	if summary == "" {
 		summary = "no candidates"
+	}
+	var others []string
+	if n := len(rep.Duplicates); n > 0 {
+		others = append(others, fmt.Sprintf("%sDUPLICATE=%d%s", cfg.red, n, cfg.reset))
+	}
+	if n := len(rep.Unlabelled); n > 0 {
+		others = append(others, fmt.Sprintf("unlabelled=%d", n))
+	}
+	if len(others) > 0 {
+		summary += " | " + strings.Join(others, " ")
 	}
 	fmt.Printf("\n%s=== %s ===%s %d candidate PRs: %s\n",
 		cfg.bold, branch, cfg.reset, len(results), summary)
@@ -1082,13 +1336,65 @@ func (cfg *config) report(branch string, results []verdict) {
 		}
 	}
 
-	clean := true
-	for _, s := range outstanding {
-		if len(byStatus[s]) > 0 {
-			clean = false
+	if len(rep.Duplicates) > 0 {
+		fmt.Printf("\n  %sDUPLICATE -- one original, more than one live backport PR%s (%d):\n",
+			cfg.red, cfg.reset, len(rep.Duplicates))
+		for _, d := range rep.Duplicates {
+			label := d.Label
+			if label == "" {
+				label = "none for this line"
+			}
+			cfg.printOrigin(cfg.red, d.URL, d.Number, d.Title)
+			fmt.Printf("      %slabel=%s -- %s%s\n", cfg.dim, label, dupDescriptions[d.Kind], cfg.reset)
+			cfg.printBackportPRs(d.BackportPRs)
 		}
 	}
-	if clean {
+
+	if rep.clean() {
 		fmt.Printf("  %snothing outstanding: every candidate is on this branch%s\n", cfg.green, cfg.reset)
+	}
+
+	if len(rep.Unlabelled) > 0 {
+		fmt.Printf("\n  %sUNLABELLED -- backport PRs here for originals not labelled for this line%s (%d, informational):\n",
+			cfg.bold, cfg.reset, len(rep.Unlabelled))
+		for _, u := range rep.Unlabelled {
+			cfg.printOrigin("", u.URL, u.Number, u.Title)
+			fmt.Printf("      %s%s%s\n", cfg.dim, claimState(u.BackportPRs), cfg.reset)
+			if len(u.Labels) > 0 {
+				fmt.Printf("      %slabels=%s, which did not target this line at merge%s\n",
+					cfg.dim, strings.Join(u.Labels, ","), cfg.reset)
+			}
+			cfg.printBackportPRs(u.BackportPRs)
+		}
+	}
+}
+
+// claimState says what the backport PRs claiming an original have done on the
+// branch, so an open claim does not read as a delivered one.
+func claimState(prs []linkedPR) string {
+	state := "claimed here, closed unmerged"
+	for _, b := range prs {
+		switch b.State {
+		case "MERGED":
+			return "backported here"
+		case "OPEN":
+			state = "claimed here, not merged"
+		}
+	}
+	return state
+}
+
+func (cfg *config) printOrigin(accent, url string, number int, title string) {
+	fmt.Printf("    %s%s%s\n", accent, url, cfg.reset)
+	fmt.Printf("      %s#%d%s %s\n", cfg.bold, number, cfg.reset, title)
+}
+
+func (cfg *config) printBackportPRs(prs []linkedPR) {
+	for _, b := range prs {
+		draft := ""
+		if b.Draft {
+			draft = " (draft)"
+		}
+		fmt.Printf("      %sbackport #%d %s%s %s%s\n", cfg.dim, b.Number, b.State, draft, b.URL, cfg.reset)
 	}
 }

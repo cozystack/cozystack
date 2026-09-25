@@ -15,7 +15,7 @@ $ go run ./cmd/backport-audit release-1.5
       label=kind/backport-previous author=myasnikovdaniil merged=2026-07-29 -- no backport PR, nothing on branch
 ```
 
-The URL is always the **original PR on main** — the thing you decide about. The evidence line names the backport PR when one exists. Anything already on the branch is counted in the header and never listed, so silence means done.
+The URL is always the **original PR on main** — the thing you decide about. The evidence line names the backport PR when one exists. A labelled PR already on the branch is counted in the header and never listed, so silence under the outstanding headings means done. Two more sections, described in [Backports the labels do not account for](#backports-the-labels-do-not-account-for), start from the backport PRs on the branch instead of from labels: `DUPLICATE`, which is outstanding, and `UNLABELLED`, which is informational.
 
 ## Usage
 
@@ -39,7 +39,7 @@ Arguments and flags may be given in any order.
 
 ## Exit code
 
-`0` when nothing is outstanding, `1` when something is, `2` when the audit could not be completed. That is the point of the tool, so it holds in `--json` mode too:
+`0` when nothing is outstanding, `1` when something is, `2` when the audit could not be completed. Outstanding means a `MISSING`, `pending` or `dropped` verdict, or any `DUPLICATE` entry; `UNLABELLED` entries never move the exit code. That is the point of the tool, so it holds in `--json` mode too:
 
 ```bash
 go build ./cmd/backport-audit
@@ -66,6 +66,39 @@ Exit `2` covers the cases where an answer cannot be trusted rather than merely b
 | `MISSING` | No backport PR ever existed and nothing on the branch matches | cherry-pick it by hand, or drop it deliberately |
 
 `dropped` is usually healthy — a maintainer deciding a fix does not apply to that line, e.g. because the feature it repairs never shipped there. The recorded reason is printed so the next release does not re-open the same investigation. A `dropped` entry reading `no reason recorded` is the one that needs a human.
+
+## Backports the labels do not account for
+
+The verdicts start from labels, so on their own they cannot see a backport of a PR nobody labelled. Two further sections start from the other side: every PR on the release branch, and the originals it names by the bot's head branch or in a `Backport of` phrase (see [How landing is established](#how-landing-is-established)). The header carries their counts after a `|`, e.g. `backported=42 | DUPLICATE=3 unlabelled=13`.
+
+`UNLABELLED` lists each original that backport PRs on the branch claim although it is not a candidate for the branch, with every backport PR claiming it and that PR's state. Each entry also says what those PRs amount to: `backported here` once one of them merged, `claimed here, not merged` while the only live one is still open, and `claimed here, closed unmerged` when every one was closed. Most are hand backports of PRs that never carried a label, merged on purpose. An original that does carry a backport request, one that resolved to a different line at merge time, is listed with its labels. The section is informational and never moves the exit code: the gate answers whether everything labelled landed, and an unlabelled backport can only add to a branch, never leave a labelled change off it.
+
+`DUPLICATE` lists each original claimed by more than one live backport PR, labelled or not:
+
+| Kind | Meaning | Action |
+|------|---------|--------|
+| `open-twice` | Two or more backport PRs are open for it — typically the bot's conflict draft next to a hand backport, or a fork PR next to its reopening from a branch in this repository | merge one, close the rest |
+| `open-after-merge` | A backport already merged and another one is still open | close the leftover, or merge it if it is the second half of a split backport |
+
+Both kinds make the audit exit `1`. Neither reaches a verdict, which settles on the first merged backport it finds or reports `pending` for the first open one, and in both a human has to decide what happens to the open PR before the cut. A closed PR next to an open one is the normal shape of a redone backport and is not flagged, and neither are two merged ones, which are history the branch already carries.
+
+```console
+  DUPLICATE -- one original, more than one live backport PR (3):
+    https://github.com/cozystack/cozystack/pull/3936
+      #3936 fix(rabbitmq): right-size the default resources preset to s1.nano
+      label=kind/backport -- a backport PR still open after another one merged
+      backport #4372 OPEN (draft) https://github.com/cozystack/cozystack/pull/4372
+      backport #4393 MERGED https://github.com/cozystack/cozystack/pull/4393
+
+  UNLABELLED -- backport PRs here for originals not labelled for this line (13, informational):
+    https://github.com/cozystack/cozystack/pull/4280
+      #4280 fix(kafka): keep the pre-delete hook's credentials as long as its Job
+      backported here
+      backport #4421 CLOSED https://github.com/cozystack/cozystack/pull/4421
+      backport #4456 MERGED https://github.com/cozystack/cozystack/pull/4456
+```
+
+The titles of unlabelled originals are not in any listing the audit already makes, so they come from one GraphQL request covering the whole run. If it fails, the report goes out without them and says so on stderr; the URLs are derived locally and the verdicts and exit code do not depend on it.
 
 ## How a PR is matched to a release line
 
@@ -100,18 +133,22 @@ Three independent kinds of evidence, strongest first:
 
 ```bash
 # URLs of what never landed, ready to paste into a tracking issue
-go run ./cmd/backport-audit --json release-1.5 | jq -r '.[][] | select(.status=="MISSING") | .url'
+go run ./cmd/backport-audit --json release-1.5 | jq -r '.[].candidates[] | select(.status=="MISSING") | .url'
 
-# every open backport PR to go merge, across lines
+# every open backport PR the audit links, labelled or not, to merge or close, across lines
 go run ./cmd/backport-audit --json release-1.6 release-1.5 \
-  | jq -r '.[][] | select(.status=="pending") | .backport_prs[].url'
+  | jq -r '[.[] | (.candidates[], .unlabelled[]) | .backport_prs[] | select(.state=="OPEN") | .url] | unique[]'
 
 # dropped items with the reason someone recorded
 go run ./cmd/backport-audit --json release-1.4 \
-  | jq -r '.[][] | select(.status=="dropped") | "#\(.number)\t\(.reason)"'
+  | jq -r '.[].candidates[] | select(.status=="dropped") | "#\(.number)\t\(.reason)"'
+
+# open backport PRs competing for one original, to settle before the cut
+go run ./cmd/backport-audit --json release-1.6 \
+  | jq -r '.[].duplicates[] | "#\(.number) \(.kind): \([.backport_prs[] | select(.state=="OPEN") | .url] | join(" "))"'
 ```
 
-Output is an object keyed by branch, each holding one record per candidate:
+Output is an object keyed by branch, each holding three arrays: `candidates`, `unlabelled` and `duplicates`, each always present and possibly empty. A `candidates` record:
 
 ```json
 {
@@ -127,6 +164,42 @@ Output is an object keyed by branch, each holding one record per candidate:
 }
 ```
 
+An `unlabelled` record, where `labels` lists the backport requests the original carries for other lines and is empty when it carries none:
+
+```json
+{
+  "number": 4280,
+  "title": "fix(kafka): keep the pre-delete hook's credentials as long as its Job",
+  "url": "https://github.com/cozystack/cozystack/pull/4280",
+  "labels": [],
+  "backport_prs": [
+    {"number": 4421, "state": "CLOSED", "url": "..."},
+    {"number": 4456, "state": "MERGED", "url": "..."}
+  ]
+}
+```
+
+A `duplicates` record, where `label` is the request the original was audited under on this line and is empty when it is not a candidate here:
+
+```json
+{
+  "number": 4254,
+  "title": "feat(kubevirt): expose migration configuration through platform values",
+  "url": "https://github.com/cozystack/cozystack/pull/4254",
+  "label": "kind/backport",
+  "kind": "open-twice",
+  "backport_prs": [
+    {"number": 4322, "state": "OPEN", "url": "...", "draft": true},
+    {"number": 4339, "state": "OPEN", "url": "..."},
+    {"number": 4402, "state": "OPEN", "url": "..."}
+  ]
+}
+```
+
 ## Limits
 
 A `MISSING` verdict is a prompt to check, not proof of absence. A hand-backport that was squash-merged, reworded, and referenced no original PR is invisible to every evidence layer and reads as `MISSING`; confirm at diff level before redoing the work. A `kind/backport` label added long after merge, once the release line has moved on, resolves to the newer line. And the audit reports *that* something is missing, never *why* — a run of `MISSING` entries clustered in time usually means the bot itself was failing during that window, which is worth checking before cherry-picking them one by one.
+
+The audit reads labels as they stand when it runs. A label added afterwards is seen only by the next run, and until then its PR is either absent or, if someone already backported it, listed as `UNLABELLED` rather than audited, so run it right before the cut rather than once at the start of the day.
+
+A backport PR that names its original neither by the bot's head branch nor in a `Backport of` phrase links to nothing, so it is invisible to both cross-checks: it is not listed as `UNLABELLED` and does not count towards a `DUPLICATE`. For a labelled original the branch history can still prove the change landed, through an identical commit subject or an `-x` cherry-pick reference. For an unlabelled one those are not read at all, so a backport of an unlabelled PR that only a cherry-pick trailer points to, or nothing does, appears nowhere in the report.
