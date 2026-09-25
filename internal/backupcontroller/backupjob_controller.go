@@ -19,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
@@ -49,6 +50,18 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		logger.Error(err, "failed to get BackupJob")
 		return ctrl.Result{}, err
+	}
+
+	// A BackupJob under deletion must not be reconciled further. Only the Bucket
+	// driver adds a finalizer; when present, hand off to it to reclaim the partial
+	// copy a cancelled run may have written into the shared repo bucket and then
+	// clear the finalizer. Other drivers add none, so a delete is already in
+	// progress and there is nothing to do.
+	if !j.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(j, bucketBackupFinalizer) {
+			return r.finalizeBucketBackupJob(ctx, j)
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Skip terminal BackupJobs: a Succeeded/Failed run must not keep
@@ -176,6 +189,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRedis(ctx, j, resolved)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafka(ctx, j, resolved)
+	case strategyv1alpha1.BucketStrategyKind:
+		return r.reconcileBucket(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -202,6 +217,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
 		strategyv1alpha1.KafkaStrategyKind,
+		strategyv1alpha1.BucketStrategyKind,
 	}
 }
 

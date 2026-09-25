@@ -185,6 +185,14 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// deletes the object and WAITS for that delete before the Backup is
 		// removed, so no object is orphaned (see cleanupKafkaBackup).
 		return r.cleanupKafkaBackup(ctx, backup)
+	case strategyv1alpha1.BucketStrategyKind:
+		// Like Rabbitmq/Redis, the Bucket driver OWNS its artifact - the mirrored
+		// objects under the repo prefix, which no engine retention prunes - so
+		// this branch deletes them and WAITS for that delete before the Backup is
+		// removed. Without it a retention-pruned Plan leaves orphaned copies in
+		// cozy-backups with nothing left that knows their prefix (see
+		// cleanupBucketBackup).
+		return r.cleanupBucketBackup(ctx, backup)
 	case strategyv1alpha1.VeleroStrategyKind:
 		return ctrl.Result{}, r.cleanupVeleroBackup(ctx, backup)
 	default:

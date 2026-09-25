@@ -274,6 +274,15 @@ assert_full_suite() {
     [ "$output" = "postgres" ]
 }
 
+@test "backup example harness edit prefers the app's -backup suite when present" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "examples/backups/bucket/run-all.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    rm -rf "$tmp"
+    [ "$output" = "bucket-backup" ]
+}
+
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

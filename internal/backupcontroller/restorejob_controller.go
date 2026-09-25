@@ -172,6 +172,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileRedisRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafkaRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.BucketStrategyKind:
+		return r.reconcileBucketRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -335,14 +337,17 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.RedisStrategyKind, strategyv1alpha1.KafkaStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.RedisStrategyKind, strategyv1alpha1.KafkaStrategyKind, strategyv1alpha1.BucketStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
 		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
 		// EtcdCluster is owned by the source HelmRelease, and the
 		// EtcdClusterSpecCaptured / TargetPurged conditions live on the
 		// RestoreJob itself - all gone with the parent. Kafka: the metadata
 		// restore runs a one-shot Job owned by the RestoreJob and writes only
-		// to the Kafka cluster via the Admin API.)
+		// to the Kafka cluster via the Admin API. Bucket: the mirror Job is
+		// owned by the RestoreJob and GC'd with it; the COSI BucketAccess the
+		// driver provisions on the target is deliberately persistent and reused
+		// across restores, so it is not reaped here.)
 	default:
 		// Readable Backup, but an unrecognised strategy kind — not Velero
 		// as far as we can tell. Speculatively reap a stray labelled Velero

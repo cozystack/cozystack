@@ -11,7 +11,7 @@ rules:
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupclasses"]
   verbs: ["get", "list", "watch"]
-# BackupJob / RestoreJob: reconcile; update for RestoreJob finalizers
+# BackupJob / RestoreJob: reconcile; update for RestoreJob and Bucket BackupJob finalizers
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs", "restorejobs"]
   verbs: ["get", "list", "watch", "update", "patch"]
@@ -211,3 +211,16 @@ rules:
 - apiGroups: ["kafka.strimzi.io"]
   resources: ["kafkas"]
   verbs: ["get", "list", "watch"]
+# Bucket strategy: read the COSI BucketClaim to gate on readiness and resolve
+# the driver-assigned S3 bucket name, and provision the BucketAccess the mirror
+# Job reads the source (backup) / writes the target (restore) through. The
+# access is server-side-applied and never deleted (persistent, reused across
+# jobs), so create + patch cover the write path; the access grant's credentials
+# Secret is consumed by the Job via secretKeyRef (kubelet-mounted), so no Secret
+# RBAC is needed here beyond the projector's.
+- apiGroups: ["objectstorage.k8s.io"]
+  resources: ["bucketclaims"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["objectstorage.k8s.io"]
+  resources: ["bucketaccesses"]
+  verbs: ["get", "list", "watch", "create", "patch"]
