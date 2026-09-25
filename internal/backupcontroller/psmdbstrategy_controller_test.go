@@ -21,6 +21,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -2212,7 +2213,7 @@ func newPsmdbBackupDynamicClient(objs ...*unstructured.Unstructured) *dynamicfak
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{psmdbBackupGVR: "PerconaServerMongoDBBackupList"},
+		map[schema.GroupVersionResource]string{psmdbBackupGVR: "PerconaServerMongoDBBackupList", psmdbClusterGVR: "PerconaServerMongoDBList"},
 		rtObjs...,
 	)
 }
@@ -3180,28 +3181,171 @@ func TestReconcileMongoDB_ForeignStorageIsNotOwned(t *testing.T) {
 }
 
 // Once a job has its operator CR the storage that CR names is fixed for the
-// dump, so the polls that follow must not apply anything to the cluster: not
-// over a cluster that re-acquired the chart's tasks and pitr after the mint
-// (the legacy-render hold refuses only before a CR exists), and not at all.
+// dump, so the polls that follow must not touch the cluster or fail the job on
+// anything decided at mint time: not the legacy-render hold (a cluster that
+// re-acquired the chart's tasks and pitr after the mint), not the precondition
+// (backups disabled on the cluster mid-dump), and not the no-coordinates hold
+// (the strategy's s3 block dropped mid-dump). Each hold fails a job at the
+// 30-minute deadline, so the job is aged past it: a streaming system-bucket
+// dump must still be left to the state switch and its 24h ceiling, with the
+// finalized CR reachable through the job that owns it.
 func TestReconcileMongoDB_ExistingCRIsNotInjectedOver(t *testing.T) {
-	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
-	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
-	// The release rendered back to the legacy flow after the CR was minted: the
-	// tenant's storage, tasks and pitr are on the cluster again.
-	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+	cases := []struct {
+		name  string
+		shape func(cluster *psmdbtypes.PerconaServerMongoDB, strategy *strategyv1alpha1.MongoDB)
+	}{
+		{"tasks re-acquired after the mint", func(cluster *psmdbtypes.PerconaServerMongoDB, _ *strategyv1alpha1.MongoDB) {
+			cluster.Spec.Backup.Tasks = []runtime.RawExtension{{Raw: []byte(`{"name":"daily-backup","enabled":true,"schedule":"0 2 * * *","storageName":"s3-storage"}`)}}
+		}},
+		{"backups disabled after the mint", func(cluster *psmdbtypes.PerconaServerMongoDB, _ *strategyv1alpha1.MongoDB) {
+			cluster.Spec.Backup.Enabled = false
+		}},
+		{"strategy lost its s3 block after the mint", func(_ *psmdbtypes.PerconaServerMongoDB, strategy *strategyv1alpha1.MongoDB) {
+			strategy.Spec.Template.S3 = nil
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+			job.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-2 * psmdbDefaultBackupDeadline)}
+			// The release rendered back to the legacy flow after the CR was minted:
+			// the tenant's own storage is on the cluster again.
+			cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+				"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"tenant-own","credentialsSecret":"mongodb-app1-s3-creds"}}`)},
+			}
+			tc.shape(cluster, strategy)
+			minted := &psmdbtypes.PerconaServerMongoDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant", Name: "op-minted", Finalizers: []string{psmdbDeleteBackupFinalizer},
+					Labels: map[string]string{
+						backupsv1alpha1.OwningJobNameLabel:      job.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+					},
+				},
+				Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateRunning},
+			}
+			sch := runtime.NewScheme()
+			_ = scheme.AddToScheme(sch)
+			_ = backupsv1alpha1.AddToScheme(sch)
+			_ = strategyv1alpha1.AddToScheme(sch)
+			_ = psmdbtypes.AddToScheme(sch)
+			_ = mongodbapp.AddToScheme(sch)
+			applies := 0
+			c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster, minted).
+				WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						if _, ok := obj.(*psmdbtypes.PerconaServerMongoDB); ok {
+							applies++
+						}
+						return cl.Patch(ctx, obj, patch, opts...)
+					},
+				}).Build()
+			r := &BackupJobReconciler{Client: c, Scheme: sch, Recorder: record.NewFakeRecorder(10)}
+			res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+			if err != nil {
+				t.Fatalf("reconcileMongoDB: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Fatalf("a job with a running CR must keep polling it, got %+v", res)
+			}
+			if applies != 0 {
+				t.Errorf("no storage may be applied once the job has its CR, got %d apply patch(es) on the cluster", applies)
+			}
+			got := &psmdbtypes.PerconaServerMongoDB{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
+				t.Fatalf("get cluster: %v", err)
+			}
+			if bucket, _ := psmdbStorageS3(got.Spec.Backup.Storages["s3-storage"]); bucket != "tenant-own" {
+				t.Errorf("the tenant's storage was rewritten to %q", bucket)
+			}
+			p := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+				t.Fatalf("get job: %v", err)
+			}
+			if p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Errorf("a streaming CR must not be failed by a mint-time hold past the deadline, got %q", p.Status.Message)
+			}
+			cr := &psmdbtypes.PerconaServerMongoDBBackup{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-minted"}, cr); err != nil || !cr.DeletionTimestamp.IsZero() {
+				t.Errorf("the running CR must be left alone, err=%v", err)
+			}
+		})
+	}
+}
+
+// A change to the strategy coordinates rewrites an entry the operator has
+// already cached, so the next mint must wait a poll for the cache to observe
+// the new entry exactly as the first injection does; otherwise the operator
+// may resolve the previous coordinates and write the dump there. Only a real
+// change waits: an entry already as applied mints in the same pass.
+func TestReconcileMongoDB_CoordinateChangeRequeuesBeforeMinting(t *testing.T) {
+	mint := func(t *testing.T, seeded string) (ctrl.Result, int, string) {
+		job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+		cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(seeded)}}
+		c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+		res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
+		if err != nil {
+			t.Fatalf("reconcileMongoDB: %v", err)
+		}
+		list := &psmdbtypes.PerconaServerMongoDBBackupList{}
+		if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		p := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		reason := ""
+		if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond != nil {
+			reason = cond.Reason
+		}
+		return res, len(list.Items), reason
+	}
+	asApplied := `{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`
+	movedBucket := `{"type":"s3","s3":{"bucket":"cozy-backups-old","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`
+
+	t.Run("entry already as applied: mints in the same pass", func(t *testing.T) {
+		_, minted, reason := mint(t, asApplied)
+		if minted != 1 {
+			t.Errorf("an entry already carrying the current coordinates must mint without waiting, got %d CRs (reason=%q)", minted, reason)
+		}
+	})
+	t.Run("bucket moved since the last injection: waits a poll first", func(t *testing.T) {
+		res, minted, reason := mint(t, movedBucket)
+		if res.RequeueAfter == 0 {
+			t.Fatalf("expected a requeue after the coordinates changed, got %+v", res)
+		}
+		if minted != 0 {
+			t.Errorf("no CR may be minted in the pass that rewrote the coordinates, got %d", minted)
+		}
+		if reason != "PerconaServerMongoDBStorageInjected" {
+			t.Errorf("the wait must be named PerconaServerMongoDBStorageInjected, got %q", reason)
+		}
+	})
+}
+
+// The mint-time reads decide from the apiserver, not the manager's cache: a
+// cache lagging a re-render back to the legacy flow shows the flag true with
+// the tasks absent, and the apply would force-own the entry the tenant's
+// restored tasks name. With a dynamic client the live cluster wins.
+func TestReconcileMongoDB_MintTimeReadsTheClusterLive(t *testing.T) {
+	job, strategy, app, cached, resolved := mongodbInjectFixture(true)
+	// The cache still shows the useSystemBucket render: enabled, no storage.
+	live := cached.DeepCopy()
+	live.Spec.Backup.Storages = map[string]runtime.RawExtension{
 		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"tenant-own","credentialsSecret":"mongodb-app1-s3-creds"}}`)},
 	}
-	cluster.Spec.Backup.Tasks = []runtime.RawExtension{{Raw: []byte(`{"name":"daily-backup","enabled":true,"schedule":"0 2 * * *","storageName":"s3-storage"}`)}}
-	minted := &psmdbtypes.PerconaServerMongoDBBackup{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tenant", Name: "op-minted", Finalizers: []string{psmdbDeleteBackupFinalizer},
-			Labels: map[string]string{
-				backupsv1alpha1.OwningJobNameLabel:      job.Name,
-				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
-			},
-		},
-		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateRunning},
+	live.Spec.Backup.Tasks = []runtime.RawExtension{{Raw: []byte(`{"name":"daily-backup","enabled":true,"storageName":"s3-storage"}`)}}
+	liveObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(live)
+	if err != nil {
+		t.Fatalf("to unstructured: %v", err)
 	}
+	u := &unstructured.Unstructured{Object: liveObj}
+	u.SetGroupVersionKind(psmdbtypes.GroupVersion.WithKind("PerconaServerMongoDB"))
+	dyn := newPsmdbBackupDynamicClient(u)
+
 	sch := runtime.NewScheme()
 	_ = scheme.AddToScheme(sch)
 	_ = backupsv1alpha1.AddToScheme(sch)
@@ -3209,7 +3353,7 @@ func TestReconcileMongoDB_ExistingCRIsNotInjectedOver(t *testing.T) {
 	_ = psmdbtypes.AddToScheme(sch)
 	_ = mongodbapp.AddToScheme(sch)
 	applies := 0
-	c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cluster, minted).
+	c := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(job, strategy, app, cached).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
@@ -3219,30 +3363,63 @@ func TestReconcileMongoDB_ExistingCRIsNotInjectedOver(t *testing.T) {
 				return cl.Patch(ctx, obj, patch, opts...)
 			},
 		}).Build()
-	r := &BackupJobReconciler{Client: c, Scheme: sch, Recorder: record.NewFakeRecorder(10)}
+	r := &BackupJobReconciler{Client: c, Interface: dyn, Scheme: sch, Recorder: record.NewFakeRecorder(10)}
 	res, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved)
 	if err != nil {
 		t.Fatalf("reconcileMongoDB: %v", err)
 	}
 	if res.RequeueAfter == 0 {
-		t.Fatalf("a job with a running CR must keep polling it, got %+v", res)
+		t.Fatalf("expected the legacy-render hold off the live read, got %+v", res)
 	}
 	if applies != 0 {
-		t.Errorf("no storage may be applied once the job has its CR, got %d apply patch(es) on the cluster", applies)
-	}
-	got := &psmdbtypes.PerconaServerMongoDB{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
-		t.Fatalf("get cluster: %v", err)
-	}
-	if bucket, _ := psmdbStorageS3(got.Spec.Backup.Storages["s3-storage"]); bucket != "tenant-own" {
-		t.Errorf("the tenant's storage under its tasks and pitr was rewritten to %q", bucket)
+		t.Errorf("the live cluster carries tasks; nothing may be applied on the cached view, got %d patch(es)", applies)
 	}
 	p := &backupsv1alpha1.BackupJob{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
 		t.Fatalf("get job: %v", err)
 	}
-	if p.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-		t.Errorf("a streaming CR must not be failed by the cluster's render changing under it")
+	if cond := apimeta.FindStatusCondition(p.Status.Conditions, "Ready"); cond == nil || cond.Reason != "PerconaServerMongoDBLegacyRender" {
+		t.Errorf("expected Ready=False PerconaServerMongoDBLegacyRender from the live read, got %+v", cond)
+	}
+}
+
+// The storage-race retry recognises one operator error and only that. Any other
+// failure of a system-bucket CR is the tenant's to see: terminal, with the
+// operator's own text, the CR left in place and no retry spent.
+func TestReconcileMongoDB_NonStorageErrorIsTerminal(t *testing.T) {
+	job, strategy, app, cluster, resolved := mongodbInjectFixture(true)
+	job.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	cluster.Spec.Backup.Storages = map[string]runtime.RawExtension{
+		"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","credentialsSecret":"cozy-backups-creds"}}`)},
+	}
+	errored := &psmdbtypes.PerconaServerMongoDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-pbm-failed", Finalizers: []string{psmdbDeleteBackupFinalizer},
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{State: psmdbtypes.StateError, Error: "pbm-agent: connection refused"},
+	}
+	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster, errored)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileMongoDB(context.Background(), job.DeepCopy(), resolved); err != nil {
+		t.Fatalf("reconcileMongoDB: %v", err)
+	}
+	p := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: job.Name}, p); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if p.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(p.Status.Message, "connection refused") {
+		t.Errorf("an operator error other than the storage race must fail the job with the operator's text, got phase=%q msg=%q", p.Status.Phase, p.Status.Message)
+	}
+	if got := psmdbStorageRaceRetries(p); got != 0 {
+		t.Errorf("no storage-race retry may be spent on an unrelated error, got %d", got)
+	}
+	got := &psmdbtypes.PerconaServerMongoDBBackup{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "op-pbm-failed"}, got); err != nil || !got.DeletionTimestamp.IsZero() {
+		t.Errorf("the errored CR must be left in place for the tenant to inspect, err=%v", err)
 	}
 }
 

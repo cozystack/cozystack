@@ -291,7 +291,7 @@ When the override needs to go beyond storage coordinates — different retention
 
 ## Tuning via a custom BackupClass
 
-The defaults aim at a reasonable middle (30-day retention, gzip compression where applicable). To override for a specific tenant or workload, create your own `BackupClass` pointing at the same strategy CRs but with tweaked `parameters`, or a fresh strategy CR. Common knobs:
+The defaults aim at a reasonable middle (gzip compression where applicable; engine-side retention only where the strategy carries it, which today is the CNPG `retentionPolicy: "30d"` and the two Velero `ttl: 720h`; every other shipped strategy, MongoDB included, sets none, so its archives on the shared bucket are bounded only by a `Plan` deleting `Backup` objects or an S3 lifecycle policy). To override for a specific tenant or workload, create your own `BackupClass` pointing at the same strategy CRs but with tweaked `parameters`, or a fresh strategy CR. Common knobs:
 
 - **CNPG strategy**: `barmanObjectStore.retentionPolicy`, `data.compression`, `wal.compression`.
 - **MariaDB strategy**: `compression`, `maxRetention`, `databases[]`.

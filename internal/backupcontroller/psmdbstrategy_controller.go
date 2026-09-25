@@ -292,133 +292,161 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, err
 	}
-	// The job's operator CR, if a previous reconcile minted one. The gates below
-	// that decide whether a CR may be minted apply only while there is none: a
-	// CR already streaming is handled by the state switch, which reads its flow
-	// off its own finalizer, so a flag flipped or a strategy edited mid-dump
-	// cannot fail it here.
+	// The job's operator CR, if a previous reconcile minted one. Everything up
+	// to the mint (the legacy-render and no-coordinates holds, the storage
+	// injection, the precondition, the ownership decision) runs only while
+	// there is none: once a CR exists the dump is under way against the storage
+	// it names, and the state switch below handles it off its own finalizer, so
+	// a flag flipped, a strategy edited or backups disabled mid-dump cannot fail
+	// or redirect it here. The deadline that bounds those holds would otherwise
+	// fail a streaming dump at 30 minutes, bypassing the running ceiling and
+	// leaving a finalized CR that no Backup object reaches.
 	existing, err := r.findMongoDBBackupForJob(ctx, j)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// The app flag is the tenant's desired value: the app CR is projected from
-	// the HelmRelease's spec.values, so it reads true the moment the tenant
-	// writes it, whether or not helm-controller has rendered that revision. The
-	// chart renders spec.backup.tasks and pitr only without useSystemBucket, so
-	// a cluster still carrying them was last rendered on the legacy flow, and
-	// its tenant-bucket storage is what those tasks and the oplog stream write
-	// to. Injecting over it would redirect the tenant's own nightly dump and
-	// PITR into the shared bucket under platform credentials, as objects no
-	// Backup represents. Hold the job until the release re-renders instead.
-	legacyRender := useSystemBucket && psmdbClusterHasLegacyRender(cluster)
-	if existing == nil && useSystemBucket {
-		if rendered.S3 == nil {
-			// Nothing to inject and nothing to own: the storage the CR would name
-			// is whatever the cluster already declares, which may be the tenant's
-			// own bucket. Refuse to mint rather than stamp the prune finalizer on
-			// a dump the platform does not own.
-			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"the MongoDB strategy %s still carried no s3 coordinates to inject %s after the job started; set spec.template.s3 on it",
-					resolved.StrategyRef.Name, psmdbDefaultBackupDeadline))
-			}
-			return r.requeueMongoDBBackupWaiting(ctx, j, "MongoDBStrategyHasNoS3",
-				"the MongoDB strategy carries no s3 coordinates to inject; set spec.template.s3 on it")
-		}
-		if legacyRender {
-			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket %s after the job started; the release has not rendered the flag (check the HelmRelease), and the driver does not inject over a legacy storage",
-					j.Namespace, psmdbName, psmdbDefaultBackupDeadline))
-			}
-			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBLegacyRender",
-				"the cluster still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket; waiting for the release to render the flag before injecting the system-bucket storage")
-		}
-	}
-
-	// System-bucket flow: the app chart leaves spec.backup.storages unset (it
-	// cannot know the platform bucket/endpoint at render time), so SSA-inject
-	// the storage from the strategy's coordinates before the precondition looks
-	// for it. Owned by a dedicated field manager with ForceOwnership so a Flux
-	// re-render of the app never reverts it (mirrors the CNPG driver's
-	// spec.plugins patch). Keyed off the app's useSystemBucket flag, not off
-	// whatever storage is on the live cluster: when the flag is set the apply
-	// runs once per BackupJob, before its CR is minted, so a later change to
-	// the strategy coordinates (endpoint, region, bucket re-provision) catches
-	// up on the next job rather than being frozen at the first backup; when it
-	// is unset the driver never touches the cluster, so a legacy app that ships
-	// its own static storage is left alone. Once the job has a CR the storage it
-	// names is fixed for that dump, so nothing is applied on the polls that
-	// follow: not the coordinates (rewriting them under a streaming dump would
-	// split it), and not over a cluster that re-acquired the chart's tasks and
-	// pitr since the mint, which the legacy-render hold above only refuses
-	// before a CR exists. The path prefix is deterministic
-	// (<namespace>/<application>), so re-applying the whole entry on the next
-	// job never splits the archive the way CNPG's serverName would. Gated
-	// additionally on backups being enabled: a cluster that can never service a
-	// backup should not be mutated just to fail the precondition below on the
-	// enabled check anyway.
-	if existing == nil && cluster.Spec.Backup.Enabled && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
-		_, storageDeclared := cluster.Spec.Backup.Storages[storageName]
-		injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
-		if err != nil {
-			// A server-side apply can fail transiently — an apiserver hiccup, or a
-			// conflict while the psmdb operator writes the same cluster — so requeue
-			// with backoff rather than failing the BackupJob outright. The deadline
-			// still turns a permanently-failing apply terminal, matching how the
-			// cluster/app read errors above are handled.
-			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s within %s: %v",
-					j.Namespace, psmdbName, psmdbDefaultBackupDeadline, err))
-			}
-			return ctrl.Result{}, err
-		}
-		cluster = injected
-		if !storageDeclared {
-			// First injection for this app: the storage is now applied, but the
-			// psmdb operator resolves spec.backup.storages from a CACHED cluster
-			// read when it services the PerconaServerMongoDBBackup, and its cache
-			// may not have observed the apply yet. A miss there latches the CR at
-			// State=error with nothing to re-drive it (the operator returns for a
-			// terminal-state CR and watches only the Backup CR and Pods), and the
-			// driver reads that as a terminal failure. So requeue instead of
-			// minting the CR in the same pass: on the next reconcile this driver's
-			// own cache reflects the storage (storageDeclared is true), which is a
-			// good proxy that the operator's does too, and only then do we mint.
-			// Later BackupJobs find the storage already declared and skip through.
-			//
-			// Bounded and observable like the other waits: consult the deadline so
-			// a cluster whose cache never reflects the storage cannot poll forever,
-			// and write Ready=False so the wait is named in kubectl describe.
-			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s did not reflect the injected storage %q within %s",
-					j.Namespace, psmdbName, storageName, psmdbDefaultBackupDeadline))
-			}
-			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageInjected",
-				fmt.Sprintf("injected storage %q; waiting for the cluster to reflect it before starting the backup", storageName))
-		}
-	}
-	if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
-		const hint = "set backup.enabled=true on the MongoDB application"
-		if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"psmdb.percona.com/PerconaServerMongoDB %s/%s not ready for backups within %s: %s (%s)",
-				j.Namespace, psmdbName, psmdbDefaultBackupDeadline, msg, hint))
-		}
-		return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupsDisabled", msg)
-	}
-
-	// Whether the storage the CR will name points at the platform bucket with
-	// the platform credential. The prune finalizer stamped at mint means "the
-	// platform owns this archive", and cleanup deletes the archive on that
-	// marker, so it must follow where the dump actually lands, never the flag.
-	bucket, cred := psmdbStorageS3(cluster.Spec.Backup.Storages[storageName])
-	platformStorage := useSystemBucket && rendered.S3 != nil && bucket == rendered.S3.Bucket && cred == psmdbInjectedCredentialsSecret(rendered.S3)
-
+	var (
+		mdbBackup       *psmdbtypes.PerconaServerMongoDBBackup
+		platformStorage bool
+	)
 	if existing == nil {
+		// The mint-time decisions below read the cluster's render (tasks, pitr,
+		// the storage entry), and a cached read can lag a re-render by one
+		// reconcile: a flag already true with the tasks not yet visible is a
+		// consistent pre-flip view that would let the apply force-own an entry
+		// the tenant's restored tasks name. Decide from the apiserver instead,
+		// the way the deadline cancel reads the operator CR live. Without a
+		// dynamic client (tests) the cached object stands.
+		if r.Interface != nil {
+			live, lerr := r.psmdbClusterLive(ctx, j.Namespace, psmdbName)
+			if lerr != nil {
+				return ctrl.Result{}, lerr
+			}
+			cluster = live
+		}
+
+		// The app flag is the tenant's desired value: the app CR is projected
+		// from the HelmRelease's spec.values, so it reads true the moment the
+		// tenant writes it, whether or not helm-controller has rendered that
+		// revision. The chart renders spec.backup.tasks and pitr only without
+		// useSystemBucket, so a cluster still carrying them was last rendered on
+		// the legacy flow, and its tenant-bucket storage is what those tasks and
+		// the oplog stream write to. Injecting over it would redirect the
+		// tenant's own nightly dump and PITR into the shared bucket under
+		// platform credentials, as objects no Backup represents. Hold the job
+		// until the release re-renders instead.
+		legacyRender := useSystemBucket && psmdbClusterHasLegacyRender(cluster)
+		if useSystemBucket {
+			if rendered.S3 == nil {
+				// Nothing to inject and nothing to own: the storage the CR would name
+				// is whatever the cluster already declares, which may be the tenant's
+				// own bucket. Refuse to mint rather than stamp the prune finalizer on
+				// a dump the platform does not own.
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"the MongoDB strategy %s still carried no s3 coordinates to inject %s after the job started; set spec.template.s3 on it",
+						resolved.StrategyRef.Name, psmdbDefaultBackupDeadline))
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "MongoDBStrategyHasNoS3",
+					"the MongoDB strategy carries no s3 coordinates to inject; set spec.template.s3 on it")
+			}
+			if legacyRender {
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"psmdb.percona.com/PerconaServerMongoDB %s/%s still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket %s after the job started; the release has not rendered the flag (check the HelmRelease), and the driver does not inject over a legacy storage",
+						j.Namespace, psmdbName, psmdbDefaultBackupDeadline))
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBLegacyRender",
+					"the cluster still carries the chart's scheduled tasks/pitr from a render without backup.useSystemBucket; waiting for the release to render the flag before injecting the system-bucket storage")
+			}
+		}
+
+		// System-bucket flow: the app chart leaves spec.backup.storages unset (it
+		// cannot know the platform bucket/endpoint at render time), so SSA-inject
+		// the storage from the strategy's coordinates before the precondition looks
+		// for it. Owned by a dedicated field manager with ForceOwnership so a Flux
+		// re-render of the app never reverts it (mirrors the CNPG driver's
+		// spec.plugins patch). Keyed off the app's useSystemBucket flag, not off
+		// whatever storage is on the live cluster: when the flag is set the apply
+		// runs before each mint (once per BackupJob, plus once per storage-race
+		// re-mint), so a later change to the strategy coordinates (endpoint,
+		// region, bucket re-provision) catches up on the next job rather than
+		// being frozen at the first backup; when it is unset the driver never
+		// touches the cluster, so a legacy app that ships its own static storage
+		// is left alone. Once the job has a CR the storage it names is fixed for
+		// that dump, so nothing is applied on the polls that follow: not the
+		// coordinates (rewriting them under a streaming dump would split it), and
+		// not over a cluster that re-acquired the chart's tasks and pitr since the
+		// mint. The path prefix is deterministic (<namespace>/<application>), so
+		// re-applying the whole entry on the next job never splits the archive the
+		// way CNPG's serverName would. Gated additionally on backups being enabled:
+		// a cluster that can never service a backup should not be mutated just to
+		// fail the precondition below on the enabled check anyway.
+		if cluster.Spec.Backup.Enabled && shouldInjectMongoDBSystemStorage(useSystemBucket, rendered) {
+			storageSettled := psmdbStorageEntrySettled(cluster.Spec.Backup.Storages[storageName], rendered.S3)
+			injected, err := r.applyMongoDBSystemStorage(ctx, j.Namespace, psmdbName, storageName, rendered.S3)
+			if err != nil {
+				// A server-side apply can fail transiently — an apiserver hiccup, or a
+				// conflict while the psmdb operator writes the same cluster — so requeue
+				// with backoff rather than failing the BackupJob outright. The deadline
+				// still turns a permanently-failing apply terminal, matching how the
+				// cluster/app read errors above are handled.
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"failed to inject system-bucket storage onto psmdb.percona.com/PerconaServerMongoDB %s/%s within %s: %v",
+						j.Namespace, psmdbName, psmdbDefaultBackupDeadline, err))
+				}
+				return ctrl.Result{}, err
+			}
+			cluster = injected
+			if !storageSettled {
+				// The apply changed what the entry says (first injection for this
+				// app, or the strategy coordinates moved since the last one). The
+				// psmdb operator resolves spec.backup.storages from a CACHED cluster
+				// read when it services the PerconaServerMongoDBBackup, and its cache
+				// may not have observed the apply yet. A miss there latches the CR at
+				// State=error with nothing to re-drive it (the operator returns for a
+				// terminal-state CR and watches only the Backup CR and Pods), and the
+				// driver reads that as a terminal failure; a stale hit would resolve
+				// the previous coordinates and write the dump there. So requeue
+				// instead of minting the CR in the same pass: on the next reconcile
+				// this driver's own read reflects the entry as applied, which is a
+				// good proxy that the operator's does too, and only then do we mint.
+				// Later BackupJobs find the entry already as applied and skip through.
+				//
+				// Bounded and observable like the other waits: consult the deadline so
+				// a cluster whose cache never reflects the storage cannot poll forever,
+				// and write Ready=False so the wait is named in kubectl describe.
+				if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+					return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+						"psmdb.percona.com/PerconaServerMongoDB %s/%s did not reflect the injected storage %q within %s",
+						j.Namespace, psmdbName, storageName, psmdbDefaultBackupDeadline))
+				}
+				return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageInjected",
+					fmt.Sprintf("injected storage %q; waiting for the cluster to reflect it before starting the backup", storageName))
+			}
+		}
+		if msg := psmdbBackupPrecondition(cluster, storageName); msg != "" {
+			const hint = "set backup.enabled=true on the MongoDB application"
+			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s not ready for backups within %s: %s (%s)",
+					j.Namespace, psmdbName, psmdbDefaultBackupDeadline, msg, hint))
+			}
+			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBBackupsDisabled", msg)
+		}
+
+		// Whether the storage the CR will name points at the platform bucket with
+		// the platform credential. The prune finalizer stamped at mint means "the
+		// platform owns this archive", and cleanup deletes the archive on that
+		// marker, so it must follow where the dump actually lands, never the flag.
+		// The useSystemBucket term is shadowed by the opt-out case below, which
+		// refuses first whenever the flag is off and the entry carries the injected
+		// credential; it stays as the statement of intent should that case narrow.
+		bucket, cred := psmdbStorageS3(cluster.Spec.Backup.Storages[storageName])
+		platformStorage = useSystemBucket && rendered.S3 != nil && bucket == rendered.S3.Bucket && cred == psmdbInjectedCredentialsSecret(rendered.S3)
+
 		switch {
 		case !useSystemBucket && cred != "" && psmdbCredentialsSecretIsInjected(cred, rendered):
 			// Opting out (useSystemBucket true→false) stops the injection but
@@ -449,11 +477,13 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageForeign",
 				fmt.Sprintf("storage %q points at bucket %q with credentialsSecret %q, not the system-bucket coordinates the strategy carries; not minting a platform-owned backup against it", storageName, bucket, cred))
 		}
-	}
 
-	mdbBackup, err := r.ensureMongoDBBackup(ctx, j, psmdbName, storageName, rendered, platformStorage)
-	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBBackup: %v", err))
+		mdbBackup, err = r.ensureMongoDBBackup(ctx, j, psmdbName, storageName, rendered, platformStorage)
+		if err != nil {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBBackup: %v", err))
+		}
+	} else {
+		mdbBackup = existing
 	}
 	// The flow a CR belongs to is fixed at mint time by its finalizer, not by the
 	// app flag a tenant can flip while the dump streams: a CR carrying
@@ -939,6 +969,61 @@ func psmdbArtifactWindow(b *psmdbtypes.PerconaServerMongoDBBackup, startedAt *me
 	}
 	window := psmdbDefaultBackupDeadline + psmdbLiveReadGrace
 	return window, startedAt != nil && time.Since(startedAt.Time) > window
+}
+
+// psmdbStorageEntrySettled reports whether the live storage entry already says
+// what the driver is about to apply: present, and agreeing on every field the
+// driver writes (fields the server adds on its own are ignored). A false answer
+// means the apply that follows changes the entry, so the operator's cache has
+// something new to observe before a CR may be minted against it. An entry that
+// lacks a driver field was not written by the driver and is left to the apply.
+func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.MongoDBStorageS3) bool {
+	if len(raw.Raw) == 0 {
+		return false
+	}
+	var live struct {
+		Type string                 `json:"type"`
+		S3   map[string]interface{} `json:"s3"`
+	}
+	if err := json.Unmarshal(raw.Raw, &live); err != nil {
+		return false
+	}
+	desired := buildMongoDBSystemStorageEntry(s3)
+	if want, _ := desired["type"].(string); live.Type != "" && live.Type != want {
+		return false
+	}
+	for k, want := range desired["s3"].(map[string]interface{}) {
+		if got, ok := live.S3[k]; ok && got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// psmdbClusterGVR addresses PerconaServerMongoDB through the dynamic client for
+// an uncached read of the cluster's current render (see reconcileMongoDB).
+var psmdbClusterGVR = schema.GroupVersionResource{
+	Group:    psmdbtypes.GroupVersion.Group,
+	Version:  psmdbtypes.GroupVersion.Version,
+	Resource: "perconaservermongodbs",
+}
+
+// psmdbClusterLive reads the PerconaServerMongoDB straight from the apiserver,
+// bypassing the informer cache, and decodes the fields the driver reads.
+func (r *BackupJobReconciler) psmdbClusterLive(ctx context.Context, namespace, name string) (*psmdbtypes.PerconaServerMongoDB, error) {
+	u, err := r.Interface.Resource(psmdbClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(u.Object)
+	if err != nil {
+		return nil, err
+	}
+	out := &psmdbtypes.PerconaServerMongoDB{}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // psmdbClusterHasLegacyRender reports whether the cluster still carries the
@@ -1820,10 +1905,12 @@ func marshalMongoDBBackupSnapshot(mdbBackup *psmdbtypes.PerconaServerMongoDBBack
 	// to those coordinates when the operator's status echo is empty - the
 	// restore path rebuilds backupSource from this snapshot and needs the
 	// endpoint + credentialsSecret (cozy-backups-creds) to be present. Gated on
-	// the app's flag, not on rendered.S3 alone: the coordinates now live on the
-	// shared cozy-default strategy, so rendered.S3 is non-nil for a legacy app
-	// too, and recording the platform bucket for an archive written to the
-	// tenant's own bucket would send restore to the wrong place.
+	// the flow the CR was minted on (the caller reads it off the CR's own
+	// finalizer, so a flag flipped mid-dump does not change it), not on
+	// rendered.S3 alone: the coordinates now live on the shared cozy-default
+	// strategy, so rendered.S3 is non-nil for a legacy app too, and recording
+	// the platform bucket for an archive written to the tenant's own bucket
+	// would send restore to the wrong place.
 	if useSystemBucket && snap.S3 == nil && rendered.S3 != nil {
 		cred := rendered.S3.CredentialsSecret
 		if cred == "" {
