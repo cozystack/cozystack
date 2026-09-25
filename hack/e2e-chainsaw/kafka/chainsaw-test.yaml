@@ -2,7 +2,7 @@
 #
 # The final step replaces the BATS check that Strimzi reclaims the ZooKeeper
 # PVCs on delete: instead of a manual kubectl delete, an explicit delete of the
-# Kafka CR followed by `error` ops asserts both PVCs disappear (a regression in
+# Kafka CR followed by deletion watches asserts both PVCs disappear (a regression in
 # the operator's deleteClaim handling would leave them behind).
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -140,17 +140,17 @@ spec:
           kind: KafkaTopic
           metadata:
             name: kafka-test-test-orders
-    - error:
+    - wait:
         timeout: 2m
-        resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
-          metadata:
-            name: data-kafka-test-zookeeper-0
-    - error:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: data-kafka-test-zookeeper-0
+        for:
+          deletion: {}
+    - wait:
         timeout: 2m
-        resource:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
-          metadata:
-            name: data-kafka-test-zookeeper-1
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        name: data-kafka-test-zookeeper-1
+        for:
+          deletion: {}
