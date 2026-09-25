@@ -36,6 +36,19 @@ expect_render_failure() {
     rm -rf "$tmp"
 }
 
+@test "render matrix refuses empty discovery and ignores nested fixtures" {
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/hack/testdata/render-fixtures/validator"
+    cp hack/check-render-matrix.sh "$tmp/hack/"
+    cp hack/testdata/render-fixtures/fresh.yaml "$tmp/hack/testdata/render-fixtures/validator/nested.yaml"
+    output=$(cd "$tmp" && expect_render_failure)
+    printf '%s\n' "$output" | grep -F 'found no charts under packages/apps'
+    make_render_chart "$tmp/packages/apps/example"
+    output=$(cd "$tmp" && expect_render_failure)
+    printf '%s\n' "$output" | grep -F 'no fixtures under hack/testdata/render-fixtures'
+    rm -rf "$tmp"
+}
+
 @test "render matrix reports a broken chart and still checks the next chart" {
     tmp=$(mktemp -d)
     make_render_chart "$tmp/broken"
@@ -83,6 +96,19 @@ expect_render_failure() {
     rm -rf "$tmp"
 }
 
+@test "render matrix counts documented lookup failures as skipped" {
+    tmp=$(mktemp -d)
+    make_render_chart "$tmp/vm-instance"
+    make_render_chart "$tmp/kubernetes-nodes"
+    printf '%s\n' '{{ fail "Specified instanceType does not exist in the cluster: u1.medium" }}' > "$tmp/vm-instance/templates/object.yaml"
+    printf '%s\n' '{{ fail `specified instanceType "u1.medium" not found in cluster` }}' > "$tmp/kubernetes-nodes/templates/object.yaml"
+    output=$(dash hack/check-render-matrix.sh "$tmp/vm-instance" "$tmp/kubernetes-nodes")
+    printf '%s\n' "$output" | grep -F 'SKIP vm-instance ('
+    printf '%s\n' "$output" | grep -F 'SKIP kubernetes-nodes ('
+    printf '%s\n' "$output" | grep -Fx 'check-render-matrix: 0 rendered, 2 skipped'
+    rm -rf "$tmp"
+}
+
 @test "fixtures match the injected value types" {
     for fixture in hack/testdata/render-fixtures/*.yaml; do
         helm template fixture-check hack/testdata/render-fixtures/validator \
@@ -109,6 +135,36 @@ expect_render_failure() {
             exit 1
         fi
         printf '%s\n' "$output" | grep -F '_cluster.scheduling.globalAppTopologySpreadConstraints must be a string'
+    done
+    rm -rf "$tmp"
+}
+
+@test "fixture validation rejects malformed maps and missing scheduling keys" {
+    tmp=$(mktemp -d)
+    for variant in malformed-yaml empty-namespace branding-scalar namespace-map scheduling-scalar missing-scheduling missing-constraint missing-windows; do
+        cluster_extra=''
+        scheduling='scheduling:'
+        namespace='host: "example.org"'
+        constraint='globalAppTopologySpreadConstraints: ""'
+        windows='dedicatedNodesForWindowsVMs: "false"'
+        case "$variant" in
+            malformed-yaml) constraint='['; windows=''; expected='error converting YAML to JSON' ;;
+            empty-namespace) namespace=''; expected='_namespace must be a non-empty map' ;;
+            branding-scalar) cluster_extra='branding: true'; expected='_cluster.branding must be a map' ;;
+            namespace-map) namespace='branding: {}'; expected='_namespace.branding must be a string' ;;
+            scheduling-scalar) constraint='true'; windows=''; expected='_cluster.scheduling must be a map' ;;
+            missing-scheduling) cluster_extra='oidc-enabled: "false"'; scheduling=''; constraint=''; windows=''; expected='_cluster.scheduling must be a map' ;;
+            missing-constraint) constraint=''; expected='_cluster.scheduling.globalAppTopologySpreadConstraints is missing' ;;
+            missing-windows) windows=''; expected='_cluster.scheduling.dedicatedNodesForWindowsVMs is missing' ;;
+        esac
+        printf '_cluster:\n  %s\n  %s\n    %s\n    %s\n_namespace: {%s}\n' \
+            "$cluster_extra" "$scheduling" "$constraint" "$windows" "$namespace" > "$tmp/value.yaml"
+        if output=$(helm template fixture-check hack/testdata/render-fixtures/validator \
+            --set-file "fixture=$tmp/value.yaml" 2>&1); then
+            echo "accepted invalid fixture: $variant" >&2
+            exit 1
+        fi
+        printf '%s\n' "$output" | grep -F "$expected"
     done
     rm -rf "$tmp"
 }
