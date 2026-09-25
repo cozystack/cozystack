@@ -23,10 +23,10 @@ on:
 #
 # So the group key moves a label event that is NOT a backport request aside, and
 # `cancel-in-progress` stops one that IS from cancelling rather than queuing.
-# Both are load-bearing. `backport` and `backport-previous` are separate requests
-# that both have to complete, so they share the main group and must not cancel
-# each other; every other label does no work here and only has to stay out of
-# the way.
+# Both are load-bearing. `kind/backport` and `kind/backport-previous` are
+# separate requests that both have to complete, so they share the main group and
+# must not cancel each other; every other label does no work here and only has
+# to stay out of the way.
 #
 # That is also why this file does not simply copy pull-requests.yaml, which
 # splits the key and leaves cancellation unconditional: a discarded label run
@@ -54,7 +54,7 @@ on:
 # surviving run rather than a hundred queued ones, and the feature only shipped
 # 2026-05-07, on a path that delivers fixes to release lines.
 concurrency:
-  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
   # Stated positively, matching the group key above. `!= 'labeled'` is equivalent
   # only while `types:` holds exactly these two, and that form fails open: adding
   # `unlabeled` or `reopened` there would hand those events cancellation in the
@@ -95,8 +95,8 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (
-        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'backport') || contains(github.event.pull_request.labels.*.name, 'backport-previous') || contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous'))) ||
-        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous' || github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
+        (github.event.action == 'closed' && (contains(github.event.pull_request.labels.*.name, 'kind/backport') || contains(github.event.pull_request.labels.*.name, 'kind/backport-previous'))) ||
+        (github.event.action == 'labeled' && (github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
       )
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
@@ -144,15 +144,16 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = pr.labels.map(l => l.name);
-            // TRANSITIONAL: both spellings are accepted so the rename can land
-            // in any order relative to the org-level dosubot, which still
-            // applies the legacy names and is today the dominant applier on
-            // real backports. Once dosubot's PR labelling is switched off and
-            // the in-repo labeler is the only applier, the legacy arms here,
-            // in the `if:` gate above and in the concurrency group can all be
-            // deleted in one pass.
-            const isBackport = labels.includes('kind/backport') || labels.includes('backport');
-            const isBackportPrevious = labels.includes('kind/backport-previous') || labels.includes('backport-previous');
+            // Only the namespaced spellings. The un-namespaced `backport` and
+            // `backport-previous` were accepted here through the rename, for as
+            // long as the org-level dosubot was still applying them; it no
+            // longer labels PRs here, and neither label exists in the
+            // repository any more — .github/labels.yml renamed both into
+            // kind/*. They stay listed there as aliases so that a legacy label
+            // applied by hand is renamed by the next label sync rather than
+            // sitting on the PR triggering nothing.
+            const isBackport = labels.includes('kind/backport');
+            const isBackportPrevious = labels.includes('kind/backport-previous');
             
             core.setOutput('backport', isBackport ? 'true' : 'false');
             core.setOutput('backport_previous', isBackportPrevious ? 'true' : 'false');
@@ -252,13 +253,14 @@ jobs:
       # The action's backport branch name is deterministic,
       # backport-<pull_number>-to-<target_branch>. A merged PR with that head
       # means an earlier run already delivered this change to the target — a
-      # second label event (e.g. backport-previous added after backport
-      # already merged) would re-enter this job and cherry-pick commits the
-      # target branch already has. Git reports that as an empty pick (exit 1)
-      # rather than a conflict, which draft_commit_conflicts below misreads
-      # as a real conflict and reports as a failed backport on the original
-      # PR. Skipping here avoids the false report; it does not touch the
-      # empty-pick behavior itself, which lives in the action.
+      # second label event (e.g. kind/backport-previous added after
+      # kind/backport already merged) would re-enter this job and cherry-pick
+      # commits the target branch already has, which produces a run whose every
+      # pick is empty. The git wrapper installed below drops those rather than
+      # failing on them, so the leg no longer dies at the cherry-pick — it dies
+      # further along instead, with nothing to open a PR from. Still a false
+      # report, just a later one; skipping here is what keeps it off the
+      # original PR.
       - name: Check for existing merged backport
         id: guard
         if: steps.target.outcome == 'success'
@@ -284,7 +286,83 @@ jobs:
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # 4. Create the back‑port pull request
+      # 4. Make `git cherry-pick` tolerate empty commits, for this job only.
+      #
+      # The action reads any non-zero cherry-pick exit as a conflict: on exit 1
+      # it commits the working tree as BACKPORT-CONFLICT and opens a draft PR
+      # for manual fixup. An empty pick also exits 1 but leaves nothing to
+      # commit, so the action's own `git commit` exits 1 in turn, it aborts the
+      # whole cherry-pick and throws — discarding the commits it had already
+      # applied, pushing no branch and opening no PR. A single
+      # `git commit --allow-empty` in a PR, the usual way to re-trigger CI, was
+      # therefore enough to lose the entire backport, reported on the original
+      # PR as a cherry-pick failure rather than as what it was.
+      #
+      # hack/backport-git-shim.sh adds `--allow-empty --empty=drop` and passes
+      # everything else through, including the sequencer verbs, which `--empty`
+      # refuses to be combined with. A real conflict still exits 1 with unmerged
+      # paths, so the draft-PR path above is untouched. It goes through PATH
+      # because the action takes no cherry-pick flags — neither does upstream v4
+      # — and git has no config knob for either case. hack/backport-git-shim.sh
+      # carries the measurements and hack/backport-git-shim.bats the behaviour.
+      #
+      # The probe is not ceremony. Without it the two ways this wiring can break
+      # — a git without `--empty`, a wrapper that cannot resolve the real one —
+      # both surface as a failed backport on somebody's merged PR, which is the
+      # failure being removed here. With it they are a red step on an otherwise
+      # untouched PR.
+      #
+      # zizmor's `github-env` audit is right to fire on an environment-file write
+      # in a `pull_request_target` workflow and wrong about this one: it flags a
+      # write whose CONTENT an attacker can steer, and this one is a path under
+      # $RUNNER_TEMP that the step itself chose. Nothing from the pull request
+      # reaches it. Ignored inline rather than in .github/zizmor.yml so the
+      # suppression names one write, travels with the line, and leaves the audit
+      # armed for the rest of this file; disabling the rule there would disarm it
+      # for every workflow in the tree. $GITHUB_PATH is also the only mechanism
+      # available: the wrapper has to be on PATH for a LATER step, which no
+      # in-step export reaches.
+      - name: Install the empty-tolerant git wrapper
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
+        run: | # zizmor: ignore[github-env]
+          set -eu
+
+          real_git="$(command -v git)"
+          shim_dir="$RUNNER_TEMP/backport-git-shim"
+          mkdir -p "$shim_dir"
+
+          # The real git's path is substituted in, not exported. `actions/checkout`
+          # declares a `post` step that runs git after the action has finished, so
+          # the wrapper is reached by a step this workflow does not control, and an
+          # environment variable that failed to arrive there would turn the job red
+          # at cleanup with the backport PR already open. A substituted path cannot
+          # fail to arrive. `command -v git` is a runner path with no shell
+          # metacharacters, so `|` is a safe sed delimiter for it.
+          sed "s|@REAL_GIT@|$real_git|" hack/backport-git-shim.sh > "$shim_dir/git"
+          chmod 0755 "$shim_dir/git"
+
+          # Drive the wrapper the way the action will: subcommand first, wrapper's
+          # directory ahead of PATH, nothing else set up for it.
+          probe="$RUNNER_TEMP/backport-git-shim-probe"
+          rm -rf "$probe"
+          mkdir -p "$probe"
+          cd "$probe"
+          export GIT_AUTHOR_NAME=probe GIT_AUTHOR_EMAIL=probe@invalid
+          export GIT_COMMITTER_NAME=probe GIT_COMMITTER_EMAIL=probe@invalid
+          "$real_git" init -q -b main .
+          "$real_git" commit -q --allow-empty -m seed
+          "$real_git" branch target
+          "$real_git" commit -q --allow-empty -m "empty commit"
+          empty_sha="$("$real_git" rev-parse HEAD)"
+          "$real_git" switch -q -c probe target
+          PATH="$shim_dir:$PATH" git cherry-pick -x "$empty_sha"
+          [ "$("$real_git" rev-list --count target..HEAD)" -eq 1 ]
+          cd "$GITHUB_WORKSPACE"
+          rm -rf "$probe"
+
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
+      # 5. Create the back‑port pull request
       - name: Create back‑port PR
         id: backport
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
