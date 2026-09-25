@@ -25,6 +25,7 @@ tests:
         system: {enabled: true, variant: isp-full}
     asserts:
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-engine, any: true}
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.flux-shard-operator, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-basics, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.tenant-application, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.etcd-application, any: true}

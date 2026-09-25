@@ -108,14 +108,15 @@ fi
 # lockstep with select-e2e.sh's src_to_suites() and the hack/e2e-chainsaw/ dirs;
 # --validate asserts every suite dir still resolves here.
 #
-# A suite may have more than one direct owner. In particular, vminstance creates
-# both VMInstance and VMDisk resources and observes the DataVolume behind the
-# disk, so both application sources are conjunctive inputs. Fixtures which only
-# name other app kinds as selectors are not owners.
+# A suite may have more than one direct owner. The Kubernetes suites create
+# Kubernetes and KubernetesNodes; vminstance creates VMInstance and VMDisk and
+# observes the DataVolume behind the disk. Each API needs its application source.
+# Fixtures which only name other app kinds as selectors are not owners.
 suite_to_source() {
   case "$1" in
     kubernetes-latest|kubernetes-previous)
-      echo cozystack.kubernetes-application ; return ;;
+      echo "cozystack.kubernetes-application cozystack.kubernetes-nodes-application"
+      return ;;
     vminstance)
       echo "cozystack.vm-instance-application cozystack.vm-disk-application"
       return ;;
@@ -334,8 +335,10 @@ validate_graph || exit 1
 # LINSTOR, CDI and MetalLB. The install then waits the CAPI operator plus all four
 # providers, and later enables and waits the Keycloak OIDC stack. Kamaji,
 # KubeVirt, storage controllers and CRDs remain graph-derived so losing those
-# declared edges stays observable in tests.
+# declared edges stays observable in tests. Tenant HelmReleases carry a shard
+# label excluded by flux-aio, so the shard operator must supply their reconciler.
 baseline="cozystack.cozystack-engine
+cozystack.flux-shard-operator
 cozystack.cozystack-basics
 cozystack.tenant-application
 cozystack.etcd-application
@@ -395,6 +398,7 @@ cozystack.prometheus-operator-crds
 cozystack.vertical-pod-autoscaler
 cozystack.reloader
 cozystack.snapshot-controller
+cozystack.objectstorage-controller
 cozystack.gateway-application
 cozystack.info-application
 cozystack.kamaji

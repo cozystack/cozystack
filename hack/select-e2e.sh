@@ -240,7 +240,8 @@ src_to_suites() {
     # mappings their derived names point at suites that do not exist, so an
     # ingress-only package change can omit the suite that exercises it.
     ingress-application|ingress-nginx) echo gateway ;;
-    kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
+    # Each Kubernetes suite creates both the control plane and worker pools.
+    kubernetes-application|kubernetes-nodes-application) echo "kubernetes-latest kubernetes-previous" ;;
     securitygroup-controller) echo securitygroup ;;
     # The kafka app source covers both the app suite and the metadata-backup
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which

@@ -25,14 +25,15 @@ assert_output_graph_error() {
     mode=$1
     sources=$2
     expected=$3
+    requested_suite=${4:-postgres}
     out=$(mktemp)
     err=$(mktemp)
     if [ "$mode" = disabled ]; then
-        if hack/select-install.sh --disabled postgres "$sources" >"$out" 2>"$err"; then
+        if hack/select-install.sh --disabled "$requested_suite" "$sources" >"$out" 2>"$err"; then
             echo "expected disabled mode to reject invalid graph $sources" >&2
             exit 1
         fi
-    elif hack/select-install.sh postgres "$sources" >"$out" 2>"$err"; then
+    elif hack/select-install.sh "$requested_suite" "$sources" >"$out" 2>"$err"; then
         echo "expected closure mode to reject invalid graph $sources" >&2
         exit 1
     fi
@@ -66,9 +67,35 @@ assert_output_graph_error() {
     assert_contains_package "$output" cozystack.objectstorage-controller
 }
 
-@test "kubernetes suites map back to the kubernetes application source" {
-    output=$(hack/select-install.sh "kubernetes-latest")
-    assert_contains_package "$output" cozystack.kubernetes-application
+@test "kubernetes suites keep the cluster and worker pool APIs" {
+    for suite in kubernetes-latest kubernetes-previous; do
+        output=$(hack/select-install.sh "$suite")
+        assert_contains_package "$output" cozystack.kubernetes-application
+        assert_contains_package "$output" cozystack.kubernetes-nodes-application
+    done
+}
+
+@test "mongodb keeps the operator for its PerconaServerMongoDB resources" {
+    output=$(hack/select-install.sh mongodb)
+    assert_contains_package "$output" cozystack.mongodb-application
+    assert_contains_package "$output" cozystack.mongodb-operator
+}
+
+@test "root SeaweedFS keeps COSI for suites without backup steps" {
+    output=$(hack/select-install.sh kuberture)
+    assert_contains_package "$output" cozystack.seaweedfs-application
+    assert_contains_package "$output" cozystack.objectstorage-controller
+
+    # A backup suite would hide a lost SeaweedFS edge by retaining COSI itself.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    yq -i '(.spec.variants[].dependsOn) -= ["cozystack.objectstorage-controller"]' \
+      "$tmp/sources/seaweedfs-application.yaml"
+    for mode in closure disabled; do
+        assert_output_graph_error "$mode" "$tmp/sources" \
+          "runtime baseline dependency closure is missing: cozystack.objectstorage-controller" kuberture
+    done
+    rm -rf "$tmp"
 }
 
 @test "vminstance keeps both application owners" {
@@ -500,7 +527,7 @@ YAML
 # baseline source also reaches them through dependsOn.
 @test "disabled mode: never disables the direct runtime baseline" {
     drop=$(hack/select-install.sh --disabled "postgres")
-    for b in cozystack.cozystack-engine cozystack.cozystack-basics \
+    for b in cozystack.cozystack-engine cozystack.flux-shard-operator cozystack.cozystack-basics \
              cozystack.tenant-application cozystack.etcd-application \
              cozystack.ingress-application cozystack.monitoring-application \
              cozystack.seaweedfs-application cozystack.linstor \
