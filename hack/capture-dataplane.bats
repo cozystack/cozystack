@@ -13,6 +13,8 @@
 #   - lb_announcer_node       -- the speaker node of the most recent announce;
 #   - lb_capture_decision     -- capture when probes failed, skip when one
 #                               succeeded, unknown when none ran or none could.
+#   - lb_probe_blocker        -- the reasons a probe cannot be attempted at all,
+#                               decided from the Service row alone.
 #   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs,
 #                               and only from whole rows.
 #   - pod_first_ready         -- pick the healthy-pod baseline for one node out
@@ -225,10 +227,10 @@ EOF
 
 @test "lb_filter_services keeps only LoadBalancer rows that have an ingress IP" {
   rows="$(printf '%s\n' \
-    'tenant|app|LoadBalancer|192.0.2.50|80|31000|Cluster' \
-    'kube-system|kube-dns|ClusterIP||53||Cluster' \
-    'tenant|pending|LoadBalancer||443|31443|Local' \
-    'tenant|db|LoadBalancer|192.0.2.51|5432|31543|Local')"
+    'tenant|app|LoadBalancer|192.0.2.50|80|TCP|31000|Cluster' \
+    'kube-system|kube-dns|ClusterIP||53|UDP||Cluster' \
+    'tenant|pending|LoadBalancer||443|TCP|31443|Local' \
+    'tenant|db|LoadBalancer|192.0.2.51|5432|TCP|31543|Local')"
 
   out="$(printf '%s\n' "$rows" | lb_filter_services)"
 
@@ -247,10 +249,10 @@ EOF
   # behind still satisfies a filter that only looks at values: what remains of
   # `192.0.2.53` here is `192.0.2.5`, an address the cluster never had, and the
   # row carrying it would be probed and written up as a Service. The jsonpath
-  # emits a fixed seven fields per Service, so a shorter row is a fragment by
+  # emits a fixed eight fields per Service, so a shorter row is a fragment by
   # construction rather than by guess.
   rows="$(printf '%s\n' \
-    'tenant|app|LoadBalancer|192.0.2.50|80|31000|Cluster' \
+    'tenant|app|LoadBalancer|192.0.2.50|80|TCP|31000|Cluster' \
     'tenant|db|LoadBalancer|192.0.2.5')"
 
   out="$(printf '%s\n' "$rows" | lb_filter_services)"
@@ -738,7 +740,7 @@ STUB
 #!/bin/sh
 case "$*" in
   *'get svc'*)
-    echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'
+    echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'
     exit 1 ;;
 esac
 exit 0
@@ -770,7 +772,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     # Complete rows AND a bound's status: the read answered in part.
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 124 ;;
   esac
@@ -1313,7 +1315,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1363,7 +1365,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) echo 'tenant-test|wedged|10.0.0.1|node-a|False|Running||eol'; exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1458,7 +1460,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1499,7 +1501,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo 'Error from server (Forbidden): endpointslices is forbidden' >&2; exit 1 ;;
   esac
 done
@@ -1533,7 +1535,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
   esac
 done
 # The endpointslice reads fall through to here: an empty list, answered.
@@ -1573,7 +1575,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1629,7 +1631,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     # No ready endpoint: the Service is enumerated, its backend is not.
     endpointslices) exit 0 ;;
     # The announcer, so the probe has somewhere to run from and the capture is
@@ -1684,7 +1686,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1717,7 +1719,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1765,7 +1767,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1804,7 +1806,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10|80|TCP|30080|Cluster'; exit 0 ;;
   esac
 done
 # Everything else answers empty: no endpointslices, so no endpoint node, and no
@@ -1834,7 +1836,7 @@ STUB
 for a in "$@"; do
   case $a in
     pods) exit 0 ;;
-    svc) echo 'tenant|web|LoadBalancer|192.0.2.10||30080|Cluster'; exit 0 ;;
+    svc) echo 'tenant|web|LoadBalancer|192.0.2.10||TCP|30080|Cluster'; exit 0 ;;
     endpointslices) echo '10.0.0.1|node-a|tenant-test|wedged|true'; exit 0 ;;
   esac
 done
@@ -1853,6 +1855,58 @@ STUB
     exit 1
   fi
   grep -q 'no port to probe' "$d/out/lb-tenant-web.txt"
+  rm -rf "$d"
+}
+
+@test "lb_probe_blocker names each reason a probe cannot be attempted" {
+  [ -z "$(lb_probe_blocker node-a 443 TCP)" ]
+  # An absent protocol is the shape a cut read leaves; the Service object always
+  # carries one, so it must not become a fourth verdict of its own.
+  [ -z "$(lb_probe_blocker node-a 443 '')" ]
+  case "$(lb_probe_blocker '' 443 TCP)" in *"nowhere to probe from"*) ;; *) false ;; esac
+  case "$(lb_probe_blocker node-a 0 TCP)" in *"no port to probe"*) ;; *) false ;; esac
+  case "$(lb_probe_blocker node-a 500 UDP)" in *"TCP connect"*) ;; *) false ;; esac
+  case "$(lb_probe_blocker node-a 132 SCTP)" in *"TCP connect"*) ;; *) false ;; esac
+}
+
+@test "a UDP LoadBalancer is recorded as unprobed rather than unreachable" {
+  # The probe is a TCP connect, so against a UDP Service it fails for a reason
+  # that says nothing about the datapath. site-router's tunnel LB is 500/4500
+  # UDP and took the heavy capture on every failed run, with the conntrack dump
+  # in the artifact showing the probe as `tcp SYN_SENT dport=500 [UNREPLIED]`.
+  d=$(mktemp -d)
+  mkdir -p "$d/bin"
+  cat >"$d/bin/kubectl" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case $a in
+    pods) exit 0 ;;
+    svc) echo 'tenant|tunnel|LoadBalancer|192.0.2.10|500|UDP|30500|Local'; exit 0 ;;
+    endpointslices) echo '10.0.0.1|node-a|tenant-test|gw|true'; exit 0 ;;
+  esac
+done
+case "$*" in
+  *'app=kube-ovn-cni'*) echo 'cni-abc'; exit 0 ;;
+esac
+exit 0
+STUB
+  chmod +x "$d/bin/kubectl"
+  PATH="$d/bin:$PATH" timeout 60 "$SCRIPT" "$d/out" >"$d/log" 2>&1 || true
+  [ -f "$d/out/lb-tenant-tunnel.txt" ]
+  if grep -qi 'unreachable' "$d/out/lb-tenant-tunnel.txt"; then
+    echo "a UDP LB was written up as unreachable on the strength of a TCP probe:"
+    cat "$d/out/lb-tenant-tunnel.txt"
+    exit 1
+  fi
+  if grep -q -- '-- reachable, skipped' "$d/out/lb-tenant-tunnel.txt"; then
+    echo "a UDP LB was recorded as reachable without a probe behind it:"
+    cat "$d/out/lb-tenant-tunnel.txt"
+    exit 1
+  fi
+  grep -q 'TCP connect' "$d/out/lb-tenant-tunnel.txt"
+  # The protocol belongs in the header too: a reader who sees "unprobed" has to
+  # be able to tell an unprobed UDP service from a broken lookup.
+  grep -q 'port=500/UDP' "$d/out/lb-tenant-tunnel.txt"
   rm -rf "$d"
 }
 

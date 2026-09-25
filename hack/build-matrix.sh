@@ -27,8 +27,9 @@ full_rebuild_pattern='^(packages/library/|api/|cmd/|internal/|pkg/|hack/common-e
 # The build units, parsed from the `build:` recipe (from `build:` to the next
 # line that starts in column 0).
 #
-# packages/core/talos and packages/core/installer are deliberately excluded from
-# the parallel matrix and handled by dedicated jobs instead:
+# packages/core/talos, packages/core/installer and packages/system/vyos-router-image
+# are deliberately excluded from the parallel matrix and handled by dedicated jobs
+# instead:
 #   - talos:     the installer tarball and Talos image are heavy; the dedicated
 #                leg runs when its direct or shared build inputs changed (and
 #                remains unconditional for forks). The container e2e lane does
@@ -37,11 +38,15 @@ full_rebuild_pattern='^(packages/library/|api/|cmd/|internal/|pkg/|hack/common-e
 #                digest-patched packages tree into the OCI artifact the operator
 #                pulls, so it must run in the finalize step AFTER every other
 #                unit's digest edits are merged — never concurrently with them.
+#   - vyos-router-image:
+#                a full VyOS live-build (debootstrap + apt + squashfs) in a
+#                privileged container, far heavier than a normal image build;
+#                built in its own build-vyos leg (see the workflow).
 all_units() {
   sed -n '/^build:/,/^[^[:space:]]/p' "$MAKEFILE" \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxE 'packages/core/(talos|installer)'
+    | grep -vxE 'packages/core/(talos|installer)|packages/system/vyos-router-image'
 }
 
 emit_json() {
