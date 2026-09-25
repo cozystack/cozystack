@@ -3,6 +3,7 @@ import { Section, Spinner } from "@cozystack/ui"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { appInstanceLabel } from "../../lib/labels.ts"
 import { formatAge } from "../../lib/status.ts"
+import { useAppConfig } from "../../lib/config.ts"
 
 interface ServiceSpec {
   type?: string
@@ -29,6 +30,7 @@ export function ServicesTab({
     { labelSelector: appInstanceLabel(ad, instance) },
   )
   const items = data?.items ?? []
+  const { serviceDomain } = useAppConfig()
 
   return (
     <div className="p-6">
@@ -53,11 +55,17 @@ export function ServicesTab({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {items.map((svc) => {
+                const isLoadBalancer = svc.spec?.type === "LoadBalancer"
                 const lb = svc.status?.loadBalancer?.ingress?.[0]
-                const external =
-                  svc.spec?.type === "LoadBalancer"
-                    ? (lb?.ip ?? lb?.hostname ?? "Pending")
-                    : "—"
+                const external = isLoadBalancer
+                  ? (lb?.ip ?? lb?.hostname ?? "Pending")
+                  : "—"
+                // Only when the operator configured a suffix: nothing in the
+                // platform publishes DNS for these names, so no fallback.
+                const hostname =
+                  isLoadBalancer && serviceDomain
+                    ? `${svc.metadata.name}.${serviceDomain}`
+                    : undefined
                 return (
                   <tr key={svc.metadata.name} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-mono text-xs text-slate-800">
@@ -70,7 +78,8 @@ export function ServicesTab({
                       {svc.spec?.clusterIP ?? "—"}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-700">
-                      {external}
+                      <div>{external}</div>
+                      {hostname && <div className="text-slate-500">{hostname}</div>}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {svc.spec?.ports
