@@ -16,7 +16,6 @@ bundles:
     - cozystack.external-dns-application
     - cozystack.external-secrets-operator
     - cozystack.flux-plunger
-    - cozystack.flux-shard-operator
     - cozystack.foundationdb-application
     - cozystack.foundationdb-operator
     - cozystack.goldpinger
