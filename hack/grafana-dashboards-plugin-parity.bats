@@ -12,13 +12,18 @@
 #             GF_INSTALL_PLUGINS pointing at .../plugins/<id>-<ver>.zip)
 #
 # The two lists are hand-maintained in different files and different languages,
-# so they drift silently. When they do, Grafana asks the mirror for an archive
-# name the image never built, the mirror answers 404, and Grafana crashloops on
-# startup — which is exactly how #4391 reached production charts (the image
-# predated the plugins the chart now asks for). E2E cannot be relied on to catch
-# it: a stacked PR overlays main's freshly built image, so a stale committed
-# image or a drifted list passes there and only surfaces on a real install.
-# This holds the two lists together at PR time, offline.
+# so a version or id can drift between them silently. When it does, Grafana asks
+# the mirror for an archive name the image never built, the mirror answers 404,
+# and Grafana crashloops on startup. This holds the two lists together at PR
+# time, offline.
+#
+# Scope, precisely: this guards list parity between the Dockerfile and
+# grafana.yaml. It does NOT prove the pinned grafana-dashboards.tag image
+# actually contains those archives. #4391 was that second, distinct failure: the
+# two lists already agreed and the committed .tag pointed at an image built
+# before the plugins existed. A change that keeps both lists in sync but forgets
+# to re-stamp the .tag reproduces the same 404 and stays green here. Closing that
+# class needs an image-content check against the pin, which is not offline.
 #
 # Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
 # `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
