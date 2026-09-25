@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -37,6 +38,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	mutatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/mutating"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -94,7 +96,27 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 		HelmReleaseMaxHistory:     5,
 	}
 	o.RecommendedOptions.Etcd = nil
+	disableUnsyncableAdmissionPlugins(o.RecommendedOptions.Admission)
 	return o
+}
+
+// disableUnsyncableAdmissionPlugins keeps MutatingAdmissionPolicy out of the
+// chain. It is on by default from k8s.io/apiserver v0.36 and refuses every
+// write until it has synced mutatingadmissionpolicies, which this server has
+// no RBAC to list and which clusters older than 1.36 do not serve. It runs
+// again in Complete because --disable-admission-plugins replaces the list.
+// Naming the plugin in --enable-admission-plugins wins: the operator has
+// granted it what it needs, and both lists at once fail validation.
+func disableUnsyncableAdmissionPlugins(a *genericoptions.AdmissionOptions) {
+	if slices.Contains(a.EnablePlugins, mutatingadmissionpolicy.PluginName) {
+		a.DisablePlugins = slices.DeleteFunc(a.DisablePlugins, func(p string) bool {
+			return p == mutatingadmissionpolicy.PluginName
+		})
+		return
+	}
+	if !slices.Contains(a.DisablePlugins, mutatingadmissionpolicy.PluginName) {
+		a.DisablePlugins = append(a.DisablePlugins, mutatingadmissionpolicy.PluginName)
+	}
 }
 
 // NewCommandStartCozyServer provides a CLI handler for the 'start apps-server' command
@@ -193,6 +215,8 @@ func (o *CozyServerOptions) parseAndValidateHelmReleaseFlags() (helmReleaseFlagV
 
 // Complete fills in the fields that are not set
 func (o *CozyServerOptions) Complete() error {
+	disableUnsyncableAdmissionPlugins(o.RecommendedOptions.Admission)
+
 	hrFlags, err := o.parseAndValidateHelmReleaseFlags()
 	if err != nil {
 		return err
