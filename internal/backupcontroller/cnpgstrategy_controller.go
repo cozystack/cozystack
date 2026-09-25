@@ -864,6 +864,20 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		// reconciling, we patch + purge in peace, and only resume once
 		// the Cluster + PVCs are fully gone so the next render lands
 		// bootstrap.recovery on an empty namespace.
+		sourceCNPGBackup, err := r.cnpgSourceBackup(ctx, backup)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if sourceCNPGBackup == nil {
+			r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "BaseBackupGone",
+				"cnpg.io/Backup %s/%s no longer exists, so its base backup has likely been removed by retention; the barman-cloud plugin picks the base backup from the catalog",
+				backup.Namespace, backup.Spec.DriverMetadata[cnpgBackupNameKey])
+		}
+		backupID := cnpgRestoreBackupID(sourceCNPGBackup, options.RecoveryTime)
+		if backupID == "" {
+			logger.Info("restore does not pin its base backup; the barman-cloud plugin picks one from the catalog",
+				"backup", backup.Name, "recoveryTime", options.RecoveryTime)
+		}
 		hrName := postgresAppPrefix + target.AppName
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {
 			return ctrl.Result{}, err
@@ -877,7 +891,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restored WAL-archive serverName collided with the recovery source",
 				"cluster", clusterName, "serverName", newServerName)
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -1076,13 +1090,13 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	ctx context.Context,
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID, credsRef, caRef, sourceDatabases, sourceUsers)
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -1112,7 +1126,7 @@ func restoredServerName(clusterName string, uid types.UID) string {
 // anything not in spec) must see the source's exact map.
 func buildPostgresAppRestorePatch(
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
@@ -1126,6 +1140,7 @@ func buildPostgresAppRestorePatch(
 	// in-place restore fails barman-cloud-check-wal-archive ("Expected empty archive").
 	patched.Spec.Bootstrap.NewServerName = newServerName
 	patched.Spec.Bootstrap.RecoveryTime = recoveryTime
+	patched.Spec.Bootstrap.BackupID = backupID
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
@@ -1383,6 +1398,65 @@ func (r *RestoreJobReconciler) cnpgBackupWALArchived(ctx context.Context, backup
 		return false, fmt.Sprintf("cnpg.io/Backup %s/%s has phase=completed but has not recorded status.endWal yet", backup.Namespace, backupName), nil
 	}
 	return true, fmt.Sprintf("cnpg.io/Backup %s/%s phase=completed, endWal=%q", backup.Namespace, backupName, cnpgBackup.Status.EndWal), nil
+}
+
+// cnpgSourceBackup returns the cnpg.io/Backup behind a Backup artifact, or
+// nil once it is gone. The driver deletes it only together with its
+// artifact, while plugin-barman-cloud's retention deletes it together with
+// the base backup it describes (deleteBackupsNotInCatalog), so an artifact
+// that outlives its cnpg.io/Backup names a base backup the catalog has lost.
+func (r *RestoreJobReconciler) cnpgSourceBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (*cnpgtypes.Backup, error) {
+	name := backup.Spec.DriverMetadata[cnpgBackupNameKey]
+	if name == "" {
+		return nil, nil
+	}
+	cnpgBackup := &cnpgtypes.Backup{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: name}, cnpgBackup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return cnpgBackup, nil
+}
+
+// cnpgRestoreBackupID decides whether a restore pins the base backup it
+// starts from, and returns the backupID to set in
+// bootstrap.recovery.recoveryTarget, or "" to leave the choice to the
+// barman-cloud plugin.
+//
+// Left to itself the plugin starts from the newest backup in the catalog
+// when no recoveryTime is set, whichever backup the RestoreJob names, and
+// otherwise from the newest one ending at or before recoveryTime, on any
+// timeline (barman-cloud pkg/catalog FindBackupInfo). On a stream holding
+// several timelines either can start from another branch of the history
+// and bring back other data than the backup asked for.
+//
+// A source that is gone (nil) is not pinned: its base backup is no longer
+// in the catalog, and pinning it would fail the recovery after the target
+// has been purged.
+//
+// A backup cannot serve a recoveryTime before it ended: recovery would stop
+// before it is consistent. Such a request keeps the plugin's choice, which
+// can find an older backup. stoppedAt is truncated to the second while the
+// catalog compares barman's end time to the microsecond, so a backup is
+// pinned only once recoveryTime is a full second past stoppedAt.
+func cnpgRestoreBackupID(source *cnpgtypes.Backup, recoveryTime string) string {
+	if source == nil || source.Status.BackupID == "" {
+		return ""
+	}
+	if recoveryTime == "" {
+		return source.Status.BackupID
+	}
+	stoppedAt := source.Status.StoppedAt
+	if stoppedAt == nil || stoppedAt.IsZero() {
+		return ""
+	}
+	target, err := time.Parse(time.RFC3339Nano, recoveryTime)
+	if err != nil || target.Before(stoppedAt.Add(time.Second)) {
+		return ""
+	}
+	return source.Status.BackupID
 }
 
 // cnpgClusterHealthy returns true once the named cnpg.io Cluster reports its

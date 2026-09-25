@@ -349,6 +349,7 @@ backup:
 ## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} [backupID] - Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
 ## @field {string} oldName - Previous cluster name before deletion.
 ## @field {string} [serverName] - Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
 ## @field {string} [newServerName] - WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
@@ -358,6 +359,7 @@ bootstrap:
   enabled: false
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
+  backupID: ""
   oldName: ""
   serverName: ""
   newServerName: ""

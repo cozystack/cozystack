@@ -312,4 +312,7 @@ func (in *BackupStatus) DeepCopyInto(out *BackupStatus) {
 	if in.StartedAt != nil {
 		out.StartedAt = in.StartedAt.DeepCopy()
 	}
+	if in.StoppedAt != nil {
+		out.StoppedAt = in.StoppedAt.DeepCopy()
+	}
 }

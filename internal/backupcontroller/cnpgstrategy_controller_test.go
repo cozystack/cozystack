@@ -496,6 +496,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsSecretRef_NotCleartext(t *testing.
 		"s3://bucket/pg-src/",
 		"https://s3.example",
 		"",
+		"",
 		creds,
 		nil,
 		nil, nil,
@@ -526,7 +527,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 		SecretAccessKeyKey: "SECRET_KEY",
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", creds, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", creds, nil, nil, nil)
 
 	want := postgresapp.S3CredentialsSecret{
 		Name:               "creds",
@@ -544,7 +545,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 // Secret name and helm install would fail.
 func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 	app := newPostgresApp("pg", "tenant")
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil)
 	if got := patched.Spec.Backup.S3CredentialsSecret; got != (postgresapp.S3CredentialsSecret{}) {
 		t.Errorf("spec.backup.s3CredentialsSecret must be zero when credsRef is nil; got %#v", got)
 	}
@@ -702,7 +703,7 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 		"appdb": {Extensions: []string{"hstore"}},
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, sourceDatabases, sourceUsers)
 
 	if _, ok := patched.Spec.Users["stale-target-user"]; ok {
 		t.Errorf("stale target user survived restore; replace semantics regressed")
@@ -739,7 +740,7 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 
 	// Restore with no recoveryTime, no endpointURL, no creds, no CA -
 	// everything stale on the target must be wiped.
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil)
 
 	if got := patched.Spec.Bootstrap.RecoveryTime; got != "" {
 		t.Errorf("stale recoveryTime survived; got %q", got)
@@ -778,7 +779,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsEndpointCA(t *testing.T) {
 		SecretRef: corev1.LocalObjectReference{Name: "pg-cnpg-backup-ca"},
 		Key:       "ca.crt",
 	}
-	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", nil, caRef, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, caRef, nil, nil)
 
 	want := postgresapp.EndpointCA{Name: "pg-cnpg-backup-ca", Key: "ca.crt"}
 	if got := patched.Spec.Backup.EndpointCA; got != want {
@@ -794,7 +795,7 @@ func TestBuildPostgresAppRestorePatch_ArchiveServerNameDiffersFromSource(t *test
 	// An in-place restore is the worst case: source serverName equals the
 	// target cluster's own name.
 	const source = "postgres-pg"
-	patched := buildPostgresAppRestorePatch(app, source, "postgres-pg-restore-deadbeef", "s3://b/", "", "", nil, nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, source, "postgres-pg-restore-deadbeef", "s3://b/", "", "", "", nil, nil, nil, nil)
 
 	if got := patched.Spec.Bootstrap.ServerName; got != source {
 		t.Errorf("recovery serverName must stay the source; got %q want %q", got, source)
@@ -2576,4 +2577,192 @@ func newCNPGStrategyTestClient(t *testing.T, objs ...client.Object) client.Clien
 		WithObjects(objs...).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
 		Build()
+}
+
+// TestCNPGRestoreBackupID pins when a restore names the base backup it starts
+// from. Without a backupID the barman-cloud plugin picks the newest backup of
+// the stream (no recoveryTime) or the newest one ending by recoveryTime, on
+// any timeline, which is not necessarily the backup the RestoreJob names.
+func TestCNPGRestoreBackupID(t *testing.T) {
+	stopped := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
+	cases := []struct {
+		name         string
+		backupID     string
+		stoppedAt    *metav1.Time
+		recoveryTime string
+		want         string
+	}{
+		{"no recoveryTime pins the requested backup", "20260921T062713", &stopped, "", "20260921T062713"},
+		{"no recoveryTime pins it even without its end", "20260921T062713", nil, "", "20260921T062713"},
+		{"recoveryTime a second past the end pins it", "20260921T062713", &stopped, "2026-09-21T06:27:24Z", "20260921T062713"},
+		{"recoveryTime well after the end pins it", "20260921T062713", &stopped, "2026-09-22T10:00:00+02:00", "20260921T062713"},
+		{"recoveryTime within the truncated second leaves the choice to the plugin", "20260921T062713", &stopped, "2026-09-21T06:27:23.5Z", ""},
+		{"recoveryTime before the end leaves the choice to the plugin", "20260921T062713", &stopped, "2026-09-21T05:00:00Z", ""},
+		{"unknown end with a recoveryTime leaves the choice to the plugin", "20260921T062713", nil, "2026-09-22T10:00:00Z", ""},
+		{"unparseable recoveryTime leaves the choice to the plugin", "20260921T062713", &stopped, "2026-09-22 10:00:00", ""},
+		{"unknown backupID pins nothing", "", &stopped, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &cnpgtypes.Backup{Status: cnpgtypes.BackupStatus{BackupID: tc.backupID, StoppedAt: tc.stoppedAt}}
+			if got := cnpgRestoreBackupID(source, tc.recoveryTime); got != tc.want {
+				t.Errorf("cnpgRestoreBackupID(%q, %v, %q) = %q, want %q", tc.backupID, tc.stoppedAt, tc.recoveryTime, got, tc.want)
+			}
+		})
+	}
+	t.Run("a cnpg.io/Backup that is gone pins nothing", func(t *testing.T) {
+		if got := cnpgRestoreBackupID(nil, ""); got != "" {
+			t.Errorf("cnpgRestoreBackupID(nil, \"\") = %q, want none", got)
+		}
+	})
+}
+
+// TestBuildPostgresAppRestorePatch_ReplacesBackupID guards against a
+// re-restore into the same target starting from the backup a previous
+// restore pinned.
+func TestBuildPostgresAppRestorePatch_ReplacesBackupID(t *testing.T) {
+	app := newPostgresApp("pg", "tenant")
+	app.Spec.Bootstrap.BackupID = "20260101T000000"
+
+	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "20260921T062713", nil, nil, nil, nil).Spec.Bootstrap.BackupID; got != "20260921T062713" {
+		t.Errorf("bootstrap.backupID: got %q want %q", got, "20260921T062713")
+	}
+	if got := buildPostgresAppRestorePatch(app, "src", "pg-new", "s3://b/", "", "", "", nil, nil, nil, nil).Spec.Bootstrap.BackupID; got != "" {
+		t.Errorf("bootstrap.backupID from a previous restore must be cleared; got %q", got)
+	}
+}
+
+// TestReconcileCNPGRestore_PinsTheRequestedBackup drives a restore through the
+// purge step and reads back what the target Postgres app is patched with: the
+// barman backupId of the backup the RestoreJob names, read from its
+// cnpg.io/Backup. Retention deletes that cnpg.io/Backup together with the base
+// backup, and pinning an id the catalog has lost fails the recovery after the
+// purge, so a cnpg.io/Backup that is gone leaves the choice to the plugin.
+func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+		backupID    = "20260921T062713"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now())
+	stoppedAt := metav1.NewTime(time.Date(2026, 9, 21, 6, 27, 23, 0, time.UTC))
+
+	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
+		t.Helper()
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+		if err != nil {
+			t.Fatalf("marshal snapshot: %v", err)
+		}
+		driverMD := map[string]string{
+			cnpgServerNameKey:      appName,
+			cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+			cnpgBackupNameKey:      cnpgBkName,
+		}
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+			Spec: backupsv1alpha1.BackupSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+				DriverMetadata: driverMD,
+			},
+			Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+		}
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{
+			Template: strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+			},
+		},
+	}
+	mkCNPGBackup := func(id string) *cnpgtypes.Backup {
+		return &cnpgtypes.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: cnpgBkName},
+			Spec:       cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+			Status: cnpgtypes.BackupStatus{
+				Phase: cnpgBackupPhaseComplete, EndWal: "000000010000000000000003",
+				BackupID: id, StoppedAt: &stoppedAt,
+			},
+		}
+	}
+	mkRestoreJob := func(recoveryTime string) *backupsv1alpha1.RestoreJob {
+		sa := startedAt
+		rj := &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+			Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+			Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &sa, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+		}
+		if recoveryTime != "" {
+			rj.Spec.Options = &runtime.RawExtension{Raw: []byte(`{"recoveryTime":"` + recoveryTime + `"}`)}
+		}
+		return rj
+	}
+	restoredBootstrap := func(t *testing.T, cnpgBackup *cnpgtypes.Backup, recoveryTime string) (postgresapp.Bootstrap, *record.FakeRecorder) {
+		t.Helper()
+		backup := mkBackupArtifact(t)
+		objs := []client.Object{backup, mkRestoreJob(recoveryTime), strategy, newPostgresApp(appName, ns)}
+		if cnpgBackup != nil {
+			objs = append(objs, cnpgBackup)
+		}
+		c := newCNPGStrategyTestClient(t, objs...)
+		recorder := record.NewFakeRecorder(10)
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: recorder}
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+		app := &postgresapp.Postgres{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: appName}, app); err != nil {
+			t.Fatalf("get patched Postgres app: %v", err)
+		}
+		if !app.Spec.Bootstrap.Enabled {
+			t.Fatalf("the reconcile did not reach the restore patch")
+		}
+		return app.Spec.Bootstrap, recorder
+	}
+
+	t.Run("without recoveryTime the requested backup is pinned", func(t *testing.T) {
+		if b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), ""); b.BackupID != backupID {
+			t.Errorf("bootstrap.backupID: got %q want %q", b.BackupID, backupID)
+		}
+	})
+
+	t.Run("a recoveryTime after the backup ended pins it", func(t *testing.T) {
+		b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), "2026-09-22T10:00:00Z")
+		if b.BackupID != backupID || b.RecoveryTime != "2026-09-22T10:00:00Z" {
+			t.Errorf("bootstrap: got backupID %q recoveryTime %q, want %q and the requested instant", b.BackupID, b.RecoveryTime, backupID)
+		}
+	})
+
+	t.Run("a recoveryTime before the backup ended leaves the choice to the plugin", func(t *testing.T) {
+		if b, _ := restoredBootstrap(t, mkCNPGBackup(backupID), "2026-09-21T05:00:00Z"); b.BackupID != "" {
+			t.Errorf("bootstrap.backupID: got %q, want none: the backup cannot serve an instant before its end", b.BackupID)
+		}
+	})
+
+	for _, recoveryTime := range []string{"", "2026-09-22T10:00:00Z"} {
+		t.Run("a cnpg.io/Backup removed by retention leaves the choice to the plugin, recoveryTime="+recoveryTime, func(t *testing.T) {
+			b, recorder := restoredBootstrap(t, nil, recoveryTime)
+			if b.BackupID != "" {
+				t.Errorf("bootstrap.backupID: got %q, want none: the catalog no longer holds that base backup", b.BackupID)
+			}
+			select {
+			case ev := <-recorder.Events:
+				if !strings.Contains(ev, "Warning BaseBackupGone") {
+					t.Errorf("event: got %q, want a BaseBackupGone warning", ev)
+				}
+			default:
+				t.Errorf("no event: a restore that cannot start from the backup it names must say so")
+			}
+		})
+	}
 }
