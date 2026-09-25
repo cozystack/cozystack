@@ -218,6 +218,44 @@
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-core" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
+{{- /*
+  The Proxmox infrastructure provider is opt-in where the KubeVirt one is not,
+  and the asymmetry is not a matter of taste. capmox talks to a hypervisor that
+  lives outside this cluster, and it needs a capmox-config Secret holding a
+  Proxmox API token: capi-operator reads that Secret before it installs
+  anything, so with no Secret the provider is never deployed at all. Enabling
+  this by default would ask every Cozystack install that has no Proxmox to
+  supply hypervisor credentials.
+
+  Enable it by adding cozystack.capi-provider-infra-proxmox to
+  bundles.enabledPackages. The in-cluster IPAM provider comes with it, for the
+  reason written next to the dependsOn edge in
+  sources/capi-provider-infra-proxmox.yaml. IPAM is also independently
+  enableable — it is a generic Cluster API addon, useful to any provider that
+  assigns rather than leases.
+*/ -}}
+{{- $proxmoxName := "cozystack.capi-provider-infra-proxmox" -}}
+{{- $ipamName := "cozystack.capi-provider-ipam-in-cluster" -}}
+{{- $pkgDisabled := default (list) .Values.bundles.disabledPackages -}}
+{{- $pkgEnabled := default (list) .Values.bundles.enabledPackages -}}
+{{- $proxmoxEnabled := and (has $proxmoxName $pkgEnabled) (not (has $proxmoxName $pkgDisabled)) -}}
+{{- /*
+  Naming the pair in conflicting lists is the one case worth stopping for. The
+  cluster catches it on its own: the capmox PackageSource depends on the IPAM
+  Package, so with that Package absent the capmox one goes Ready=False with
+  DependenciesNotReady and no HelmRelease is created. What it does not do is
+  say why. Failing the render names the two list entries that conflict, at the
+  moment someone writes them, instead of leaving a condition to decode later.
+*/ -}}
+{{- if and $proxmoxEnabled (has $ipamName $pkgDisabled) -}}
+{{- fail (printf "%s requires %s, which is listed in bundles.disabledPackages: capmox allocates worker addresses from an InClusterIPPool and has no DHCP mode, so without the IPAM provider no ProxmoxCluster ever becomes Ready" $proxmoxName $ipamName) -}}
+{{- end -}}
+{{- if or $proxmoxEnabled (has $ipamName $pkgEnabled) }}
+{{include "cozystack.platform.package.default" (list $ipamName $) }}
+{{- end }}
+{{- if $proxmoxEnabled }}
+{{include "cozystack.platform.package.default" (list $proxmoxName $) }}
+{{- end }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.computeplane-application" "kubevirt" $) }}
