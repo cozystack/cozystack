@@ -1,0 +1,228 @@
+suite: Alertmanager email input boundaries
+templates:
+  - templates/alerta/alerta.yaml
+release:
+  name: monitoring
+  namespace: tenant-root
+set:
+  _cluster.root-host: example.org
+  _namespace.host: tenant-root.example.org
+  _namespace.ingress: tenant-root
+  alerta.alerts.email.to: oncall@example.org
+  alerta.alerts.email.from: alerts@example.org
+  alerta.alerts.email.smarthost: smtp.example.org:465
+tests:
+  - it: "rejects malformed bracketed smarthost [deadbeef]:25"
+    set:
+      alerta.alerts.email.smarthost: "[deadbeef]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[deadbeef]:25\""
+
+  - it: "rejects malformed bracketed smarthost [...]:25"
+    set:
+      alerta.alerts.email.smarthost: "[...]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[...]:25\""
+
+  - it: "rejects malformed bracketed smarthost [1:2:3:4:5:6:7:8:9]:25"
+    set:
+      alerta.alerts.email.smarthost: "[1:2:3:4:5:6:7:8:9]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[1:2:3:4:5:6:7:8:9]:25\""
+
+  - it: "rejects malformed bracketed smarthost [1::2::3]:25"
+    set:
+      alerta.alerts.email.smarthost: "[1::2::3]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[1::2::3]:25\""
+
+  - it: "rejects malformed bracketed smarthost [1:2:3:4:5:6:7:8::]:25"
+    set:
+      alerta.alerts.email.smarthost: "[1:2:3:4:5:6:7:8::]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[1:2:3:4:5:6:7:8::]:25\""
+
+  - it: "rejects malformed bracketed smarthost [1:2:3:4::5:6:7:8]:25"
+    set:
+      alerta.alerts.email.smarthost: "[1:2:3:4::5:6:7:8]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[1:2:3:4::5:6:7:8]:25\""
+
+  - it: "rejects malformed bracketed smarthost [::ffff:256.0.0.1]:25"
+    set:
+      alerta.alerts.email.smarthost: "[::ffff:256.0.0.1]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[::ffff:256.0.0.1]:25\""
+
+  - it: "rejects malformed bracketed smarthost [192.0.2.256]:25"
+    set:
+      alerta.alerts.email.smarthost: "[192.0.2.256]:25"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got \"[192.0.2.256]:25\""
+
+  - it: "rejects a leading zero in the SMTP port smtp.example.org:0465"
+    set:
+      alerta.alerts.email.smarthost: "smtp.example.org:0465"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost port must not contain leading zeros, got \"smtp.example.org:0465\""
+
+  - it: "rejects a leading zero in the SMTP port [::1]:00025"
+    set:
+      alerta.alerts.email.smarthost: "[::1]:00025"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.smarthost port must not contain leading zeros, got \"[::1]:00025\""
+
+  - it: "accepts IP smarthost [::]:25"
+    set:
+      alerta.alerts.email.smarthost: "[::]:25"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "smarthost: \"\\[::\\]:25\""
+
+  - it: "accepts IP smarthost [2001:db8:0:1:2:3:4:5]:587"
+    set:
+      alerta.alerts.email.smarthost: "[2001:db8:0:1:2:3:4:5]:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "smarthost: \"\\[2001:db8:0:1:2:3:4:5\\]:587\""
+
+  - it: "accepts IP smarthost [::ffff:192.0.2.1]:465"
+    set:
+      alerta.alerts.email.smarthost: "[::ffff:192.0.2.1]:465"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "smarthost: \"\\[::ffff:192\\.0\\.2\\.1\\]:465\""
+
+  - it: "accepts IP smarthost [1:2:3:4:5:6:192.0.2.1]:587"
+    set:
+      alerta.alerts.email.smarthost: "[1:2:3:4:5:6:192.0.2.1]:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "smarthost: \"\\[1:2:3:4:5:6:192\\.0\\.2\\.1\\]:587\""
+
+  - it: "accepts IP smarthost [192.0.2.1]:25"
+    set:
+      alerta.alerts.email.smarthost: "[192.0.2.1]:25"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "smarthost: \"\\[192\\.0\\.2\\.1\\]:25\""
+
+  - it: "accepts repeat interval 100000000ms"
+    set:
+      alerta.alerts.email.repeatInterval: "100000000ms"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "repeat_interval: \"100000000ms\""
+
+  - it: "accepts repeat interval 9223372036854ms"
+    set:
+      alerta.alerts.email.repeatInterval: "9223372036854ms"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "repeat_interval: \"9223372036854ms\""
+
+  - it: "accepts repeat interval 9223372036s854ms"
+    set:
+      alerta.alerts.email.repeatInterval: "9223372036s854ms"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "repeat_interval: \"9223372036s854ms\""
+
+  - it: "accepts repeat interval 000000000000000000000005m"
+    set:
+      alerta.alerts.email.repeatInterval: "000000000000000000000005m"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "repeat_interval: \"000000000000000000000005m\""
+
+  - it: "accepts repeat interval 30s"
+    set:
+      alerta.alerts.email.repeatInterval: "30s"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "repeat_interval: \"30s\""
+
+  - it: "rejects overflowing repeat interval 9223372036855ms"
+    set:
+      alerta.alerts.email.repeatInterval: "9223372036855ms"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got \"9223372036855ms\""
+
+  - it: "rejects overflowing repeat interval 9223372036s855ms"
+    set:
+      alerta.alerts.email.repeatInterval: "9223372036s855ms"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got \"9223372036s855ms\""
+
+  - it: "rejects overflowing repeat interval 9999999999999999999999999999999999y"
+    set:
+      alerta.alerts.email.repeatInterval: "9999999999999999999999999999999999y"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got \"9999999999999999999999999999999999y\""
+
+  - it: "rejects overflowing repeat interval 9223372036854h"
+    set:
+      alerta.alerts.email.repeatInterval: "9223372036854h"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.repeatInterval is out of range for Alertmanager, got \"9223372036854h\""
+
+  - it: "reports a whitespace-only recipient"
+    set:
+      alerta.alerts.email.to: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to has an empty entry, got \"   \""
