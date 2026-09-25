@@ -1,0 +1,155 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Release.Name }}-pre-delete"
+  labels:
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "10"
+    # No hook-succeeded: the script exits 0 on the degraded path too, where the
+    # finalizer outlived the 180s wait and the only record that it did is this
+    # Job's log. Deleting on success takes that record seconds after it is
+    # written, leaving an operator with a namespace that will not finalize and
+    # nothing to read. ttlSecondsAfterFinished reclaims it on a timescale a
+    # human can act within instead.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 3600
+  # 270 + terminationGracePeriodSeconds 10 stays under helm-controller's 300s
+  # default, and leaves 90s over the 180s wait below for scheduling and the
+  # image pull. That headroom is the part to keep in mind when either number is
+  # tuned: a deadline that fires mid-wait kills the Job, and with
+  # backoffLimit: 0 the hook returns non-zero, which is the wedged uninstall the
+  # deliberate exit 0 on the timeout branch exists to avoid. Raise this and the
+  # wait together, or not at all.
+  activeDeadlineSeconds: 270
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: "{{ .Release.Name }}-pre-delete"
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: '{{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}'
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          env:
+            - name: HOME
+              value: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "Deleting KafkaTopics for {{ .Release.Name }} before the topic-operator is removed"
+              # The call carries no request timeout, deliberately. Any non-zero
+              # value for that flag makes kubectl skip its in-cluster
+              # credentials: client-go consults them only while the assembled
+              # config still equals the default, and the flag lands in that
+              # config. kubectl then talks to its built-in default cluster,
+              # localhost:8080, is refused, and this script reads the refusal as
+              # a failed delete and exits 1 -- which returns from Uninstall.Run
+              # before anything is removed and wedges every uninstall of this
+              # release. It leaves no trace in the rendered manifest; only a live
+              # uninstall shows it (#4276). The call is bounded by --timeout
+              # above for the watch and by activeDeadlineSeconds for the whole
+              # Job, the shape packages/apps/tenant/templates/cleanup-job.yaml
+              # uses and documents.
+              if ! out=$(kubectl -n {{ .Release.Namespace }} delete kafkatopics.kafka.strimzi.io \
+                    -l 'strimzi.io/cluster={{ .Release.Name }}' \
+                    --ignore-not-found=true \
+                    --wait=true \
+                    --timeout=180s 2>&1); then
+                printf '%s\n' "${out}"
+                case "${out}" in
+                  *"the server doesn't have a resource type"*|*"no matches for kind"*)
+                    echo "KafkaTopic CRD absent; nothing to delete" ;;
+                  *"timed out waiting for the condition"*)
+                    echo "WARNING: topics still hold the strimzi.io/topic-operator finalizer after 180s." >&2
+                    echo "WARNING: leaving them behind so the uninstall can finish; clear the finalizer by hand." >&2 ;;
+                  *)
+                    echo "ERROR: deleting KafkaTopics failed: ${out}" >&2; exit 1 ;;
+                esac
+              else
+                printf '%s\n' "${out}"
+              fi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "{{ .Release.Name }}-pre-delete"
+  labels:
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "0"
+    # hook-succeeded, unlike the Job above: the Job reclaims itself through
+    # ttlSecondsAfterFinished, this has no such clock and would otherwise
+    # outlive the release. Reaping runs only once the Job is terminal, which
+    # activeDeadlineSeconds guarantees happens first.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ .Release.Name }}-pre-delete"
+  labels:
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "5"
+    # Reaped with the ServiceAccount above, for the reason recorded there.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["kafka.strimzi.io"]
+    resources: ["kafkatopics"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ .Release.Name }}-pre-delete"
+  labels:
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "5"
+    # Reaped with the ServiceAccount above, for the reason recorded there.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "{{ .Release.Name }}-pre-delete"
+subjects:
+  - kind: ServiceAccount
+    name: "{{ .Release.Name }}-pre-delete"
+    namespace: "{{ .Release.Namespace }}"
