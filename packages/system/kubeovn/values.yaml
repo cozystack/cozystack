@@ -14,7 +14,14 @@ kube-ovn:
   cni_conf:
     CNI_CONFIG_PRIORITY: "10"
     MOUNT_LOCAL_BIN_DIR: false
+  # These three directories are hostPaths on every node. The kube-ovn defaults
+  # place them under /etc/origin, which a Talos node cannot create: its root
+  # filesystem is read-only, so the container fails at create time with
+  # "mkdir /etc/origin: read-only file system". Keep them under the writable
+  # /var/lib. OVN_IPSEC_KEY_DIR only takes effect with func.ENABLE_OVN_IPSEC
+  # on, where its absence leaves the node without ESP security associations.
   OPENVSWITCH_DIR: "/var/lib/openvswitch"
+  OVN_IPSEC_KEY_DIR: "/var/lib/ovs_ipsec_keys"
   OVN_DIR: "/var/lib/ovn"
   DISABLE_MODULES_MANAGEMENT: true
   ovn-central:

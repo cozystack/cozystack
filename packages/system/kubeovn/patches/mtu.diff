@@ -1,0 +1,12 @@
+diff --git a/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml b/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml
+--- a/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml
++++ b/packages/system/kubeovn/charts/kube-ovn/templates/ovncni-ds.yaml
+@@ -122,6 +122,9 @@
+           - --set-vxlan-tx-off={{- .Values.func.SET_VXLAN_TX_OFF }}
+           - --non-primary-cni-mode={{- .Values.cni_conf.NON_PRIMARY_CNI }}
++          {{- with .Values.mtu }}
++          - --mtu={{ . }}
++          {{- end }}
+         securityContext:
+           runAsUser: 0
+           privileged: false
