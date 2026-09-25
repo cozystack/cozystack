@@ -189,6 +189,30 @@ v1.8.0-alpha.1 2026-10-02T12:00:00+05:00
 	}
 }
 
+// The label listing goes through GitHub search, which stops at 1000 results
+// whatever --limit says, so a limit above that must not let a listing cut at
+// 1000 pass for a complete one.
+func TestCandidateCeiling(t *testing.T) {
+	cases := []struct {
+		limit, got int
+		truncated  bool
+	}{
+		{limit: 400, got: 399, truncated: false},
+		{limit: 400, got: 400, truncated: true},
+		{limit: 1000, got: 999, truncated: false},
+		{limit: 1000, got: 1000, truncated: true},
+		{limit: 2000, got: 999, truncated: false},
+		{limit: 2000, got: 1000, truncated: true},
+	}
+	for _, tc := range cases {
+		ceiling, remedy := candidateCeiling(tc.limit)
+		err := truncated(tc.got, ceiling, "the listing", remedy)
+		if (err != nil) != tc.truncated {
+			t.Errorf("--limit %d, %d results: truncated = %v, want %v", tc.limit, tc.got, err != nil, tc.truncated)
+		}
+	}
+}
+
 // Bodies are the ones real backport PRs carry, trimmed, so a change to the
 // grammar is judged against how people actually write them.
 func TestBodyOrigins(t *testing.T) {

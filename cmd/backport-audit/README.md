@@ -30,7 +30,7 @@ Requires `git` and an authenticated `gh` on PATH. The audit is read-only: it fet
 | Flag | Meaning |
 |------|---------|
 | `--remote NAME` | Git remote holding the release branches (default `origin`) |
-| `--limit N` | Max merged PRs scanned per label spelling (default 1000) |
+| `--limit N` | Max merged PRs scanned per label spelling (default 1000, which is also the ceiling — see [Exit code](#exit-code)) |
 | `--no-fetch` | Trust the local refs as-is, skipping `git fetch` |
 | `--json` | Machine-readable output |
 | `--no-color` | Disable color (auto-disabled on a non-TTY and under `--json`) |
@@ -47,7 +47,7 @@ go run ./cmd/backport-audit release-1.5 || echo "do not cut yet"
 
 `go run` forwards the exit code but also prints its own `exit status 1` line to stderr. Build the binary first (`go build ./cmd/backport-audit`) where that noise is unwelcome.
 
-Exit `2` covers the cases where an answer cannot be trusted rather than merely being bad news, and a saturated listing is one of them: `gh` truncates at `--limit` in silence, and a truncated list does not make the audit partial, it makes it wrong — the PRs past the cut are reported nowhere and the exit code says clean. Each of the three listings is checked against its cap and fails instead, naming the cap to raise.
+Exit `2` covers the cases where an answer cannot be trusted rather than merely being bad news, and a saturated listing is one of them: `gh` truncates at `--limit` in silence, and a truncated list does not make the audit partial, it makes it wrong — the PRs past the cut are reported nowhere and the exit code says clean. Each of the three listings is checked against its cap and fails instead, naming the cap to raise. The label listings go through GitHub search, which never returns more than 1000 results however far it is paginated, so they are checked against the lower of `--limit` and 1000: a `--limit` above 1000 cannot make a listing cut at 1000 pass for complete.
 
 ## Statuses
 

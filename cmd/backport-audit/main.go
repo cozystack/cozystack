@@ -69,7 +69,7 @@ Arguments:
 
 Options:
       --remote NAME     Git remote holding the release branches (default: origin)
-      --limit N         Max merged PRs to scan per label (default: 1000)
+      --limit N         Max merged PRs to scan per label (default and ceiling: 1000)
       --no-fetch        Trust the local refs as-is, skipping git fetch
       --json            Machine-readable output
       --no-color        Disable color output (auto-disabled on non-TTY)
@@ -128,6 +128,22 @@ const (
 	releaseListCap = 1000
 	branchPRCap    = 1000
 )
+
+// searchResultCap is the most results GitHub search returns for one query,
+// however far it is paginated. gh pr list answers a --label filter through
+// search, so the candidate listing stops here whatever --limit asks for, and
+// gh's --json output does not warn that it did. The other two listings do not
+// go through search and are bounded by their own caps alone.
+const searchResultCap = 1000
+
+// candidateCeiling is the listing length at which a label query with --limit
+// limit has to be taken as truncated, and what to do about it.
+func candidateCeiling(limit int) (int, string) {
+	if limit < searchResultCap {
+		return limit, "re-run with a higher --limit"
+	}
+	return searchResultCap, "GitHub search returns at most 1000 results per query; split the label query in cmd/backport-audit, e.g. by merge date"
+}
 
 // freezeContractLandedAt is when cutting an rc started creating release-X.Y,
 // and with it when backport.yaml stopped resolving its targets from the last
@@ -685,8 +701,8 @@ func candidates(limit int) (map[int]*mainPR, error) {
 				"--json", "number,title,url,mergedAt,mergeCommit,labels,author"); err != nil {
 				return nil, err
 			}
-			if err := truncated(len(prs), limit, "the merged-PR query for label "+spelling,
-				"re-run with a higher --limit"); err != nil {
+			ceiling, remedy := candidateCeiling(limit)
+			if err := truncated(len(prs), ceiling, "the merged-PR query for label "+spelling, remedy); err != nil {
 				return nil, err
 			}
 			for i := range prs {
