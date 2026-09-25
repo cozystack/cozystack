@@ -42,10 +42,16 @@ Arguments and flags may be given in any order.
 `0` when nothing is outstanding, `1` when something is, `2` when the audit could not be completed. That is the point of the tool, so it holds in `--json` mode too:
 
 ```bash
-go run ./cmd/backport-audit release-1.5 || echo "do not cut yet"
+go build ./cmd/backport-audit
+./backport-audit release-1.5
+case $? in
+  0) echo "clean" ;;
+  1) echo "do not cut yet" ;;
+  *) echo "the audit itself failed; no answer yet" ;;
+esac
 ```
 
-`go run` forwards the exit code but also prints its own `exit status 1` line to stderr. Build the binary first (`go build ./cmd/backport-audit`) where that noise is unwelcome.
+Use the built binary (`go build` as above, or `go install ./cmd/backport-audit`) wherever the exit code matters. `go run` does not preserve it: any non-zero exit of the program comes back as `go run`'s own `1`, after an `exit status N` line on stderr, so under `go run` an audit that could not be completed looks exactly like one that found outstanding work. `go run` is fine for reading the report.
 
 Exit `2` covers the cases where an answer cannot be trusted rather than merely being bad news, and a saturated listing is one of them: `gh` truncates at `--limit` in silence, and a truncated list does not make the audit partial, it makes it wrong — the PRs past the cut are reported nowhere and the exit code says clean. Each of the three listings is checked against its cap and fails instead, naming the cap to raise. The label listings go through GitHub search, which never returns more than 1000 results however far it is paginated, so they are checked against the lower of `--limit` and 1000: a `--limit` above 1000 cannot make a listing cut at 1000 pass for complete.
 
