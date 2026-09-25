@@ -160,7 +160,7 @@ step_line() {
   printf '%s\n' "$report" | code_lines | grep -qF "IS_RELEASE === 'true' && CANDIDATE_RESULT !== 'success'"
 
   # `e2e` is the other consumer, and the one that RUNS the suite. Reporting a
-  # red is a lesser guarantee than not running a full-e2e promotion suite
+  # red is a lesser guarantee than not running a e2e/full promotion suite
   # against a candidate that did not verify, so pin both halves: the dependency
   # and the clause on the release arm. Removing them together left every other
   # assertion in this file green.
