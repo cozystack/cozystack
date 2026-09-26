@@ -1,0 +1,375 @@
+diff --git a/cmd/manager/cmd.go b/cmd/manager/cmd.go
+index b4e8f20..ec346cd 100644
+--- a/cmd/manager/cmd.go
++++ b/cmd/manager/cmd.go
+@@ -155,6 +155,16 @@ func NewCmd(scheme *runtime.Scheme) *cobra.Command {
+ 				return err
+ 			}
+ 
++			// Resolved once for the process lifetime, so a discovery error must not be read as "not installed".
++			gatewayAPIAvailable, err := utilities.GatewayAPIResourcesAvailable(ctx, discoveryClient)
++			if err != nil {
++				setupLog.Error(err, "unable to discover Gateway API availability")
++
++				return err
++			}
++
++			setupLog.Info("Gateway API availability resolved", "available", gatewayAPIAvailable)
++
+ 			reconciler := &controllers.TenantControlPlaneReconciler{
+ 				Client:    mgr.GetClient(),
+ 				APIReader: mgr.GetAPIReader(),
+@@ -174,7 +184,7 @@ func NewCmd(scheme *runtime.Scheme) *cobra.Command {
+ 				KamajiMigrateImage:      migrateJobImage,
+ 				KamajiMigrateCABundle:   webhookCABundle,
+ 				MaxConcurrentReconciles: maxConcurrentReconciles,
+-				DiscoveryClient:         discoveryClient,
++				GatewayAPIAvailable:     gatewayAPIAvailable,
+ 			}
+ 
+ 			if err = reconciler.SetupWithManager(ctx, mgr); err != nil {
+@@ -228,7 +238,7 @@ func NewCmd(scheme *runtime.Scheme) *cobra.Command {
+ 			}
+ 
+ 			// Only requires to look for the core api group.
+-			if utilities.AreGatewayResourcesAvailable(ctx, mgr.GetClient(), discoveryClient) {
++			if gatewayAPIAvailable {
+ 				if err = (&kamajiv1alpha1.GatewayListener{}).SetupWithManager(ctx, mgr); err != nil {
+ 					setupLog.Error(err, "unable to create indexer", "indexer", "GatewayListener")
+ 
+@@ -265,8 +275,9 @@ func NewCmd(scheme *runtime.Scheme) *cobra.Command {
+ 						},
+ 					},
+ 					handlers.TenantControlPlaneGatewayValidation{
+-						Client:          mgr.GetClient(),
+-						DiscoveryClient: discoveryClient,
++						Client:              mgr.GetClient(),
++						DiscoveryClient:     discoveryClient,
++						GatewayAPIAvailable: gatewayAPIAvailable,
+ 					},
+ 				},
+ 				routes.TenantControlPlaneTelemetry{}: {
+diff --git a/controllers/resources.go b/controllers/resources.go
+index fa375df..b12f085 100644
+--- a/controllers/resources.go
++++ b/controllers/resources.go
+@@ -11,7 +11,6 @@ import (
+ 	"github.com/go-logr/logr"
+ 	"github.com/google/uuid"
+ 	k8stypes "k8s.io/apimachinery/pkg/types"
+-	"k8s.io/client-go/discovery"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+ 
+@@ -22,7 +21,6 @@ import (
+ 	"github.com/clastix/kamaji/internal/resources"
+ 	ds "github.com/clastix/kamaji/internal/resources/datastore"
+ 	"github.com/clastix/kamaji/internal/resources/konnectivity"
+-	"github.com/clastix/kamaji/internal/utilities"
+ )
+ 
+ type GroupResourceBuilderConfiguration struct {
+@@ -40,7 +38,7 @@ type GroupResourceBuilderConfiguration struct {
+ 	KamajiService                 string
+ 	KamajiMigrateImage            string
+ 	KamajiMigrateCABundle         []byte
+-	DiscoveryClient               discovery.DiscoveryInterface
++	GatewayAPIAvailable           bool
+ }
+ 
+ type GroupDeletableResourceBuilderConfiguration struct {
+@@ -72,8 +70,7 @@ func GetResources(ctx context.Context, config GroupResourceBuilderConfiguration)
+ 	resources = append(resources, getDataStoreMigratingCleanup(config.client, config.KamajiNamespace)...)
+ 	resources = append(resources, getKubernetesIngressResources(config.client)...)
+ 
+-	// Conditionally add Gateway resources
+-	if utilities.AreGatewayResourcesAvailable(ctx, config.client, config.DiscoveryClient) {
++	if config.GatewayAPIAvailable {
+ 		resources = append(resources, getKubernetesGatewayResources(config.client)...)
+ 		resources = append(resources, getKonnectivityGatewayResources(config.client)...)
+ 	}
+diff --git a/controllers/resources_test.go b/controllers/resources_test.go
+new file mode 100644
+index 0000000..623bfdd
+--- /dev/null
++++ b/controllers/resources_test.go
+@@ -0,0 +1,124 @@
++// Copyright 2022 Clastix Labs
++// SPDX-License-Identifier: Apache-2.0
++
++package controllers
++
++import (
++	"context"
++	"testing"
++
++	"k8s.io/apimachinery/pkg/api/meta"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++
++	"github.com/clastix/kamaji/internal/datastore"
++	"github.com/clastix/kamaji/internal/resources"
++	"github.com/clastix/kamaji/internal/resources/konnectivity"
++)
++
++// countingRESTMapper counts RESTMapper lookups, the route by which a controller-runtime client reaches discovery.
++type countingRESTMapper struct {
++	meta.RESTMapper
++
++	calls int
++}
++
++func (m *countingRESTMapper) KindFor(r schema.GroupVersionResource) (schema.GroupVersionKind, error) {
++	m.calls++
++
++	return m.RESTMapper.KindFor(r)
++}
++
++func (m *countingRESTMapper) KindsFor(r schema.GroupVersionResource) ([]schema.GroupVersionKind, error) {
++	m.calls++
++
++	return m.RESTMapper.KindsFor(r)
++}
++
++func (m *countingRESTMapper) ResourceFor(r schema.GroupVersionResource) (schema.GroupVersionResource, error) {
++	m.calls++
++
++	return m.RESTMapper.ResourceFor(r)
++}
++
++func (m *countingRESTMapper) ResourcesFor(r schema.GroupVersionResource) ([]schema.GroupVersionResource, error) {
++	m.calls++
++
++	return m.RESTMapper.ResourcesFor(r)
++}
++
++func (m *countingRESTMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
++	m.calls++
++
++	return m.RESTMapper.RESTMapping(gk, versions...)
++}
++
++func (m *countingRESTMapper) RESTMappings(gk schema.GroupKind, versions ...string) ([]*meta.RESTMapping, error) {
++	m.calls++
++
++	return m.RESTMapper.RESTMappings(gk, versions...)
++}
++
++type stubConnection struct {
++	datastore.Connection
++}
++
++func (stubConnection) GetConnectionString() string { return "" }
++
++func TestGetResources_ConsultsNoRESTMapper(t *testing.T) {
++	t.Parallel()
++
++	for _, available := range []bool{true, false} {
++		mapper := &countingRESTMapper{RESTMapper: meta.NewDefaultRESTMapper(nil)}
++		config := GroupResourceBuilderConfiguration{
++			client:              fake.NewClientBuilder().WithRESTMapper(mapper).Build(),
++			Connection:          stubConnection{},
++			GatewayAPIAvailable: available,
++		}
++
++		GetResources(context.Background(), config)
++
++		if mapper.calls != 0 {
++			t.Fatalf("GatewayAPIAvailable=%t: GetResources runs inside the reconcile timeout and must not consult the RESTMapper, got %d lookups", available, mapper.calls)
++		}
++	}
++}
++
++func TestGetResources_GatewayResourcesFollowAvailability(t *testing.T) {
++	t.Parallel()
++
++	tests := []struct {
++		name      string
++		available bool
++	}{
++		{name: "gateway api available", available: true},
++		{name: "gateway api not available", available: false},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			t.Parallel()
++
++			config := GroupResourceBuilderConfiguration{
++				client:              fake.NewClientBuilder().Build(),
++				Connection:          stubConnection{},
++				GatewayAPIAvailable: tt.available,
++			}
++
++			var kubernetesGateway, konnectivityGateway bool
++
++			for _, resource := range GetResources(context.Background(), config) {
++				switch resource.(type) {
++				case *resources.KubernetesGatewayResource:
++					kubernetesGateway = true
++				case *konnectivity.KubernetesKonnectivityGatewayResource:
++					konnectivityGateway = true
++				}
++			}
++
++			if kubernetesGateway != tt.available || konnectivityGateway != tt.available {
++				t.Fatalf("want gateway resources present=%t, got KubernetesGatewayResource=%t KubernetesKonnectivityGatewayResource=%t", tt.available, kubernetesGateway, konnectivityGateway)
++			}
++		})
++	}
++}
+diff --git a/controllers/tenantcontrolplane_controller.go b/controllers/tenantcontrolplane_controller.go
+index 7eb378e..5aebcf7 100644
+--- a/controllers/tenantcontrolplane_controller.go
++++ b/controllers/tenantcontrolplane_controller.go
+@@ -19,7 +19,6 @@ import (
+ 	networkingv1 "k8s.io/api/networking/v1"
+ 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+ 	k8stypes "k8s.io/apimachinery/pkg/types"
+-	"k8s.io/client-go/discovery"
+ 	"k8s.io/client-go/util/retry"
+ 	"k8s.io/client-go/util/workqueue"
+ 	"k8s.io/utils/clock"
+@@ -45,7 +44,6 @@ import (
+ 	kamajierrors "github.com/clastix/kamaji/internal/errors"
+ 	"github.com/clastix/kamaji/internal/metrics"
+ 	"github.com/clastix/kamaji/internal/resources"
+-	"github.com/clastix/kamaji/internal/utilities"
+ )
+ 
+ // TenantControlPlaneReconciler reconciles a TenantControlPlane object.
+@@ -62,7 +60,9 @@ type TenantControlPlaneReconciler struct {
+ 	KamajiMigrateCABundle   []byte
+ 	MaxConcurrentReconciles int
+ 	ReconcileTimeout        time.Duration
+-	DiscoveryClient         discovery.DiscoveryInterface
++	// GatewayAPIAvailable is resolved once at startup: it selects both the Gateway API watches and the
++	// Gateway resources reconciled, so the two cannot disagree.
++	GatewayAPIAvailable bool
+ 	// CertificateChan is the channel used by the CertificateLifecycleController that is checking for
+ 	// certificates and kubeconfig user certs validity: a generic event for the given TCP will be triggered
+ 	// once the validity threshold for the given certificate is reached.
+@@ -240,7 +240,7 @@ func (r *TenantControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
+ 		KamajiService:                 r.KamajiService,
+ 		KamajiMigrateImage:            r.KamajiMigrateImage,
+ 		KamajiMigrateCABundle:         r.KamajiMigrateCABundle,
+-		DiscoveryClient:               r.DiscoveryClient,
++		GatewayAPIAvailable:           r.GatewayAPIAvailable,
+ 	}
+ 	registeredResources := GetResources(ctx, groupResourceBuilderConfiguration)
+ 
+@@ -384,8 +384,7 @@ func (r *TenantControlPlaneReconciler) SetupWithManager(ctx context.Context, mgr
+ 			return ok && v == "migrate"
+ 		})))
+ 
+-	// Conditionally add Gateway API ownership if available
+-	if utilities.AreGatewayResourcesAvailable(ctx, r.Client, r.DiscoveryClient) {
++	if r.GatewayAPIAvailable {
+ 		controllerBuilder = controllerBuilder.
+ 			Owns(&gatewayv1.HTTPRoute{}).
+ 			Owns(&gatewayv1.GRPCRoute{}).
+diff --git a/internal/webhook/handlers/tcp_gateway_validate.go b/internal/webhook/handlers/tcp_gateway_validate.go
+index 4efcbcd..7c3bf1b 100644
+--- a/internal/webhook/handlers/tcp_gateway_validate.go
++++ b/internal/webhook/handlers/tcp_gateway_validate.go
+@@ -21,6 +21,9 @@ import (
+ type TenantControlPlaneGatewayValidation struct {
+ 	Client          client.Client
+ 	DiscoveryClient discovery.DiscoveryInterface
++	// GatewayAPIAvailable is the value the controller resolved at startup: admitting a Gateway spec
++	// it will not reconcile would fail silently.
++	GatewayAPIAvailable bool
+ }
+ 
+ func (t TenantControlPlaneGatewayValidation) OnCreate(object runtime.Object) AdmissionResponse {
+@@ -64,8 +67,8 @@ func (t TenantControlPlaneGatewayValidation) OnDelete(object runtime.Object) Adm
+ }
+ 
+ func (t TenantControlPlaneGatewayValidation) validateGatewayAPIAvailability(ctx context.Context) error {
+-	if !utilities.AreGatewayResourcesAvailable(ctx, t.Client, t.DiscoveryClient) {
+-		return fmt.Errorf("the Gateway API is not available in this cluster, cannot use gatewayRoute configuration")
++	if !t.GatewayAPIAvailable {
++		return fmt.Errorf("the Gateway API was not available when Kamaji started, cannot use gatewayRoute configuration: install the Gateway API CRDs and restart Kamaji")
+ 	}
+ 
+ 	// Additional check for TLSRoute specifically
+diff --git a/internal/webhook/handlers/tcp_gateway_validate_test.go b/internal/webhook/handlers/tcp_gateway_validate_test.go
+index 2614fbb..c709f51 100644
+--- a/internal/webhook/handlers/tcp_gateway_validate_test.go
++++ b/internal/webhook/handlers/tcp_gateway_validate_test.go
+@@ -104,6 +104,7 @@ var _ = Describe("TCP Gateway Validation Webhook", func() {
+ 
+ 		Context("and Gateway APIs are available", func() {
+ 			BeforeEach(func() {
++				handler.GatewayAPIAvailable = true
+ 				mockDiscovery.serverGroups = &metav1.APIGroupList{
+ 					Groups: []metav1.APIGroup{
+ 						{Name: "gateway.networking.k8s.io"},
+@@ -138,19 +139,20 @@ var _ = Describe("TCP Gateway Validation Webhook", func() {
+ 			It("should deny creation with clear error message", func() {
+ 				_, err := handler.OnCreate(tcp)(ctx, admission.Request{})
+ 				Expect(err).To(HaveOccurred())
+-				Expect(err.Error()).To(ContainSubstring("Gateway API is not available in this cluster"))
++				Expect(err.Error()).To(ContainSubstring("Gateway API was not available when Kamaji started"))
+ 			})
+ 
+ 			It("should deny updates with clear error message", func() {
+ 				oldTCP := tcp.DeepCopy()
+ 				_, err := handler.OnUpdate(tcp, oldTCP)(ctx, admission.Request{})
+ 				Expect(err).To(HaveOccurred())
+-				Expect(err.Error()).To(ContainSubstring("Gateway API is not available in this cluster"))
++				Expect(err.Error()).To(ContainSubstring("Gateway API was not available when Kamaji started"))
+ 			})
+ 		})
+ 
+ 		Context("and Gateway API group exists but TLSRoute is not available", func() {
+ 			BeforeEach(func() {
++				handler.GatewayAPIAvailable = true
+ 				mockDiscovery.serverGroups = &metav1.APIGroupList{
+ 					Groups: []metav1.APIGroup{
+ 						{Name: "gateway.networking.k8s.io"},
+@@ -170,6 +172,35 @@ var _ = Describe("TCP Gateway Validation Webhook", func() {
+ 				Expect(err.Error()).To(ContainSubstring("TLSRoute resource is not available"))
+ 			})
+ 		})
++
++		Context("and Gateway APIs were installed after Kamaji started", func() {
++			BeforeEach(func() {
++				handler.GatewayAPIAvailable = false
++				mockDiscovery.serverGroups = &metav1.APIGroupList{
++					Groups: []metav1.APIGroup{
++						{Name: "gateway.networking.k8s.io"},
++					},
++				}
++				mockDiscovery.serverResources["gateway.networking.k8s.io/v1"] = &metav1.APIResourceList{
++					APIResources: []metav1.APIResource{
++						{Kind: "TLSRoute"},
++					},
++				}
++			})
++
++			It("should deny creation because the controller does not reconcile Gateway resources until restarted", func() {
++				_, err := handler.OnCreate(tcp)(ctx, admission.Request{})
++				Expect(err).To(HaveOccurred())
++				Expect(err.Error()).To(ContainSubstring("restart Kamaji"))
++			})
++
++			It("should deny updates because the controller does not reconcile Gateway resources until restarted", func() {
++				oldTCP := tcp.DeepCopy()
++				_, err := handler.OnUpdate(tcp, oldTCP)(ctx, admission.Request{})
++				Expect(err).To(HaveOccurred())
++				Expect(err.Error()).To(ContainSubstring("restart Kamaji"))
++			})
++		})
+ 	})
+ 
+ 	Context("when Gateway configuration is added in update", func() {
+@@ -186,7 +217,7 @@ var _ = Describe("TCP Gateway Validation Webhook", func() {
+ 
+ 			_, err := handler.OnUpdate(tcp, oldTCP)(ctx, admission.Request{})
+ 			Expect(err).To(HaveOccurred())
+-			Expect(err.Error()).To(ContainSubstring("Gateway API is not available"))
++			Expect(err.Error()).To(ContainSubstring("Gateway API was not available when Kamaji started"))
+ 		})
+ 
+ 		It("should allow removing Gateway configuration", func() {
