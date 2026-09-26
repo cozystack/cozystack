@@ -273,7 +273,7 @@
       ],
       "properties": {
         "destinationPath": {
-          "description": "Destination path for backups (e.g. s3://bucket/path/).",
+          "description": "Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).",
           "type": "string",
           "default": "s3://bucket/path/to/folder/"
         },
@@ -283,36 +283,47 @@
           "default": false
         },
         "endpointURL": {
-          "description": "S3 endpoint URL for uploads.",
+          "description": "S3 endpoint URL for uploads. Ignored when useSystemBucket is true (the strategy supplies the platform endpoint).",
           "type": "string",
           "default": "http://minio-gateway-service:9000"
         },
         "insecureSkipTLSVerify": {
-          "description": "Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs).",
+          "description": "Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).",
           "type": "boolean",
           "default": false
         },
         "retentionPolicy": {
-          "description": "Retention policy (e.g. \"30d\").",
+          "description": "Retention policy (e.g. \"30d\"). Ignored when useSystemBucket is true (no engine-side retention on that flow).",
           "type": "string",
           "default": "30d"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "Access key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).",
           "type": "string",
           "default": ""
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "Secret key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).",
           "type": "string",
           "default": ""
         },
         "schedule": {
-          "description": "Cron schedule for automated backups.",
+          "description": "Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).",
           "type": "string",
           "default": "0 2 * * *"
+        },
+        "useSystemBucket": {
+          "description": "Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `\u003cnamespace\u003e/\u003capplication\u003e`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the chart refuses the combination with `enabled: false` at render time; the schema carries the same rule as a marker for the UI and for the day the apiserver enforces CEL on application schemas (cozystack/cozystack#2657), which it does not yet. A release that has not yet rendered this flag (its cluster still carries the chart's scheduled tasks and PITR) holds a BackupJob until it does, so the tenant's own storage is never injected over.",
+          "type": "boolean",
+          "default": false
         }
-      }
+      },
+      "x-kubernetes-validations": [
+        {
+          "message": "backup.useSystemBucket requires backup.enabled: the percona-backup-mongodb agents only run when backups are enabled",
+          "rule": "!(has(self.useSystemBucket) \u0026\u0026 self.useSystemBucket) || (has(self.enabled) \u0026\u0026 self.enabled)"
+        }
+      ]
     },
     "bootstrap": {
       "description": "Bootstrap configuration.",

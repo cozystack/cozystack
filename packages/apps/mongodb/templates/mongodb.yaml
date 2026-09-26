@@ -1,4 +1,7 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- if and .Values.backup.useSystemBucket (not .Values.backup.enabled) }}
+{{- fail "mongodb: backup.useSystemBucket=true requires backup.enabled=true: the percona-backup-mongodb agents only run when backups are enabled, so this combination renders a cluster that can never service a BackupJob. Set backup.enabled=true (or drop useSystemBucket). See docs/operations/backup-classes.md." }}
+{{- end }}
 {{- /*
 TLS IMPLEMENTATION NOTE — operator-managed cert-manager chain
 =============================================================
@@ -43,6 +46,12 @@ metadata:
     - percona.com/delete-psmdb-pods-in-order
     - percona.com/delete-psmdb-pvc
 spec:
+  {{- /*
+    The backup driver matches this operator's own error text ("unable to get
+    storage") to retry the storage-injection race; bumping crVersion must be
+    paired with re-checking that wording in internal/backupcontroller/
+    psmdbstrategy_controller.go (psmdbErrorIsUnresolvedStorage).
+  */}}
   crVersion: 1.22.0
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
@@ -220,7 +229,17 @@ spec:
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
     image: percona/percona-backup-mongodb:2.11.0
-    {{- if .Values.backup.enabled }}
+    {{- /*
+      useSystemBucket: keep enabled (so the pbm agents run) but omit the static
+      storage/tasks/pitr. The chart cannot know the platform bucket/endpoint at
+      render time, so the cozy-default BackupClass driver SSA-injects
+      spec.backup.storages["s3-storage"] under its own field manager at
+      BackupJob time; Helm never owns that subtree, so a Flux re-render leaves
+      the injected storage intact (same split the postgres useSystemBucket flow
+      uses for spec.plugins). Scheduling is driven by a BackupClass Plan, not
+      the chart's tasks; PITR on the system bucket is not wired here yet.
+    */}}
+    {{- if and .Values.backup.enabled (not .Values.backup.useSystemBucket) }}
     storages:
       s3-storage:
         type: s3
