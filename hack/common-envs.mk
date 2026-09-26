@@ -54,7 +54,12 @@ ifneq ($(strip $(OCI_EXPORT_DIR)),)
 endif
 
 BUILDER ?=
-PLATFORM ?=
+# Published images are amd64+arm64 by default, so a build on either
+# architecture cannot publish an image the other one cannot run. LOAD=1 builds
+# the host architecture only: the classic docker image store cannot load a
+# multi-platform index. Set PLATFORM explicitly to build anything else.
+DEFAULT_PLATFORMS := linux/amd64,linux/arm64
+PLATFORM ?= $(if $(filter 1,$(LOAD)),,$(DEFAULT_PLATFORMS))
 BUILDX_EXTRA_ARGS ?=
 COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 

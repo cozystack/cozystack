@@ -1,7 +1,7 @@
 ARG NODE_VERSION=22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 
 # Stage 1: Install dependencies and build
-FROM node:${NODE_VERSION} AS builder
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION} AS builder
 
 ARG APP_VERSION
 ENV VITE_APP_VERSION=${APP_VERSION}

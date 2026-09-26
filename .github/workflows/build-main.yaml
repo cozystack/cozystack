@@ -106,6 +106,10 @@ jobs:
           # --builder=$(BUILDER)); buildx forwards the OCIR auth from DOCKER_CONFIG
           # to the container builder for cache reads/writes and image pushes.
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
+          # and on this x86-64 runner the arm64 half would be emulated anyway;
+          # CI builds amd64 until arm64 has a native leg of its own.
+          PLATFORM: linux/amd64
           # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
           WRITE_CACHE: '1'
           # Publish a floating :main handle; do not move :latest (releases do).

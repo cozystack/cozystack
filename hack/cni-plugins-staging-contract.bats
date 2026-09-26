@@ -215,10 +215,10 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
 }
 
 @test "the tarball checksum is present, pinned, and precedes extraction" {
-  # These are TEXT checks. PLATFORM defaults to empty in hack/common-envs.mk and
-  # nothing in this repository sets it, so a plain build produces the runner's
-  # arch as a single manifest; a caller passing PLATFORM gets an index, and both
-  # per-arch digests below are then live.
+  # These are TEXT checks. hack/common-envs.mk builds amd64 and arm64 by
+  # default, so both per-arch digests below are live on a build without an
+  # explicit PLATFORM. CI pins linux/amd64, so there only the amd64 one is
+  # exercised.
 
   # One whole line, and it must TERMINATE. The `;` is what closes the family:
   # `|| true`, `&& :`, `| cat` (a pipeline's status is its last element and there

@@ -2,9 +2,10 @@
 ARG VERSION="1.15.26"
 ARG BASE_TAG=v$VERSION
 
-FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 as builder
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 as builder
 
 ARG TAG="v1.15.26"
+ARG TARGETARCH
 RUN git clone --branch ${TAG} --depth 1 https://github.com/kubeovn/kube-ovn /source
 
 WORKDIR /source
@@ -13,7 +14,14 @@ COPY patches /patches
 RUN git apply /patches/*.diff
 COPY tests/kubevirt_migration_test.go.txt /source/pkg/controller/kubevirt_migration_test.go
 RUN go test ./pkg/controller -run '^TestVMIMigrationSchedulingRetry$' -count=1
-RUN make build-go
+# Upstream hardcodes GOARCH in each target: build-go is amd64 only, and
+# build-go-arm is its arm64 twin minus the `go mod tidy` and the test-server
+# binary, which this image never copies.
+RUN case "$TARGETARCH" in \
+      amd64) make build-go ;; \
+      arm64) go mod tidy && make build-go-arm ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH:-<empty>}" >&2; exit 1 ;; \
+    esac
 
 WORKDIR /source/dist/images
 
