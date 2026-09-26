@@ -7,6 +7,7 @@ ARG COZYHR_VERSION=1.6.1
 ARG CRUST_GATHER_VERSION=v0.15.2
 ARG CHAINSAW_VERSION=0.2.15
 ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
+ARG FLUX_VERSION=2.8.6
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -20,7 +21,9 @@ RUN curl -sSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/${TARGETOS}/${T
 RUN curl -sSL "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3" | bash -s - --version "v${HELM_VERSION}"
 RUN curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_${TARGETOS}_${TARGETARCH}" -o /usr/local/bin/yq \
  && chmod +x /usr/local/bin/yq
-RUN curl -sSL "https://fluxcd.io/install.sh" | bash
+RUN curl -fsSL "https://fluxcd.io/install.sh" -o /tmp/flux-install.sh \
+ && FLUX_VERSION="${FLUX_VERSION}" bash /tmp/flux-install.sh \
+ && rm -f /tmp/flux-install.sh
 RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYHR_VERSION}"
 # dl.min.io stopped serving community mc builds (HTTP 410) when MinIO archived
 # the project; the final release is still published on GitHub.

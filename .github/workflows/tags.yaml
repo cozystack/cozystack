@@ -141,12 +141,18 @@ jobs:
           fetch-tags:  true
 
       # Ephemeral runners lack the flux CLI the installer's image-packages step
-      # shells out to; install if absent (idempotent).
+      # shells out to; install the pinned version when it is not already present.
       - name: Set up build toolchain
         if: steps.check_release.outputs.release_exists == 'false'
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
 
       - name: Login to GHCR
         if: steps.check_release.outputs.release_exists == 'false'
