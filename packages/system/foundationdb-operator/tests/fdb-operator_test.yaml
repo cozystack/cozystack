@@ -16,14 +16,16 @@ tests:
           value: foundationdb/fdb-kubernetes-operator:v2.30.0
       # The CVE remediation also rides the init-monitor base images, so
       # pin those too — a silent upstream retag would otherwise slip past.
+      # No 7.1 init container: every fdb-kubernetes-monitor 7.1.x tag is
+      # a single amd64 manifest, so it keeps the operator off arm64.
+      - lengthEqual:
+          path: spec.template.spec.initContainers
+          count: 2
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: foundationdb/fdb-kubernetes-monitor:7.1.67
-      - equal:
-          path: spec.template.spec.initContainers[1].image
           value: foundationdb/fdb-kubernetes-monitor:7.3.63
       - equal:
-          path: spec.template.spec.initContainers[2].image
+          path: spec.template.spec.initContainers[1].image
           value: foundationdb/fdb-kubernetes-monitor:7.4.1
 
   - it: renders the operator image in the cozystack globalMode (the shipping config)
