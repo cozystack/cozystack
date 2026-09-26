@@ -22,9 +22,12 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[0].image
           value: velero/velero-plugin-for-aws:v1.14.1
-      - equal:
+      # The build stamps the in-tree multi-arch image by digest and release
+      # preparation commits it, so the tag half is not stable. Until the first
+      # stamp lands the upstream amd64-only ref is still committed.
+      - matchRegex:
           path: spec.template.spec.initContainers[1].image
-          value: quay.io/kubevirt/kubevirt-velero-plugin:v0.9.0
+          pattern: '^(ghcr\.io/cozystack/cozystack/kubevirt-velero-plugin:[^@]+@sha256:[0-9a-f]{64}|quay\.io/kubevirt/kubevirt-velero-plugin:v0\.9\.0)$'
 
   # Cozystack disables the upgrade-crds Job (upgradeCRDs: false): CRD lifecycle
   # is owned by the generated HelmRelease (upgradeCRDs: CreateReplace on the
