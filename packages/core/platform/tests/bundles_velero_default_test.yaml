@@ -37,9 +37,11 @@ tests:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.velero
+          any: true
         not: true
       - containsDocument:
           apiVersion: cozystack.io/v1alpha1
           kind: Package
           name: cozystack.backupstrategy-controller
+          any: true
         not: true
