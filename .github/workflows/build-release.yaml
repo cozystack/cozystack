@@ -143,7 +143,7 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
-          # amd64 only, as in build-main.yaml.
+          # amd64 here; build-arm64 below builds arm64 natively.
           PLATFORM: linux/amd64
           # READ the shared mode=max cache, never write it. CACHE_REGISTRY/<img>:
           # buildcache is a single ref per image and build-main.yaml is
@@ -158,3 +158,155 @@ jobs:
           IMAGE_TAG: ${{ github.ref_name }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+
+      - name: Capture the stamped tree
+        run: git diff --binary HEAD > "${{ runner.temp }}/stamped-tree.patch"
+      - name: Upload the stamped tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stamped-tree
+          path: ${{ runner.temp }}/stamped-tree.patch
+          if-no-files-found: error
+
+  # The line's images built natively for arm64, as build-main.yaml's
+  # build-arm64 does for main; see there for what it leaves out and why.
+  build-arm64:
+    name: Build ${{ github.ref_name }} arm64 images
+    runs-on: oracle-vm-24cpu-96gb-arm64
+    # Starts from the amd64 job's budget; re-measure after the first runs.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # Same refusal as build-line: a dispatch from any other ref would push
+      # <ref>-arm64 tags beside whatever that ref's own build publishes.
+      - name: Refuse a build for a non-line ref
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ] \
+            || ! printf '%s' "$REF_NAME" | grep -qE '^release-[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing to build '$REF_NAME' ($REF_TYPE); only a release-X.Y line is built here."
+            exit 1
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          command -V docker jq yq
+          yq --version | grep -q mikefarah
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build line arm64 images
+        run: |
+          set -euo pipefail
+          # Checked first, for the reason given in build-main.yaml.
+          units="$(MATRIX_ARCH=arm64 hack/build-matrix.sh | jq -r '.[]')"
+          [ -n "$units" ]
+          for unit in $units; do
+            make -C "$unit" image
+          done
+          make -C packages/core/installer image-operator
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/arm64
+          # Read main's arm64 cache, never write it, for the reason build-line
+          # does not write the amd64 one.
+          WRITE_CACHE: '0'
+          CACHE_TAG: buildcache-arm64
+          IMAGE_TAG: ${{ github.ref_name }}-arm64
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+
+  # Join each image with its arm64 twin and republish
+  # cozystack-packages:<line> and the installer chart from the repinned tree,
+  # as build-main.yaml's stitch does. When the arm64 leg fails, the line stays amd64 only.
+  stitch:
+    name: Publish ${{ github.ref_name }} multi-arch indexes
+    needs: [build-line, build-arm64]
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          make build-deps
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Download the stamped tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: stamped-tree
+          path: ${{ runner.temp }}
+
+      # Republishes the artifact and then the chart, as build-main.yaml does.
+      - name: Stitch indexes and republish the packages artifact and chart
+        run: |
+          set -eu
+          git apply --binary "${RUNNER_TEMP}/stamped-tree.patch"
+          hack/stitch-multiarch.sh packages "$REGISTRY" "$IMAGE_TAG"
+          make -C packages/core/installer image-packages chart
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+          IMAGE_TAG: ${{ github.ref_name }}

@@ -202,6 +202,24 @@ _make_world() {
   rm -rf "$tmp"
 }
 
+@test "the stitch jobs republish the packages artifact and then the chart from the rewritten tree" {
+  # The amd64 build pushed both before the stitch, pinned on amd64-only
+  # digests. The chart's values pin the operator image and the digest
+  # image-packages writes, so it must be packaged after that write.
+  for wf in .github/workflows/build-main.yaml .github/workflows/build-release.yaml; do
+    [ "$(yq -r '.jobs.stitch.needs | length' "$wf")" -eq 2 ]
+    run=$(yq -r '.jobs.stitch.steps[] | select(.run // "" | test("stitch-multiarch")) | .run' "$wf")
+    s=$(echo "$run" | grep -n 'hack/stitch-multiarch.sh' | cut -d: -f1)
+    p=$(echo "$run" | grep -n 'make -C packages/core/installer image-packages chart$' | cut -d: -f1)
+    [ -n "$s" ] && [ -n "$p" ] && [ "$s" -lt "$p" ] || { echo "FAIL: $wf does not republish artifact and chart after the stitch"; false; }
+  done
+  out=$(make -n -C packages/core/installer image-packages chart COZYSTACK_VERSION=0)
+  ref=$(echo "$out" | grep -n 'platformSourceRef = ' | cut -d: -f1)
+  pkg=$(echo "$out" | grep -n 'helm package' | cut -d: -f1)
+  [ -n "$ref" ] && [ -n "$pkg" ] && [ "$ref" -lt "$pkg" ]
+  echo "$out" | grep -q 'helm push'
+}
+
 @test "an arm64 tag that holds no arm64 image is skipped, not stitched" {
   # The talos and testing packages pin amd64, so a stray <tag>-arm64 of theirs
   # holds a second amd64 image. An index of two amd64 manifests would be wrong.

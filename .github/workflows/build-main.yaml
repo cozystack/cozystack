@@ -108,7 +108,7 @@ jobs:
           BUILDER: ${{ steps.buildx.outputs.name }}
           # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
           # and on this x86-64 runner the arm64 half would be emulated anyway;
-          # CI builds amd64 until arm64 has a native leg of its own.
+          # build-arm64 below builds it natively.
           PLATFORM: linux/amd64
           # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
           WRITE_CACHE: '1'
@@ -116,3 +116,157 @@ jobs:
           IMAGE_TAG: main
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+
+      # The stitch job repins this exact stamped tree on multi-arch indexes.
+      # --binary keeps the regenerated components.gz applicable.
+      - name: Capture the stamped tree
+        run: git diff --binary HEAD > "${{ runner.temp }}/stamped-tree.patch"
+      - name: Upload the stamped tree
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stamped-tree
+          path: ${{ runner.temp }}/stamped-tree.patch
+          if-no-files-found: error
+
+  # The same images built natively for arm64 and pushed as <tag>-arm64. It
+  # builds images only, not the packages artifact or the installer chart, which
+  # carry no architecture and would otherwise race the amd64 build for the same
+  # names. talos and testing stay amd64 only, so they are not built here.
+  # Independent of warm-cache: the amd64 publish never waits on this leg.
+  build-arm64:
+    name: Build arm64 images
+    runs-on: oracle-vm-24cpu-96gb-arm64
+    # Starts from the amd64 job's budget; re-measure after the first runs.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          # Fail here rather than an hour into the build if the arm64 pool
+          # lacks a tool the image targets use.
+          command -V docker jq yq
+          yq --version | grep -q mikefarah
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build all arm64 images and write their cache
+        run: |
+          set -euo pipefail
+          # Assigned and checked first: an error in a `for` list is ignored, and
+          # a leg that built nothing would let the stitch pair this run's amd64
+          # images with a previous run's arm64 ones.
+          units="$(MATRIX_ARCH=arm64 hack/build-matrix.sh | jq -r '.[]')"
+          [ -n "$units" ]
+          for unit in $units; do
+            make -C "$unit" image
+          done
+          make -C packages/core/installer image-operator
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/arm64
+          # Its own cache ref, so neither leg's writes evict the other's layers.
+          WRITE_CACHE: '1'
+          CACHE_TAG: buildcache-arm64
+          IMAGE_TAG: main-arm64
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+
+  # Join each amd64 image and its arm64 twin into one index under the amd64
+  # tags, repin the stamped tree on the index digests, and republish
+  # cozystack-packages:main and the installer chart from it. Runs only when
+  # both legs succeeded; when the arm64 leg fails, both stay exactly what
+  # warm-cache published.
+  stitch:
+    name: Publish multi-arch indexes
+    needs: [warm-cache, build-arm64]
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # image-packages records `git describe --tags` as the revision.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          make build-deps
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Download the stamped tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: stamped-tree
+          path: ${{ runner.temp }}
+
+      # Everything that embeds a ref is republished after the rewrite: the
+      # packages artifact, then the installer chart, whose values pin both the
+      # operator image and the artifact digest image-packages just wrote. The
+      # chart overwrites the one warm-cache pushed at the same version.
+      - name: Stitch indexes and republish the packages artifact and chart
+        run: |
+          set -eu
+          git apply --binary "${RUNNER_TEMP}/stamped-tree.patch"
+          hack/stitch-multiarch.sh packages "$REGISTRY" main
+          make -C packages/core/installer image-packages chart
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # skopeo reads the same login docker does.
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+          IMAGE_TAG: main
