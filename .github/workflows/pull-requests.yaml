@@ -321,9 +321,11 @@ jobs:
       # One make process owns all four runner CPUs. Each BATS file is a separate
       # prerequisite, so the long tail no longer runs as one nine-minute shell
       # loop; Helm and Go targets share the same bounded pool. Output stays
-      # grouped by target instead of four test logs interleaving.
+      # grouped by target instead of four test logs interleaving. The envtest
+      # target fetches a kube-apiserver and etcd through setup-envtest, for the
+      # controller suites a fake client cannot stand in for.
       - name: Run unit and controller tests
-        run: make unit-tests test-controllers -j4 --output-sync=target
+        run: make unit-tests test-controllers test-controllers-envtest -j4 --output-sync=target
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
