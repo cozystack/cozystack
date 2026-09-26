@@ -25,7 +25,14 @@
 #     must turn this file red;
 #   * any OTHER kubectl failure exits non-zero, so a Forbidden or an apiserver
 #     error cannot be mistaken for the timeout case and silently proceed;
-#   * the selector names this release only.
+#   * the selector names this release only;
+#   * the release's KafkaNodePools are deleted after the topics, including on
+#     the timeout branch. The migration hook creates them outside the release
+#     manifest, and each owns the StrimziPodSet running its brokers, so a pool
+#     the hook skips keeps its brokers running after the release is gone;
+#   * a KafkaNodePool CRD that is absent exits 0, and any other failure of
+#     that delete exits non-zero, so the uninstall is retried rather than
+#     finishing with the pools still in place.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
 # paths resolve against that cwd. That runner implements `@test` and little
@@ -59,11 +66,20 @@ render_hook() {
 # CRD-absent strings are the two RESTMapper wordings.
 # DELETE_RC deliberately has NO default: an unset value would make every
 # failure-path test exit 0 and assert nothing. Each test sets it.
+# The KafkaNodePool delete answers from POOL_OUT / POOL_RC instead, so a test
+# can fail one call without failing the other. POOL_RC defaults to a clean
+# delete, because the topic-path tests above are about the topic call; every
+# pool-path test sets it explicitly.
 # No line below is a bare column-0 `}`, so cozytest.sh's parser leaves it alone.
 write_fake_kubectl() {
   cat > "$1/kubectl" <<'KEOF'
 #!/bin/sh
 echo "$*" >> "$KLOG"
+case "$*" in
+  *kafkanodepools*)
+    printf '%s\n' "${POOL_OUT:-kafkanodepool.kafka.strimzi.io \"b-0\" deleted}"
+    exit "${POOL_RC:-0}" ;;
+esac
 if [ -z "${DELETE_RC:-}" ]; then
   echo "fake kubectl: DELETE_RC unset; the test would assert nothing" >&2
   exit 64
@@ -200,6 +216,130 @@ KEOF
     false
   fi
   if ! grep -q '^ERROR: deleting KafkaTopics failed' "$tmp/err"; then
+    echo "FAIL: the failure was not reported as an error"
+    cat "$tmp/err"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "kafka pre-delete hook deletes this release's node pools after its topics" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
+
+  export KLOG="$tmp/calls"
+  export DELETE_RC=0
+  export DELETE_OUT='kafkatopic.kafka.strimzi.io "t" deleted'
+  export POOL_RC=0
+  export POOL_OUT='kafkanodepool.kafka.strimzi.io "b-0" deleted'
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc on a clean delete"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  # Anchored like the topic selector above: the trailing space keeps the
+  # sibling release kafka-test2 out.
+  pool_line=$(grep -n -- "delete kafkanodepools.kafka.strimzi.io -l strimzi.io/cluster=kafka-test " "$tmp/calls" | cut -d: -f1)
+  topic_line=$(grep -n -- "delete kafkatopics.kafka.strimzi.io -l strimzi.io/cluster=kafka-test " "$tmp/calls" | cut -d: -f1)
+  if [ -z "$pool_line" ] || [ -z "$topic_line" ]; then
+    echo "FAIL: expected one release-scoped delete of each kind"
+    cat "$tmp/calls"
+    false
+  fi
+  # The topic operator clears topic finalizers through the brokers, so the
+  # brokers have to outlive the topic delete.
+  if [ "$pool_line" -le "$topic_line" ]; then
+    echo "FAIL: the node pools were deleted before the topics"
+    cat "$tmp/calls"
+    false
+  fi
+  if ! grep -q -- "kafkanodepools.* --wait=false" "$tmp/calls"; then
+    echo "FAIL: the node pool delete waits, which spends the Job's deadline"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "kafka pre-delete hook still deletes the node pools after a topic wait timeout" {
+  # The timeout branch lets the uninstall finish. Skipping the pools there
+  # would leave the brokers running with nothing left to remove them.
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
+
+  export KLOG="$tmp/calls"
+  export DELETE_RC=1
+  export DELETE_OUT='error: timed out waiting for the condition on kafkatopics/kafka-test-orders'
+  export POOL_RC=0
+  export POOL_OUT='kafkanodepool.kafka.strimzi.io "b-0" deleted'
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc on a wait timeout"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q -- "delete kafkanodepools.kafka.strimzi.io -l strimzi.io/cluster=kafka-test " "$tmp/calls"; then
+    echo "FAIL: the node pools were skipped after the topic wait timed out"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "kafka pre-delete hook exits 0 when the KafkaNodePool CRD is absent" {
+  for msg in 'error: the server doesn'"'"'t have a resource type "kafkanodepools"' \
+             'error: no matches for kind "KafkaNodePool" in version "kafka.strimzi.io/v1beta2"'; do
+    tmp=$(mktemp -d)
+    write_fake_kubectl "$tmp"
+    render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
+
+    export KLOG="$tmp/calls"
+    export DELETE_RC=0
+    export DELETE_OUT='kafkatopic.kafka.strimzi.io "t" deleted'
+    export POOL_RC=1
+    export POOL_OUT="$msg"
+    rc=0
+    PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "FAIL: hook exited $rc on an absent KafkaNodePool CRD, wedging the uninstall"
+      cat "$tmp/out" "$tmp/err"
+      false
+    fi
+    if ! grep -q 'KafkaNodePool CRD absent' "$tmp/out"; then
+      echo "FAIL: the absent CRD was not reported as such"
+      cat "$tmp/out"
+      false
+    fi
+    rm -rf "$tmp"
+  done
+}
+
+@test "kafka pre-delete hook exits non-zero when the node pool delete fails" {
+  # Once the uninstall finishes, Helm never runs this hook for the release
+  # again, so a pool left here is left for good. A non-zero exit stops the
+  # uninstall before it deletes anything, and helm-controller retries it.
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
+
+  export KLOG="$tmp/calls"
+  export DELETE_RC=0
+  export DELETE_OUT='kafkatopic.kafka.strimzi.io "t" deleted'
+  export POOL_RC=1
+  export POOL_OUT='Error from server (Forbidden): kafkanodepools.kafka.strimzi.io is forbidden'
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 on a Forbidden, so the uninstall would finish and leave the pools"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^ERROR: deleting KafkaNodePools failed' "$tmp/err"; then
     echo "FAIL: the failure was not reported as an error"
     cat "$tmp/err"
     false

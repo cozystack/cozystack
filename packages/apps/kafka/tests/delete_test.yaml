@@ -127,6 +127,36 @@ tests:
           value: kafka-test-pre-delete
         documentIndex: 3
 
+  - it: deletes release-scoped KafkaNodePools after the KafkaTopics
+    asserts:
+      # The migration hook creates the pools with kubectl apply, so they are
+      # not in the release manifest and helm uninstall never removes them. Each
+      # pool owns its StrimziPodSet, so a pool left behind keeps its brokers
+      # running after the release is gone.
+      #
+      # One pattern pins three things at once: the pools go after the topics
+      # (the topic operator needs live brokers to clear its finalizers), the
+      # selector names this release only (both quotes are part of it, as in the
+      # topic pin above), and the call does not wait, so the deadline
+      # arithmetic on the Job is unchanged.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "(?s)delete kafkatopics\\.kafka\\.strimzi\\.io .*delete kafkanodepools\\.kafka\\.strimzi\\.io \\\\\\s+-l 'strimzi\\.io/cluster=kafka-test' \\\\\\s+--ignore-not-found=true \\\\\\s+--wait=false"
+        documentIndex: 0
+      # list and delete are what a label-selected delete issues; nothing here
+      # waits on or reads a single pool.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kafka.strimzi.io"]
+            resources: ["kafkanodepools"]
+            verbs: ["list", "delete"]
+        documentIndex: 2
+      - lengthEqual:
+          path: rules
+          count: 2
+        documentIndex: 2
+
   - it: prefixes the hook image with the cluster images registry when set
     set:
       _cluster:

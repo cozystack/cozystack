@@ -96,6 +96,36 @@ spec:
               else
                 printf '%s\n' "${out}"
               fi
+
+              # The migration hook creates the node pools with kubectl apply, so
+              # they are not in the release manifest and the uninstall does not
+              # remove them, and each pool owns the StrimziPodSet that runs its
+              # brokers. After the topics, because the topic operator clears
+              # their finalizers through those brokers; also after the timeout
+              # branch above, since this is the last chance to remove them.
+              # --wait=false: the pods go by garbage collection, and waiting
+              # would spend the headroom the deadline above leaves. No request
+              # timeout either, for the reason given on the topic call.
+              echo "Deleting KafkaNodePools for {{ .Release.Name }}"
+              if ! out=$(kubectl -n {{ .Release.Namespace }} delete kafkanodepools.kafka.strimzi.io \
+                    -l 'strimzi.io/cluster={{ .Release.Name }}' \
+                    --ignore-not-found=true \
+                    --wait=false 2>&1); then
+                printf '%s\n' "${out}"
+                case "${out}" in
+                  *"the server doesn't have a resource type"*|*"no matches for kind"*)
+                    echo "KafkaNodePool CRD absent; nothing to delete" ;;
+                  *)
+                    # Non-zero, unlike the topic timeout: once the uninstall
+                    # completes, Helm never runs this hook for the release
+                    # again, so a pool left now keeps its brokers for good.
+                    # Failing stops the uninstall before it deletes anything,
+                    # and helm-controller retries it.
+                    echo "ERROR: deleting KafkaNodePools failed: ${out}" >&2; exit 1 ;;
+                esac
+              else
+                printf '%s\n' "${out}"
+              fi
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -133,6 +163,9 @@ rules:
   - apiGroups: ["kafka.strimzi.io"]
     resources: ["kafkatopics"]
     verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["kafka.strimzi.io"]
+    resources: ["kafkanodepools"]
+    verbs: ["list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
