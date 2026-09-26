@@ -131,6 +131,52 @@
       "description": "Enable the OpenBAO web UI.",
       "type": "boolean",
       "default": true
+    },
+    "seal": {
+      "description": "Seal configuration. Defaults to Shamir key shares; set `type: static` for auto-unseal.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "keyId",
+        "secretName",
+        "type"
+      ],
+      "properties": {
+        "allowMigration": {
+          "description": "Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.",
+          "type": "boolean",
+          "default": false
+        },
+        "keyId": {
+          "description": "Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.",
+          "type": "string",
+          "default": ""
+        },
+        "previousKeyId": {
+          "description": "Identifier of the previous key. Required when `previousSecretName` is set.",
+          "type": "string",
+          "default": ""
+        },
+        "previousSecretName": {
+          "description": "Secret holding the previous key during an n-1 key rotation. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`; see the README.",
+          "type": "string",
+          "default": ""
+        },
+        "secretName": {
+          "description": "Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.",
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "description": "Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.",
+          "type": "string",
+          "default": "shamir",
+          "enum": [
+            "shamir",
+            "static"
+          ]
+        }
+      }
     }
   }
 }
