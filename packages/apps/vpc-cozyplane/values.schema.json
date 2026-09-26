@@ -1,0 +1,73 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "cidrs": {
+      "description": "Address ranges (IPv4 and/or IPv6) of the VPC. May overlap with other VPCs: isolation is by overlay, not address space.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "mtu": {
+      "description": "MTU advertised to workloads in this VPC. 0 selects the platform default.",
+      "type": "integer",
+      "default": 0
+    },
+    "peers": {
+      "description": "VPC peering connections (bidirectional declaration required)",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "tenantNamespace",
+          "vpcName"
+        ],
+        "properties": {
+          "tenantNamespace": {
+            "description": "Namespace of the remote tenant",
+            "type": "string"
+          },
+          "vpcName": {
+            "description": "Name of the remote VPC (without \"virtualprivatecloud-\" prefix)",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gateway": {
+      "description": "North-south boundary of the VPC",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "ingressLoadBalancer",
+        "nat"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Open a path to the outside. Without a gateway the VPC is a closed island: no way out, no way in.",
+          "type": "boolean",
+          "default": false
+        },
+        "ingressLoadBalancer": {
+          "description": "Admit Service type=LoadBalancer traffic onto this VPC's workloads.",
+          "type": "boolean",
+          "default": false
+        },
+        "loadBalancerClass": {
+          "description": "The LoadBalancer implementation that allocates the egress identity. Empty selects the cluster default.",
+          "type": "string",
+          "default": ""
+        },
+        "nat": {
+          "description": "Many-to-one egress for workloads with no external address of their own.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  }
+}

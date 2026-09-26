@@ -1,1 +1,3 @@
-{}
+# Which cozyrds/ ApplicationDefinition this release installs. The platform
+# bundle selects it per networking variant through the PackageSource.
+variant: kubevirt

@@ -202,12 +202,13 @@
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.computeplane-application" "kubevirt" $) }}
-{{- /* virtualprivatecloud is Cozystack's kube-ovn/multus tenant VPC app; it
-       hard-depends on cozystack.multus and cannot function without kube-ovn. The
-       cozyplane variant runs neither and provides VPC tenancy through its own
-       sdn.cozystack.io model, so skip it here (otherwise its Package hangs on a
-       multus dependency that the variant never installs). */ -}}
-{{- if ne (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
+{{- /* virtualprivatecloud follows the networking variant: the kubevirt flavor
+       is kube-ovn/multus-backed and would hang on a multus dependency the
+       cozyplane variant never installs; the cozyplane flavor serves the same
+       catalog kind from sdn.cozystack.io. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
+{{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "cozyplane" $) }}
+{{- else }}
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
