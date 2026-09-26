@@ -43,11 +43,13 @@ spec:
     an unexpected status can never be silently read as Ready. A paused or
     failed log store is not ingesting, so the release must not report Ready;
     cozystack never sets spec.paused on these VLClusters, so `paused` is not
-    reachable in normal operation. Before the operator writes any updateStatus
-    (fresh apply) all three predicates are false, so the poller holds the
-    release not-ready until it becomes operational or hits `timeout:`, the
-    real backstop. Matching by kind covers every logsStorages entry. (CEL
-    evaluation is exercised live, not in helm-unittest, which cannot run it.)
+    reachable in normal operation. If status exists but has no updateStatus,
+    all three predicates evaluate to false. If the top-level status key is
+    absent, `has(status.updateStatus)` can instead fail during evaluation and
+    the status reader reports Unknown. The poller continues waiting in both
+    cases until the resource becomes operational or hits `timeout:`, the real
+    backstop. Matching by kind covers every logsStorages entry. (CEL evaluation
+    is exercised live, not in helm-unittest, which cannot run it.)
 
     The gate keys on a VLCluster existing, so an empty logsStorages would leave
     nothing to match. That configuration is rejected at render time by the
