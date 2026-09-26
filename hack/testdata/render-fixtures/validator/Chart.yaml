@@ -1,0 +1,4 @@
+apiVersion: v2
+name: render-fixture-validator
+version: 0.0.0
+type: application
