@@ -282,10 +282,11 @@ spec:
                 CA_DATA=$(kubectl --kubeconfig "$KUBECONFIG_TENANT" config view --raw \
                   --output=jsonpath='{.clusters[0].cluster.certificate-authority-data}')
                 if [ -z "$CA_DATA" ]; then
-                  echo "WARNING: tenant admin kubeconfig has no certificate-authority-data; leaving OIDC kubeconfig Secret as the install-time placeholder" >&2
-                else
-                  KUBECONFIG_FILE=$(mktemp)
-                  cat > "$KUBECONFIG_FILE" <<EOF
+                  echo "tenant admin kubeconfig has no certificate-authority-data; refusing to leave the OIDC kubeconfig Secret as the install-time placeholder" >&2
+                  exit 1
+                fi
+                KUBECONFIG_FILE=$(mktemp)
+                cat > "$KUBECONFIG_FILE" <<EOF
               apiVersion: v1
               kind: Config
               current-context: $RELEASE
@@ -316,14 +317,13 @@ spec:
                   cluster: $RELEASE
                   user: $RELEASE-oidc
               EOF
-                  KUBECONFIG_B64=$(base64 < "$KUBECONFIG_FILE" | tr -d '\n')
-                  PATCH=$(printf '{"data":{"kubeconfig":"%s"},"stringData":null}' "$KUBECONFIG_B64")
-                  kubectl --namespace "$RELEASE_NAMESPACE" patch secret \
-                    "$RELEASE-oidc-kubeconfig" \
-                    --type=merge \
-                    --patch "$PATCH"
-                  rm -f "$KUBECONFIG_FILE"
-                fi
+                KUBECONFIG_B64=$(base64 < "$KUBECONFIG_FILE" | tr -d '\n')
+                PATCH=$(printf '{"data":{"kubeconfig":"%s"},"stringData":null}' "$KUBECONFIG_B64")
+                kubectl --namespace "$RELEASE_NAMESPACE" patch secret \
+                  "$RELEASE-oidc-kubeconfig" \
+                  --type=merge \
+                  --patch "$PATCH"
+                rm -f "$KUBECONFIG_FILE"
               fi
 
               echo "Done."
