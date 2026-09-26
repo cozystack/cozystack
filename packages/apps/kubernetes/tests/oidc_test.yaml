@@ -253,7 +253,7 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "url: https://keycloak.example.org/realms/cozy"
-      # Verified end-to-end on dev3: cozy realm's preferred_username is the
+      # Verified end-to-end: cozy realm's preferred_username is the
       # Keycloak *username* (not the email), so a CRB subject sourced from
       # users[].email would silently mis-authenticate. Lock the claim name.
       - matchRegex:
@@ -281,7 +281,7 @@ tests:
       # The groups range MUST be wrapped in dyn(): claims.groups is statically
       # `any`, and the apiserver rejects a comprehension over `any` at startup
       # (CrashLoop). Pinning dyn() here makes a regression fail the unit suite
-      # instead of only surfacing on a live apiserver. Verified on dev3 v1.32.
+      # instead of only surfacing on a live apiserver. Verified on Kubernetes v1.32.
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: 'expression: .+has\(claims\.groups\).+dyn\(claims\.groups\)\.exists\(g, g in .+tenant-foo-view.+tenant-foo-use.+tenant-foo-admin.+tenant-foo-super-admin'

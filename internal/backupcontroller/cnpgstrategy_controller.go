@@ -136,8 +136,8 @@ const (
 	cnpgWALArchiveDeadline = 3 * time.Minute
 
 	// Both constants below couple to CNPG/PostgreSQL internals. Verified
-	// against CNPG 1.28.1 + barman-cloud plugin (postgresql:18.1) on the dev7
-	// test cluster. The negative e2e in examples/backups/postgres/run-all.sh
+	// against CNPG 1.28.1 + barman-cloud plugin (postgresql:18.1) on a test
+	// cluster. The negative e2e in examples/backups/postgres/run-all.sh
 	// (step 46: a recoveryTime past the archive must fail with reason
 	// RecoveryTargetUnreachable) is what catches a drift in either string on
 	// a future CNPG/PostgreSQL bump - if it regresses, this fail-fast silently

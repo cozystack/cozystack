@@ -37,12 +37,12 @@ User identity claim: `email`, not `preferred_username`.
 
 The design doc example used `claim: preferred_username`, but in the
 cozystack `cozy` realm `preferred_username` is the Keycloak *username*
-(`kvaps`, `i.okhotnikov`), NOT the email — and the operator-facing
+(`alice`, `j.doe`), NOT the email — and the operator-facing
 `users[].email` field asks for the email address. Matching the `User:`
 subject in the ClusterRoleBinding to `preferred_username` would
 silently misidentify every user whose Keycloak username differs from
-their email — verified on dev3 where token auth succeeded but the CRB
-match failed with 403.
+their email — verified on a test cluster where token auth succeeded
+but the CRB match failed with 403.
 
 Switching the claim to `email` aligns the apiserver-visible identity
 with the operator's declared `users[].email` value. Requires the

@@ -175,7 +175,7 @@ quorum:
 ## CNPG webhook rejects under quorum, and — worse — under server-side apply the phase-2
 ## omit prunes the field whenever KEDA has not yet written /scale (e.g. a cluster idle at
 ## its floor), collapsing it to 1 and decommissioning every replica PVC (see community
-## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on dev9).
+## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on a test cluster).
 ## Seeding max(replicas, effectiveMin) — rather than effectiveMin alone — keeps the active
 ## branch equal to the disabled/dryRun/transition branch (which renders `instances:
 ## replicas`) whenever `replicas` sits at or above the floor, so enabling, dry-running, or

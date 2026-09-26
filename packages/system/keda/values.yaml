@@ -99,7 +99,7 @@ keda:
   # at the default QPS those polls queue in the client rate limiter ahead of the
   # leader-election lease renewal, which then misses its deadline and the manager
   # exits with "leader election lost" (observed crash-looping the single-replica
-  # operator on dev9). A higher ceiling keeps the renewal call from starving.
+  # operator on a test cluster). A higher ceiling keeps the renewal call from starving.
   extraArgs:
     keda:
       kube-api-qps: 50
