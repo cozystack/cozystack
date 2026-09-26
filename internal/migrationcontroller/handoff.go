@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -94,6 +95,12 @@ func (r *VMImportTaskReconciler) fulfill(
 			return nil, err
 		}
 		if reclaimed != nil {
+			// A controller predating settleReclaimPolicy deleted the VM before
+			// settling anything, so these volumes may still be on Retain.
+			settled, err := r.settleReclaimPolicies(ctx, task, req.ID, reclaimed.Disks, nil)
+			if err != nil || !settled {
+				return nil, err
+			}
 			logger.Info("reclaimed outputs recorded by no status", "vm", req.ID, "instance", reclaimed.VMInstance)
 			return reclaimed, nil
 		}
@@ -124,9 +131,15 @@ func (r *VMImportTaskReconciler) fulfill(
 			return nil, err
 		}
 	}
+	settled, err := r.settleReclaimPolicies(ctx, task, req.ID, diskNames, claims)
+	if err != nil || !settled {
+		return nil, err
+	}
 
-	// The VMInstance is created only once every disk is in place, so a tenant
-	// never sees an instance referencing a disk that does not exist yet.
+	// The VMInstance is created only once every disk is in place, its volume
+	// policy included, so a tenant never sees an instance referencing a disk
+	// that does not exist yet, and an import failing past this point leaves
+	// disks that clean up after themselves like any other.
 	if err := r.createVMInstance(ctx, task, req, name, vm, diskNames); err != nil {
 		return nil, err
 	}
@@ -387,10 +400,11 @@ func (r *VMImportTaskReconciler) adoptVolume(
 		return err
 	}
 
-	// Retain is what protects the data during the swap, and it stays on
-	// permanently: CDI takes a controller owner reference on an adopted claim,
-	// so deleting the DataVolume garbage-collects the claim, and only the
-	// reclaim policy keeps the disk. That policy is part of the contract.
+	// Retain carries the data through the swap: from the moment the
+	// transferred claim is deleted until claimRef names its replacement, the
+	// volume is Released, and under Delete the provisioner reclaims it on the
+	// spot. It is held for that window only: settleReclaimPolicy hands back
+	// the class's own policy once the volume answers to its VMDisk alone.
 	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
 		if err := r.Update(ctx, pv); err != nil {
@@ -468,6 +482,157 @@ func (r *VMImportTaskReconciler) adoptVolume(
 		return err
 	}
 	return r.ensureVMDisk(ctx, task, vmID, diskName, bound)
+}
+
+// settleReclaimPolicies settles every disk of one source VM, and reports
+// whether all of them are done. sourceClaims, when known, is index-aligned
+// with diskNames.
+func (r *VMImportTaskReconciler) settleReclaimPolicies(
+	ctx context.Context,
+	task *migrationv1alpha1.VMImportTask,
+	vmID string,
+	diskNames []string,
+	sourceClaims []string,
+) (bool, error) {
+	all := true
+	for i, diskName := range diskNames {
+		source := ""
+		if i < len(sourceClaims) {
+			source = sourceClaims[i]
+		}
+		settled, err := r.settleReclaimPolicy(ctx, task, vmID, diskName, source)
+		if err != nil {
+			return false, err
+		}
+		all = all && settled
+	}
+	return all, nil
+}
+
+// settleReclaimPolicy gives an adopted volume back the reclaim policy its
+// StorageClass declares, once nothing but its VMDisk can release it.
+//
+// Past the swap, Retain protects nothing and leaks a volume per imported disk:
+// deleting the VMDisk removes its DataVolume, garbage collection takes the
+// claim through the owner reference CDI set when it adopted it, and the volume
+// is left Released with its backing storage, where no tenant can see or delete
+// it. Every disk a tenant creates directly carries its class's policy, and an
+// imported one has to end up the same.
+//
+// Until the handoff is provably over this reports false and touches nothing.
+// Over means: the claim and the volume are each Bound to the other, as the PV
+// controller reports it rather than as claimRef was written, so no release is
+// still in flight; the transferred claim is gone; and the claim's one owner is
+// the DataVolume of the VMDisk release, so the only deletion that can reach
+// the volume is the VMDisk's own.
+func (r *VMImportTaskReconciler) settleReclaimPolicy(
+	ctx context.Context,
+	task *migrationv1alpha1.VMImportTask,
+	vmID string,
+	diskName string,
+	sourceClaim string,
+) (bool, error) {
+	target := vmDiskReleasePrefix + diskName
+	waiting := func(what string) (bool, error) {
+		log.FromContext(ctx).V(1).Info("imported volume not settled yet", "disk", diskName, "waitingFor", what)
+		return false, nil
+	}
+
+	claim := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: target}, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			return waiting("the replacement claim")
+		}
+		return false, err
+	}
+	if !isOwnOutput(claim, task, vmID) {
+		return waiting("a claim created by this import")
+	}
+	if claim.Status.Phase != corev1.ClaimBound || claim.Spec.VolumeName == "" {
+		return waiting("the replacement claim to bind")
+	}
+
+	pv := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, types.NamespacedName{Name: claim.Spec.VolumeName}, pv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return waiting("the volume")
+		}
+		return false, err
+	}
+	ref := pv.Spec.ClaimRef
+	if pv.Status.Phase != corev1.VolumeBound || ref == nil ||
+		ref.UID != claim.UID || ref.Namespace != claim.Namespace || ref.Name != claim.Name {
+		return waiting("the volume to bind to the replacement claim")
+	}
+
+	if sourceClaim != "" && sourceClaim != target {
+		old := &corev1.PersistentVolumeClaim{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: sourceClaim}, old)
+		if err == nil {
+			return waiting("the transferred claim to be deleted")
+		}
+		if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+	}
+
+	dv := newObject(dataVolumeGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: target}, dv); err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return waiting("the VMDisk DataVolume")
+		}
+		return false, err
+	}
+	owners := claim.OwnerReferences
+	if len(owners) != 1 || owners[0].Kind != dataVolumeGVK.Kind || owners[0].Name != target ||
+		owners[0].UID != dv.GetUID() || owners[0].Controller == nil || !*owners[0].Controller {
+		return waiting("CDI to adopt the claim into the VMDisk DataVolume")
+	}
+
+	disk := newObject(vmDiskGVK)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: task.Namespace, Name: diskName}, disk); err != nil {
+		if apierrors.IsNotFound(err) {
+			return waiting("the VMDisk")
+		}
+		return false, err
+	}
+	if !isOwnOutput(disk, task, vmID) {
+		return waiting("a VMDisk created by this import")
+	}
+
+	policy, err := r.classReclaimPolicy(ctx, pv.Spec.StorageClassName)
+	if err != nil {
+		return false, err
+	}
+	if pv.Spec.PersistentVolumeReclaimPolicy != policy {
+		pv.Spec.PersistentVolumeReclaimPolicy = policy
+		if err := r.Update(ctx, pv); err != nil {
+			return false, err
+		}
+		log.FromContext(ctx).Info("restored the reclaim policy of an imported volume",
+			"disk", diskName, "volume", pv.Name, "policy", policy)
+	}
+	return true, nil
+}
+
+// classReclaimPolicy is the policy a volume of this class would have been
+// provisioned with. A class that is gone, or that names none, gets Delete:
+// the API's own default for a dynamically provisioned volume.
+func (r *VMImportTaskReconciler) classReclaimPolicy(ctx context.Context, className string) (corev1.PersistentVolumeReclaimPolicy, error) {
+	if className == "" {
+		return corev1.PersistentVolumeReclaimDelete, nil
+	}
+	sc := &storagev1.StorageClass{}
+	if err := r.Get(ctx, types.NamespacedName{Name: className}, sc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return corev1.PersistentVolumeReclaimDelete, nil
+		}
+		return "", err
+	}
+	if sc.ReclaimPolicy == nil || *sc.ReclaimPolicy == "" {
+		return corev1.PersistentVolumeReclaimDelete, nil
+	}
+	return *sc.ReclaimPolicy, nil
 }
 
 // deleteOwningDataVolume removes the DataVolume that owns a claim, and waits
