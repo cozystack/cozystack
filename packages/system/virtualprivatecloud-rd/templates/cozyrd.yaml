@@ -1,4 +1,15 @@
-{{- range $path, $_ := .Files.Glob "cozyrds/*" }}
----
-{{ $.Files.Get $path }}
+{{- /* One ApplicationDefinition per cluster: both variants register the same
+       VirtualPrivateCloud kind (same release prefix), so rendering more than
+       one is a same-name collision. The variant value picks the backing
+       chart's definition; the PackageSource variant sets it. */ -}}
+{{- $variant := .Values.variant | default "kubevirt" -}}
+{{- $file := printf "cozyrds/virtualprivatecloud-%s.yaml" $variant -}}
+{{- if eq $variant "kubevirt" -}}
+{{- $file = "cozyrds/virtualprivatecloud.yaml" -}}
+{{- end -}}
+{{- $doc := .Files.Get $file -}}
+{{- if not $doc -}}
+{{- fail (printf "unknown variant %q: %s does not exist" $variant $file) -}}
 {{- end }}
+---
+{{ $doc }}

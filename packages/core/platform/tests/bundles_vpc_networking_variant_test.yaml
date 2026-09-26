@@ -1,0 +1,39 @@
+suite: vpc application follows the networking variant
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: installs the kubevirt vpc flavor on the default variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.virtualprivatecloud-application
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubevirt
+
+  - it: installs the cozyplane vpc flavor on the cozyplane variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+        iaas:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.virtualprivatecloud-application
+    asserts:
+      - equal:
+          path: spec.variant
+          value: cozyplane
