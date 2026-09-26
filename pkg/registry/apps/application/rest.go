@@ -1660,8 +1660,9 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 // from Spec.Interval — the previous coupling caused failed installs to
 // retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
-	// Per-Application annotation overrides win over the global defaults
-	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	// Kind-wide annotation overrides from this kind's ApplicationDefinition
+	// win over the global defaults (HelmReleaseInstallTimeout /
+	// HelmReleaseUpgradeTimeout):
 	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
 	//     sets both Install.Timeout and Upgrade.Timeout;
 	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
