@@ -122,11 +122,14 @@ endef
 #     so ALL stages are cached -- including the multistage `builder` layers that
 #     `--cache-to type=inline` could never export. oci-mediatypes + image-manifest
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
-# <cache-tag> defaults to `buildcache`; pass an explicit tag for images that build
+# <cache-tag> defaults to $(CACHE_TAG); pass an explicit tag for images that build
 # a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
+# CACHE_TAG lets a build for another platform keep a cache of its own
+# (buildcache-arm64) instead of overwriting the amd64 one with every write.
 # $(comma) (defined above) escapes the literal commas in the --cache-to value so
 # make does not mis-parse them as $(if ...) argument separators.
-cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
+CACHE_TAG ?= buildcache
+cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),$(CACHE_TAG))$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
 
 ifeq ($(COZYSTACK_VERSION),)
     $(shell git remote add upstream https://github.com/cozystack/cozystack.git || true)
