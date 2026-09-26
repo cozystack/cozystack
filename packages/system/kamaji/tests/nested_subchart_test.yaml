@@ -1,0 +1,12 @@
+suite: no subchart is vendored under charts/kamaji
+
+# The kamaji-etcd dependency's condition is never evaluated through this
+# umbrella chart, so any chart placed under charts/kamaji/charts deploys.
+templates:
+  - "charts/kamaji/charts/*/templates/*"
+
+tests:
+  - it: renders nothing from a nested subchart
+    asserts:
+      - hasDocuments:
+          count: 0
