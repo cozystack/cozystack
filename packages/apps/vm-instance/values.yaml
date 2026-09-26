@@ -27,7 +27,7 @@
 ## @typedef {struct} Firmware - Firmware and boot configuration. When left empty, the boot mode is inherited from the instanceProfile.
 ## @field {string} [bootloader] - Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
 ## @field {bool} [secureBoot] - Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
-## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi".
 
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false

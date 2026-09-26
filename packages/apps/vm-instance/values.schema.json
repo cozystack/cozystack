@@ -152,7 +152,7 @@
           "type": "string"
         },
         "efiPersistent": {
-          "description": "Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is \"uefi\". On default RWO storage the VM is node-pinned (no live-migration).",
+          "description": "Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is \"uefi\".",
           "type": "boolean"
         },
         "secureBoot": {
