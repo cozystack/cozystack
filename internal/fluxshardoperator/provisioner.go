@@ -3,6 +3,7 @@ package fluxshardoperator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -89,7 +89,7 @@ func (r *ShardSetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	for i := 0; i < shardCount; i++ {
+	for i := range shardCount {
 		desired, err := BuildShardDeployment(flux, i, r.Config)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -241,9 +241,7 @@ func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) 
 	if *dst == nil {
 		*dst = corev1.ResourceList{}
 	}
-	for name, quantity := range overrides {
-		(*dst)[name] = quantity
-	}
+	maps.Copy(*dst, overrides)
 }
 
 // BuildShardDeployment clones the helm-controller container out of the
@@ -418,7 +416,7 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			// helm-controller runs with leader election disabled, so two pods
 			// of one shard must never overlap during a rollout.
 			Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},

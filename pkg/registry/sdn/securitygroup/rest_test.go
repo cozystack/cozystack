@@ -1249,7 +1249,7 @@ func TestRulesLessSecurityGroupProjectsValidPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("to unstructured: %v", err)
 	}
-	spec, _ := u["spec"].(map[string]interface{})
+	spec, _ := u["spec"].(map[string]any)
 	if _, ok := spec["ingress"]; !ok {
 		t.Fatalf("unstructured backing policy spec has no ingress key: %v", spec)
 	}

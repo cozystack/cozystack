@@ -4,6 +4,7 @@ package tenantsecret
 
 import (
 	"context"
+	"maps"
 	"sort"
 	"testing"
 	"time"
@@ -57,9 +58,7 @@ func makeTenantSecret(name string, extra map[string]string) *corev1.Secret {
 	lbls := map[string]string{
 		corev1alpha1.TenantResourceLabelKey: corev1alpha1.TenantResourceLabelValue,
 	}
-	for k, v := range extra {
-		lbls[k] = v
-	}
+	maps.Copy(lbls, extra)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,

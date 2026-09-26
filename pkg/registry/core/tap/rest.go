@@ -217,23 +217,23 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
-	repo := &unstructured.Unstructured{Object: map[string]interface{}{
+	repo := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "source.toolkit.fluxcd.io/v1",
 		"kind":       "OCIRepository",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":        target.FluxSourceName,
 			"namespace":   "cozy-system",
-			"labels":      map[string]interface{}{tapconst.Label: "true"},
-			"annotations": map[string]interface{}{tapconst.NameAnnotation: target.FluxSourceName},
+			"labels":      map[string]any{tapconst.Label: "true"},
+			"annotations": map[string]any{tapconst.NameAnnotation: target.FluxSourceName},
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"url":      target.URL,
 			"interval": "5m0s",
-			"ref":      map[string]interface{}{"tag": target.Tag},
+			"ref":      map[string]any{"tag": target.Tag},
 		},
 	}}
 	if in.Spec.SecretRef != "" {
-		_ = unstructured.SetNestedMap(repo.Object, map[string]interface{}{"name": in.Spec.SecretRef}, "spec", "secretRef")
+		_ = unstructured.SetNestedMap(repo.Object, map[string]any{"name": in.Spec.SecretRef}, "spec", "secretRef")
 	}
 
 	// Create the Flux source, idempotently: a repeat connect updates the
@@ -456,7 +456,7 @@ func (r *REST) appDefIndex(ctx context.Context) map[string]cozyv1alpha1.Applicat
 	return indexAppDefsByChartRef(ads)
 }
 
-func fromUnstructured(u *unstructured.Unstructured, target interface{}) error {
+func fromUnstructured(u *unstructured.Unstructured, target any) error {
 	return runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, target)
 }
 
@@ -498,7 +498,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
 	row := func(t *corev1alpha1.Tap) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{t.Name, t.Spec.Source.Kind, t.Spec.Ready, len(t.Spec.Packages)},
+			Cells:  []any{t.Name, t.Spec.Source.Kind, t.Spec.Ready, len(t.Spec.Packages)},
 			Object: runtime.RawExtension{Object: t},
 		}
 	}

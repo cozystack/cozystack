@@ -19,6 +19,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -1430,5 +1431,49 @@ func TestUpdateStatus_OwnMarkerAttemptsExhaustedButFinalBackoffPending(t *testin
 	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
 	if psReady == nil || psReady.Status != metav1.ConditionUnknown || psReady.Reason != reasonAwaitingRecovery {
 		t.Errorf("PS Ready = %+v, want Unknown/%s — give-up must wait for final backoff to elapse", psReady, reasonAwaitingRecovery)
+	}
+}
+
+// TestReconcileArtifactGeneratorsLayersValuesFiles pins how a component's
+// valuesFiles become copy operations: every file lands on the same
+// values.yaml, the first one replacing the chart's own values and each later
+// one merged on top in declaration order, so a later file wins on conflicting
+// keys.
+func TestReconcileArtifactGeneratorsLayersValuesFiles(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo.app"},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "demo-app", Namespace: "cozy-system"},
+			Variants: []cozyv1alpha1.Variant{{
+				Name: "default",
+				Components: []cozyv1alpha1.Component{{
+					Name:        "web",
+					Path:        "apps/web",
+					ValuesFiles: []string{"values.yaml", "values-ha.yaml", "values-site.yaml"},
+				}},
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ps.DeepCopy()).Build()
+	r := &PackageSourceReconciler{Client: cl, Scheme: testScheme(t)}
+	if err := r.reconcileArtifactGenerators(context.Background(), ps); err != nil {
+		t.Fatalf("reconcileArtifactGenerators: %v", err)
+	}
+
+	var ag sourcewatcherv1beta1.ArtifactGenerator
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "demo.app", Namespace: "cozy-system"}, &ag); err != nil {
+		t.Fatalf("get ArtifactGenerator: %v", err)
+	}
+	if len(ag.Spec.OutputArtifacts) != 1 {
+		t.Fatalf("OutputArtifacts = %d, want 1", len(ag.Spec.OutputArtifacts))
+	}
+	want := []sourcewatcherv1beta1.CopyOperation{
+		{From: "@demo-app/apps/web/**", To: "@artifact/web/"},
+		{From: "@demo-app/apps/web/values.yaml", To: "@artifact/web/values.yaml", Strategy: "Overwrite"},
+		{From: "@demo-app/apps/web/values-ha.yaml", To: "@artifact/web/values.yaml", Strategy: "Merge"},
+		{From: "@demo-app/apps/web/values-site.yaml", To: "@artifact/web/values.yaml", Strategy: "Merge"},
+	}
+	if got := ag.Spec.OutputArtifacts[0].Copy; !reflect.DeepEqual(got, want) {
+		t.Errorf("Copy =\n%+v\nwant\n%+v", got, want)
 	}
 }

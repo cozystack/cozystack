@@ -241,10 +241,7 @@ func (o *CozyServerOptions) Complete() error {
 		fmt.Printf("Failed to list ApplicationDefinitions (retrying in %v): %v\n", delay, err)
 		time.Sleep(delay)
 
-		delay = time.Duration(float64(delay) * 1.5)
-		if delay > maxDelay {
-			delay = maxDelay
-		}
+		delay = min(time.Duration(float64(delay)*1.5), maxDelay)
 	}
 
 	resourceConfig, err := resourceConfigFrom(crdList.Items, hrFlags)

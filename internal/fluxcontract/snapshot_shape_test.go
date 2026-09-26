@@ -347,7 +347,7 @@ func TestGuardExpressionReadsUpstreamHistoryStatuses(t *testing.T) {
 	}
 
 	var got []string
-	for _, line := range strings.Split(out.String(), "\n") {
+	for line := range strings.SplitSeq(out.String(), "\n") {
 		if line != "" {
 			got = append(got, line)
 		}

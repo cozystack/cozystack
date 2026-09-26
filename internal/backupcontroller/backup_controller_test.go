@@ -486,12 +486,12 @@ func redisCleanupBackup(name, objectKey string) *backupsv1alpha1.Backup {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     "Redis",
 				Name:     "cache",
 			},
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.RedisStrategyKind,
 				Name:     "cozy-default-redis",
 			},

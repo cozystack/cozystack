@@ -32,12 +32,12 @@ func TestAnyOtherReferences(t *testing.T) {
 }
 
 func psObj(name, srcName string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
+	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "cozystack.io/v1alpha1",
 		"kind":       "PackageSource",
-		"metadata":   map[string]interface{}{"name": name},
-		"spec": map[string]interface{}{
-			"sourceRef": map[string]interface{}{"kind": "OCIRepository", "name": srcName, "namespace": "cozy-system"},
+		"metadata":   map[string]any{"name": name},
+		"spec": map[string]any{
+			"sourceRef": map[string]any{"kind": "OCIRepository", "name": srcName, "namespace": "cozy-system"},
 		},
 	}}
 }
@@ -52,24 +52,24 @@ func tapPsObj(name, srcName string) *unstructured.Unstructured {
 }
 
 func ociRepoObj(name string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
+	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "source.toolkit.fluxcd.io/v1",
 		"kind":       "OCIRepository",
-		"metadata":   map[string]interface{}{"name": name, "namespace": "cozy-system"},
-		"spec":       map[string]interface{}{"url": "oci://ghcr.io/a/b"},
+		"metadata":   map[string]any{"name": name, "namespace": "cozy-system"},
+		"spec":       map[string]any{"url": "oci://ghcr.io/a/b"},
 	}}
 }
 
 // tapPkgObj is a tap-managed registration Package, owned by sourceName (the
 // marketplace-tap label plus the tap-source annotation).
 func tapPkgObj(name, sourceName string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
+	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "cozystack.io/v1alpha1",
 		"kind":       "Package",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":        name,
-			"labels":      map[string]interface{}{"apps.cozystack.io/marketplace-tap": "true"},
-			"annotations": map[string]interface{}{"apps.cozystack.io/tap-source": sourceName},
+			"labels":      map[string]any{"apps.cozystack.io/marketplace-tap": "true"},
+			"annotations": map[string]any{"apps.cozystack.io/tap-source": sourceName},
 		},
 	}}
 }

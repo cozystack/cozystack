@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,10 +23,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
-	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 )
 
 var (
@@ -195,9 +197,7 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 	if existing == nil {
 		existing = make(map[string]string)
 	}
-	for k, v := range labels {
-		existing[k] = v
-	}
+	maps.Copy(existing, labels)
 	o.SetLabels(existing)
 }
 
@@ -282,5 +282,7 @@ func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out
 	if len(req.Object.Raw) == 0 {
 		return errors.New("empty admission object")
 	}
-	return json.Unmarshal(req.Object.Raw, &out.Object)
+	// encoding/json would turn every number into float64, and an int64 above
+	// 2^53 would come back altered in the patch computed against req.Object.Raw.
+	return utiljson.Unmarshal(req.Object.Raw, &out.Object)
 }

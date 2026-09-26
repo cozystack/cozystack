@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -168,7 +169,7 @@ func TestReconcile_IsIdempotent(t *testing.T) {
 		Build()
 
 	r := &Reconciler{Client: c, Scheme: s}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
 			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
 		}); err != nil {
@@ -212,6 +213,117 @@ func TestReconcile_IsIdempotent(t *testing.T) {
 	}
 	if iss2.ResourceVersion != rvIssuer {
 		t.Errorf("Issuer ResourceVersion bumped on no-op reconcile: %s → %s", rvIssuer, iss2.ResourceVersion)
+	}
+}
+
+// TestReconcile_SecondPassLeavesCertManagerObjectsUntouched extends
+// the no-op contract to every cert-manager object the controller
+// owns, in both cert modes: the Issuer, the DNS-01 wildcard
+// Certificate and each HTTP-01 per-listener Certificate. The update
+// gate compares the stored spec with the freshly rendered one, so a
+// spec field the API round trip fills in differently would re-issue
+// certificates on every pass.
+func TestReconcile_SecondPassLeavesCertManagerObjectsUntouched(t *testing.T) {
+	cases := []struct {
+		name      string
+		spec      gatewayv1alpha1.TenantGatewaySpec
+		wantCerts []string
+	}{
+		{
+			name: "dns01",
+			spec: gatewayv1alpha1.TenantGatewaySpec{
+				Apex:             "foo.example.com",
+				CertMode:         gatewayv1alpha1.CertModeDNS01,
+				GatewayClassName: "cilium",
+				DNS01: &gatewayv1alpha1.DNS01Config{
+					Provider: "cloudflare",
+					Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+						APITokenSecretRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+							Key:                  "api-token",
+						},
+					},
+				},
+			},
+			wantCerts: []string{"*.foo.example.com"},
+		},
+		{
+			name: "http01",
+			spec: gatewayv1alpha1.TenantGatewaySpec{
+				Apex:               "foo.example.com",
+				CertMode:           gatewayv1alpha1.CertModeHTTP01,
+				GatewayClassName:   "cilium",
+				AttachedNamespaces: []string{"cozy-harbor"},
+			},
+			wantCerts: []string{"harbor.foo.example.com", "registry.foo.example.com"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec:       tc.spec,
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(
+					tgw,
+					httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com"),
+					httpRouteAttached("registry", "cozy-harbor", "registry.foo.example.com"),
+				).
+				WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1.HTTPRoute{}).
+				Build()
+			r := &Reconciler{Client: c, Scheme: s}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}}
+
+			snapshot := func() map[string]string {
+				t.Helper()
+				rvs := map[string]string{}
+				iss := &cmv1.Issuer{}
+				if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+					t.Fatalf("get Issuer: %v", err)
+				}
+				rvs["Issuer/"+iss.Name] = iss.ResourceVersion
+				certs := &cmv1.CertificateList{}
+				if err := c.List(context.TODO(), certs, client.InNamespace("tenant-foo")); err != nil {
+					t.Fatalf("list Certificates: %v", err)
+				}
+				for _, cert := range certs.Items {
+					rvs["Certificate/"+cert.Name] = cert.ResourceVersion
+				}
+				return rvs
+			}
+
+			if _, err := r.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("first reconcile: %v", err)
+			}
+			certs := &cmv1.CertificateList{}
+			if err := c.List(context.TODO(), certs, client.InNamespace("tenant-foo")); err != nil {
+				t.Fatalf("list Certificates: %v", err)
+			}
+			for _, want := range tc.wantCerts {
+				found := false
+				for _, cert := range certs.Items {
+					if containsString(cert.Spec.DNSNames, want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("no Certificate covers %q after first reconcile, got %d certs", want, len(certs.Items))
+				}
+			}
+
+			before := snapshot()
+			if _, err := r.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("second reconcile: %v", err)
+			}
+			after := snapshot()
+			if !reflect.DeepEqual(before, after) {
+				t.Errorf("ResourceVersions moved on no-op reconcile:\nbefore=%v\nafter=%v", before, after)
+			}
+		})
 	}
 }
 
@@ -285,12 +397,7 @@ func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
 }
 
 func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // TestReconcile_LabelsAttachedNamespaces pins the controller-side

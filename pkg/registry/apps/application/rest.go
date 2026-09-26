@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -1200,12 +1201,8 @@ func mergeMaps(a, b map[string]string) map[string]string {
 		return a
 	}
 	merged := make(map[string]string, len(a)+len(b))
-	for k, v := range a {
-		merged[k] = v
-	}
-	for k, v := range b {
-		merged[k] = v
-	}
+	maps.Copy(merged, a)
+	maps.Copy(merged, b)
 	return merged
 }
 
@@ -1228,9 +1225,8 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	}
 	processed := make(map[string]string)
 	for k, v := range original {
-		if strings.HasPrefix(k, prefix) {
-			newKey := strings.TrimPrefix(k, prefix)
-			processed[newKey] = v
+		if key, ok := strings.CutPrefix(k, prefix); ok {
+			processed[key] = v
 		}
 	}
 	return processed

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,13 +125,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// leak cozy-backups-creds into the tenant namespace and then
 	// silently no-op in the dispatch switch below — leaving the
 	// BackupJob in a phaseless state forever.
-	supported := false
-	for _, k := range supportedBackupStrategyKinds() {
-		if strategyRef.Kind == k {
-			supported = true
-			break
-		}
-	}
+	supported := slices.Contains(supportedBackupStrategyKinds(), strategyRef.Kind)
 	if !supported {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("strategy Kind %q is not supported by this controller (supported: %s)", strategyRef.Kind, strings.Join(supportedBackupStrategyKinds(), ", ")))
 	}

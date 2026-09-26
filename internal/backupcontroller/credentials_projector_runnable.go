@@ -80,7 +80,7 @@ func (p *SystemCredentialsProjector) NeedLeaderElection() bool { return true }
 // if Period is zero.
 func NewSystemCredentialsProjector(c client.Client, cfg BackupCredentialsConfig, namespacesCSV string, period time.Duration) *SystemCredentialsProjector {
 	var ns []string
-	for _, s := range strings.Split(namespacesCSV, ",") {
+	for s := range strings.SplitSeq(namespacesCSV, ",") {
 		s = strings.TrimSpace(s)
 		if s != "" {
 			ns = append(ns, s)
@@ -138,8 +138,7 @@ func (p *SystemCredentialsProjector) projectAll(ctx context.Context, logger logr
 // error is one of ours, otherwise "Unknown". Used as a metric label, so
 // the cardinality is bounded by the small Reason* set.
 func classifyReason(err error) string {
-	var perr *ProjectionError
-	if errors.As(err, &perr) {
+	if perr, ok := errors.AsType[*ProjectionError](err); ok {
 		return perr.Reason
 	}
 	return "Unknown"

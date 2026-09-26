@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1567,12 +1568,7 @@ func logIndicatesRecoveryTargetUnreachable(recoveryLog string) bool {
 // already had the whole window to converge, and this only classifies *why* it
 // did not. Pure so the decision is unit-testable without a live cluster.
 func recoveryUnreachableFromLogs(logs []string) bool {
-	for _, l := range logs {
-		if logIndicatesRecoveryTargetUnreachable(l) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(logs, logIndicatesRecoveryTargetUnreachable)
 }
 
 // recoveryTargetUnreachable inspects the target Cluster's bootstrap-recovery
@@ -1737,7 +1733,7 @@ func renderCNPGTemplate(t strategyv1alpha1.CNPGTemplate, app *postgresapp.Postgr
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -1748,12 +1744,12 @@ func renderCNPGTemplate(t strategyv1alpha1.CNPGTemplate, app *postgresapp.Postgr
 // so user-authored go-templates continue to address fields by their JSON
 // names (e.g. .Application.metadata.name) without leaking the Go struct
 // hierarchy to user-facing strategy templates.
-func toJSONMap(obj interface{}) (map[string]interface{}, error) {
+func toJSONMap(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

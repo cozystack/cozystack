@@ -20,7 +20,7 @@ func TestComputePlacementNOverNIsOnePerShard(t *testing.T) {
 	// across N shards => exactly 1 per shard. Deterministic, not probabilistic.
 	const n = 4
 	var tenants []TenantInfo
-	for i := 0; i < n; i++ {
+	for i := range n {
 		tenants = append(tenants, TenantInfo{Namespace: fmt.Sprintf("tenant-%c", 'a'+i), Weight: 7})
 	}
 	assign := ComputePlacement(PlacementInput{Tenants: tenants, ShardCount: n})

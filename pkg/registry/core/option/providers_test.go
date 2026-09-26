@@ -40,7 +40,7 @@ func listKinds() map[schema.GroupVersionResource]string {
 	}
 }
 
-func newObj(gvk schema.GroupVersionKind, namespace, name string, spec map[string]interface{}) *unstructured.Unstructured {
+func newObj(gvk schema.GroupVersionKind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
 	o := &unstructured.Unstructured{}
 	o.SetGroupVersionKind(gvk)
 	o.SetName(name)
@@ -128,10 +128,10 @@ func TestBackupProviderIsNamespaced(t *testing.T) {
 func TestAppKindProviderDedupesAndSorts(t *testing.T) {
 	gvk := gvrAppDefs.GroupVersion().WithKind("ApplicationDefinition")
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
-		newObj(gvk, "", "postgres", map[string]interface{}{"application": map[string]interface{}{"kind": "Postgres"}}),
-		newObj(gvk, "", "redis", map[string]interface{}{"application": map[string]interface{}{"kind": "Redis"}}),
-		newObj(gvk, "", "postgres-dup", map[string]interface{}{"application": map[string]interface{}{"kind": "Postgres"}}),
-		newObj(gvk, "", "broken", map[string]interface{}{"application": map[string]interface{}{}}),
+		newObj(gvk, "", "postgres", map[string]any{"application": map[string]any{"kind": "Postgres"}}),
+		newObj(gvk, "", "redis", map[string]any{"application": map[string]any{"kind": "Redis"}}),
+		newObj(gvk, "", "postgres-dup", map[string]any{"application": map[string]any{"kind": "Postgres"}}),
+		newObj(gvk, "", "broken", map[string]any{"application": map[string]any{}}),
 	)
 	providers := DefaultProviders(dyn)
 	items, err := providers["appkind"](context.Background(), "")
@@ -267,12 +267,12 @@ func itemByValue(items []corev1alpha1.OptionItem, value string) (corev1alpha1.Op
 }
 
 func TestGPUProviderIntersectsWhitelistWithNodeAllocatable(t *testing.T) {
-	kv := newObj(gvrKubevirts.GroupVersion().WithKind("KubeVirt"), kubevirtNamespace, "kubevirt", map[string]interface{}{
-		"configuration": map[string]interface{}{
-			"permittedHostDevices": map[string]interface{}{
-				"pciHostDevices": []interface{}{
-					map[string]interface{}{"resourceName": "nvidia.com/GP100"},
-					map[string]interface{}{"resourceName": "nvidia.com/A100"},
+	kv := newObj(gvrKubevirts.GroupVersion().WithKind("KubeVirt"), kubevirtNamespace, "kubevirt", map[string]any{
+		"configuration": map[string]any{
+			"permittedHostDevices": map[string]any{
+				"pciHostDevices": []any{
+					map[string]any{"resourceName": "nvidia.com/GP100"},
+					map[string]any{"resourceName": "nvidia.com/A100"},
 				},
 			},
 		},
@@ -336,12 +336,12 @@ func TestStorageClassProviderMarksDefault(t *testing.T) {
 }
 
 func TestStoragePoolProviderWalksPoolsAndZones(t *testing.T) {
-	hr := newObj(gvrHelmReleases.GroupVersion().WithKind("HelmRelease"), "tenant-x", "seaweedfs", map[string]interface{}{
-		"values": map[string]interface{}{
-			"volume": map[string]interface{}{
-				"pools": map[string]interface{}{"default": map[string]interface{}{}, "ssd": map[string]interface{}{}},
-				"zones": map[string]interface{}{
-					"zoneA": map[string]interface{}{"pools": map[string]interface{}{"archive": map[string]interface{}{}}},
+	hr := newObj(gvrHelmReleases.GroupVersion().WithKind("HelmRelease"), "tenant-x", "seaweedfs", map[string]any{
+		"values": map[string]any{
+			"volume": map[string]any{
+				"pools": map[string]any{"default": map[string]any{}, "ssd": map[string]any{}},
+				"zones": map[string]any{
+					"zoneA": map[string]any{"pools": map[string]any{"archive": map[string]any{}}},
 				},
 			},
 		},
@@ -363,7 +363,7 @@ func TestStoragePoolProviderWalksPoolsAndZones(t *testing.T) {
 func TestVMDiskProviderShowsSizeInLabel(t *testing.T) {
 	vdGVK := gvrVMDisks.GroupVersion().WithKind("VMDisk")
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
-		newObj(vdGVK, "tenant-x", "data", map[string]interface{}{"storage": "10Gi"}),
+		newObj(vdGVK, "tenant-x", "data", map[string]any{"storage": "10Gi"}),
 		newObj(vdGVK, "tenant-x", "blank", nil),
 	)
 	items, err := DefaultProviders(dyn)["vmdisk"](context.Background(), "tenant-x")

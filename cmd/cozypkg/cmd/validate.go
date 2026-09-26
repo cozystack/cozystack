@@ -70,7 +70,7 @@ type Report struct {
 	Findings []Finding
 }
 
-func (r *Report) add(sev Severity, code, location, format string, args ...interface{}) {
+func (r *Report) add(sev Severity, code, location, format string, args ...any) {
 	r.Findings = append(r.Findings, Finding{
 		Severity: sev,
 		Code:     code,

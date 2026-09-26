@@ -251,9 +251,9 @@ func parseLabels() map[string]string {
 		return infraClusterLabelsMap
 	}
 
-	labelStrings := strings.Split(*infraClusterLabels, ",")
+	labelStrings := strings.SplitSeq(*infraClusterLabels, ",")
 
-	for _, label := range labelStrings {
+	for label := range labelStrings {
 		labelPair := strings.SplitN(label, "=", 2)
 
 		if len(labelPair) != 2 {

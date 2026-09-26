@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,8 +36,8 @@ type RestoreJobReconciler struct {
 	client.Client
 	dynamic.Interface
 	meta.RESTMapper
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 	// Clientset reads Pod logs (the controller-runtime cache client cannot);
 	// the CNPG restore driver uses it to read a bootstrap-recovery pod's log
 	// and tell an unreachable point-in-time target apart from a transient
@@ -126,13 +127,7 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// namespace and then fall through to markRestoreJobFailed with the
 	// Secret already in place.
 	{
-		supported := false
-		for _, k := range supportedBackupStrategyKinds() {
-			if backup.Spec.StrategyRef.Kind == k {
-				supported = true
-				break
-			}
-		}
+		supported := slices.Contains(supportedBackupStrategyKinds(), backup.Spec.StrategyRef.Kind)
 		if !supported {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 		}

@@ -1,4 +1,4 @@
-FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 ARG KUBECTL_VERSION=1.33.13
 ARG TALOSCTL_VERSION=1.13.5
@@ -6,6 +6,7 @@ ARG HELM_VERSION=3.21.2
 ARG COZYHR_VERSION=1.6.1
 ARG CRUST_GATHER_VERSION=v0.15.2
 ARG CHAINSAW_VERSION=0.2.15
+ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -21,7 +22,15 @@ RUN curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.53.3/yq_${TA
  && chmod +x /usr/local/bin/yq
 RUN curl -sSL "https://fluxcd.io/install.sh" | bash
 RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYHR_VERSION}"
-RUN curl -fsSL "https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc" --create-dirs -o /usr/local/bin/mc \
+# dl.min.io stopped serving community mc builds (HTTP 410) when MinIO archived
+# the project; the final release is still published on GitHub.
+RUN case "${TARGETARCH}" in \
+      amd64) sum=01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891 ;; \
+      arm64) sum=14c8c9616cfce4636add161304353244e8de383b2e2752c0e9dad01d4c27c12c ;; \
+      *) echo "no pinned mc checksum for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL "https://github.com/minio/mc/releases/download/${MC_VERSION}/mc.${TARGETOS}-${TARGETARCH}.${MC_VERSION}" -o /usr/local/bin/mc \
+ && echo "${sum}  /usr/local/bin/mc" | sha256sum -c - \
  && chmod +x /usr/local/bin/mc
 # crust-gather: full-cluster diagnostic snapshots, captured per failed test by
 # cozytest.sh (BATS install/openapi tests) and by the global .chainsaw.yaml

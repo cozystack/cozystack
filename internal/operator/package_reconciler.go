@@ -19,6 +19,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -555,13 +556,7 @@ func (r *PackageReconciler) buildDependsOn(ctx context.Context, pkg *cozyv1alpha
 	if len(variant.DependsOn) > 0 {
 		for _, depPackageName := range variant.DependsOn {
 			// Check if dependency is in IgnoreDependencies
-			ignore := false
-			for _, ignoreDep := range pkg.Spec.IgnoreDependencies {
-				if ignoreDep == depPackageName {
-					ignore = true
-					break
-				}
-			}
+			ignore := slices.Contains(pkg.Spec.IgnoreDependencies, depPackageName)
 			if ignore {
 				logger.V(1).Info("ignoring dependency", "package", pkg.Name, "dependency", depPackageName)
 				continue
@@ -632,13 +627,7 @@ func (r *PackageReconciler) updateDependenciesStatus(ctx context.Context, pkg *c
 	if len(variant.DependsOn) > 0 {
 		for _, depPackageName := range variant.DependsOn {
 			// Check if dependency is in IgnoreDependencies
-			ignore := false
-			for _, ignoreDep := range pkg.Spec.IgnoreDependencies {
-				if ignoreDep == depPackageName {
-					ignore = true
-					break
-				}
-			}
+			ignore := slices.Contains(pkg.Spec.IgnoreDependencies, depPackageName)
 			if ignore {
 				logger.V(1).Info("ignoring dependency", "package", pkg.Name, "dependency", depPackageName)
 				continue
@@ -700,13 +689,7 @@ func (r *PackageReconciler) areDependenciesReady(pkg *cozyv1alpha1.Package, vari
 
 	for _, depPackageName := range variant.DependsOn {
 		// Check if dependency is in IgnoreDependencies
-		ignore := false
-		for _, ignoreDep := range pkg.Spec.IgnoreDependencies {
-			if ignoreDep == depPackageName {
-				ignore = true
-				break
-			}
-		}
+		ignore := slices.Contains(pkg.Spec.IgnoreDependencies, depPackageName)
 		if ignore {
 			continue
 		}
@@ -764,13 +747,7 @@ func (r *PackageReconciler) updateDependentPackagesDependencies(ctx context.Cont
 		dependsOn := false
 		for _, dep := range variant.DependsOn {
 			// Check if dependency is in IgnoreDependencies
-			ignore := false
-			for _, ignoreDep := range pkg.Spec.IgnoreDependencies {
-				if ignoreDep == dep {
-					ignore = true
-					break
-				}
-			}
+			ignore := slices.Contains(pkg.Spec.IgnoreDependencies, dep)
 			if ignore {
 				continue
 			}
@@ -1061,13 +1038,7 @@ func (r *PackageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					// Check if this variant depends on updatedPkg
 					for _, dep := range variant.DependsOn {
 						// Check if dependency is in IgnoreDependencies
-						ignore := false
-						for _, ignoreDep := range pkg.Spec.IgnoreDependencies {
-							if ignoreDep == dep {
-								ignore = true
-								break
-							}
-						}
+						ignore := slices.Contains(pkg.Spec.IgnoreDependencies, dep)
 						if ignore {
 							continue
 						}

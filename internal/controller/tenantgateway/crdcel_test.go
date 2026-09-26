@@ -161,7 +161,7 @@ func checkFromProps(t *testing.T, specProps *apiextensionsv1.JSONSchemaProps) *a
 
 // rejects reports whether the apiserver would refuse this spec, running
 // the structural schema and the CEL rules the same way admission does.
-func (a *admissionCheck) rejects(t *testing.T, spec map[string]interface{}) bool {
+func (a *admissionCheck) rejects(t *testing.T, spec map[string]any) bool {
 	t.Helper()
 	if errs := apiservervalidation.ValidateCustomResource(field.NewPath("spec"), spec, a.schema); len(errs) > 0 {
 		return true
@@ -331,22 +331,22 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			celList := make([]interface{}, 0, len(tc.listeners))
+			celList := make([]any, 0, len(tc.listeners))
 			goList := make([]gatewayv1alpha1.TLSPassthroughListener, 0, len(tc.listeners))
 			for _, l := range tc.listeners {
-				celList = append(celList, map[string]interface{}{
+				celList = append(celList, map[string]any{
 					"name": l.name, "port": int64(l.port), "hostname": l.host,
 				})
 				goList = append(goList, gatewayv1alpha1.TLSPassthroughListener{
 					Name: l.name, Port: l.port, Hostname: l.host,
 				})
 			}
-			spec := map[string]interface{}{
+			spec := map[string]any{
 				"apex":                    apex,
 				"tlsPassthroughListeners": celList,
 			}
 			if tc.services != nil {
-				svcs := make([]interface{}, 0, len(tc.services))
+				svcs := make([]any, 0, len(tc.services))
 				for _, s := range tc.services {
 					svcs = append(svcs, s)
 				}
@@ -425,11 +425,11 @@ func TestEveryCertModeIsJudgedOnPassthroughListeners(t *testing.T) {
 			continue
 		}
 		t.Run(string(mode), func(t *testing.T) {
-			spec := map[string]interface{}{
+			spec := map[string]any{
 				"apex":     apex,
 				"certMode": string(mode),
-				"tlsPassthroughListeners": []interface{}{
-					map[string]interface{}{"name": "postgres", "port": int64(5432), "hostname": "postgres." + apex},
+				"tlsPassthroughListeners": []any{
+					map[string]any{"name": "postgres", "port": int64(5432), "hostname": "postgres." + apex},
 				},
 			}
 			if gotCEL := !a.rejects(t, spec); gotCEL != want {
@@ -445,10 +445,10 @@ func TestEveryCertModeIsJudgedOnPassthroughListeners(t *testing.T) {
 	// served by the http01 path, so both layers must treat the absent
 	// field the way they treat http01.
 	t.Run("absent certMode", func(t *testing.T) {
-		spec := map[string]interface{}{
+		spec := map[string]any{
 			"apex": apex,
-			"tlsPassthroughListeners": []interface{}{
-				map[string]interface{}{"name": "postgres", "port": int64(5432), "hostname": "postgres." + apex},
+			"tlsPassthroughListeners": []any{
+				map[string]any{"name": "postgres", "port": int64(5432), "hostname": "postgres." + apex},
 			},
 		}
 		if a.rejects(t, spec) {
@@ -531,16 +531,16 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	// One past the count bound, so the row fails on maxItems and on
 	// nothing else: every entry is a well-formed DNS-1123 subdomain.
 	overCapServices := make([]string, 0, 63)
-	for i := 0; i < 63; i++ {
+	for i := range 63 {
 		overCapServices = append(overCapServices, fmt.Sprintf("svc%d", i))
 	}
 
-	spec := func(apex string, services ...string) map[string]interface{} {
-		svcs := make([]interface{}, 0, len(services))
+	spec := func(apex string, services ...string) map[string]any {
+		svcs := make([]any, 0, len(services))
 		for _, s := range services {
 			svcs = append(svcs, s)
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"apex":                   apex,
 			"certMode":               "http01",
 			"gatewayClassName":       "cilium",
@@ -558,7 +558,7 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	// means it does not track upstream, so a bump of
 	// apiextensions-apiserver past the pinned v0.35.0 is where to
 	// re-read strategy.go and confirm the shape still holds.
-	rejectsUpdate := func(newSpec, oldSpec map[string]interface{}) bool {
+	rejectsUpdate := func(newSpec, oldSpec map[string]any) bool {
 		if errs := apiservervalidation.ValidateCustomResourceUpdate(
 			field.NewPath("spec"), newSpec, oldSpec, a.schema,
 			apiservervalidation.WithRatcheting(nil),
@@ -573,7 +573,7 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 
 	for _, tc := range []struct {
 		name         string
-		newSpec, old map[string]interface{}
+		newSpec, old map[string]any
 		wantRejected bool
 	}{{
 		name:         "over-long apex left untouched",
@@ -658,12 +658,12 @@ func TestListTypeSetWouldNotRefuseAStoredDuplicate(t *testing.T) {
 	withSet.Properties["tlsPassthroughServices"] = svc
 	a := checkFromProps(t, withSet)
 
-	spec := func(certMode string, services ...string) map[string]interface{} {
-		svcs := make([]interface{}, 0, len(services))
+	spec := func(certMode string, services ...string) map[string]any {
+		svcs := make([]any, 0, len(services))
 		for _, e := range services {
 			svcs = append(svcs, e)
 		}
-		return map[string]interface{}{
+		return map[string]any{
 			"apex":                   "foo.example.com",
 			"certMode":               certMode,
 			"tlsPassthroughServices": svcs,
@@ -674,7 +674,7 @@ func TestListTypeSetWouldNotRefuseAStoredDuplicate(t *testing.T) {
 	// passes. Reproduced rather than called, because the guard lives in
 	// the registry strategy and the validator it wraps is what this
 	// package can reach.
-	rejects := func(newSpec, oldSpec map[string]interface{}) bool {
+	rejects := func(newSpec, oldSpec map[string]any) bool {
 		if errs := listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, oldSpec); len(errs) > 0 {
 			return false
 		}
@@ -693,10 +693,10 @@ func TestListTypeSetWouldNotRefuseAStoredDuplicate(t *testing.T) {
 	// through tlsPassthroughListeners, the listType=map list this
 	// resource cannot afford to lose — one bad entry in the unmarked
 	// list would switch every list's check off at once.
-	withListeners := func(s map[string]interface{}, names ...string) map[string]interface{} {
-		ls := make([]interface{}, 0, len(names))
+	withListeners := func(s map[string]any, names ...string) map[string]any {
+		ls := make([]any, 0, len(names))
 		for _, n := range names {
-			ls = append(ls, map[string]interface{}{"name": n, "port": int64(5432), "hostname": n + ".foo.example.com"})
+			ls = append(ls, map[string]any{"name": n, "port": int64(5432), "hostname": n + ".foo.example.com"})
 		}
 		s["tlsPassthroughListeners"] = ls
 		return s
@@ -736,9 +736,9 @@ func TestApexAcceptsUpperCaseAtCreate(t *testing.T) {
 		t.Errorf("spec.apex carries pattern %q; a mixed-case tenant host is refused at the write", pattern)
 	}
 
-	for _, spec := range []map[string]interface{}{
+	for _, spec := range []map[string]any{
 		{"apex": "Foo.Example.com"},
-		{"apex": "Case-Probe.foo.example.com", "tlsPassthroughServices": []interface{}{"api"}},
+		{"apex": "Case-Probe.foo.example.com", "tlsPassthroughServices": []any{"api"}},
 	} {
 		if a.rejects(t, spec) {
 			t.Errorf("spec %v rejected at create, want admitted", spec)
@@ -766,7 +766,7 @@ func TestPassthroughServiceCapFitsGatewayAPI(t *testing.T) {
 	maxItems := *servicesSchema.MaxItems
 
 	services := make([]string, 0, maxItems)
-	for i := int64(0); i < maxItems; i++ {
+	for i := range maxItems {
 		services = append(services, fmt.Sprintf("svc%d", i))
 	}
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -832,7 +832,7 @@ func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 	maxItems := *listenersSchema.MaxItems
 
 	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, maxItems)
-	for i := int64(0); i < maxItems; i++ {
+	for i := range maxItems {
 		listeners = append(listeners, gatewayv1alpha1.TLSPassthroughListener{
 			Name:     fmt.Sprintf("db%d", i),
 			Port:     int32(10000 + i),
@@ -869,7 +869,7 @@ func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 // on the TenantGateway the tenant actually manages.
 func TestRenderGatewayRejectsOverListenerCap(t *testing.T) {
 	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, 62)
-	for i := 0; i < 62; i++ {
+	for i := range 62 {
 		listeners = append(listeners, gatewayv1alpha1.TLSPassthroughListener{
 			Name:     fmt.Sprintf("db%d", i),
 			Port:     int32(10000 + i),
@@ -909,10 +909,10 @@ func TestRenderGatewayRejectsOverListenerCap(t *testing.T) {
 // TenantGateway in the cluster on its next write.
 func TestSpecCELAcceptsEmptyPassthroughListeners(t *testing.T) {
 	a := specValidator(t)
-	for _, spec := range []map[string]interface{}{
+	for _, spec := range []map[string]any{
 		{"apex": "foo.example.com"},
-		{"apex": "foo.example.com", "tlsPassthroughServices": []interface{}{"api"}},
-		{"apex": "foo.example.com", "tlsPassthroughListeners": []interface{}{}},
+		{"apex": "foo.example.com", "tlsPassthroughServices": []any{"api"}},
+		{"apex": "foo.example.com", "tlsPassthroughListeners": []any{}},
 	} {
 		if a.rejects(t, spec) {
 			t.Errorf("spec %v was rejected, want accepted", spec)
