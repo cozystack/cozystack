@@ -689,10 +689,11 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
-      # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
-      # when the full-e2e label skipped selection: if `select` ran and came back
-      # empty it set skip=true and this step never starts.
+      # Each suite runs once, one `chainsaw test` per suite directory, with no
+      # retry loop (e2e-testing.md §1) — Chainsaw polls each assertion to its own
+      # timeout. Full suite only when the full-e2e label skipped selection: if
+      # `select` ran and came back empty it set skip=true and this step never
+      # starts.
       - name: Run E2E tests
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
@@ -712,7 +713,7 @@ jobs:
             echo "Running selected chainsaw suites: $suites"
           fi
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"

@@ -1113,7 +1113,7 @@ jobs:
             echo "Running selected chainsaw suites: $suites"
           fi
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"

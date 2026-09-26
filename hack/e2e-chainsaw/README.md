@@ -2,7 +2,7 @@
 
 The Cozystack E2E app suite, written for [Kyverno Chainsaw](https://github.com/kyverno/chainsaw) — a declarative, Kubernetes-native E2E test framework (CNCF, part of the Kyverno project; successor to KUTTL).
 
-This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs `chainsaw test hack/e2e-chainsaw/` after `make install-cozystack`; cluster bootstrap (`hack/e2e-prepare-cluster.bats`, `hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
+This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs every suite under `hack/e2e-chainsaw/` through `hack/e2e-chainsaw-run.sh` after `make install-cozystack`; cluster bootstrap (`hack/e2e-prepare-cluster.bats`, `hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
 ## Layout
 
@@ -72,4 +72,4 @@ chainsaw test postgres/
 
 ## CI integration
 
-The `e2e` job in `.github/workflows/pull-requests.yaml` runs `make -C packages/core/testing test-chainsaw` (which execs `chainsaw test hack/e2e-chainsaw/` inside the e2e sandbox) and uploads `chainsaw-report.xml`. The sandbox image (`packages/core/testing/images/e2e-sandbox/Dockerfile`) ships the `chainsaw` binary alongside `kubectl`/`helm`/`mc`/`jq`/`nc`.
+The `e2e` job in `.github/workflows/pull-requests.yaml` runs `make -C packages/core/testing test-chainsaw` (which execs `hack/e2e-chainsaw-run.sh` inside the e2e sandbox) and uploads `chainsaw-report.xml`. The runner calls `chainsaw test` once per suite directory, fails a suite whose pods outlive its cleanup by more than the default `timeouts.cleanup` (`LEAKED-PODS suite=<dir>` in the log; see `docs/agents/e2e-testing.md` §8 and `_lib/leak-allowlist.txt` for known, filed leaks), and merges the per-suite reports into that one file. A local `chainsaw test` as shown above runs the same tests without the leak check. The sandbox image (`packages/core/testing/images/e2e-sandbox/Dockerfile`) ships the `chainsaw` binary alongside `kubectl`/`helm`/`mc`/`jq`/`nc`.
