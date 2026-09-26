@@ -123,16 +123,20 @@ spec:
     migrations:
       {{- toYaml . | nindent 6 }}
     {{- end }}
-    evictionStrategy: LiveMigrateIfPossible  # a VMI that cannot live-migrate is evicted instead of blocking the node drain
+    evictionStrategy: LiveMigrateIfPossible  # a VMI that cannot live-migrate is evicted instead of blocking the drain; a VMI keeps the strategy it was created with, so a non-migratable one created before this value still blocks until its VM is restarted
     virtualMachineOptions:
       disableSerialConsoleLog: {}
     vmRolloutStrategy: LiveUpdate
   workloadUpdateStrategy:
-    # Evict shuts down VMs that cannot migrate on a KubeVirt upgrade, but it is
-    # also how such a kubernetes-nodes worker (evictionStrategy External) gets
-    # the new launcher without a rollout: the eviction marks the VMI for
-    # evacuation, CAPK drains the tenant node and deletes the VMI, and the VM
-    # starts it again.
+    # Evict shuts down VMs that cannot migrate on a KubeVirt upgrade; a VMI still
+    # carrying LiveMigrate from before evictionStrategy changed refuses the
+    # eviction and stays on the old launcher. Evict is also how a non-migratable
+    # kubernetes-nodes worker (evictionStrategy External) gets the new launcher:
+    # the eviction marks the VMI for evacuation, CAPK drains the tenant node and
+    # deletes the VMI, and it also marks the KubevirtMachine failed, so the node
+    # group's MachineHealthCheck replaces the Machine. Where maxUnhealthy holds
+    # remediation back, the VM starts a new VMI but the Machine stays failed and
+    # is replaced once remediation is allowed.
     workloadUpdateMethods:
     - LiveMigrate
     - Evict
