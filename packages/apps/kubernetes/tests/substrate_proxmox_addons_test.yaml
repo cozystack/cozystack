@@ -1,0 +1,304 @@
+suite: proxmox substrate tenant addons
+# Where the hypervisor token is allowed to be, and what the tenant gets instead.
+#
+# The controller half of both components runs in THIS cluster and reaches the
+# tenant over its admin kubeconfig; the tenant gets only the CSI node plugin,
+# which mounts no credentials. That split is the whole point of these objects,
+# so it is asserted from both ends: the management-side Deployments must carry
+# the Secret, and the tenant-side release must carry nothing that could become
+# one.
+templates:
+  - templates/csi-proxmox/controller.yaml
+  - templates/ccm-proxmox/controller.yaml
+  - templates/helmreleases/csi-proxmox.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set: &base
+  _namespace:
+    etcd: etcd-test
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    dnsServers: ["8.8.8.8"]
+    allowedNodes: [prox-home]
+    ipv4Config:
+      addresses: ["10.0.0.160-10.0.0.170"]
+      gateway: "10.0.0.1"
+      prefix: 24
+    csi:
+      enabled: true
+      credentialsSecretName: proxmox-csi-creds
+      storageClasses:
+        - name: proxmox
+          storage: main-pool
+    ccm:
+      credentialsSecretName: proxmox-ccm-creds
+tests:
+  # --- the tenant side holds nothing ---------------------------------------
+  - it: sends the tenant no credentials at all
+    template: templates/helmreleases/csi-proxmox.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      # A valuesFrom here would hand the token to the tenant: Flux would read
+      # the Secret in this namespace and inject it into a release installed
+      # inside the tenant, where the chart writes it to a Secret the tenant can
+      # read with the admin kubeconfig the resource definition hands it.
+      - notExists:
+          path: spec.valuesFrom
+      # The chart's own secrets.yaml is gated on a non-empty clusters list, so
+      # an empty one is what keeps it from rendering.
+      - equal:
+          path: spec.values.proxmox-csi-plugin.config.clusters
+          value: []
+      # And the controller that would have consumed it does not run there.
+      - equal:
+          path: spec.values.proxmox-csi-plugin.replicaCount
+          value: 0
+      # CSIStorageCapacity is published by the provisioner sidecar, which now
+      # runs in the management cluster and owns those objects through a Pod that
+      # does not exist in the tenant. Left on, CSIDriver.storageCapacity=true and
+      # the scheduler waits forever for capacity nobody publishes.
+      - equal:
+          path: spec.values.proxmox-csi-plugin.options.enableCapacity
+          value: false
+      # The chart hardcodes CSIDriver.storageCapacity: true, so the value above
+      # does not reach the object the scheduler reads. Without this patch a Pod
+      # with a Proxmox PVC never schedules.
+      - equal:
+          path: spec.postRenderers[0].kustomize.patches[0].target.kind
+          value: CSIDriver
+      - matchRegex:
+          path: spec.postRenderers[0].kustomize.patches[0].patch
+          pattern: 'path: /spec/storageCapacity'
+
+  - it: still gives the tenant its storage classes and its node plugin release
+    template: templates/helmreleases/csi-proxmox.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.proxmox-csi-plugin.storageClass[0].name
+          value: proxmox
+      - equal:
+          path: spec.values.proxmox-csi-plugin.storageClass[0].storage
+          value: main-pool
+      - equal:
+          path: spec.kubeConfig.secretRef.name
+          value: kubernetes-test-admin-kubeconfig
+
+  # --- the management side holds it instead ---------------------------------
+  - it: runs the CSI controller here, with the Secret mounted and the tenant as its target
+    template: templates/csi-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-pcsi-controller
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: proxmox-credentials
+            secret:
+              secretName: proxmox-csi-creds
+      # Every container that talks to Kubernetes must talk to the TENANT's
+      # apiserver. A sidecar left on the in-cluster ServiceAccount would
+      # reconcile this cluster's objects instead of the tenant's.
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-driver")].args[3]
+          value: "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-attacher")].args[3]
+          value: "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="csi-resizer")].args[3]
+          value: "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+
+  - it: runs the cloud-controller-manager here too
+    template: templates/ccm-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-pccm
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: proxmox-credentials
+            secret:
+              secretName: proxmox-ccm-creds
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--controllers=cloud-node,cloud-node-lifecycle"
+      # capmox mode, not the default one. The default writes the Node's
+      # providerID as proxmox://<node>/<vmid> while capmox has already written
+      # proxmox://<SMBIOS UUID> on the Machine, and the two never match.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'provider: capmox'
+
+  # A blanket `operator: Exists` also matches
+  # node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds, which
+  # stops admission adding the bounded 300s one and lets the Pod outlive its
+  # Node. `notContains` on that one element does not catch a list that ALSO has
+  # the unreachable toleration spelled out, so the whole list is compared.
+  - it: tolerates exactly two taints and no others
+    template: templates/ccm-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: CriticalAddonsOnly
+              operator: Exists
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+
+  # --- volumes are owned per tenant, not by one shared id -------------------
+  # The driver names volumes vm-<controllerVmID>-pvc-<uuid> and defaults that id
+  # to 9999, which made every tenant's volumes indistinguishable on shared
+  # storage. These two cases pin that the id is set and that it follows the
+  # release, so two tenants never share an owner.
+  - it: gives this tenant its own volume owner id
+    template: templates/csi-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'controllerVmID: 1[0-9]{5}|controllerVmID: [2-8][0-9]{5}'
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'controllerVmID: 9999$'
+
+  - it: and a different one to a different tenant
+    release:
+      name: kubernetes-other
+      namespace: tenant-test
+    template: templates/csi-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'controllerVmID: 829977'
+
+  # --- refusals and the other substrate -------------------------------------
+  - it: refuses to render a proxmox cluster with no CCM credentials
+    set:
+      proxmox.ccm.credentialsSecretName: ""
+    template: templates/ccm-proxmox/controller.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.ccm.credentialsSecretName is required on the proxmox substrate: without a cloud-controller-manager every worker keeps the uninitialized taint and the cluster schedules nothing"
+
+  - it: refuses to render a CSI controller with no credentials
+    set:
+      proxmox.csi.credentialsSecretName: ""
+    template: templates/csi-proxmox/controller.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.csi.credentialsSecretName is required on the proxmox substrate: the CSI controller cannot reach the hypervisor without an API token"
+
+  - it: leaves the KubeVirt substrate untouched
+    set:
+      substrate: kubevirt
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: propagates a verifiable hypervisor certificate to the CSI controller
+    set:
+      proxmox:
+        insecure: false
+        dnsServers: ["8.8.8.8"]
+        allowedNodes: [prox-home]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+        csi:
+          enabled: true
+          credentialsSecretName: proxmox-csi-creds
+        ccm:
+          credentialsSecretName: proxmox-ccm-creds
+    template: templates/csi-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'insecure: false"'
+
+  - it: propagates a verifiable hypervisor certificate to the cloud-controller-manager
+    set:
+      proxmox:
+        insecure: false
+        dnsServers: ["8.8.8.8"]
+        allowedNodes: [prox-home]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+        csi:
+          enabled: true
+          credentialsSecretName: proxmox-csi-creds
+        ccm:
+          credentialsSecretName: proxmox-ccm-creds
+    template: templates/ccm-proxmox/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'insecure: false"'
+
+  - it: keeps the CCM when the CSI driver is switched off
+    set:
+      proxmox.csi.enabled: false
+    asserts:
+      - template: templates/ccm-proxmox/controller.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-pccm
+          any: true
+      - template: templates/helmreleases/csi-proxmox.yaml
+        hasDocuments:
+          count: 0
+
+  # The switch has to reach the controller too: a controller with no driver to
+  # serve would still hold a hypervisor token, and would still demand one.
+  - it: runs no CSI controller and needs no CSI token when the driver is switched off
+    set:
+      proxmox.csi.enabled: false
+      proxmox.csi.credentialsSecretName: ""
+    asserts:
+      - template: templates/csi-proxmox/controller.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/ccm-proxmox/controller.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-pccm
+          any: true

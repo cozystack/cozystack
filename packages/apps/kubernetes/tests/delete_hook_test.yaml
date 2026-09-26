@@ -189,3 +189,75 @@ tests:
       - equal:
           path: spec.template.spec.restartPolicy
           value: Never
+
+  # Step 1b exists only on the proxmox substrate: a PVC there is a disk on the
+  # hypervisor that only the CSI controller can free, and Step 2 removes that
+  # controller. The Role gains the tenant's admin kubeconfig for it, by name.
+  - it: releases Proxmox volumes before the driver goes, on proxmox only
+    set: &proxmox
+      substrate: proxmox
+      _namespace:
+        etcd: etcd-test
+      proxmox:
+        dnsServers: ["8.8.8.8"]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+        ccm:
+          credentialsSecretName: proxmox-ccm-creds
+        csi:
+          enabled: true
+          credentialsSecretName: proxmox-csi-creds
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Step 1b: Releasing Proxmox volumes while the CSI driver is still running'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'get --raw /readyz'
+
+  - it: has no volume-release step on kubevirt, where the CSI controller stays until the cluster goes
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Step 1b'
+
+  - it: lets the cleanup Role read the tenant admin kubeconfig on proxmox, and nothing more
+    set: *proxmox
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - secrets
+            resourceNames:
+              - test-k8s-datastore-config
+              - test-k8s-admin-kubeconfig
+            verbs:
+              - get
+              - patch
+
+  - it: deletes the claims before the Pods that hold them, so nothing can mount one again
+    set: *proxmox
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete pvc "\$pname"[\s\S]*delete pod "\$pod"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete pod "\$pod"[\s\S]*delete pvc "\$pname"'

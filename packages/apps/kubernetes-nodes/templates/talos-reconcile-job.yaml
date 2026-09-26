@@ -71,9 +71,27 @@ rules:
     resources: ["kamajicontrolplanes"]
     resourceNames: ["{{ $clusterName }}"]
     verbs: ["get", "patch"]
+  {{- /* Split by verb because RBAC matches resourceNames on the verbs that name
+         an object and not on create, which has no name yet. Reading and writing
+         are pinned to this pool's own template: several clusters can share a
+         tenant namespace, and a Job that could patch a sibling pool's
+         TalosConfigTemplate could rewrite the machineconfig its next workers
+         boot. Create stays unnamed because RBAC gives no way to narrow it. */}}
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
-    verbs: ["get", "create", "patch", "update"]
+    resourceNames: ["{{ $clusterName }}-{{ $groupName }}"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["talosconfigtemplates"]
+    verbs: ["create"]
+  {{- /* delete is separate and named: the CRD marks spec immutable, so a
+         genuinely changed render can only be applied by replacing the object.
+         Restricting it to this pool's own template keeps the Job unable to
+         remove anyone else's. */}}
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["talosconfigtemplates"]
+    resourceNames: ["{{ $clusterName }}-{{ $groupName }}"]
+    verbs: ["delete"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
        pod in the tenant namespace; without an explicit allow, this Job
@@ -253,7 +271,11 @@ spec:
               # Apply the TalosConfigTemplate. ownerReference back to the parent
               # KamajiControlPlane makes the standard Kubernetes garbage collector
               # clean it up when the parent cluster is deleted.
-              cat <<EOF | kubectl apply -f -
+              {{- /* Held in a variable, not a file: the container runs with
+                     readOnlyRootFilesystem, so there is nowhere to write one.
+                     One variable also means the replace below applies exactly
+                     what the first attempt did. */}}
+              TCT_MANIFEST="$(cat <<EOF
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
@@ -271,7 +293,7 @@ spec:
                   spec:
                     generateType: none
                     talosVersion: "{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}"
-                    {{- /* INVARIANT (cozystack/cozystack#3513): the data block below is emitted from the unquoted `cat <<EOF | kubectl apply` heredoc in this Job's command, so it is subject to shell parameter expansion and command substitution at Job runtime. Every tenant-controlled free-form value interpolated into it must therefore be either shell-escaped for backslash, dollar and backtick (as talosVersion here and registryMirrors below are) or render-time pattern-validated to exclude those bytes (as the kubelet reservation fields are in nodegroup.yaml). A new such field added here without one of the two silently reopens command injection into a host-cluster Pod. Note: an asterisk-slash sequence inside this Helm comment closes it early and breaks the render, so the kubelet field names are spelled out here rather than written as globs. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. */}}
+                    {{- /* INVARIANT (cozystack/cozystack#3513): the data block below is emitted from the unquoted `TCT_MANIFEST="$(cat <<EOF` heredoc in this Job's command, so it is subject to shell parameter expansion and command substitution at Job runtime. Every tenant-controlled free-form value interpolated into it must therefore be either shell-escaped for backslash, dollar and backtick (as talosVersion here and registryMirrors below are) or render-time pattern-validated to exclude those bytes (as the kubelet reservation fields are in nodegroup.yaml). A new such field added here without one of the two silently reopens command injection into a host-cluster Pod. Note: an asterisk-slash sequence inside this Helm comment closes it early and breaks the render, so the kubelet field names are spelled out here rather than written as globs. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. */}}
                     data: |
                       version: v1alpha1
                       persist: true
@@ -338,6 +360,22 @@ spec:
                         {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
+                          {{- /* Without this the kubelet never applies the
+                                node.cloudprovider.kubernetes.io/uninitialized
+                                taint, the Proxmox cloud-controller-manager
+                                never gets to initialise the Node, and the
+                                topology.kubernetes.io/{region,zone} labels are
+                                never set. The CSI node plugin then exits
+                                fatally on "Failed to get region or zone for
+                                node", so the tenant ends up with a
+                                StorageClass and no way to attach a volume.
+                                The kubevirt path has no cloud provider and
+                                must not carry the flag: it would taint every
+                                worker with nothing to remove the taint. */}}
+                          {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                          extraArgs:
+                            cloud-provider: external
+                          {{- end }}
                           extraConfig:
                             systemReserved:
                               cpu: "{{ .systemReservedCpu }}"
@@ -397,6 +435,32 @@ spec:
                             service:
                               disabled: true
               EOF
+              )"
+
+              # The CRD marks spec immutable, so apply fails the moment any input
+              # this render depends on has genuinely changed -- the apiserver
+              # address is the one that moves in practice. The object then has to
+              # be replaced rather than patched. Existing Machines are unaffected:
+              # their bootstrap data was rendered when they joined. Only Machines
+              # created afterwards read the new template, which is the intent.
+              #
+              # Every other apply failure still stops the Job. Matching on the
+              # message is narrow on purpose: silently deleting and recreating on
+              # an unrecognised error would turn an unrelated fault into worker
+              # churn.
+              if ! APPLY_OUT="$(printf '%s\n' "$TCT_MANIFEST" | kubectl apply -f - 2>&1)"; then
+                case "$APPLY_OUT" in
+                  *"is immutable"*|*"Spec is immutable"*)
+                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} spec changed; replacing the immutable object"
+                    kubectl delete talosconfigtemplate "${RELEASE}-${GROUP_NAME}" -n "$NS"
+                    printf '%s\n' "$TCT_MANIFEST" | kubectl apply -f -
+                    ;;
+                  *)
+                    echo "$APPLY_OUT" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
               echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} applied"
           resources:
             requests:

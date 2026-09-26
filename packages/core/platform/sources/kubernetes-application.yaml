@@ -38,6 +38,15 @@ spec:
           path: system/victoria-metrics-operator
         - name: kubernetes-kubevirt-csi-node
           path: system/kubevirt-csi-node
+        # The node half of the storage driver for the proxmox substrate: the
+        # DaemonSet, the CSIDriver object and the storage classes. Published
+        # alongside the KubeVirt one rather than in a variant of its own,
+        # because a second variant would rename every tenant addon artifact.
+        # The controller half and the cloud-controller-manager are not here:
+        # they hold the hypervisor token, so they run in the management cluster
+        # as plain Deployments rendered by the kubernetes chart itself.
+        - name: kubernetes-proxmox-csi
+          path: system/proxmox-csi
         - name: kubernetes-vertical-pod-autoscaler-crds
           path: system/vertical-pod-autoscaler-crds
         - name: kubernetes-coredns

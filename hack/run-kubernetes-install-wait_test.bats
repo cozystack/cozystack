@@ -1569,9 +1569,16 @@ EOF
   # not a filter by itself either: what a creator can be
   # written in is decided beside the sweep, so that prose acquiring a fenced
   # manifest reds nothing here.
+  #
+  # The Proxmox fixture is the second entry and is deliberately not governed by
+  # the rules above: those read run-kubernetes.sh's shell, and this one is a
+  # declarative manifest a chainsaw `apply:` block applies. It creates a cluster
+  # all the same, which is why it is named here rather than excluded — a reader
+  # asking "what creates a tenant cluster in this tree" gets both answers. The
+  # suite that applies it ships `.disabled`, so nothing runs it in CI today.
   found="$(_kind_creators "$REPO_ROOT/hack/e2e-chainsaw" \
     | sed "s|^$REPO_ROOT/||" | tr '\n' ' ')"
-  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh "
+  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml "
   if [ "$found" != "$want" ]; then
     echo "scripts under hack/e2e-chainsaw creating a Kubernetes CR: [$found]" >&2
     echo "Check first whether the new file APPLIES the kind or only asserts on" >&2

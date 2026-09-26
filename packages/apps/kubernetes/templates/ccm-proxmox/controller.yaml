@@ -1,0 +1,165 @@
+{{- /*
+  The Proxmox cloud-controller-manager, running in the management cluster for
+  the same reason as the CSI controller beside it: it authenticates to the
+  hypervisor, and the tenant is cluster-admin of its own cluster. Its whole job
+  is to write on the tenant's Nodes — clear the
+  node.cloudprovider.kubernetes.io/uninitialized taint the kubelet sets under
+  --cloud-provider=external, set providerID, apply the topology labels the CSI
+  node plugin exits without — and it can do all of that over the tenant's admin
+  kubeconfig from out of cluster. Nothing about it needs to live inside.
+
+  There is no tenant-side RBAC to install: authenticating as the tenant's own
+  admin, there is nothing left to grant.
+*/ -}}
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if .Values._namespace.etcd }}
+{{- if not .Values.proxmox.ccm.credentialsSecretName }}
+{{-   fail "proxmox.ccm.credentialsSecretName is required on the proxmox substrate: without a cloud-controller-manager every worker keeps the uninitialized taint and the cluster schedules nothing" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-pccm
+  namespace: {{ .Release.Namespace }}
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Release.Name }}-pccm
+  labels:
+    app: {{ .Release.Name }}-pccm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-pccm
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-pccm
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: {{ .Release.Name }}-pccm
+      priorityClassName: system-cluster-critical
+      {{- /* Deliberately not a blanket `operator: Exists`. That one also matches
+            node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds,
+            which stops admission adding the bounded 300s one, and the Pod then
+            outlives the Node it runs on. Here the Pod is in the management
+            cluster, so the failure is milder than it was in the tenant, but the
+            reason to keep the list exact has not changed. */}}
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
+      - name: build-cloud-config
+        image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          for k in url token_id token_secret region; do
+            [ -s "/proxmox-credentials/$k" ] || {
+              echo "the credentials Secret has no key '$k'; the cloud-controller-manager needs url, token_id, token_secret and region" >&2
+              exit 1
+            }
+          done
+          umask 077
+          {
+            echo "clusters:"
+            echo "  - url: $(cat /proxmox-credentials/url)"
+            echo "    insecure: {{ .Values.proxmox.insecure }}"
+            echo "    token_id: $(cat /proxmox-credentials/token_id)"
+            echo "    token_secret: $(cat /proxmox-credentials/token_secret)"
+            echo "    region: $(cat /proxmox-credentials/region)"
+            {{- /* capmox, not the default mode. The default resolves a node to
+                  its VM by name and writes providerID as proxmox://<node>/<vmid>;
+                  capmox reads the CAPI Machine and writes proxmox://<SMBIOS UUID>,
+                  which is the form capmox itself puts on the Machine. Leave it
+                  out and the Node and its Machine carry two different providerIDs
+                  for the same VM — measured on a live cluster, where the Node
+                  came up as proxmox://prox-home/119 against the Machine's
+                  proxmox://fc881854-a1f7-4814-831a-b69e286e6e4c. */}}
+            echo "features:"
+            echo "  provider: capmox"
+          } > /cloud-config/config.yaml
+        volumeMounts:
+        - name: proxmox-credentials
+          mountPath: /proxmox-credentials
+          readOnly: true
+        - name: cloud-config
+          mountPath: /cloud-config
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      containers:
+        - name: cloud-controller-manager
+          image: ghcr.io/sergelogvinov/proxmox-cloud-controller-manager:v0.15.0
+          args:
+            - --v=4
+            - --cloud-provider=proxmox
+            - --cloud-config=/etc/proxmox/config.yaml
+            {{- /* cloud-node clears the uninitialized taint and applies the
+                  topology labels; cloud-node-lifecycle removes Nodes whose VM
+                  is gone. The route and service controllers are not wanted:
+                  routing is Cilium's and the hypervisor offers no load
+                  balancer. */}}
+            - --controllers=cloud-node,cloud-node-lifecycle
+            - --leader-elect=false
+            {{- /* Out of cluster, against the tenant. The kubeconfig makes it
+                  the tenant's own admin, which is why no RBAC is installed
+                  there and why --use-service-account-credentials is absent:
+                  that flag asks the manager to mint per-controller tokens from
+                  the cluster it authenticates to. */}}
+            - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+            - --authentication-kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+            - --authorization-kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+            - --secure-port=10258
+            - --authorization-always-allow-paths=/healthz,/livez,/readyz,/metrics
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/proxmox
+              readOnly: true
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10258
+              scheme: HTTPS
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: cloud-config
+          emptyDir:
+            medium: Memory
+        - name: proxmox-credentials
+          secret:
+            secretName: {{ .Values.proxmox.ccm.credentialsSecretName | quote }}
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig
+{{- end }}
+{{- end }}

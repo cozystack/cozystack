@@ -1,0 +1,237 @@
+{{- /*
+  The Proxmox CSI controller runs HERE, in the management cluster, and not in
+  the tenant. It is the only component in this pair that holds the hypervisor
+  token, and a token that reaches a tenant cluster is a token the tenant owns:
+  the tenant downloads this cluster's admin kubeconfig (the resource definition
+  lists it in secrets.include), so it is cluster-admin there and can read any
+  Secret. The privileges the driver documents are granted on `/` — VM.Audit,
+  VM.Config.Disk, Datastore.Allocate and friends — so a leaked token reaches
+  every VM and every volume on the whole Proxmox cluster, not just this
+  tenant's.
+
+  This mirrors what the KubeVirt path already does in templates/csi/deploy.yaml:
+  the controller lives in the management cluster and drives the tenant through
+  its admin kubeconfig, while the tenant gets only the node plugin, which
+  mounts no credentials at all. The driver supports exactly this — its
+  --kubeconfig flag is documented as "if the provisioner is being run out of
+  cluster" — and so do the sidecars.
+
+  The token still never appears in a rendered manifest: this Deployment names
+  the operator's Secret, and an init container composes the driver's config
+  file from it into an emptyDir at start-up.
+
+  It follows proxmox.csi.enabled, like the tenant-side release: with the driver
+  switched off there is nothing for a controller to serve and no token to hold.
+*/ -}}
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if and .Values._namespace.etcd .Values.proxmox.csi.enabled }}
+{{- if not .Values.proxmox.csi.credentialsSecretName }}
+{{-   fail "proxmox.csi.credentialsSecretName is required on the proxmox substrate: the CSI controller cannot reach the hypervisor without an API token" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-pcsi
+  namespace: {{ .Release.Namespace }}
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Release.Name }}-pcsi-controller
+  labels:
+    app: {{ .Release.Name }}-pcsi-driver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-pcsi-driver
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-pcsi-driver
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: {{ .Release.Name }}-pcsi
+      priorityClassName: system-cluster-critical
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
+      {{- /* The operator's Secret carries the four keys the driver's config
+            file is made of: url, token_id, token_secret and region. Composing
+            them here keeps the token in this namespace: the kubelet of this
+            cluster reads the Secret into a tmpfs volume, and nothing carries it
+            into the tenant. */}}
+      - name: build-cloud-config
+        image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          for k in url token_id token_secret region; do
+            [ -s "/proxmox-credentials/$k" ] || {
+              echo "the credentials Secret has no key '$k'; the driver needs url, token_id, token_secret and region" >&2
+              exit 1
+            }
+          done
+          umask 077
+          {
+            echo "clusters:"
+            echo "  - url: $(cat /proxmox-credentials/url)"
+            echo "    insecure: {{ .Values.proxmox.insecure }}"
+            echo "    token_id: $(cat /proxmox-credentials/token_id)"
+            echo "    token_secret: $(cat /proxmox-credentials/token_secret)"
+            echo "    region: $(cat /proxmox-credentials/region)"
+            echo "features:"
+            {{- /* Every tenant's volumes used to be owned by the driver's
+                  default VMID 9999, which left them indistinguishable on shared
+                  storage: an operator could not tell whose leftovers were whose,
+                  and a VM-level ACL could not separate them. A per-cluster id
+                  derived from the release name gives each tenant its own owner. */}}
+            echo "  controllerVmID: {{ include "kubernetes.proxmoxControllerVmID" $ }}"
+          } > /cloud-config/config.yaml
+        volumeMounts:
+        - name: proxmox-credentials
+          mountPath: /proxmox-credentials
+          readOnly: true
+        - name: cloud-config
+          mountPath: /cloud-config
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      containers:
+        - name: csi-driver
+          image: ghcr.io/sergelogvinov/proxmox-csi-controller:v0.20.0
+          args:
+            - "-v=4"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--cloud-config=/etc/proxmox/config.yaml"
+            {{- /* Out of cluster: the Nodes, PVs and VolumeAttachments this
+                  driver reconciles are the tenant's, and it reaches them the
+                  same way the KubeVirt controller's sidecars do. */}}
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: cloud-config
+              mountPath: /etc/proxmox
+              readOnly: true
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.12.0
+          args:
+            - "-v=4"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout=3m"
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
+          args:
+            - "-v=4"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout=3m"
+            - "--default-fstype=ext4"
+            - "--feature-gates=Topology=true"
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
+          args:
+            - "-v=4"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout=3m"
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: cloud-config
+          emptyDir:
+            medium: Memory
+        - name: proxmox-credentials
+          secret:
+            secretName: {{ .Values.proxmox.csi.credentialsSecretName | quote }}
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig
+{{- end }}
+{{- end }}

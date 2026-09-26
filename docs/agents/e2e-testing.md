@@ -10,6 +10,16 @@ The app suite is **Kyverno Chainsaw** (`hack/e2e-chainsaw/`, one directory per a
 
 Every convention below follows from that finding: **fail fast, fail loud, make the failure legible.** A test that flakes is a test (or a product) with a real race to fix, not a test to wrap in a retry. Chainsaw's per-assertion polling is the structural expression of this: each `assert` waits on its own condition to its own timeout, and a failure is reported as a structured diff plus auto-captured events/describe/logs — not a generic non-zero exit.
 
+## The Proxmox lane
+
+`hack/e2e-chainsaw/kubernetes-proxmox/` covers the Proxmox substrate and is the one suite in this tree that the normal lanes cannot run. It needs a Proxmox hypervisor, and the `oracle-vm-*` runners have none, so it ships as `chainsaw-test.yaml.disabled`: suite discovery is `find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml`, which registers it nowhere and makes it unselectable rather than merely unselected. `.github/workflows/e2e-proxmox.yaml` drops the suffix on a self-hosted runner that has one.
+
+Two properties of that workflow are security boundaries rather than preferences. It is never triggered by `pull_request`, because a self-hosted runner executes what the workflow checks out and this one stages a hypervisor token and a live kubeconfig — a fork PR trigger would hand both to its author. And its concurrency group never cancels in progress, because a killed run leaks VMs on the hypervisor rather than merely losing a result.
+
+It does not install Cozystack. Every other lane builds a sandbox per run; this one asserts against an existing cluster and an existing hypervisor, which is a weaker guarantee and is stated in the suite header rather than left to be discovered.
+
+The imperative half lives in `_lib/run-proxmox.sh` and is deliberately not a port of `_lib/run-kubernetes.sh`: that script's diagnostics are virt-launcher Pods, VirtualMachineInstances and guest consoles, none of which exist on an external hypervisor.
+
 ## Conventions
 
 ### 1. No retries on deterministic steps; retry only pure infrastructure

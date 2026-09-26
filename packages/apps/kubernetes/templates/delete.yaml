@@ -138,6 +138,90 @@ spec:
                     --type=merge --field-manager=flux-client-side-apply
                 fi
               done
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+              {{- /* Step 1b, proxmox only, and it has to come before Step 2.
+                    A PVC on this substrate is a disk on the hypervisor, and the
+                    only thing that can free it is the CSI controller answering
+                    DeleteVolume. Step 2 removes that controller. capmox then
+                    destroys the worker VMs, and Proxmox frees only the volumes
+                    the destroyed VMID owns — these are owned by the driver's
+                    own controllerVmID, not by any worker — so anything still
+                    bound here stays on storage after the cluster is gone, with
+                    the tenant's data in it and no PV object left to say whose
+                    it was. Deleting the claims while the driver is still up is
+                    what turns that into a DeleteVolume call.
+
+                    Best effort on purpose: a tenant that never came up has no
+                    apiserver to ask, and a teardown must not wedge on that. */}}
+              echo "Step 1b: Releasing Proxmox volumes while the CSI driver is still running"
+              kubeconfig=/tmp/tenant-kubeconfig
+              if kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-admin-kubeconfig \
+                   -o jsonpath='{.data.super-admin\.svc}' 2>/dev/null | base64 -d > "$kubeconfig" 2>/dev/null && [ -s "$kubeconfig" ]; then
+                {{- /* A kubeconfig that exists is not an apiserver that answers.
+                      Listing claims against one that does not would come back
+                      empty, and empty is the clean case below — so the two are
+                      told apart first, and the silent one goes through the
+                      backstop rather than through "no PVCs to release".
+                      Bounded by `timeout`, not by --request-timeout: a non-zero
+                      --request-timeout on an in-cluster kubectl call diverts it
+                      to localhost:8080, which is why
+                      hack/check-hook-request-timeout.bats refuses the flag in
+                      hook templates, and the check cannot tell this call, which
+                      carries its own kubeconfig, from one that does not. */}}
+                if ! timeout 30 kubectl --kubeconfig "$kubeconfig" get --raw /readyz >/dev/null 2>&1; then
+                  backstop "step 1b (proxmox volumes)" \
+                    "the tenant apiserver did not answer, so no claim could be released; any Proxmox volume the tenant still held stays on the hypervisor"
+                  pvcs=""
+                else
+                  pvcs=$(kubectl --kubeconfig "$kubeconfig" get pvc -A \
+                    -o jsonpath='{range .items[?(@.spec.storageClassName)]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.spec.volumeName}{"\n"}{end}' 2>/dev/null || true)
+                fi
+                if [ -n "$pvcs" ]; then
+                  {{- /* The claims go first, with --wait=false: a claim being
+                        deleted is one the scheduler places no new Pod on, so a
+                        Pod that a StatefulSet or Deployment brings back cannot
+                        mount it again and hold it to the backstop. Then the
+                        Pods that hold them: a claim in use carries the
+                        kubernetes.io/pvc-protection finalizer, so it clears only
+                        once nothing mounts it. The cluster is being destroyed,
+                        so the workloads are going with it either way. */}}
+                  echo "$pvcs" | while read -r pns pname pv; do
+                    [ -n "$pname" ] || continue
+                    echo "  Deleting PVC $pns/$pname (PV $pv)"
+                    kubectl --kubeconfig "$kubeconfig" -n "$pns" delete pvc "$pname" --wait=false --ignore-not-found 2>/dev/null || true
+                  done
+                  echo "$pvcs" | while read -r pns pname pv; do
+                    [ -n "$pname" ] || continue
+                    for pod in $(kubectl --kubeconfig "$kubeconfig" -n "$pns" get pods \
+                      -o jsonpath="{range .items[?(@.spec.volumes[*].persistentVolumeClaim.claimName=='$pname')]}{.metadata.name}{\"\n\"}{end}" 2>/dev/null || true); do
+                      echo "  Deleting Pod $pns/$pod, which holds $pname"
+                      kubectl --kubeconfig "$kubeconfig" -n "$pns" delete pod "$pod" --grace-period=0 --force --ignore-not-found 2>/dev/null || true
+                    done
+                  done
+                  {{- /* Wait on the PVs, not the PVCs: the claim disappears as
+                        soon as its finalizer clears, while the disk is freed
+                        only when the PV is gone. */}}
+                  deadline=$(( $(date +%s) + 300 ))
+                  while [ "$(date +%s)" -lt "$deadline" ]; do
+                    left=$(kubectl --kubeconfig "$kubeconfig" get pv \
+                      -o jsonpath='{range .items[?(@.spec.csi.driver=="csi.proxmox.sinextra.dev")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)
+                    [ "${left:-0}" -eq 0 ] && break
+                    echo "  waiting for $left Proxmox volume(s) to be released"
+                    sleep 5
+                  done
+                  left=$(kubectl --kubeconfig "$kubeconfig" get pv \
+                    -o jsonpath='{range .items[?(@.spec.csi.driver=="csi.proxmox.sinextra.dev")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)
+                  if [ "${left:-0}" -ne 0 ]; then
+                    backstop "step 1b (proxmox volumes)" \
+                      "$left Proxmox volume(s) were not released in 300s; their disks stay on the hypervisor and no PV object will survive to name them"
+                  fi
+                else
+                  echo "  no PVCs to release"
+                fi
+              else
+                echo "  no tenant kubeconfig; nothing to release" >&2
+              fi
+{{- end }}
 
               echo "Step 2: Deleting HelmReleases with label cozystack.io/target-cluster-name={{ .Release.Name }}"
               # --wait=true blocks until the child HelmReleases (in-tenant cilium,
@@ -285,10 +369,21 @@ spec:
               # already been accepted either way — an expired wait and
               # --wait=false leave the same cluster state, with the same objects
               # finalizing in the background once the hook has moved on.
+              {{- /* CDI is a KubeVirt-path component and is not installed on
+                    every cluster; on the proxmox substrate there are no
+                    DataVolumes at all. kubectl exits non-zero on an unknown
+                    resource type, and under set -e that failed the whole hook
+                    after every earlier step had already run — the teardown then
+                    reports failure while the cluster is half gone. Checked
+                    rather than assumed. */}}
               echo "Step 5: Cleaning up DataVolumes"
-              kubectl -n {{ .Release.Namespace }} delete datavolumes \
-                -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
-                --ignore-not-found=true --wait=false
+              if ! kubectl api-resources --api-group=cdi.kubevirt.io 2>/dev/null | grep -q datavolumes; then
+                echo "  DataVolume CRD is not installed; nothing to clean up"
+              else
+                kubectl -n {{ .Release.Namespace }} delete datavolumes \
+                  -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
+                  --ignore-not-found=true --wait=false
+              fi
 
               echo "Step 6: Cleaning up LoadBalancer Services"
               kubectl -n {{ .Release.Namespace }} delete services \
@@ -373,15 +468,21 @@ rules:
       - get
       - list
       - delete
-  # Scoped to the single Kamaji datastore connection Secret so Step 4b can
-  # strip the leftover finalizer.kamaji.clastix.io/datastore-secret finalizer.
-  # resourceNames limits get/patch to exactly this Secret.
+  # Scoped to two Secrets by name: the Kamaji datastore connection Secret, whose
+  # leftover finalizer.kamaji.clastix.io/datastore-secret finalizer Step 4b
+  # strips, and on the proxmox substrate the tenant's admin kubeconfig, which
+  # Step 1b needs to delete the tenant's PVCs while the CSI driver is still up.
+  # Without the second one Step 1b degrades to "no tenant kubeconfig" and says
+  # nothing is to be released while the volumes are quietly left behind.
   - apiGroups:
       - ""
     resources:
       - secrets
     resourceNames:
       - {{ .Release.Name }}-datastore-config
+      {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+      - {{ .Release.Name }}-admin-kubeconfig
+      {{- end }}
     verbs:
       - get
       - patch

@@ -288,12 +288,39 @@ type Proxmox struct {
 	// Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 	// +kubebuilder:default:={}
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// Proxmox cloud-controller-manager settings.
+	// +kubebuilder:default:={}
+	Ccm ProxmoxCCM `json:"ccm,omitempty"`
+	// Proxmox CSI driver settings.
+	// +kubebuilder:default:={}
+	Csi ProxmoxCSI `json:"csi,omitempty"`
 	// Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 	// +kubebuilder:default:={}
 	DnsServers []string `json:"dnsServers,omitempty"`
+	// Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
+	// +kubebuilder:default:=false
+	Insecure bool `json:"insecure,omitempty"`
 	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
 	// +kubebuilder:default:={}
 	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+}
+
+type ProxmoxCCM struct {
+	// Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
+}
+
+type ProxmoxCSI struct {
+	// Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
+	// Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+	// +kubebuilder:default:=true
+	Enabled bool `json:"enabled"`
+	// StorageClasses to create in the tenant.
+	// +kubebuilder:default:={}
+	StorageClasses []ProxmoxStorageClass `json:"storageClasses,omitempty"`
 }
 
 type ProxmoxIPv4 struct {
@@ -306,6 +333,19 @@ type ProxmoxIPv4 struct {
 	// Netmask prefix length.
 	// +kubebuilder:default:=24
 	Prefix int `json:"prefix"`
+}
+
+type ProxmoxStorageClass struct {
+	// Filesystem the driver formats volumes with: ext4 or xfs.
+	Fstype string `json:"fstype,omitempty"`
+	// StorageClass name inside the tenant cluster.
+	Name string `json:"name"`
+	// Delete or Retain.
+	ReclaimPolicy string `json:"reclaimPolicy,omitempty"`
+	// Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+	Ssd bool `json:"ssd,omitempty"`
+	// Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+	Storage string `json:"storage"`
 }
 
 type Resources struct {

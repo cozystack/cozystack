@@ -94,15 +94,40 @@ substrate: kubevirt
 ## @field {string} gateway - Default gateway for the workers.
 ## @field {int} prefix - Netmask prefix length.
 
-## @typedef {struct} Proxmox - Proxmox substrate settings for the cluster's infrastructure object. Ignored unless `substrate` is `proxmox`.
+## @typedef {struct} ProxmoxStorageClass - A StorageClass backed by a Proxmox storage.
+## @field {string} name - StorageClass name inside the tenant cluster.
+## @field {string} storage - Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+## @field {string} [fstype] - Filesystem the driver formats volumes with: ext4 or xfs.
+## @field {bool} [ssd] - Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+## @field {string} [reclaimPolicy] - Delete or Retain.
+
+## @typedef {struct} ProxmoxCCM - Proxmox cloud-controller-manager. It runs in the management cluster, in this namespace, and writes on the tenant's Nodes over the tenant's admin kubeconfig, so the hypervisor token never enters the tenant. Not optional on this substrate: the worker kubelet runs with `--cloud-provider=external`, so every node carries the `uninitialized` taint until this controller clears it, and the CSI node plugin needs the topology labels it applies.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+
+## @typedef {struct} ProxmoxCSI - Proxmox CSI driver. The tenant gets the node plugin, the CSIDriver object and the storage classes; the controller, the only half that holds the hypervisor token, runs in the management cluster, in this namespace.
+## @field {bool} enabled - Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+## @field {[]ProxmoxStorageClass} storageClasses - StorageClasses to create in the tenant.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
 ## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 ## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+## @field {bool} [insecure] - Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
 ## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+## @field {ProxmoxCCM} [ccm] - Proxmox cloud-controller-manager settings.
+## @field {ProxmoxCSI} [csi] - Proxmox CSI driver settings.
 
 ## @param {Proxmox} proxmox - Proxmox substrate settings.
 proxmox:
   allowedNodes: []
   dnsServers: []
+  insecure: false
+  ccm:
+    credentialsSecretName: ""
+  csi:
+    enabled: true
+    credentialsSecretName: ""
+    storageClasses: []
   ipv4Config:
     addresses: []
     gateway: ""

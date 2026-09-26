@@ -161,6 +161,7 @@ substrate: kubevirt
 ## @field {bool} [full] - Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
 ## @field {ProxmoxNetwork} network - NIC configuration.
 ## @field {string} [storage] - Proxmox storage for the cloned disk; needs `full: true`. A target storage is a full-clone parameter — a linked clone always lives on the template's storage, and Proxmox refuses the pair — so the render refuses it too. Empty keeps the template's storage.
+## @field {string} [pool] - Proxmox resource pool the worker VMs are added to. Set the same pool on every node pool of a tenant cluster and grant the tenant's tokens their privileges on `/pool/<name>`: that is the one ACL path that follows every VM capmox creates, replacements included. The pool must exist on the hypervisor; capmox does not create it. Empty adds the workers to no pool.
 ## @field {[]string} dnsServers - Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.
 
 ## @param {Proxmox} proxmox - Proxmox substrate settings.
@@ -173,6 +174,7 @@ proxmox:
   network:
     bridge: ""
   storage: ""
+  pool: ""
   dnsServers: []
 
 ##

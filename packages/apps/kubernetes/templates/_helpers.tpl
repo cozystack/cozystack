@@ -287,3 +287,23 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+  A per-cluster owner id for the volumes this tenant's CSI controller creates.
+
+  The driver names every volume vm-<controllerVmID>-pvc-<uuid> and defaults that
+  id to 9999, so on shared storage all tenants' volumes carry one owner: an
+  operator looking at leftovers cannot tell whose they are, and a VM-level ACL
+  cannot separate them. Deriving it from the release name gives each tenant its
+  own, which is what makes both of those possible.
+
+  The range starts at 100000, above the ids Proxmox hands out to real guests in
+  practice and well above the driver's own minimum of 100, and is 800000 wide so
+  two tenants colliding takes a birthday collision rather than a near miss. It
+  is derived, not stored: the same release always produces the same id, and a
+  cluster that is deleted and recreated under the same name adopts its own old
+  volumes rather than orphaning them.
+*/ -}}
+{{- define "kubernetes.proxmoxControllerVmID" -}}
+{{- add 100000 (mod (atoi (adler32sum .Release.Name)) 800000) -}}
+{{- end -}}

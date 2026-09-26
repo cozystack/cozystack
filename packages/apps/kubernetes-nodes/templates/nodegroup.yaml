@@ -146,6 +146,9 @@ spec:
   {{- with .group.proxmox.storage }}
   storage: {{ . | quote }}
   {{- end }}
+  {{- with .group.proxmox.pool }}
+  pool: {{ . | quote }}
+  {{- end }}
   network:
     default:
       bridge: {{ .group.proxmox.network.bridge | quote }}

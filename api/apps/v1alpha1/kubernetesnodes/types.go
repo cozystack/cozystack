@@ -131,6 +131,9 @@ type Proxmox struct {
 	// NIC configuration.
 	// +kubebuilder:default:={}
 	Network ProxmoxNetwork `json:"network"`
+	// Proxmox resource pool the worker VMs are added to. Set the same pool on every node pool of a tenant cluster and grant the tenant's tokens their privileges on `/pool/<name>`: that is the one ACL path that follows every VM capmox creates, replacements included. The pool must exist on the hypervisor; capmox does not create it. Empty adds the workers to no pool.
+	// +kubebuilder:default:=""
+	Pool string `json:"pool,omitempty"`
 	// Proxmox storage for the cloned disk; needs `full: true`. A target storage is a full-clone parameter — a linked clone always lives on the template's storage, and Proxmox refuses the pair — so the render refuses it too. Empty keeps the template's storage.
 	// +kubebuilder:default:=""
 	Storage string `json:"storage,omitempty"`
