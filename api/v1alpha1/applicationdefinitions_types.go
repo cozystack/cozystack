@@ -120,10 +120,14 @@ type ApplicationDefinitionRelease struct {
 	//     kstatus rules instead.
 	// A CR whose CRD is not installed fails the Helm action before any wait,
 	// whatever these expressions say.
-	// Upstream evaluates these only when the Helm action itself has wait
-	// enabled, so the release.cozystack.io/helm-install-disable-wait annotation
-	// makes them a silent no-op whatever waitStrategy says: the HelmRelease
-	// reports Ready as soon as helm applies the CR, with no error or warning.
+	// helm-controller parses and validates these expressions and constructs the
+	// status reader before choosing how to wait. Invalid configuration can
+	// therefore stall the HelmRelease with reason InvalidCELExpression even when
+	// the release.cozystack.io/helm-install-disable-wait annotation is set or the
+	// legacy wait strategy is selected. Once setup succeeds, only helm-controller's
+	// poller evaluates expressions: while a Helm action waits under the poller
+	// strategy, and for Helm hooks, which are still waited on when the annotation
+	// disables wait. The legacy strategy never evaluates them.
 	// +optional
 	HealthCheckExprs []kustomize.CustomHealthCheck `json:"healthCheckExprs,omitempty"`
 }
