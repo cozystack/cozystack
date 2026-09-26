@@ -4,11 +4,6 @@ image:
   tag: v2.30.0
   pullPolicy: IfNotPresent
 initContainers:
-  7.1:
-    image:
-      repository: foundationdb/fdb-kubernetes-monitor
-      tag: 7.1.67
-      pullPolicy: IfNotPresent
   7.3:
     image:
       repository: foundationdb/fdb-kubernetes-monitor
