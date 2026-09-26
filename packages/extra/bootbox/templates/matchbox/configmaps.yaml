@@ -22,6 +22,25 @@ data:
         ]
       }
     }
+  arm64.json: |
+    {
+      "id": "arm64",
+      "name": "arm64",
+      "boot": {
+        "kernel": "/assets/vmlinuz-arm64",
+        "initrd": ["/assets/initramfs-arm64.xz"],
+        "args": [
+          "initrd=initramfs-arm64.xz",
+          "init_on_alloc=1",
+          "slab_nomerge",
+          "pti=on",
+          "console=tty0",
+          "console=ttyAMA0",
+          "printk.devkmsg=on",
+          "talos.platform=metal"
+        ]
+      }
+    }
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -33,6 +52,15 @@ data:
       "id": "default",
       "name": "default",
       "profile": "default"
+    }
+  arm64.json: |
+    {
+      "id": "arm64",
+      "name": "arm64",
+      "profile": "arm64",
+      "selector": {
+        "arch": "arm64"
+      }
     }
 ---
 apiVersion: v1
