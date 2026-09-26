@@ -6,3 +6,6 @@ generate:
 
 update:
 	echo
+
+test:
+	helm unittest .

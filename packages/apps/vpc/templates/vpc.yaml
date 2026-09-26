@@ -81,6 +81,12 @@ spec:
   protocol: IPv4
   enableLb: false
   private: true
+  {{- with .allowSubnets }}
+  allowSubnets:
+    {{- range . }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
 {{- end }}
 ---
 apiVersion: v1
