@@ -99,3 +99,61 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/kafka-metadata/cleanup.sh
+
+  # cleanup.sh above deleted both Kafka apps; the node pools the migration hook
+  # created outside the release manifest must go with their uninstalls. The pod
+  # checks select on strimzi.io/cluster on purpose, so they cover every pod
+  # Strimzi runs for each cluster, not only the brokers.
+  #
+  # 12m per check, because cleanup.sh returns without waiting for the
+  # uninstalls. The pools are deleted inside each release's pre-delete Job,
+  # which activeDeadlineSeconds 270 plus terminationGracePeriodSeconds 10 bound
+  # at 280s; the pods then take Strimzi's default 30s termination grace period.
+  # If the two uninstalls run one after the other, 2 x 280 + 30 = 590s, and the
+  # remaining 130s cover helm-controller picking up each deletion and garbage
+  # collection. Every check carries the whole budget, since the order in which
+  # the two finish is not fixed; a passing run waits only as long as the
+  # uninstalls take.
+  - name: verify-uninstall-removes-node-pools
+    try:
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-meta-src
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-meta-target
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-meta-src
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-meta-target
+    catch:
+    # A failed error op already names each object still matching. This adds
+    # the StrimziPodSets between the pools and the pods, and the pods' phase.
+    - script:
+        timeout: 1m
+        content: |
+          kubectl -n "$NAMESPACE" --request-timeout=15s \
+            get kafkanodepools.kafka.strimzi.io,strimzipodsets.core.strimzi.io,pods \
+            -l 'strimzi.io/cluster in (kafka-kafka-meta-src,kafka-kafka-meta-target)' -o wide || true

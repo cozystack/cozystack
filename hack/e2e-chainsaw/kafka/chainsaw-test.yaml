@@ -4,8 +4,8 @@
 # of separate broker + controller KafkaNodePools. This test asserts the KRaft
 # topology renders and converges (both node pools present, the Strimzi Kafka CR
 # reaches kafkaMetadataState=KRaft) and that no ZooKeeper resources remain.
-# Chainsaw's built-in cleanup deletes the applied Kafka CR and fails the test if
-# the teardown hangs, so no explicit delete step is needed.
+# The last step deletes the app itself and checks that no node pool or Strimzi
+# pod of this cluster survives the uninstall.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -121,6 +121,51 @@ spec:
           metadata:
             name: kafka-test-kafka-bootstrap
           (subsets[0].addresses[0].ip != null): true
+
+  # The node pools are created by the migration hook, outside the release
+  # manifest, and each owns the StrimziPodSet running its brokers, so only the
+  # chart's pre-delete hook removes them. Deleting the app explicitly here,
+  # rather than leaving it to Chainsaw's cleanup, is what lets the test look at
+  # the namespace afterwards. The pod check selects on strimzi.io/cluster on
+  # purpose, so it covers every pod Strimzi runs for this cluster (brokers,
+  # controllers, entity operator), not only the brokers.
+  - name: verify-uninstall-removes-node-pools
+    try:
+    # Waits for the app, and so the HelmRelease uninstall behind it, to finish.
+    # 8m, the same budget and for the same reason as timeouts.cleanup above:
+    # this delete is the teardown that cleanup used to perform.
+    - delete:
+        timeout: 8m
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Kafka
+          name: test
+    # The pre-delete hook deleted the pools before the delete above returned;
+    # the pods then go through garbage collection and their termination grace
+    # period, which the default error timeout covers.
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-test
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-test
+    catch:
+    # A failed error op already names each object still matching. This adds
+    # the StrimziPodSets between the pools and the pods, and the pods' phase.
+    - script:
+        timeout: 1m
+        content: |
+          kubectl -n "$NAMESPACE" --request-timeout=15s \
+            get kafkanodepools.kafka.strimzi.io,strimzipodsets.core.strimzi.io,pods \
+            -l strimzi.io/cluster=kafka-test -o wide || true
 ---
 # Logical topic-data backup -> in-place + to-copy RestoreJob round-trip,
 # driving the validated example scripts (examples/backups/kafka) as the harness
@@ -254,3 +299,49 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
+
+  # cleanup.sh above deleted both Kafka apps and waited for them to go, so their
+  # uninstalls have run, and the node pools the migration hook created outside
+  # the release manifest must be gone with them. The pod checks select on
+  # strimzi.io/cluster on purpose, so they cover every pod Strimzi runs for each
+  # cluster, not only the brokers. What is left is garbage collection and the
+  # pods' termination grace period, which the default error timeout covers.
+  - name: verify-uninstall-removes-node-pools
+    try:
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-test
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-restore
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-test
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-restore
+    catch:
+    # A failed error op already names each object still matching. This adds
+    # the StrimziPodSets between the pools and the pods, and the pods' phase.
+    - script:
+        timeout: 1m
+        content: |
+          kubectl -n "$NAMESPACE" --request-timeout=15s \
+            get kafkanodepools.kafka.strimzi.io,strimzipodsets.core.strimzi.io,pods \
+            -l 'strimzi.io/cluster in (kafka-kafka-test,kafka-kafka-restore)' -o wide || true
