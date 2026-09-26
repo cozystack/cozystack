@@ -94,6 +94,13 @@ ingress-nginx:
 
   defaultBackend:
     enabled: true
+    # The chart default, defaultbackend-amd64, has no arm64 build. This image
+    # is the upstream multi-arch replacement: 404 on :8080, /healthz for probes.
+    image:
+      registry: registry.k8s.io
+      image: ingress-nginx/custom-error-pages
+      tag: v1.2.9
+      digest: sha256:203d3020005dbdd735c1ad51f238d8663b9851399b52cc0c9c9e3f7273b6b299
     resources:
       limits:
         cpu: 10m
