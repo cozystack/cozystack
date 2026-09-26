@@ -22,7 +22,7 @@ Which tag an image carries depends on what versions it. Confusing these classes 
 | **Component-versioned** | upstream version + cozystack suffix | `cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0` | No |
 | **Third-party pass-through** | whatever upstream publishes | `docker.io/library/busybox:1.37.0` | No |
 
-Version-line images are first-party builds whose version *is* the cozystack version; they are the ones a release rewrites and retags. Component-versioned images are first-party rebuilds of an upstream component, versioned by that component so the provenance stays legible — kamaji keeping `v0.19.0-cozystack.0` across a cozystack release is correct, not a missed rewrite. Third-party images are vendored by digest from registries cozystack cannot push to; they are never retagged and never mirrored.
+Version-line images are first-party builds whose version *is* the cozystack version; they are the ones a release rewrites and retags. Component-versioned images are first-party rebuilds of an upstream component, versioned by that component so the provenance stays legible — kamaji keeping `v0.19.0-cozystack.0` across a cozystack release is correct, not a missed rewrite. Only a release build pushes that tag (`PUBLISH_VERSIONED=1`); every other build pushes the image under its build-unique `IMAGE_TAG`, so in a CI registry the component tag in the ref may not exist and the digest is what resolves. Third-party images are vendored by digest from registries cozystack cannot push to; they are never retagged and never mirrored.
 
 Only class 1 is touched by a promotion. A tool that "fixes" a class 2 or 3 tag to the cozystack version is introducing a bug, not removing one.
 

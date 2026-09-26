@@ -138,3 +138,22 @@
   echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:percall '
   echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:percall,'
 }
+
+@test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {
+  # An IMAGE_TAG assigned in a package Makefile beats the value CI puts in the
+  # environment, so every PR, main and line build would push the same
+  # component-version tag and overwrite each other's.
+  pkg=packages/system/capi-providers-cpprovider
+  out=$(IMAGE_TAG=pr-1-abc make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/^--tag //')
+  [ "$(echo "$tags" | sed 's/.*://')" = pr-1-abc ] || { echo "FAIL: pushes $tags"; false; }
+  # The stamped refs keep the component version, the tag a release publishes.
+  echo "$out" | grep -qE 'IMG="[^"]*/cluster-api-control-plane-provider-kamaji:v[0-9][^"@]*-cozystack\.[0-9]+@'
+  # The component tag is published only when a release asks for versioned tags.
+  out=$(IMAGE_TAG=pr-1-abc PUBLISH_VERSIONED=1 make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/.*://')
+  [ "$(echo "$tags" | head -1)" = pr-1-abc ]
+  echo "$tags" | grep -qE '^v[0-9].*-cozystack\.[0-9]+$'
+  [ "$(echo "$tags" | wc -l | tr -d ' ')" -eq 2 ]
+  if echo "$tags" | grep -q -- '-$'; then echo "FAIL: a tag ends in '-': $tags"; false; fi
+}
