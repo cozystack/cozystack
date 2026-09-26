@@ -1,0 +1,25 @@
+suite: haproxy deployment
+
+templates:
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+
+tests:
+  - it: pins the haproxy image to the chart appVersion
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: haproxy:3.4.4
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ':latest$'
+
+  - it: follows the chart appVersion when it changes
+    template: templates/deployment.yaml
+    chart:
+      appVersion: 9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: haproxy:9.9.9
