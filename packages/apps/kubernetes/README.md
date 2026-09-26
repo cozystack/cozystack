@@ -116,6 +116,8 @@ What contains it is one Proxmox ACL per tenant, on a resource pool. Create a poo
 | CCM | `VM.Audit`, `VM.GuestAgent.Audit` | `/pool/<proxmox.pool>`: a NotReady node whose VM the token cannot see is reported as gone, and the CCM deletes it |
 | CCM | `Sys.Audit` | `/` |
 
+Grant these to the user that owns the tokens as well as to the tokens themselves: Proxmox caps a privilege-separated token at its user's permissions, so a token whose user holds nothing has nothing, whatever its own ACL says. `pveum user token permissions <user> <token> --path /pool/<proxmox.pool>` shows the set that actually applies.
+
 A storage shared between tenants cannot be scoped: `Datastore.Allocate` on it is what deletes volumes and also what lets any volume on it be attached. Without `proxmox.pool` there is no VM-level scope either: a token that reaches the tenant's VMs then reaches every VM on the hypervisor. What the pool-and-storage scope still leaves open is the tenant's own disks, which the tenant can attach, detach and delete through the controller — the same reach a cluster-admin of the tenant has anyway.
 
 `proxmox.insecure` defaults to `false`: the controllers verify the hypervisor's certificate. A stock Proxmox VE install serves a self-signed one, so either set `insecure: true` for it or install a certificate the management cluster trusts.
