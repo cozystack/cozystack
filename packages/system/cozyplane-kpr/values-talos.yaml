@@ -1,0 +1,9 @@
+# Talos runs KubePrism (a node-local apiserver load balancer) on localhost:7445 —
+# the real endpoint `apiServerURL` asks for; see values.yaml. A hostNetwork pod
+# reaches it on localhost, before any ClusterIP proxy exists.
+apiServerURL: "https://localhost:7445"
+
+# Applied as the SECOND valuesFile of the `cozyplane-kpr` component
+# (packages/packagesources/networking.yaml): the Cozystack operator applies the
+# first with strategy Overwrite and every later one with Merge, so this overlay
+# only works as a file distinct from values.yaml.

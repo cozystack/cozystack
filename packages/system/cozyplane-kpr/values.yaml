@@ -1,0 +1,21 @@
+# cozyplane-kpr container image, built from kpr/ in this repository.
+# Digest-pinned (no floating tag); built and pushed by release.yml's kpr-image
+# job for amd64 and arm64, like the cozyplane image. docs/packaging.md has the
+# procedure and how the pin is refreshed.
+# It imports Cilium's LB control plane, so it is a large image and a SEPARATE
+# component from the cozyplane agent — never co-mingled.
+image: ghcr.io/lllamnyp/cozyplane-kpr@sha256:93353087eb57f1cb0488e5fe503a376173703a5c626a9c074f0b527a57e4b4b6
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The apiserver endpoint cozyplane-kpr connects to. It must NOT be the
+# kubernetes.default ClusterIP: with kube-proxy gone, that VIP is unserved until
+# kpr itself is running (chicken-and-egg). Point it at a real endpoint. Empty
+# uses the in-cluster config (only valid where some other proxy already serves
+# the ClusterIP); on Talos, values-talos.yaml sets the KubePrism local endpoint.
+apiServerURL: ""
+
+# The host cgroup2 root (bind-mounted into the pod) where socket-LB attaches,
+# and the host bpffs root where the LB service/backend maps are pinned.
+cgroupRoot: /host/cgroup2
+bpffsRoot: /sys/fs/bpf
