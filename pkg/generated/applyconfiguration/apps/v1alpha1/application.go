@@ -30,7 +30,7 @@ import (
 //
 // Application is an example type with a spec and a status.
 type ApplicationApplyConfiguration struct {
-	v1.TypeMetaApplyConfiguration    `json:",inline"`
+	v1.TypeMetaApplyConfiguration    `json:""`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
 	AppVersion                       *string                              `json:"appVersion,omitempty"`
 	Spec                             *apiextensionsv1.JSON                `json:"spec,omitempty"`

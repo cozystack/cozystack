@@ -964,11 +964,10 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			// fallback. ResourceVersionMatch must accompany SendInitialEvents.
 			SendInitialEvents:    opts.SendInitialEvents,
 			ResourceVersionMatch: opts.ResourceVersionMatch,
-			// AllowWatchBookmarks and SendInitialEvents are independent watch
-			// features: honor an explicit client bookmark request, and also enable
-			// bookmarks when initial events are requested so the terminating
-			// initial-events bookmark can fire.
-			AllowWatchBookmarks: opts.AllowWatchBookmarks || sendInitialEvents,
+			// Backing bookmarks are forwarded to the client, so ask for them only
+			// when the client did; a WatchList client always does, which keeps
+			// the terminating bookmark's trigger.
+			AllowWatchBookmarks: opts.AllowWatchBookmarks,
 		},
 	})
 	if err != nil {
@@ -982,7 +981,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		}
 	}
 
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, opts.ResourceVersion, func() runtime.Object {
+	bookmarker := registry.NewInitialEventsBookmarker(registry.InitialEventsEndBookmarkRequested(opts), opts.ResourceVersion, func() runtime.Object {
 		return &sdnv1alpha1.SecurityGroup{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: sdnv1alpha1.SchemeGroupVersion.String(),

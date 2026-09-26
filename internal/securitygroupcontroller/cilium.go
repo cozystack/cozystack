@@ -13,8 +13,11 @@ import (
 // CiliumNetworkPolicy resource. The securitygroup-controller only reads a
 // policy's marker label, its attachments annotation and its finalizers — never
 // the spec — so this mirror deliberately omits the spec entirely, keeping the
-// controller binary free of the full Cilium module (whose Kubernetes pin is
-// incompatible with this project's apimachinery fork).
+// controller binary free of the full Cilium module. Importing it would tie this
+// project's k8s.io libraries to Cilium's: Go builds with the higher of the two
+// required versions, so a Cilium release built on a newer Kubernetes would drag
+// them forward, and one built on an older Kubernetes would have to compile
+// against ours.
 //
 // NEVER Update an object of this type: a PUT would serialize it without a spec
 // and wipe the real policy's rules. Finalizer changes go through MergeFrom

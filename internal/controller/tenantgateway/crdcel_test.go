@@ -511,7 +511,7 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 // list-type semantics only when the stored object passes them, for the
 // object as a whole. That is read from
 // pkg/registry/customresource/strategy.go in apiextensions-apiserver
-// v0.35.0, the version go.mod pins. So a stored duplicate does not block writes, it
+// v0.37.1, the version go.mod pins. So a stored duplicate does not block writes, it
 // stops every list on the resource from being checked. The duplicate
 // row below therefore stays admissible whether or not the field carries
 // a marker, which is why the marker's absence is pinned by the schema
@@ -556,7 +556,7 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	// guard is reproduced here rather than exercised. Dropping it would
 	// model an apiserver that refuses writes it accepts. Reproduced
 	// means it does not track upstream, so a bump of
-	// apiextensions-apiserver past the pinned v0.35.0 is where to
+	// apiextensions-apiserver past the pinned v0.37.1 is where to
 	// re-read strategy.go and confirm the shape still holds.
 	rejectsUpdate := func(newSpec, oldSpec map[string]any) bool {
 		if errs := apiservervalidation.ValidateCustomResourceUpdate(
@@ -633,9 +633,9 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 // write. It would not: customresource.ValidateUpdate validates the
 // incoming object's list-type semantics only when the stored object
 // passes them, so a duplicate already in etcd is ratcheted through.
-// Byte-identical across apiextensions-apiserver v0.31.1, the pinned
-// v0.35.0 and v0.36.3, so it is settled behaviour rather than a version
-// quirk, but it is upstream's to change. The
+// That guard is byte-identical across apiextensions-apiserver v0.31.1,
+// v0.35.0, v0.36.3 and the pinned v0.37.1, so it is settled behaviour
+// rather than a version quirk, but it is upstream's to change. The
 // reason is the grain of that ratchet. It is taken over the whole
 // object, not per field, so one stored duplicate stops list-type
 // validation for every list on the resource, silently and with nothing

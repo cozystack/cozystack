@@ -269,6 +269,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 // server using the provided storage map (plural name → rest.Storage).
 func InstallAppsAPIGroup(server *genericapiserver.GenericAPIServer, storage map[string]rest.Storage) error {
 	info := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	info.NegotiatedSerializer = kindPreservingSerializer{Codecs}
 	info.VersionedResourcesStorageMap["v1alpha1"] = storage
 	return server.InstallAPIGroup(&info)
 }

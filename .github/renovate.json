@@ -77,12 +77,6 @@
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],
       "enabled": false
-    },
-    {
-      "description": "k8s.io/apimachinery is replaced by the cozystack/apimachinery fork at a pseudo-version cut from a rebased branch that carries the ConvertToVersion patch. The fork's release tags are stale upstream mirrors, so Renovate proposes one of them as an 'update' that is in fact a downgrade dropping the patch. Advance the replace by hand whenever the fork is rebased onto a new Kubernetes line.",
-      "matchManagers": ["gomod"],
-      "matchPackageNames": ["github.com/cozystack/apimachinery"],
-      "enabled": false
     }
   ]
 }

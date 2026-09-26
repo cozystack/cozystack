@@ -799,12 +799,12 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Honor SendInitialEvents (WatchList): the client expects all existing
+	// Honor a WatchList request: the client expects all existing
 	// objects as ADDED events, then a Bookmark annotated with
 	// metav1.InitialEventsAnnotationKey. controller-runtime's cache already
 	// replays the ADDED events, so we just emit the terminating bookmark.
-	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(options)
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, options.ResourceVersion, func() runtime.Object {
 		app := &appsv1alpha1.Application{}
 		app.TypeMeta = metav1.TypeMeta{
 			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
@@ -826,10 +826,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
-		// Ask the backing watch for bookmarks on a WatchList request; the
-		// apiserver omits them by default, leaving the terminating
-		// initial-events-end bookmark with no reliable trigger.
-		Raw: &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
+		// Backing bookmarks are forwarded to the client, so ask for them only
+		// when the client did; a WatchList client always does, which keeps
+		// the terminating bookmark's trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: options.AllowWatchBookmarks},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
