@@ -211,14 +211,14 @@ type ReleaseConfig struct {
 	Prefix   string            `yaml:"prefix"`
 	Labels   map[string]string `yaml:"labels"`
 	ChartRef ChartRefConfig    `yaml:"chartRef"`
-	// HelmInstallTimeout is a per-Application override of Install.Timeout
-	// and Upgrade.Timeout. When non-zero, it wins over
+	// HelmInstallTimeout is a per-kind override of Install.Timeout and
+	// Upgrade.Timeout. When non-zero, it wins over
 	// HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout below.
 	// Populated from the release.cozystack.io/helm-install-timeout
 	// annotation on the ApplicationDefinition at start-up.
 	HelmInstallTimeout time.Duration `yaml:"helmInstallTimeout,omitempty"`
-	// HelmUpgradeTimeout is a per-Application override of Upgrade.Timeout
-	// only. When non-zero, it wins over both HelmReleaseUpgradeTimeout and
+	// HelmUpgradeTimeout is a per-kind override of Upgrade.Timeout only.
+	// When non-zero, it wins over both HelmReleaseUpgradeTimeout and
 	// the Upgrade.Timeout value HelmInstallTimeout would otherwise apply,
 	// so a kind can carry an asymmetric install/upgrade budget. Populated
 	// from the release.cozystack.io/helm-upgrade-timeout annotation on the
@@ -236,12 +236,13 @@ type ReleaseConfig struct {
 	// without polling healthy releases at the same cadence.
 	HelmReleaseRetryInterval time.Duration `yaml:"helmReleaseRetryInterval,omitempty"`
 	// HelmReleaseInstallTimeout is the global default for
-	// Spec.Install.Timeout. Overridden per-Application by HelmInstallTimeout
-	// when the annotation is set.
+	// Spec.Install.Timeout. Overridden for this Application kind by
+	// HelmInstallTimeout from its ApplicationDefinition.
 	HelmReleaseInstallTimeout time.Duration `yaml:"helmReleaseInstallTimeout,omitempty"`
 	// HelmReleaseUpgradeTimeout is the global default for
-	// Spec.Upgrade.Timeout. Overridden per-Application by HelmInstallTimeout
-	// when the annotation is set.
+	// Spec.Upgrade.Timeout. Overridden for this Application kind by
+	// HelmInstallTimeout, or by HelmUpgradeTimeout with higher precedence,
+	// from its ApplicationDefinition.
 	HelmReleaseUpgradeTimeout time.Duration `yaml:"helmReleaseUpgradeTimeout,omitempty"`
 	// HelmReleaseMaxHistory is the global default for Spec.MaxHistory.
 	// 0 means unlimited per Helm semantics; matches the cozystack-operator
