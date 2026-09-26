@@ -13,15 +13,10 @@ repos:
       files: ^(api/|pkg/apis/|pkg/generated/|internal/crdinstall/manifests/|packages/system/cozystack-controller/definitions/|packages/system/application-definition-crd/definition/|packages/system/backup-controller/definitions/|packages/system/backupstrategy-controller/definitions/|hack/update-codegen\.sh$|hack/boilerplate\.go\.txt$|Makefile$)
       pass_filenames: false
     - id: run-make-generate
-      name: Run 'make generate' in all app directories
+      name: Run 'make generate' in all package directories
       entry: |
         sh -c 'exec flock -x "$(git rev-parse --git-common-dir)/pre-commit.lock" "$@"' -- sh -c '
-          for dir in ./packages/apps/*/ ./packages/extra/*/; do
-            if [ -d "$dir" ]; then
-              echo "Running make generate in $dir"
-              make generate -C "$dir" || exit $?
-            fi
-          done
+          hack/pre-commit-generate-packages.sh || exit $?
           git diff --color=always | cat
         '
       language: system
