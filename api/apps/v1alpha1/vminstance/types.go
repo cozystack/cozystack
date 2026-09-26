@@ -80,7 +80,7 @@ type Disk struct {
 type Firmware struct {
 	// Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
 	Bootloader string `json:"bootloader,omitempty"`
-	// Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+	// Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi".
 	EfiPersistent bool `json:"efiPersistent,omitempty"`
 	// Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
 	SecureBoot bool `json:"secureBoot,omitempty"`
