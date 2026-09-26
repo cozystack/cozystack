@@ -373,6 +373,11 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+          # checkout v4.4.0 and later refuse a fork's code under workflow_run
+          # without this opt-in. The boundary is the one the header describes:
+          # no fork-authored script runs in `publish`, and `e2e` holds no push
+          # token.
+          allow-unsafe-pr-checkout: true
       # Guard against a TOCTOU race: the status is stamped on the SHA `resolve`
       # saw, but refs/pull/N/merge tracks the live PR head. If the fork pushed
       # again between resolve and here, HEAD^2 (the merge ref's PR-head parent)
@@ -566,6 +571,7 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
       # Same TOCTOU guard as `publish`: refuse to test a merge ref that moved off
       # the SHA the status is stamped on (see the publish job for the rationale).
       - name: Assert checkout matches resolved head SHA
