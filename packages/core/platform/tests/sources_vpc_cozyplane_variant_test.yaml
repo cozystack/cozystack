@@ -1,0 +1,42 @@
+suite: the cozyplane vpc variant's dependency edges
+# Its own suite because it renders templates/sources.yaml — see
+# vpc_multus_dependency_test.yaml for why sources suites stay separate from
+# bundle suites.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: gates the cozyplane vpc flavor on the aggregated sdn apiserver, not on multus
+    documentSelector:
+      path: metadata.name
+      value: cozystack.virtualprivatecloud-application
+    asserts:
+      - equal:
+          path: spec.variants[1].name
+          value: cozyplane
+      # sdn.cozystack.io is served only by the aggregated apiserver; without
+      # this edge the tenant VPC release races the group's availability.
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.cozyplane-apiserver
+      # No NetworkAttachmentDefinitions in this flavor, so no multus edge —
+      # the cozyplane bundle never installs multus and the edge would hang.
+      - notContains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.multus
+      # The rd component must select the cozyplane ApplicationDefinition, or
+      # the installed definition points at an artifact this variant never
+      # builds.
+      - contains:
+          path: spec.variants[1].components
+          content:
+            name: virtualprivatecloud-rd
+            path: system/virtualprivatecloud-rd
+            valuesFiles:
+              - values.yaml
+              - values-cozyplane.yaml
+            install:
+              namespace: cozy-system
+              releaseName: virtualprivatecloud-rd

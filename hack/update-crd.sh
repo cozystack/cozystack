@@ -67,11 +67,16 @@ esac
 
 # Determine variant from PackageSource file
 # Look for packages/core/platform/sources/${NAME}-application.yaml
+# VARIANT (with OUT) is settable from the environment for a chart that provides
+# an ALTERNATIVE variant of an application: its ApplicationDefinition must point
+# at that variant's ExternalArtifact, not at variants[0]'s.
 PACKAGE_SOURCE_FILE="../../core/platform/sources/${NAME}-application.yaml"
-if [[ -f "$PACKAGE_SOURCE_FILE" ]]; then
-  VARIANT="$(yq -r '.spec.variants[0].name // "default"' "$PACKAGE_SOURCE_FILE")"
-else
-  VARIANT="default"
+if [[ -z "${VARIANT:-}" ]]; then
+  if [[ -f "$PACKAGE_SOURCE_FILE" ]]; then
+    VARIANT="$(yq -r '.spec.variants[0].name // "default"' "$PACKAGE_SOURCE_FILE")"
+  else
+    VARIANT="default"
+  fi
 fi
 
 # If file doesn't exist, create a minimal skeleton

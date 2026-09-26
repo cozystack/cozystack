@@ -1,0 +1,121 @@
+suite: cozyplane vpc rendering
+templates:
+  - templates/vpc.yaml
+release:
+  name: virtualprivatecloud-myvpc
+  namespace: tenant-team-a
+tests:
+  - it: renders the VPC and the owner-namespace binding, nothing else
+    set:
+      cidrs: ["10.10.0.0/24"]
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentSelector:
+          path: kind
+          value: VPC
+        equal:
+          path: spec.cidrs
+          value: ["10.10.0.0/24"]
+      # Attachment is default-deny even for the owner, so the release must
+      # carry a binding for its own namespace or no pod can ever attach.
+      - documentSelector:
+          path: kind
+          value: VPCBinding
+        equal:
+          path: spec.vpcRef
+          value:
+            namespace: tenant-team-a
+            name: virtualprivatecloud-myvpc
+
+  - it: omits mtu at 0 so the platform default applies
+    set:
+      cidrs: ["10.10.0.0/24"]
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VPC
+        notExists:
+          path: spec.mtu
+
+  - it: sets an explicit mtu
+    set:
+      cidrs: ["10.10.0.0/24"]
+      mtu: 1400
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VPC
+        equal:
+          path: spec.mtu
+          value: 1400
+
+  - it: renders one peering half per peer, addressing the remote release name
+    set:
+      cidrs: ["10.10.0.0/24"]
+      peers:
+        - vpcName: other-vpc
+          tenantNamespace: tenant-team-b
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VPCPeering
+        equal:
+          path: spec.peerRef
+          value:
+            namespace: tenant-team-b
+            # The catalog name resolves to the remote VPC through the same
+            # release prefix this chart's own objects carry.
+            name: virtualprivatecloud-other-vpc
+      - documentSelector:
+          path: kind
+          value: VPCPeering
+        equal:
+          path: spec.vpcRef
+          value:
+            name: virtualprivatecloud-myvpc
+
+  - it: renders the gateway only when enabled
+    set:
+      cidrs: ["10.10.0.0/24"]
+      gateway:
+        enabled: true
+        nat: true
+        ingressLoadBalancer: false
+        loadBalancerClass: ""
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VPCGateway
+        equal:
+          path: spec.nat.enabled
+          value: true
+      - documentSelector:
+          path: kind
+          value: VPCGateway
+        equal:
+          path: spec.ingress.loadBalancer
+          value: false
+      # Empty selects the cluster default, so the field must be absent rather
+      # than an empty string the apiserver would treat as a named class.
+      - documentSelector:
+          path: kind
+          value: VPCGateway
+        notExists:
+          path: spec.loadBalancerClass
+
+  - it: names a loadBalancerClass when given one
+    set:
+      cidrs: ["10.10.0.0/24"]
+      gateway:
+        enabled: true
+        nat: true
+        ingressLoadBalancer: true
+        loadBalancerClass: metallb
+    asserts:
+      - documentSelector:
+          path: kind
+          value: VPCGateway
+        equal:
+          path: spec.loadBalancerClass
+          value: metallb
