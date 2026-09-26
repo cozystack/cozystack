@@ -36,6 +36,11 @@ COPY migrations /migrations
 # pre-upgrade hook completes).
 COPY etcd-operator-crds /etcd-operator-crds
 COPY run-migrations.sh /usr/bin/run-migrations.sh
+# Upgrade preflight health gate (run-preflight.sh + checks/ + lib/). Shares this
+# image with the migration runner; the preflight Job overrides the entrypoint to
+# /preflight/run-preflight.sh (see templates/preflight-hook.yaml).
+COPY preflight /preflight
+RUN chmod +x /preflight/run-preflight.sh /preflight/checks/*
 
 WORKDIR /migrations
 

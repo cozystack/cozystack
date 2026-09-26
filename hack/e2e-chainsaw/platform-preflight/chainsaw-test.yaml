@@ -1,0 +1,338 @@
+# Runs the upgrade preflight gate against the live E2E cluster.
+#
+# WHY THIS SUITE EXISTS: the gate ships as a `pre-upgrade` hook that renders
+# only when the cozystack-version ConfigMap is below migrations.targetVersion.
+# The E2E cluster is a fresh install, so that hook never fires and nothing else
+# in CI ever starts the Job. Without this suite the unit tests prove the shell
+# logic and the rendered YAML, and everything in between stays unproven: that
+# /preflight exists in the image the chart pins, that the entrypoint runs there,
+# and that the ClusterRole plus the two namespaced Roles are actually sufficient
+# for `get nodes`, the LINSTOR deploy probe, `exec` into linstor-controller and
+# the status-ConfigMap write.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: it does not stamp cozystack-version
+# backwards to provoke a real platform upgrade. That would re-run the schema
+# migrations against the E2E cluster, which is both slow and a good way to turn
+# an unrelated migration bug into a red preflight suite. That a failed
+# pre-upgrade hook aborts `helm upgrade` is Helm's own documented contract and
+# is not re-tested here; what is tested is that this Job exits non-zero, for the
+# right reason, and leaves the verdict where an operator can read it.
+#
+# The two Jobs differ ONLY in the RBAC bound to their ServiceAccount, so the
+# blocking case exercises a real check failing through its real fail-closed
+# path (`kubectl get nodes` forbidden) rather than a synthetic stub.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: platform-preflight
+spec:
+  catch:
+  - events: {}
+  - description: preflight Job logs and status ConfigMaps
+    script:
+      timeout: 2m
+      content: |
+        set +e
+        for j in cozystack-preflight-e2e-pass cozystack-preflight-e2e-block; do
+          echo "--- job/$j ---"
+          kubectl --namespace cozy-system describe job "$j" 2>&1 | tail -30
+          kubectl --namespace cozy-system logs "job/$j" --tail=200 2>&1
+        done
+        for c in cozystack-preflight-e2e-pass-status cozystack-preflight-e2e-block-status; do
+          echo "--- configmap/$c ---"
+          kubectl --namespace cozy-system get configmap "$c" --output yaml 2>&1 | tail -60
+        done
+  steps:
+  - name: run-the-preflight-gate-on-a-live-cluster
+    try:
+    - script:
+        # Generous: the migrations image is ~350 MB and nothing has pulled it on
+        # this cluster yet (the migration hook does not run on a fresh install).
+        timeout: 20m
+        content: |
+          set -eu
+          cd ../../..
+
+          # The image the chart actually pins. In CI values.yaml carries the
+          # digest built for this PR (the finalize job's patch rewrites it), so
+          # this resolves to the image under test, not a released one.
+          IMAGE=$(yq -e '.migrations.image' packages/core/platform/values.yaml)
+          [ -n "$IMAGE" ] || { echo "could not resolve migrations.image"; exit 1; }
+          echo "preflight image: $IMAGE"
+
+          kubectl apply --filename - <<EOF
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: cozystack-preflight-e2e
+            namespace: cozy-system
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: cozystack-preflight-e2e-norbac
+            namespace: cozy-system
+          ---
+          # Mirrors the read-only ClusterRole the chart renders.
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: cozystack-preflight-e2e
+          rules:
+            - apiGroups: [""]
+              resources: ["nodes"]
+              verbs: ["get", "list"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list"]
+            - apiGroups: ["apps"]
+              resources: ["deployments"]
+              verbs: ["get", "list"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: cozystack-preflight-e2e
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cozystack-preflight-e2e
+          subjects:
+            - kind: ServiceAccount
+              name: cozystack-preflight-e2e
+              namespace: cozy-system
+          ---
+          # Mirrors the status-ConfigMap Role, and is bound to BOTH accounts so
+          # the blocked run can still publish its verdict.
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: cozystack-preflight-e2e-status
+            namespace: cozy-system
+          rules:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["create"]
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              resourceNames:
+                - cozystack-preflight-e2e-pass-status
+                - cozystack-preflight-e2e-block-status
+              verbs: ["get", "update", "patch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: cozystack-preflight-e2e-status
+            namespace: cozy-system
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: cozystack-preflight-e2e-status
+          subjects:
+            - kind: ServiceAccount
+              name: cozystack-preflight-e2e
+              namespace: cozy-system
+            - kind: ServiceAccount
+              name: cozystack-preflight-e2e-norbac
+              namespace: cozy-system
+          EOF
+
+          # The chart gates this grant on the namespace existing, so mirror that
+          # rather than assuming every cluster shape ships LINSTOR. Without it
+          # the check N/A-skips, which the assertions below tolerate.
+          if kubectl get namespace cozy-linstor >/dev/null 2>&1; then
+            kubectl apply --filename - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: cozystack-preflight-e2e-exec
+            namespace: cozy-linstor
+          rules:
+            - apiGroups: [""]
+              resources: ["pods/exec"]
+              verbs: ["create"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: cozystack-preflight-e2e-exec
+            namespace: cozy-linstor
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: cozystack-preflight-e2e-exec
+          subjects:
+            - kind: ServiceAccount
+              name: cozystack-preflight-e2e
+              namespace: cozy-system
+          EOF
+          fi
+
+          # Jobs last, so their ServiceAccounts already carry every grant.
+          kubectl apply --filename - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: cozystack-preflight-e2e-pass
+            namespace: cozy-system
+          spec:
+            backoffLimit: 0
+            template:
+              metadata:
+                labels:
+                  policy.cozystack.io/allow-to-apiserver: "true"
+              spec:
+                serviceAccountName: cozystack-preflight-e2e
+                restartPolicy: Never
+                containers:
+                  - name: preflight
+                    image: ${IMAGE}
+                    command: ["/preflight/run-preflight.sh"]
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: ["ALL"]
+                      seccompProfile:
+                        type: RuntimeDefault
+                    env:
+                      - name: NAMESPACE
+                        value: cozy-system
+                      - name: PREFLIGHT_STATUS_CONFIGMAP
+                        value: cozystack-preflight-e2e-pass-status
+                      # The shipped default. LINSTOR health on a CI cluster is
+                      # not this suite's subject: what matters is that the check
+                      # can reach the controller at all, asserted below by the
+                      # absence of an RBAC refusal.
+                      - name: PREFLIGHT_ADVISORY
+                        value: linstor
+          ---
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: cozystack-preflight-e2e-block
+            namespace: cozy-system
+          spec:
+            backoffLimit: 0
+            template:
+              metadata:
+                labels:
+                  policy.cozystack.io/allow-to-apiserver: "true"
+              spec:
+                # No ClusterRole, so listing nodes is refused: that is the
+                # nodes-ready check's real fail-closed path. A gate that cannot
+                # see the cluster must block, not assume health.
+                # Keep backticks out of this heredoc: it is unquoted so the
+                # image reference expands, which also makes a backtick run as a
+                # command and corrupt the manifest.
+                serviceAccountName: cozystack-preflight-e2e-norbac
+                restartPolicy: Never
+                containers:
+                  - name: preflight
+                    image: ${IMAGE}
+                    command: ["/preflight/run-preflight.sh"]
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: ["ALL"]
+                      seccompProfile:
+                        type: RuntimeDefault
+                    env:
+                      - name: NAMESPACE
+                        value: cozy-system
+                      - name: PREFLIGHT_STATUS_CONFIGMAP
+                        value: cozystack-preflight-e2e-block-status
+                      - name: PREFLIGHT_ADVISORY
+                        value: linstor
+          EOF
+
+          # Wait for a terminal condition rather than one specific outcome, so
+          # the wrong outcome fails fast with a readable message instead of
+          # burning the whole step timeout.
+          wait_job() {
+            name=$1
+            want=$2
+            deadline=$(( $(date +%s) + 900 ))
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              got=$(kubectl --namespace cozy-system get job "$name" \
+                --output jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null || true)
+              case " $got " in
+                *" Complete "*)
+                  if [ "$want" = Complete ]; then return 0; fi
+                  echo "job/$name completed but was expected to fail"
+                  return 1
+                  ;;
+                *" Failed "*)
+                  if [ "$want" = Failed ]; then return 0; fi
+                  echo "job/$name failed but was expected to complete"
+                  return 1
+                  ;;
+              esac
+              sleep 5
+            done
+            echo "timed out waiting for job/$name to reach $want"
+            return 1
+          }
+
+          wait_job cozystack-preflight-e2e-pass Complete
+          wait_job cozystack-preflight-e2e-block Failed
+
+          pass_log=$(kubectl --namespace cozy-system logs job/cozystack-preflight-e2e-pass)
+          echo "$pass_log"
+          # The read-only ClusterRole is sufficient for the readiness check.
+          echo "$pass_log" | grep -q "all nodes are Ready"
+          # The LINSTOR check ran and was not refused by RBAC. Its health verdict
+          # is deliberately not asserted; a refusal would read "is forbidden".
+          echo "$pass_log" | grep -q "running check: linstor"
+          if echo "$pass_log" | grep -q "is forbidden"; then
+            echo "the preflight ServiceAccount was refused by RBAC on a grant the chart claims to give it"
+            exit 1
+          fi
+
+          block_log=$(kubectl --namespace cozy-system logs job/cozystack-preflight-e2e-block)
+          echo "$block_log"
+          # Cannot list nodes => blocked, and the message says why.
+          echo "$block_log" | grep -q "cannot list nodes"
+          echo "$block_log" | grep -q "The upgrade is BLOCKED"
+
+          # The verdict has to be readable after the Job is gone, which on the
+          # real upgrade path happens within one 30s retry interval.
+          verdict=$(kubectl --namespace cozy-system get configmap cozystack-preflight-e2e-pass-status \
+            --output jsonpath='{.data.verdict}')
+          [ "$verdict" = passed ] || { echo "expected verdict=passed, got '$verdict'"; exit 1; }
+
+          verdict=$(kubectl --namespace cozy-system get configmap cozystack-preflight-e2e-block-status \
+            --output jsonpath='{.data.verdict}')
+          [ "$verdict" = blocked ] || { echo "expected verdict=blocked, got '$verdict'"; exit 1; }
+
+          failed=$(kubectl --namespace cozy-system get configmap cozystack-preflight-e2e-block-status \
+            --output jsonpath='{.data.failedChecks}')
+          case " $failed " in
+            *" nodes-ready "*) ;;
+            *) echo "expected failedChecks to name nodes-ready, got '$failed'"; exit 1 ;;
+          esac
+
+          # The published log is the operator-facing part of the record.
+          kubectl --namespace cozy-system get configmap cozystack-preflight-e2e-block-status \
+            --output jsonpath='{.data.log}' | grep -q "cannot list nodes"
+        check:
+          ($error == null): true
+    finally:
+    # Everything above is applied imperatively, so Chainsaw's auto-cleanup does
+    # not track it. Each delete is independent: one failure must not skip the
+    # rest.
+    - description: reclaim the preflight fixtures
+      script:
+        timeout: 5m
+        content: |
+          set +e
+          kubectl --namespace cozy-system delete job cozystack-preflight-e2e-pass cozystack-preflight-e2e-block --ignore-not-found
+          kubectl --namespace cozy-system delete configmap cozystack-preflight-e2e-pass-status cozystack-preflight-e2e-block-status --ignore-not-found
+          kubectl --namespace cozy-system delete rolebinding cozystack-preflight-e2e-status --ignore-not-found
+          kubectl --namespace cozy-system delete role cozystack-preflight-e2e-status --ignore-not-found
+          kubectl --namespace cozy-linstor delete rolebinding cozystack-preflight-e2e-exec --ignore-not-found
+          kubectl --namespace cozy-linstor delete role cozystack-preflight-e2e-exec --ignore-not-found
+          kubectl delete clusterrolebinding cozystack-preflight-e2e --ignore-not-found
+          kubectl delete clusterrole cozystack-preflight-e2e --ignore-not-found
+          kubectl --namespace cozy-system delete serviceaccount cozystack-preflight-e2e cozystack-preflight-e2e-norbac --ignore-not-found
+          exit 0

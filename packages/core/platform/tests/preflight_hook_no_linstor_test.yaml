@@ -1,0 +1,81 @@
+suite: upgrade preflight hook on a cluster without LINSTOR
+templates:
+  - templates/preflight-hook.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+# Deliberately the mirror image of preflight_hook_test.yaml: the version
+# ConfigMap is seeded so the gate is live, and the cozy-linstor Namespace is
+# NOT, so the namespaced pods/exec Role and its binding must not render.
+#
+# This is its own suite because the mocked cluster objects are declared per
+# suite. Without it the `if lookup ... cozy-linstor` term is unpinned: deleting
+# the condition leaves every other test green, while on a real cluster without
+# LINSTOR it would apply a Role into a namespace that does not exist, fail the
+# pre-upgrade hook, and block every upgrade.
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        version: "v1"
+        resource: "configmaps"
+      namespaced: true
+    "v1/Namespace":
+      gvr:
+        version: "v1"
+        resource: "namespaces"
+      namespaced: false
+  objects:
+    - kind: ConfigMap
+      apiVersion: v1
+      metadata:
+        name: cozystack-version
+        namespace: cozy-system
+      data:
+        version: "52"
+tests:
+  - it: renders the gate without the LINSTOR exec grant
+    asserts:
+      # Job, ClusterRole, ClusterRoleBinding, the status-ConfigMap Role and its
+      # RoleBinding, ServiceAccount. Two fewer than with cozy-linstor present.
+      - hasDocuments:
+          count: 6
+
+  - it: leaves the only Role scoped to the release namespace
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - equal:
+          path: rules[1].resourceNames[0]
+          value: cozystack-preflight-status
+
+  - it: leaves the only RoleBinding scoped to the release namespace
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+
+  - it: still renders the read-only ClusterRole and never grants exec anywhere
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes"]
+            verbs: ["get", "list"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["create"]
