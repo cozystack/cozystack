@@ -119,3 +119,41 @@
   echo "$out" | grep -q -- '--load=1'
   if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
 }
+
+@test "CACHE_TAG moves the default cache ref and an explicit cache tag still wins" {
+  # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
+  # make every write from one leg evict the other's layers.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1)
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache,'
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64 '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64,'
+  # The second argument of cache-args names a per-iteration cache; CACHE_TAG
+  # must not override it.
+  tmp=$(mktemp -d)
+  printf 'include %s/hack/common-envs.mk\nprobe:\n\t@echo $(call cache-args,img,percall)\n' "$(pwd)" > "$tmp/Makefile"
+  out=$(make -s -C "$tmp" probe COZYSTACK_VERSION=0 WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
+  rm -rf "$tmp"
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:percall '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:percall,'
+}
+
+@test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {
+  # An IMAGE_TAG assigned in a package Makefile beats the value CI puts in the
+  # environment, so every PR, main and line build would push the same
+  # component-version tag and overwrite each other's.
+  pkg=packages/system/capi-providers-cpprovider
+  out=$(IMAGE_TAG=pr-1-abc make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/^--tag //')
+  [ "$(echo "$tags" | sed 's/.*://')" = pr-1-abc ] || { echo "FAIL: pushes $tags"; false; }
+  # The stamped refs keep the component version, the tag a release publishes.
+  echo "$out" | grep -qE 'IMG="[^"]*/cluster-api-control-plane-provider-kamaji:v[0-9][^"@]*-cozystack\.[0-9]+@'
+  # The component tag is published only when a release asks for versioned tags.
+  out=$(IMAGE_TAG=pr-1-abc PUBLISH_VERSIONED=1 make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/.*://')
+  [ "$(echo "$tags" | head -1)" = pr-1-abc ]
+  echo "$tags" | grep -qE '^v[0-9].*-cozystack\.[0-9]+$'
+  [ "$(echo "$tags" | wc -l | tr -d ' ')" -eq 2 ]
+  if echo "$tags" | grep -q -- '-$'; then echo "FAIL: a tag ends in '-': $tags"; false; fi
+}

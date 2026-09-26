@@ -2,9 +2,10 @@
 # Shared enumeration of where cozystack vendors its image references.
 #
 # Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
-# hack/nightly-mirror.sh and hack/verify-promoted-packages.sh. It exists because
-# the first three call sites each grew their own idea of where a ref can live,
-# and drifted: promote-retag and nightly-mirror scanned only the depth-2
+# hack/nightly-mirror.sh, hack/verify-promoted-packages.sh and
+# hack/stitch-multiarch.sh. It exists because the first three call sites each
+# grew their own idea of where a ref can live, and drifted: promote-retag and
+# nightly-mirror scanned only the depth-2
 # values.yaml, while the promote workflow's tag rewrite scanned those plus
 # packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
 # images/*.tag file was therefore invisible to all three — never retagged to

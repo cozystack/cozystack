@@ -24,6 +24,19 @@
   if echo "$out" | grep -q '"packages/core/installer"'; then echo "FAIL: packages/core/installer must be excluded from the parallel matrix"; false; fi
 }
 
+@test "the arm64 matrix drops the amd64-only e2e sandbox and nothing else" {
+  full=$(hack/build-matrix.sh)
+  arm=$(MATRIX_ARCH=arm64 hack/build-matrix.sh)
+  echo "$full" | grep -q '"packages/core/testing"'
+  if echo "$arm" | grep -q '"packages/core/testing"'; then echo "FAIL: the arm64 matrix builds the amd64-only sandbox"; false; fi
+  [ "$(echo "$full" | sed 's/,*"packages\/core\/testing"//')" = "$arm" ]
+  # A diff that touches only the sandbox gives the arm64 leg nothing to build.
+  tmp=$(mktemp)
+  echo "packages/core/testing/Makefile" > "$tmp"
+  [ "$(MATRIX_ARCH=arm64 hack/build-matrix.sh "$tmp")" = "[]" ]
+  rm -f "$tmp"
+}
+
 @test "talos-only diff selects nothing (handled by the dedicated leg)" {
   tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
   echo "packages/core/talos/images/matchbox/Dockerfile" > "$tmp"

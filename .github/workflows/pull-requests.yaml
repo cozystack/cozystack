@@ -78,6 +78,8 @@ jobs:
       trigger_map: ${{ steps.p.outputs.trigger_map }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
+      matrix_arm64: ${{ steps.p.outputs.matrix_arm64 }}
+      any_arm64: ${{ steps.p.outputs.any_arm64 }}
       touched: ${{ steps.p.outputs.touched }}
       talos: ${{ steps.p.outputs.talos }}
     steps:
@@ -198,6 +200,14 @@ jobs:
             echo "any=false" >> "$GITHUB_OUTPUT"
           else
             echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+          # The same selection minus the units that are amd64 only.
+          matrix_arm64="$(MATRIX_ARCH=arm64 hack/build-matrix.sh /tmp/changed.txt)"
+          echo "matrix_arm64=$matrix_arm64" >> "$GITHUB_OUTPUT"
+          if [ "$matrix_arm64" = "[]" ]; then
+            echo "any_arm64=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "any_arm64=true" >> "$GITHUB_OUTPUT"
           fi
 
   # Promotion publishes the rewritten packages artifact before opening its PR.
@@ -407,7 +417,7 @@ jobs:
           BUILDER: ${{ steps.buildx.outputs.name }}
           # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
           # and on this x86-64 runner the arm64 half would be emulated anyway;
-          # CI builds amd64 until arm64 has a native leg of its own.
+          # build-arm64 below builds arm64 natively.
           PLATFORM: linux/amd64
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PR images are consumed by digest; :latest belongs to releases.
@@ -451,6 +461,79 @@ jobs:
           name: pr-oci-${{ steps.frag.outputs.safe }}
           path: _out/oci/*.oci.tar
           if-no-files-found: error
+
+  # The same images built natively for arm64, so a change that breaks the arm64
+  # build is caught before it reaches main. Nothing consumes these images: e2e
+  # runs on amd64 and PRs are not stitched, so there is no fragment and the
+  # images are pushed only because buildx needs somewhere to put them. Not a
+  # required check, but not continue-on-error either: a red must stay visible.
+  # Same-repo PRs only, since a fork's build has no credentials to push.
+  build-arm64:
+    name: Build ${{ matrix.pkg }} (arm64)
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && needs.plan.outputs.any_arm64 == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+      && !github.event.pull_request.head.repo.fork
+    runs-on: oracle-vm-4cpu-16gb-arm64
+    # Starts from the amd64 job's budget; re-measure after the first runs.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.plan.outputs.matrix_arm64) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up build toolchain
+        run: |
+          if ! command -v flux >/dev/null; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo bash "$install_script"
+            rm -f "$install_script"
+          fi
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build ${{ matrix.pkg }} for arm64
+        run: make -C "$PKG" image
+        env:
+          PKG: ${{ matrix.pkg }}
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/arm64
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-arm64
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+          # Read the cache build-main.yaml's arm64 leg writes; never write it.
+          CACHE_TAG: buildcache-arm64
+          WRITE_CACHE: '0'
 
   # Talos is its own leg: the installer tarball is heavy and the Talos image is
   # built from it, so both live in one job. No nocloud disk is built here any
