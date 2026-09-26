@@ -14,24 +14,17 @@ spec:
       containers:
       - name: linstor-satellite
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
-        # The satellite DaemonSet ran BestEffort on every storage node, which
-        # made it a standing victim for the Talos userspace OOM handler
-        # (v1.12+): that handler only ever kills cgroups with no memory.max, and
-        # picks by QoS class rather than by what caused the pressure. A tenant
-        # workload thrashing against its own limit would get the satellite
-        # killed, taking DRBD connections down with it.
-        #
-        # Note this is the opposite call from linstor-controller, which is
-        # deliberately left limit-free in values.yaml (a JVM that must not be
-        # OOM-killed mid-operation). The satellite is a Go binary with a bounded
-        # working set, so a generous limit costs nothing and buys immunity.
+        # Deliberately no memory limit: this is the same JVM as linstor-controller,
+        # which values.yaml exempts for the same reason. Its heap ceiling is an
+        # explicit -Xmx2G from linstor-server, not derived from the cgroup, so a
+        # limit only caps RSS — and the 2Gi limit this replaces was exactly that
+        # ceiling, leaving nothing for non-heap. Full account, and what would settle
+        # the sizing: packages/system/linstor/tests/satellites_test.yaml.
         # 14d peak 368Mi on a 3-node dev cluster; grows with resource count.
         resources:
           requests:
             cpu: 100m
             memory: 128Mi
-          limits:
-            memory: 2Gi
         startupProbe:
           tcpSocket:
             port: linstor
