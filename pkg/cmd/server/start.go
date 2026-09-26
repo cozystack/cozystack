@@ -135,15 +135,15 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 			"same cadence.")
 	flags.StringVar(&o.HelmReleaseInstallTimeout, "helmrelease-install-timeout", o.HelmReleaseInstallTimeout,
 		"Default timeout for the Helm install action of HelmReleases generated from Application "+
-			"resources (Spec.Install.Timeout). Overridden per-Application by the "+
-			"release.cozystack.io/helm-install-timeout annotation on the ApplicationDefinition; the "+
+			"resources (Spec.Install.Timeout). Overridden for an Application kind by the "+
+			"release.cozystack.io/helm-install-timeout annotation on its ApplicationDefinition; the "+
 			"same annotation also overrides --helmrelease-upgrade-timeout.")
 	flags.StringVar(&o.HelmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", o.HelmReleaseUpgradeTimeout,
 		"Default timeout for the Helm upgrade action of HelmReleases generated from Application "+
-			"resources (Spec.Upgrade.Timeout). Overridden per-Application by the "+
-			"release.cozystack.io/helm-install-timeout annotation (which sets both install and "+
-			"upgrade), or by release.cozystack.io/helm-upgrade-timeout to override only the upgrade "+
-			"side for a kind that needs an asymmetric budget.")
+			"resources (Spec.Upgrade.Timeout). Overridden for an Application kind by the "+
+			"release.cozystack.io/helm-install-timeout annotation on its ApplicationDefinition (which "+
+			"sets both install and upgrade), or with higher precedence by "+
+			"release.cozystack.io/helm-upgrade-timeout to override only the upgrade side.")
 	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
 		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
 			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
@@ -307,11 +307,11 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 			Name:      crd.Spec.Release.ChartRef.Name,
 			Namespace: crd.Spec.Release.ChartRef.Namespace,
 		},
-		// Per-Application HelmRelease generation defaults from server
-		// flags. The same five values are applied to every Resource,
-		// matching cozystack-operator's PackageReconciler. The
-		// per-Application HelmInstallTimeout annotation populated below
-		// still wins over HelmReleaseInstallTimeout/UpgradeTimeout.
+		// HelmRelease generation defaults from server flags. The same five
+		// values are applied to every Resource, matching cozystack-operator's
+		// PackageReconciler. The kind-wide HelmInstallTimeout and
+		// HelmUpgradeTimeout overrides from the ApplicationDefinition
+		// populated below still take precedence over these defaults.
 		HelmReleaseInterval:       hrFlags.interval,
 		HelmReleaseRetryInterval:  hrFlags.retryInterval,
 		HelmReleaseInstallTimeout: hrFlags.installTimeout,
@@ -324,8 +324,9 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 		WaitStrategy:     crd.Spec.Release.WaitStrategy,
 		HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
 	}
-	// Per-Application HelmRelease Install/Upgrade timeout. Applications
-	// whose parent chart contains asynchronously-provisioned resources
+	// Kind-wide HelmRelease Install/Upgrade timeout from this
+	// ApplicationDefinition. Kinds whose parent chart contains
+	// asynchronously-provisioned resources
 	// the chart itself depends on (for example, the Kamaji-provisioned
 	// admin-kubeconfig Secret for Kubernetes tenants) need a longer
 	// wait budget than the Flux default. Consumed by the REST storage
