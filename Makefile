@@ -37,6 +37,7 @@ build: build-deps
 	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/system/redis-operator image
+	make -C packages/system/velero image
 	make -C packages/system/opensearch-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
