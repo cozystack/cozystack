@@ -1,0 +1,72 @@
+## Release.Namespace == tenant namespace
+## Release.Name == "virtualprivatecloud-" + the VPC's catalog name
+
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPC
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    cozystack.io/vpcName: {{ .Release.Name }}
+    cozystack.io/tenantName: {{ .Release.Namespace }}
+spec:
+  cidrs: {{ .Values.cidrs | toJson }}
+  {{- with .Values.mtu }}
+  mtu: {{ . }}
+  {{- end }}
+---
+# Attachment is default-deny even for the owner: the VPC's namespace expresses
+# ownership, a VPCBinding expresses use — so the tenant's own namespace needs one.
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCBinding
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    cozystack.io/vpcName: {{ .Release.Name }}
+    cozystack.io/tenantName: {{ .Release.Namespace }}
+spec:
+  vpcRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ .Release.Name }}
+{{- range .Values.peers }}
+---
+# One half of a symmetric peering. The remote owner declares the mirror half in
+# their own VPC, and the peering is live only while both halves exist.
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCPeering
+metadata:
+  name: {{ printf "%s-to-%s-%s" $.Release.Name .tenantNamespace .vpcName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  vpcRef:
+    name: {{ $.Release.Name }}
+  peerRef:
+    namespace: {{ .tenantNamespace }}
+    name: {{ printf "virtualprivatecloud-%s" .vpcName }}
+{{- end }}
+{{- if .Values.gateway.enabled }}
+---
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: VPCGateway
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    cozystack.io/vpcName: {{ .Release.Name }}
+    cozystack.io/tenantName: {{ .Release.Namespace }}
+spec:
+  vpcRef:
+    name: {{ .Release.Name }}
+  {{- with .Values.gateway.loadBalancerClass }}
+  loadBalancerClass: {{ . | quote }}
+  {{- end }}
+  nat:
+    enabled: {{ .Values.gateway.nat }}
+  ingress:
+    loadBalancer: {{ .Values.gateway.ingressLoadBalancer }}
+{{- end }}
