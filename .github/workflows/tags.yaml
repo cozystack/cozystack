@@ -257,6 +257,8 @@ jobs:
           make upload_assets VERSION=${{ steps.tag.outputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # hack/upload-assets.sh publishes the amd64 Talos assets only.
+          PLATFORM: linux/amd64
 
       # Publish the rc release once its assets are uploaded. The draft above is
       # created draft; a stable draft stays draft for finalize to publish, but an

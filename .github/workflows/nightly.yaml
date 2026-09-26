@@ -201,6 +201,9 @@ jobs:
       # rebuild of any cozystack image.
       - name: Build nocloud disk
         run: make -C packages/core/talos talos-nocloud
+        env:
+          # The e2e sandbox boots amd64 only.
+          PLATFORM: linux/amd64
       - name: Publish disk to GHCR
         env:
           VERSION: ${{ needs.mirror.outputs.version }}
