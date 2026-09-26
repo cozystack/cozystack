@@ -27,7 +27,7 @@
 # NOT touch the cozystack-packages artifact itself (it is rebuilt downstream
 # from the rewritten content, so a copy here would just be overwritten).
 #
-# Requires: yq (mikefarah), skopeo, and a login to both registries already done.
+# Requires: yq (mikefarah), skopeo, sha256sum, and a login to both registries already done.
 set -eu
 
 VERSION="${1:?usage: nightly-mirror.sh <version> <baked-tree-dir> [--dry-run]}"
@@ -47,6 +47,7 @@ FLOATING="${FLOATING:-nightly}"
 command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1; }
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
+[ "$DRY_RUN" -eq 1 ] || command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
 
 # Ref collection (which files are scanned, and the YAML shapes within them) is
 # shared with hack/promote-retag.sh and hack/promote-rewrite-tags.sh — see
@@ -115,9 +116,13 @@ echo "$refs" | while IFS= read -r ref; do
   echo "▸ ${src_repo}  ->  ${dst_repo}  ${digest}"
   copy "${src_repo}@${digest}" "${dst_repo}:${VERSION}"
   copy "${src_repo}@${digest}" "${dst_repo}:${FLOATING}"
-  # Verify the dest pinned tag resolves to the exact source digest.
+  # Verify the dest pinned tag resolves to the exact source digest. Hash the raw
+  # manifest: without --raw, skopeo resolves a multi-arch index to the host
+  # platform's child manifest and reports that digest, which never equals the
+  # index digest the tree pins. A failed inspect hashes the empty input and
+  # fails the comparison, so the pipe cannot fail open.
   if [ "$DRY_RUN" -eq 0 ]; then
-    got="$(skopeo inspect --format '{{.Digest}}' "docker://${dst_repo}:${VERSION}" 2>/dev/null || echo '')"
+    got="sha256:$(skopeo inspect --raw "docker://${dst_repo}:${VERSION}" 2>/dev/null | sha256sum | cut -d' ' -f1)"
     if [ "$got" != "$digest" ]; then
       echo "::error::${dst_repo}:${VERSION} resolved to '${got}', expected '${digest}'" >&2
       exit 1
