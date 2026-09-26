@@ -175,7 +175,11 @@ jobs:
       # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.release_exists == 'false'
-        run: make build
+        run: |
+          make build
+          # The arm64 assets published below install this image, and building
+          # its arm64 half needs no QEMU, so it is pushed again as both arches.
+          make -C packages/core/talos image-talos PLATFORM=linux/amd64,linux/arm64
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           # Cache manifests are registry-portable (oci-mediatypes=true) — read

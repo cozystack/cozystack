@@ -23,7 +23,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROBE_PLATFORM="linux/riscv64"
 PROBE_MARKER="--build-arg=BUILDX_ARGS_PROBE=1"
-AMD64_ONLY="packages/core/talos packages/core/testing"
+AMD64_ONLY="packages/core/testing"
 
 @test "every package image target passes BUILDX_ARGS and PLATFORM to docker buildx" {
   command -v make >/dev/null || { echo "make is required" >&2; exit 1; }

@@ -119,3 +119,17 @@
   echo "$out" | grep -q -- '--load=1'
   if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
 }
+
+@test "talos pushes one installer index for PLATFORM and matchbox boots both arches" {
+  # -B prints every asset build whether or not a local _out/assets has it.
+  out=$(make -n -B -C packages/core/talos image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q 'for a in amd64 arm64; do skopeo copy'
+  echo "$out" | grep -q 'hack/installer-index.sh [^ ]* amd64 arm64;'
+  echo "$out" | grep -q 'skopeo copy --all "$SRC" docker://[^ ]*/talos:pr-1-abc'
+  # The installer follows PLATFORM, but matchbox serves machines of either arch
+  # wherever it runs, so it still needs the arm64 kernel and initramfs.
+  out=$(make -n -B -C packages/core/talos image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b PLATFORM=linux/amd64)
+  if echo "$out" | grep -q 'installer-arm64'; then echo "FAIL: an amd64 build builds the arm64 installer"; false; fi
+  echo "$out" | grep -q 'profiles/kernel-arm64.yaml'
+  echo "$out" | grep -q 'profiles/initramfs-arm64.yaml'
+}

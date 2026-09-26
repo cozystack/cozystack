@@ -522,6 +522,10 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job. The arm64 installer needs no QEMU,
+          # but nothing a PR runs boots it. matchbox still gets the arm64 kernel
+          # and initramfs.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
