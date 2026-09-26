@@ -405,6 +405,10 @@ jobs:
           # pulls go through the docker.io mirror (BUILDX_ARGS adds
           # --builder=$(BUILDER)).
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
+          # and on this x86-64 runner the arm64 half would be emulated anyway;
+          # CI builds amd64 until arm64 has a native leg of its own.
+          PLATFORM: linux/amd64
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PR images are consumed by digest; :latest belongs to releases.
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -749,6 +753,8 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'

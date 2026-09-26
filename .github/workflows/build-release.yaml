@@ -143,6 +143,8 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in build-main.yaml.
+          PLATFORM: linux/amd64
           # READ the shared mode=max cache, never write it. CACHE_REGISTRY/<img>:
           # buildcache is a single ref per image and build-main.yaml is
           # deliberately its only writer, serialized, precisely so concurrent

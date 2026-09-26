@@ -182,6 +182,10 @@ jobs:
           # them from OCIR while pushing images to GHCR. A missing :buildcache
           # ref 404s harmlessly into a cold build.
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # amd64 only, as in build-main.yaml. This job also builds on the
+          # default docker driver, which handles a multi-platform image only
+          # on the containerd image store.
+          PLATFORM: linux/amd64
           # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
           # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
           # job only ever runs for a prerelease (a stable tag is rejected or

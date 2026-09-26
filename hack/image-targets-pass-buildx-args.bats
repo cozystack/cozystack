@@ -12,6 +12,10 @@
 # platform and no other, since a second hardcoded --platform turns the build
 # into a multi-platform one.
 #
+# The packages in AMD64_ONLY pin `override PLATFORM := linux/amd64` because
+# what they build is amd64 by nature; they must yield exactly that platform
+# whatever the command line says.
+#
 # Written for POSIX sh: hack/cozytest.sh sources this file into /bin/sh.
 #
 # Requires: make.
@@ -19,6 +23,7 @@
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROBE_PLATFORM="linux/riscv64"
 PROBE_MARKER="--build-arg=BUILDX_ARGS_PROBE=1"
+AMD64_ONLY="packages/core/talos packages/core/testing"
 
 @test "every package image target passes BUILDX_ARGS and PLATFORM to docker buildx" {
   command -v make >/dev/null || { echo "make is required" >&2; exit 1; }
@@ -38,6 +43,8 @@ PROBE_MARKER="--build-arg=BUILDX_ARGS_PROBE=1"
       failed="$failed ${dir#"$REPO_ROOT"/} (no buildx command: $(tr '\n' ' ' <"$errlog"))"
       continue
     fi
+    want="$PROBE_PLATFORM"
+    case " $AMD64_ONLY " in *" ${dir#"$REPO_ROOT"/} "*) want="linux/amd64" ;; esac
     printf '%s\n' "$commands" >"$cmdlist"
     while IFS= read -r cmd; do
       checked=$((checked + 1))
@@ -46,7 +53,7 @@ PROBE_MARKER="--build-arg=BUILDX_ARGS_PROBE=1"
         *) failed="$failed ${dir#"$REPO_ROOT"/} (no \$(BUILDX_ARGS))"; continue ;;
       esac
       platforms="$(printf '%s\n' "$cmd" | grep -oE -- '--platform[= ][^ ]+' | tr '\n' ' ')"
-      [ "$platforms" = "--platform=$PROBE_PLATFORM " ] || failed="$failed ${dir#"$REPO_ROOT"/} ($platforms)"
+      [ "$platforms" = "--platform=$want " ] || failed="$failed ${dir#"$REPO_ROOT"/} ($platforms)"
     done <"$cmdlist"
   done
   rm -f "$errlog" "$cmdlist"

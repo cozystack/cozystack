@@ -3,6 +3,13 @@ NAMESPACE=cozy-system
 
 TALOS_VERSION=$(shell awk '/^version:/ {print $$2}' images/talos/profiles/installer.yaml)
 
+# The Talos assets this package builds are amd64 only (profiles, imager
+# output), and matchbox bakes them into its image, so both images stay amd64.
+# `override` also beats a PLATFORM given on the command line to a whole
+# `make build`. It must precede the include: common-envs.mk expands BUILDX_ARGS
+# immediately.
+override PLATFORM := linux/amd64
+
 include ../../../hack/common-envs.mk
 
 update:

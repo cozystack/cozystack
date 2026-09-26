@@ -93,7 +93,8 @@ Build environment variables:
 
 - `REGISTRY` — Docker registry (default `ghcr.io/cozystack/cozystack`).
 - `PUSH=1` / `LOAD=0` — control buildx push/load behaviour.
-- `LOAD=1 PUSH=0` — load images locally instead of pushing.
+- `LOAD=1 PUSH=0` — load images locally instead of pushing. Builds for the host architecture only, because the classic docker image store cannot load a multi-platform index.
+- `PLATFORM` — the buildx platforms. Defaults to `linux/amd64,linux/arm64` for anything but `LOAD=1`, so a push from either architecture publishes an index both can run. Needs a `docker-container` builder (`BUILDER`) or a docker daemon on the containerd image store, with QEMU registered for the non-native half. Compiling builder stages run natively on `$BUILDPLATFORM` and cross-compile for the target, but every `RUN` step of a stage that runs on the target platform (package installs, `setcap`, install scripts, patch steps) still runs emulated. `packages/core/talos` and `packages/core/testing` pin `linux/amd64`, because they carry amd64-only payloads: the Talos assets and an x86 KVM sandbox.
 
 ### Values schema generation
 

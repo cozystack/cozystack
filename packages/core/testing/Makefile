@@ -19,8 +19,15 @@ COMPOSE_PROJECT ?= cozy-e2e
 COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
 ZPOOL_BACKING_DIR ?= /var/lib/cozy-e2e-zpools
 
-include ../../../hack/common-envs.mk
+# The e2e sandbox image is pinned to amd64 as a whole: its VM lane boots the
+# amd64 Talos disk under qemu-system-x86_64 with KVM
+# (hack/e2e-prepare-cluster.bats), which an arm64 sandbox cannot run.
+# `override` beats any PLATFORM given on the command line, an explicit
+# linux/arm64 as much as one passed to a whole `make build`. It must precede
+# the include: common-envs.mk expands BUILDX_ARGS immediately.
+override PLATFORM := linux/amd64
 
+include ../../../hack/common-envs.mk
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)

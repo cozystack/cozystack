@@ -101,3 +101,21 @@
   echo "$tout" | grep -q 'docker://.*/talos:latest'
   if echo "$tout" | grep -q 'oci-archive:'; then echo "FAIL: talos exports an archive without OCI_EXPORT_DIR"; false; fi
 }
+
+@test "a published image is built for amd64 and arm64 unless PLATFORM says otherwise" {
+  # A push with no PLATFORM builds both, so an arm64 workstation cannot publish
+  # an arm64-only digest that amd64 nodes then fail to pull.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  platforms=$(echo "$out" | grep -o -- '--platform=[^ ]*' | tr '\n' ' ')
+  [ "$platforms" = "--platform=linux/amd64,linux/arm64 " ]
+  # An explicit PLATFORM replaces the default rather than adding to it.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b PLATFORM=linux/arm64)
+  platforms=$(echo "$out" | grep -o -- '--platform=[^ ]*' | tr '\n' ' ')
+  [ "$platforms" = "--platform=linux/arm64 " ]
+}
+
+@test "LOAD=1 builds for the host only, since the docker image store cannot load an index" {
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b LOAD=1 PUSH=0)
+  echo "$out" | grep -q -- '--load=1'
+  if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
+}
