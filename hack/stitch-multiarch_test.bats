@@ -7,10 +7,13 @@
 # real sha256 sums of the stored bytes and an index the docker stub creates
 # resolves like any other manifest.
 #
-# Harness note: run by hack/cozytest.sh, not real bats; each @test is a shell
-# function under `set -eu`, sourced into POSIX sh (dash on CI).
+# Harness note: the unit lane runs this file under Bats. The bodies stay POSIX
+# sh (no `run`, no [[ ]]; each @test a shell function under `set -eu`), so
+# hack/cozytest.sh can still run it under dash by hand.
 #
-# Run with: hack/cozytest.sh hack/stitch-multiarch_test.bats
+# Run with: bats hack/stitch-multiarch_test.bats
+
+load test_helper
 
 REG=registry.example/cozy
 

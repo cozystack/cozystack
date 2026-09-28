@@ -15,11 +15,12 @@
 # migration "kafka" pool (collision guard, create-CAS, name-freeing) force the
 # resolved value with force_kafka_pool.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests). No
-# setup/teardown, no EXIT traps: each @test builds its own fixture and removes it
-# at the end of the body. cozytest.sh rewrites every line that is exactly `}`
-# into `return 0` + `}`, the heredoc included, so the stub uses only case/if (no
-# shell functions) and every helper's closing brace is indented.
+# Run from the repo root with make bats-unit-tests. Direct assertions and
+# inline cleanup retain compatibility with cozytest. Its translator rewrites
+# lone closing braces even inside heredocs, so the stub avoids shell functions
+# and helper closing braces stay indented.
+
+load test_helper
 
 CHART=packages/apps/kafka
 

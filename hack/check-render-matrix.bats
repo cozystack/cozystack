@@ -3,6 +3,8 @@
 # Shared by bats and cozytest.sh: inspect exit codes directly, without bats-only
 # helpers. Scratch directories stay available if an assertion fails.
 
+load test_helper
+
 make_render_chart() {
     mkdir -p "$1/templates"
     printf 'apiVersion: v2\nname: render-test\nversion: 0.0.0\n' > "$1/Chart.yaml"

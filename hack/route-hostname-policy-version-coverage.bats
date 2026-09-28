@@ -33,16 +33,15 @@
 # The policy side is read from `helm template` output rather than the template
 # source, so what is checked is the object the apiserver would receive.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
-# `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs
-# as a shell function under `set -eu -x`, so a non-zero exit is the failure.
-# Paths are repo-root-relative: BATS_TEST_DIRNAME is unset and would abort the
-# whole suite under `set -u`.
+# Paths are repo-root-relative. Direct assertions retain compatibility with
+# cozytest, which does not provide Bats-specific helpers or directory variables.
 #
 # Requires: yq (mikefarah v4+), helm. Both are available on the project's CI
 # image and are already relied on by other hack/*.bats.
 #
-# Run with: hack/cozytest.sh hack/route-hostname-policy-version-coverage.bats
+# Run with: bats hack/route-hostname-policy-version-coverage.bats
+
+load test_helper
 
 CRD_BUNDLE=packages/system/gateway-api-crds/templates/crds-experimental.yaml
 BASICS_CHART=packages/system/cozystack-basics

@@ -19,7 +19,7 @@ LINE='----------------------------------------------------------------'
 # the fail handler prints all of it, so quiet mode drops the output of passing
 # tests only -- which by definition did not establish the result. On the unit
 # lane that is a ~40x cut (1338 tests: 239k lines/15M of which 98% was trace),
-# and it is why the Makefile's bats-unit-tests target sets it.
+# and it is why the Makefile's bats-posix-compat-tests target sets it.
 #
 # One exception, stated because it is the whole exposure quiet mode adds: the
 # fail handler runs only after the pipeline returns, and there is no INT/TERM
@@ -314,6 +314,16 @@ LC_ALL=C awk '
 ' "$TEST_FILE" > "$TMP_SH"
 
 [ -f "$TMP_SH" ] || { echo "Failed to generate test functions" >&2; exit 1; }
+
+# Compatibility with unit files shared with Bats. Only adjacent .bash helpers
+# are supported; cozytest already enables nounset when it runs a test body.
+load() {
+  _lib="$(dirname "$TEST_FILE")/$1.bash"
+  [ -f "$_lib" ] || { echo "load: no such helper: $_lib" >&2; return 1; }
+  # shellcheck disable=SC1090
+  . "$_lib"
+}
+
 # shellcheck disable=SC1090
 . "$TMP_SH"
 

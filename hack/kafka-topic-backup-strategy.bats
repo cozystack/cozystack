@@ -14,6 +14,8 @@
 # so each test calls init_stubs itself, and negative assertions go through
 # expect_fail or an explicit if/return 1.
 
+load test_helper
+
 REPO="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 EXAMPLE="$REPO/examples/backups/kafka"
 

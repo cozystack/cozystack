@@ -6,6 +6,8 @@
 # An empty spec.release.prefix is skipped: hack/update-crd.sh generates the
 # definitions for packages/extra charts with PREFIX="".
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 @test "every resourceNames selector carries its release prefix" {

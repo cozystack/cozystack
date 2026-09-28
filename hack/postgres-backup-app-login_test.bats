@@ -13,6 +13,8 @@
 # /bin/sh (dash in CI). It is sourced first, then the stubs override its
 # cluster-touching functions.
 
+load test_helper
+
 @test "psql_app_exec reads the credentials Secret named after the cluster, not the app name" {
     calls=$(mktemp)
     CALLS="$calls" bash -uc '

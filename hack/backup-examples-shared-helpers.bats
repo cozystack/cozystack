@@ -5,6 +5,8 @@
 # wait_for_field reports why kubectl could not read a field while staying quiet
 # about a resource that does not exist yet.
 
+load test_helper
+
 SHARED=examples/backups/_lib/wait-helpers.sh
 SHARED_HELPERS="wait_for_field wait_hr_ready wait_deleted"
 

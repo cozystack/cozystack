@@ -1,42 +1,47 @@
 #!/usr/bin/env bats
 # `make bats-unit-tests` must run every bats file even when an early one fails,
-# and still exit non-zero. Each file is its own make target, and without
-# --keep-going make stops scheduling targets at the first failure, so the files
-# sorting after it never run and the output reads like a complete suite.
+# and still exit non-zero, so a red file never hides the ones after it behind
+# output that reads like a complete suite. One Bats invocation owns the whole
+# set, which gives that for free; this pins that the recipe keeps it that way.
 #
-# The tests drive the real root Makefile against a miniature tree: two bats
-# files and a stub hack/cozytest.sh that reports which file it was given.
+# The tests drive the real root Makefile against a miniature tree of two bats
+# files, with the real bats binary.
 #
-# Requires: make.
+# Requires: make, bats.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
-# kg_run <stub body line> [makefiles]: builds the fixture, runs the target with
-# MAKEFILES set to the second argument, and leaves the output in $fixture/out
-# and the exit status in $rc.
+# kg_run <body of a.bats's only test>: builds the fixture, runs the target in it
+# and leaves the output in $fixture/out and the exit status in $rc. a.bats sorts
+# first, so a failure there is the one that could hide b.bats.
 kg_run() {
   fixture="$(mktemp -d)"
   mkdir "$fixture/hack"
   : >"$fixture/hack/common-envs.mk"
-  : >"$fixture/hack/a.bats"
-  : >"$fixture/hack/b.bats"
-  printf '%s\n' '#!/bin/sh' 'echo "stub ran $1"' "$1" >"$fixture/hack/cozytest.sh"
-  chmod +x "$fixture/hack/cozytest.sh"
+  printf '%s\n' '@test "first file" {' "  $1" '}' >"$fixture/hack/a.bats"
+  printf '%s\n' '@test "second file" {' '  true' '}' >"$fixture/hack/b.bats"
 
   # Under `make unit-tests -k` this suite inherits MAKEFLAGS carrying the
-  # parent's --keep-going, which would let the old behaviour pass here.
+  # parent's --keep-going, which would hide a recipe that stops on its own.
+  #
+  # Bats puts its own libexec first on PATH, and the `bats` found there is a
+  # helper that needs bats_readlinkf, a bash function bin/bats exports. The
+  # recipe runs under /bin/sh, and dash (the CI runner's) drops exported
+  # functions, so the helper dies with "command not found" and no test runs.
+  # Dropping libexec makes the recipe find the real bats on either shell.
   rc=0
-  env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL MAKEFILES="${2:-}" \
-    make --file="$REPO_ROOT/Makefile" --directory="$fixture" bats-unit-tests >"$fixture/out" 2>&1 || rc=$?
+  env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL PATH="${PATH#"$BATS_LIBEXEC":}" \
+    make --file="$REPO_ROOT/Makefile" --directory="$fixture" --no-print-directory \
+      BATS_JOBS=1 "BATS_REPORT_DIR=$fixture/reports" bats-unit-tests >"$fixture/out" 2>&1 || rc=$?
   cat "$fixture/out"
 }
 
 @test "bats-unit-tests runs every file after a failure and still fails" {
-  # Fail whichever file runs first, whatever order make picks, so the exit
-  # status cannot come from the last file alone.
-  kg_run 'mkdir "$(dirname "$0")/.failed" 2>/dev/null && exit 1; exit 0'
-  ran_a=$(grep -c '^stub ran hack/a.bats$' "$fixture/out" || true)
-  ran_b=$(grep -c '^stub ran hack/b.bats$' "$fixture/out" || true)
+  kg_run 'false'
+  ran_a=$(grep -c '^not ok 1 first file' "$fixture/out" || true)
+  ran_b=$(grep -c '^ok 2 second file' "$fixture/out" || true)
   rm -rf "$fixture"
 
   [ "$ran_a" = 1 ]
@@ -44,18 +49,11 @@ kg_run() {
   [ "$rc" -ne 0 ]
 }
 
-@test "bats-unit-tests still finds the root Makefile when MAKEFILES reads another first" {
-  extra="$(mktemp)"
-  printf '%s\n' 'unrelated:' '	@true' >"$extra"
-  kg_run 'exit 0' "$extra"
-  ran_b=$(grep -c '^stub ran hack/b.bats$' "$fixture/out" || true)
-  rm -rf "$fixture" "$extra"
-  [ "$ran_b" = 1 ]
-  [ "$rc" -eq 0 ]
-}
-
 @test "bats-unit-tests exits zero when every file passes" {
-  kg_run 'exit 0'
+  kg_run 'true'
+  ran=$(grep -c '^ok [12] ' "$fixture/out" || true)
   rm -rf "$fixture"
+
+  [ "$ran" = 2 ]
   [ "$rc" -eq 0 ]
 }

@@ -21,6 +21,8 @@
 # own reconciler, which sets no finalizer at all, and the Queue, Exchange and
 # Binding objects it owns are already covered.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 HELPER="$REPO_ROOT/packages/apps/rabbitmq/templates/_topology.tpl"
 README="$REPO_ROOT/packages/apps/rabbitmq/README.md"

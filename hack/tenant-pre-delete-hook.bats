@@ -11,12 +11,15 @@
 # delete which gave up. Those are the two halves below: one test reads the
 # arguments, the rest inject the non-zero exit an expired delete produces.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture and removes it at the end of the body. No EXIT
+# Run from the repo root through `make bats-unit-tests`; relative paths resolve
+# against that cwd. The file also remains compatible with the legacy
+# `hack/cozytest.sh` translator, so each @test builds and removes its fixture
+# inline instead of relying on setup()/teardown(). No EXIT
 # traps: a test that dies inside one prints neither `not ok` nor a reason, and
 # the suite reads green. A failing test therefore leaves its temp directory
 # behind, which is what you want when reading the rendered script afterwards.
+
+load test_helper
 
 CHART=packages/apps/tenant
 

@@ -18,6 +18,8 @@
 # Run with: hack/cozytest.sh hack/migration-58-http-cache-freeze.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-58-http-cache"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
 ALPINE=$(sed -n 's/^FROM \(alpine:[^ ]*\).*$/\1/p' \

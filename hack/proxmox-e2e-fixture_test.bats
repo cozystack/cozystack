@@ -6,6 +6,8 @@
 # integer. So the defaults live in the script, the fixture carries bare
 # variables, and the render refuses to hand out a fixture with one left in it.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 FIXTURE="$REPO_ROOT/hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml"
 RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
@@ -37,7 +39,8 @@ RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
 
 # The PVC probe waits for the disk to leave the storage. A listing that fails
 # must fail the check: read as empty, it would report a leaked disk as freed.
-# (hack/cozytest.sh runs these as POSIX sh: no `run`, no [[ ]].)
+# (The bodies stay POSIX sh, so the legacy hack/cozytest.sh translator can still
+# run them: no `run`, no [[ ]].)
 @test "disk-freed fails when the storage cannot be listed, instead of calling the disk gone" {
   stub="$(mktemp -d)"
   printf '#!/bin/sh\necho "ssh: connect to host pve: Connection refused" >&2\nexit 255\n' > "$stub/ssh"

@@ -17,11 +17,11 @@
 # byte scan is exercised the way that box exercises it; under a C ctype the scan
 # cannot abort and the guard would pass without proving anything.
 #
-# Harness note (see hack/promote-rewrite-tags_test.bats): the CI path is
-# hack/cozytest.sh, not real bats -- no `run`, `$status`, `skip` or setup(). Each
-# test runs as a shell function under `set -eu -x`; paths are repo-root-relative.
+# The outer tests run under Bats; their fixtures exercise cozytest itself.
 #
-# Run with: hack/cozytest.sh hack/cozytest-nonascii-title.bats
+# Run with: bats hack/cozytest-nonascii-title.bats
+
+load test_helper
 
 @test "cozytest.sh runs a test whose title contains a multibyte character" {
   tmp=$(mktemp -d)

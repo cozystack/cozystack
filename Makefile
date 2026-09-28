@@ -1,9 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
-
-# Before any include, the last file make has read is this one: MAKEFILES and
-# -f files given before it are earlier in the list, -f files after it are not
-# read yet.
-ROOT_MAKEFILE := $(lastword $(MAKEFILE_LIST))
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -122,7 +117,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -174,11 +169,9 @@ test-controllers:
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. This glob is one level deep: live-cluster suites under
-# hack/e2e-* or in subdirectories need an invocation in packages/core/testing.
-# hack/bats-runner-coverage.bats reports files that neither runner selects.
-# Park a suite with the .bats.disabled suffix to exclude it from the audit.
+# Unit discovery is one level deep. Live-cluster files need an invocation in
+# packages/core/testing; hack/bats-runner-coverage.bats checks that boundary.
+# Bats supplies TAP and JUnit output; the live-cluster runner keeps its tracing.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
@@ -186,40 +179,81 @@ test-check-readiness:
 # introduces whitespace-bearing filenames this recipe must be rewritten
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
-BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))
 
-# Quiet by default: cozytest.sh streams every test's xtrace live, which over
-# this many suites buried the one failing assertion under ~240k lines of
-# trace in CI. COZYTEST_TRACE=0 keeps the per-test start/end lines and still dumps
-# the full trace of whichever test FAILS -- but not of one that is killed
-# instead, a hang reaped by the job timeout among them, since the dump runs
-# after the test returns. See the COZYTEST_TRACE comment in hack/cozytest.sh.
-# Override to watch a run line by
-# line: `COZYTEST_TRACE=1 make bats-unit-tests`, or invoke the runner
-# directly (`hack/cozytest.sh hack/foo.bats [pattern]`), which stays verbose.
-# The e2e call sites in packages/core/testing/Makefile are untouched and keep
-# the live stream -- see the COZYTEST_TRACE comment in hack/cozytest.sh.
-COZYTEST_TRACE ?= 0
+# The same list, one file per line, for hack/bats-strict-setup.bats. Every unit
+# file has to load hack/test_helper.bash to get `set -u` back, and that audit is
+# only worth anything if the set it walks is the set that actually runs -- so it
+# asks here rather than keeping a second copy of the filter above.
+print-bats-unit-files:
+	@printf '%s\n' $(BATS_UNIT_FILES)
 
-# A sub-make with --keep-going, so one red file does not stop make from
-# scheduling the files after it; the sub-make still exits non-zero if any
-# file failed (hack/bats-unit-keep-going.bats covers both). It shares the
-# caller's -j slots and --output-sync through MAKEFLAGS.
-bats-unit-tests: bats-unit-files-check
-	@$(MAKE) --file=$(ROOT_MAKEFILE) --no-print-directory --keep-going $(BATS_UNIT_TARGETS)
+# `bats -j` needs GNU parallel and exits non-zero rather than degrading when it
+# is missing. moreutils also ships a command named parallel, so identify the GNU
+# implementation from its version output before enabling concurrency. Resolve
+# the probe once per make process; `?=` would keep the `$(shell ...)` recursive
+# and rerun it at every expansion.
+ifndef BATS_JOBS
+BATS_JOBS := $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
+endif
+
+print-bats-jobs:
+	@printf '%s\n' "$(BATS_JOBS)"
+
+# JUnit XML is preserved as a CI artifact for inspection. _out is gitignored.
+BATS_REPORT_DIR ?= _out/test-reports
 
 bats-unit-files-check:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
 		exit 1; \
 	fi
+bats-unit-tests: bats-unit-files-check
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
+		exit 1; \
+	}
+	@mkdir -p "$(BATS_REPORT_DIR)"
+	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
 
-# Each file is its own target of the sub-make so `make -jN` can schedule them,
-# and the trace switch rides along per target.
-.PHONY: $(BATS_UNIT_TARGETS)
-$(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats
-	@echo "--- running $< ---"
-	@COZYTEST_TRACE=$(COZYTEST_TRACE) hack/cozytest.sh "$<"
+# Real Bats is authoritative. Unit files that source production code whose
+# contract is POSIX sh retain a compatibility pass through cozytest.sh's
+# /bin/sh translator. Discover literal .sh dependencies wherever they live,
+# including hack/lib and package migration helpers, so a new non-Chainsaw
+# helper test cannot run only under Bash. The explicit entries retain reviewed
+# shell-facing tests, including files whose production path is held in a
+# variable and therefore cannot be identified from the source line alone.
+BATS_SOURCED_SH_FILES := $(shell grep -El '^[[:space:]]*(\.|source)[[:space:]]+.*\.sh' $(BATS_UNIT_FILES))
+BATS_POSIX_COMPAT_FILES := $(sort \
+	$(BATS_SOURCED_SH_FILES) \
+	hack/capture-dataplane.bats \
+	hack/capture-previous-logs.bats \
+	hack/cilium-leak-healer_test.bats \
+	hack/container-lane-capacity_test.bats \
+	hack/cozyreport-talos.bats \
+	hack/cozyreport.bats \
+	hack/cozystack-version-stamp.bats \
+	hack/nightly-mirror_test.bats \
+	hack/pod-label-census_test.bats \
+	hack/promote-rewrite-tags_test.bats \
+	hack/runner-identity.bats \
+	hack/seaweedfs-naming-audit.bats \
+)
+
+# CI's /bin/sh is dash. Keep the interpreter overridable so contributors can
+# run the same compatibility lane explicitly on hosts whose /bin/sh differs.
+BATS_POSIX_SHELL ?= /bin/sh
+COZYTEST_TRACE ?= 0
+
+print-bats-posix-compat-files:
+	@printf '%s\n' $(BATS_POSIX_COMPAT_FILES)
+
+bats-posix-compat-tests:
+	@status=0; \
+	for f in $(BATS_POSIX_COMPAT_FILES); do \
+		echo "--- running POSIX compatibility: $$f ---"; \
+		COZYTEST_TRACE=$(COZYTEST_TRACE) "$(BATS_POSIX_SHELL)" hack/cozytest.sh "$$f" || status=1; \
+	done; \
+	exit $$status
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded

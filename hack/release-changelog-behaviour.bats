@@ -31,6 +31,8 @@
 # Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
 # Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PRESERVE="$REPO_ROOT/hack/changelog-preserve.sh"
 VALIDATE="$REPO_ROOT/hack/validate-changelog.sh"

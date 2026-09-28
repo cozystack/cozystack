@@ -12,21 +12,25 @@
 # kubectl and chainsaw are stubs on PATH that answer from fixture files, so the
 # cluster is a directory: pods.json is what `get pods` returns (pods.after.json
 # once a `kubectl wait` has succeeded), obj/ holds the owners the walk may look
-# up, and `now` is the apiserver clock. The guard is bash; cozytest.sh runs these
-# bodies under sh, so each test calls it through `bash`.
+# up, and `now` is the apiserver clock. The guard is bash; the legacy
+# cozytest.sh translator runs these bodies under sh, so each test calls it
+# through `bash`.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`, and setup()/teardown() are not
-# honored. Each test removes its own temp dir on its last line. The parser also
-# puts `return 0` in front of every bare `}` in the file, top-level helpers
-# included, so a helper whose exit status matters closes with `} # name`.
+# CI runs this file under Bats. It stays compatible with that translator, whose
+# awk parser recognizes only @test blocks and a bare `}` on its own line, so the
+# tests avoid bats `run`, `$status`, setup() and teardown(). Each test removes
+# its own temp dir on its last line. The parser also puts `return 0` in front of
+# every bare `}` in the file, top-level helpers included, so a helper whose exit
+# status matters closes with `} # name`.
 #
 # The file name carries no `e2e-` prefix on purpose: the root Makefile leaves
 # hack/e2e-*.bats out of `make unit-tests`, and cozytest.sh arms its cluster
 # captures for them.
 #
-# Run with: hack/cozytest.sh hack/chainsaw-leak-guard_test.bats
+# Run with: bats hack/chainsaw-leak-guard_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 LG_LIB="$HACK_DIR/e2e-chainsaw/_lib/leak-guard.sh"

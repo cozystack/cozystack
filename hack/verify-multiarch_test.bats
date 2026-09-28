@@ -5,10 +5,13 @@
 # The registry is a stub: skopeo on PATH answers `inspect --raw` from one file
 # per digest, so each test decides what every ref resolves to.
 #
-# Harness note: run by hack/cozytest.sh, not real bats; each @test is a shell
-# function under `set -eu`, sourced into POSIX sh (dash on CI).
+# Harness note: the unit lane runs this file under Bats. The bodies stay POSIX
+# sh (no `run`, no [[ ]]; each @test a shell function under `set -eu`), so
+# hack/cozytest.sh can still run it under dash by hand.
 #
-# Run with: hack/cozytest.sh hack/verify-multiarch_test.bats
+# Run with: bats hack/verify-multiarch_test.bats
+
+load test_helper
 
 _stub_registry() {
   MOCK_REG="$1"

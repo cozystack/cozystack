@@ -34,15 +34,11 @@
 #     that delete exits non-zero, so the uninstall is retried rather than
 #     finishing with the pools still in place.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. That runner implements `@test` and little
-# else: it has NO `run` helper and therefore no $status or $output, so every
-# test below saves `$?` by hand the way hack/app-cleanup-hooks_test.bats does.
-# Under the bats binary `run` would work and the file would pass either way,
-# which is exactly how a suite that dies on `run: command not found` under the
-# real runner got committed once. docs/agents/e2e-testing.md:66 says it too.
-# Each @test builds its own fixture and removes it in the body: no
-# setup/teardown, and no EXIT trap.
+# Run from the repo root with make bats-unit-tests. Direct status checks
+# retain compatibility with cozytest, which has no Bats run/setup helpers.
+# Inline cleanup preserves Bats' TAP handler on failed assertions.
+
+load test_helper
 
 KAFKA_CHART=packages/apps/kafka
 

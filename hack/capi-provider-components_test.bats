@@ -13,6 +13,8 @@
 # the header carries a timestamp and every regeneration rewrites the committed
 # blob even when the input has not changed.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 check_pair() {

@@ -36,6 +36,8 @@
 # teardown(), so TMP is provisioned inline per test and cleaned without an EXIT
 # trap (docs/agents/e2e-testing.md bans those here).
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/apps/kubernetes-nodes"
 

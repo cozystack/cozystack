@@ -99,19 +99,19 @@
 # at least one matched job, which turns a half-broken parser red instead of
 # quietly narrowing what is checked.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
-# `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
-# a shell function under `set -eu -x`, so a non-zero exit is the failure. A
-# `!`-negated command never trips errexit, so every assertion below is written
-# as an explicit `if ... return 1`. A top-level helper function would have
-# `return 0` injected before its closing brace by the runner's awk, so nothing
-# is factored into one. The same awk pass injects that line before any bare `}`
-# at column 0 and reads any line starting with `@test ` as a block header, so
-# the fixtures below are built with `printf` rather than heredocs: a heredoc
-# holding either shape would be rewritten as if it were code. Paths are
-# repo-root-relative.
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, so it avoids `run`, `$status`, `$output`,
+# `skip`, and setup()/teardown(). A `!`-negated command never trips errexit, so
+# every assertion below is written as an explicit `if ... return 1`. The legacy
+# translator injects `return 0` before a top-level helper's closing brace, so
+# nothing is factored into one. It also rewrites bare `}` lines and lines that
+# begin with `@test `, so the fixtures below use `printf` instead of heredocs.
+# Paths stay repo-root-relative.
 #
-# Run with: hack/cozytest.sh hack/sandbox-runner-headroom.bats
+# Run with: bats hack/sandbox-runner-headroom.bats
+
+load test_helper
 
 # The guest-side derivation, held in one place so the check that runs against
 # the live tree and the fixtures that pin its refusals cannot drift apart.

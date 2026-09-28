@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHECK="$REPO_ROOT/hack/check-rd-presets.sh"
 

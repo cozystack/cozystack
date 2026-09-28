@@ -14,12 +14,11 @@
 # that moved out of the served config -- into a comment, or into a build stage
 # that ships nothing -- does not read as present.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. No `run`,
-# `$status`, `$output`, `skip` or setup()/teardown(); each @test is a shell
-# function under `set -eu -x`, and paths resolve from the repo root. The two
-# runners disagree on negative assertions, so an assertion written for bats can
-# be vacuous under the one that gates a merge.
-# Run with: hack/cozytest.sh hack/console-nginx-header-buffers.bats
+# Paths resolve from the repo root. Direct assertions also keep this file
+# compatible with cozytest, which has no Bats run/setup helpers.
+# Run with: bats hack/console-nginx-header-buffers.bats
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CONSOLE_CONTAINERFILE="packages/system/dashboard/images/console/Containerfile"

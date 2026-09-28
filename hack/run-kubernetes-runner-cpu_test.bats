@@ -21,9 +21,11 @@
 # that spent nothing -- and the legends, which are what stop a reader comparing a
 # hypervisor's row against its guest's.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-runner-cpu_test.bats
-#           (or `bats hack/run-kubernetes-runner-cpu_test.bats` if the bats
-#           binary is installed; cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/run-kubernetes-runner-cpu_test.bats`. The legacy
+# `hack/cozytest.sh` runner remains a supported compatibility path.
+
+load test_helper
 
 timeout_calls=/dev/null
 timeout_rc_override=

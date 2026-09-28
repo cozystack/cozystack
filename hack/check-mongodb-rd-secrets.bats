@@ -11,6 +11,8 @@
 # The declaration that names the extraction source is a TenantProjection the
 # chart renders, covered by packages/apps/mongodb/tests/tenant_projection_test.yaml.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mongodb-rd/cozyrds/mongodb.yaml"
 # Bound explicitly rather than read from BATS_TEST_FILENAME inside a test body.

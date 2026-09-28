@@ -131,6 +131,10 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     unit-tests` runs them, gated on pull-requests.yaml's `code`
 #                     output, which is "any path outside docs/" and is computed
 #                     in the workflow rather than from this script
+#   - hack/test_helper.bash  shared setup for that same unit-only BATS lane. It
+#                     is loaded by BATS_UNIT_FILES and by nothing in the e2e
+#                     sandbox; enumerate it rather than making every future
+#                     top-level *.bash file inert
 #   - packages/tests/ helm-unittest fixture charts. cozy-lib-tests exercises
 #                     library/cozy-lib from the outside; changing a test OF
 #                     cozy-lib does not change cozy-lib, no PackageSource lists
@@ -159,7 +163,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     .gitattributes NOT on this list is classified by whatever
 #                     rule its path falls under — the graph, or the unclassified
 #                     fall-through — both of which fail safe
-inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
+inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/test_helper\.bash$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).

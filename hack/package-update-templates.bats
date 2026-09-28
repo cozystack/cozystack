@@ -106,6 +106,8 @@
 # A second `update:` can fool this in either direction: make runs the last
 # recipe, this reads whichever ones are adjacent. Nothing in the tree writes
 # one.
+load test_helper
+
 wipe_command() {
     awk '/^update:/ { r = 1; next }
          r && /^\t[[:space:]]*@?#/ { next }

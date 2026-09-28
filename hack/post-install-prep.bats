@@ -28,8 +28,10 @@
 #   - A line that is exactly `}` is rewritten, so stub bodies below use `case`
 #     rather than nested functions.
 #
-# Run with: hack/cozytest.sh hack/post-install-prep.bats
+# Run with: bats hack/post-install-prep.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-post-install-prep.sh"

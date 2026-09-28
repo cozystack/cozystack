@@ -158,6 +158,8 @@
 # happens under bats at all -- which is why running this by hand can look green
 # while CI reds, which is why both are kept green.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 TENANT_SCRIPT="${TENANT_SCRIPT:-$REPO_ROOT/hack/e2e-chainsaw/_lib/run-kubernetes.sh}"
 

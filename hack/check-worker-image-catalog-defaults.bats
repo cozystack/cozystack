@@ -26,6 +26,8 @@
 # runs each @test in a fresh subshell with `set -u` and does not honor bats
 # setup()/teardown().
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 APP_VALUES="$REPO_ROOT/packages/apps/kubernetes-nodes/values.yaml"
 CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"

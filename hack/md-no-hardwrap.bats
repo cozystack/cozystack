@@ -26,6 +26,8 @@
 # The hook speaks the agent hook protocol: a JSON payload on stdin, exit 0 to
 # allow, exit 2 to block with an explanation on stderr.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/md-no-hardwrap.py"
 

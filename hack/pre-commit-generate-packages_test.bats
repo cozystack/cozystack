@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
-# cozytest.sh provides no bats lifecycle or result helpers, so each test owns
-# its fixture and uses ordinary shell assertions.
+
+load test_helper
 
 add_generator() {
     root="$1"
