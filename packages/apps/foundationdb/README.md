@@ -22,7 +22,7 @@ This package provides a managed FoundationDB cluster deployment using the Founda
 ### Basic Configuration
 
 ```yaml
-# FoundationDB major.minor version (v7.4, v7.3, v7.1)
+# FoundationDB major.minor version (v7.4, v7.3)
 version: v7.3
 
 # Cluster process configuration
