@@ -229,7 +229,7 @@ export class K8sClient {
     resourceVersion: string,
     onEvent: (event: WatchEvent<T>) => void,
     onError?: (error: Error) => void,
-    search?: { labelSelector?: string; fieldSelector?: string },
+    search?: { labelSelector?: string; fieldSelector?: string; onOpen?: () => void },
   ): () => void {
     const path = this.buildPath(apiGroup, apiVersion, plural, namespace)
     const params = new URLSearchParams({
@@ -262,6 +262,8 @@ export class K8sClient {
           )
         }
         if (!res.body) throw new Error("No response body for watch")
+        if (controller.signal.aborted) return
+        search?.onOpen?.()
 
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
@@ -347,10 +349,9 @@ export interface K8sCondition {
   lastTransitionTime?: string
 }
 
-export interface WatchEvent<T> {
-  type: "ADDED" | "MODIFIED" | "DELETED" | "BOOKMARK" | "ERROR"
-  object: T
-}
+export type WatchEvent<T> =
+  | { type: "ADDED" | "MODIFIED" | "DELETED" | "BOOKMARK"; object: T }
+  | { type: "ERROR"; object: { code?: number; message?: string; reason?: string } }
 
 export interface APIGroupVersion {
   groupVersion: string
