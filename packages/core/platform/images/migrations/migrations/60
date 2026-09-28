@@ -4,14 +4,16 @@
 # field that replaces it, and record the releases that cannot be carried over.
 #
 # The foundationdb chart used to pass cluster.version, a free-form string, to
-# the operator as the FoundationDB version. It now takes version (v7.4, v7.3,
-# v7.1) and maps it to a tag, and no longer reads cluster.version at all. A
-# cluster that set cluster.version to anything but 7.3.x would otherwise move to
-# the v7.3 default on its first reconcile after the upgrade: an incompatible
-# upgrade from 7.1 with a full cluster bounce, or a downgrade from 7.4.
+# the operator as the FoundationDB version. It now takes version (v7.4, v7.3)
+# and maps it to a tag, and no longer reads cluster.version as a version. A 7.4
+# cluster left without version would move to the v7.3 default, a downgrade; the
+# chart refuses that render, and this migration keeps it from coming to that
+# where platform migrations run.
 #
-# The release line is carried over, not the patch: 7.1.x becomes v7.1, which
-# the chart maps to the one tag it ships for that line.
+# The release line is carried over, not the patch: 7.4.x becomes v7.4, which
+# the chart maps to the one tag it ships for that line. A 7.1 cluster has no
+# line to be carried to: the operator no longer carries the 7.1 client, so it
+# is recorded, and it has to be upgraded to 7.3 before the chart renders it.
 #
 # cluster.version is left in place on purpose. This runs as a pre-upgrade hook,
 # so helm-controller reconciles the patched release with the OLD chart first.
@@ -34,11 +36,12 @@
 # What cannot be carried over is recorded on the cozystack-version ConfigMap
 # and does not block the upgrade, because one tenant's release must not hold
 # the fleet:
-#   - a cluster.version outside those three lines, or one the apiserver stored
+#   - a cluster.version outside those two lines, or one the apiserver stored
 #     as something other than a string (spec.values is
 #     x-kubernetes-preserve-unknown-fields, so a direct edit of the HelmRelease
 #     can put a number or a list there);
 #   - a whole spec.values that is not an object, for the same reason;
+#   - a version already set to a line the chart no longer offers;
 #   - a cluster.version whose patch differs from the tag the release will render:
 #     it is carried over and still moves to that tag, which can be a step down.
 #     This is worked out from the values rather than from the patch, so a run
@@ -78,7 +81,7 @@ K8S_INLINE_CHART_NAME="kubernetes"
 NODES_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"
 NODES_INLINE_CHART_NAME="kubernetes-nodes"
 
-FOUNDATIONDB_TAGS='{"v7.4": "7.4.1", "v7.3": "7.3.63", "v7.1": "7.1.67"}'
+FOUNDATIONDB_TAGS='{"v7.4": "7.4.1", "v7.3": "7.3.63"}'
 
 # One JSON line per release that needs attention, carrying the values as read.
 # Releases are matched by the application label or by the chart they install,
@@ -109,7 +112,9 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
       elif (($v.version | type) == "string" and $v.version != "") then
         ($v.cluster | if type == "object" then .version else null end) as $cv
         | $fdbtags[$v.version] as $tag
-        | if ($cv | type) == "string" and $tag != null and $cv != $tag
+        | if $tag == null
+          then $id + {action: "unoffered", version: $v.version}
+          elif ($cv | type) == "string" and $cv != $tag
           then $id + {action: "drift", version: $v.version, tag: $tag, detail: $cv}
           else empty end
       elif (($v.cluster | type) != "object") or ($v.cluster.version == null) then empty
@@ -117,7 +122,7 @@ plan=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces --output
         $id + {action: "unmapped", detail: ($v.cluster.version | tostring)}
       else
         ($v.cluster.version) as $cv
-        | (($cv | capture("^(?<line>7\\.(1|3|4))\\.[0-9]+$") | .line) // null) as $line
+        | (($cv | capture("^(?<line>7\\.(3|4))\\.[0-9]+$") | .line) // null) as $line
         | if $line then $id + {action: "carry", version: "v\($line)", tag: $fdbtags["v\($line)"], detail: $cv, values: $v}
           else $id + {action: "unmapped", detail: $cv} end
       end
@@ -187,8 +192,12 @@ while IFS= read -r row; do
       record_leftover "${ns}/${name}=version:null"
       ;;
     unmapped)
-      echo "WARN: FoundationDB $ns/$name has cluster.version $detail, which is not on a supported line (7.1, 7.3, 7.4); it will render the v7.3 default after the upgrade" >&2
+      echo "WARN: FoundationDB $ns/$name has cluster.version $detail, which is not on a line the chart offers (7.3, 7.4); the chart refuses to render it until version is set, and a cluster on an older line has to be upgraded first" >&2
       record_leftover "${ns}/${name}=cluster.version:${detail}"
+      ;;
+    unoffered)
+      echo "WARN: FoundationDB $ns/$name sets version $version, which the chart no longer offers (v7.3, v7.4); it will fail to render until version is changed" >&2
+      record_leftover "${ns}/${name}=version:${version}"
       ;;
     malformed)
       echo "WARN: FoundationDB $ns/$name has a spec.values that is not an object, so its version cannot be read; it will render the v7.3 default after the upgrade" >&2
