@@ -1,4 +1,5 @@
 {{- $clusterDomain := index .Values._cluster "cluster-domain" | default "cozy.local" }}
+{{- include "foundationdb.checkLegacyVersion" . }}
 ---
 apiVersion: apps.foundationdb.org/v1beta2
 kind: FoundationDBCluster
