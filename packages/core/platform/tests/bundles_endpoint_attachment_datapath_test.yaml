@@ -1,0 +1,111 @@
+suite: EndpointAttachment datapath capability wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The controller renders method: WholeIP|PortList Services only where the
+  # platform declares a cozy-proxy-contract implementor deployed. This chart
+  # is the deployer, so the declaration must track exactly the condition under
+  # which it emits the cozy-proxy Package: a declaration that is true where no
+  # proxy runs leaves a routable address that drops everything, and one that
+  # is false where a proxy runs refuses every VM attachment.
+  - it: declares the contract on isp-full, where cozy-proxy is deployed
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.cozyProxyContractImplemented
+          value: true
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.allocateLoadBalancerNodePorts
+          value: false
+
+  - it: declares the contract on isp-full-generic beside the cozystack-api override
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.cozyProxyContractImplemented
+          value: true
+      - equal:
+          path: spec.components.cozystack-api.values.cozystackAPI.nodeSelector["node-role.kubernetes.io/control-plane"]
+          value: "true"
+
+  - it: withdraws the declaration when cozy-proxy is disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.cozy-proxy
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.cozyProxyContractImplemented
+          value: false
+
+  - it: withdraws the declaration on isp-hosted, which deploys no cozy-proxy
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.cozyProxyContractImplemented
+          value: false
+
+  - it: allocates node ports when Hetzner RobotLB is enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.hetzner-robotlb
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.allocateLoadBalancerNodePorts
+          value: true
+
+  - it: keeps the telemetry opt-out beside the declaration
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      telemetry:
+        disabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
+          value: true
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.endpointAttachments.cozyProxyContractImplemented
+          value: true

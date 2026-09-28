@@ -1,0 +1,6 @@
+# A reserved address: created before any attachment, outlives every one.
+apiVersion: local.sdn.cozystack.io/v1alpha1
+kind: IPAddressClaim
+metadata:
+  name: ea-held
+spec: {}

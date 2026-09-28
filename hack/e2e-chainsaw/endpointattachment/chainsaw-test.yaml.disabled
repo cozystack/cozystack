@@ -1,0 +1,480 @@
+# EndpointAttachment e2e. Parked as .disabled until the address substrate
+# (address-controller + a per-class driver + a default IPAddressClass) is part
+# of the sandbox install; see README.md.
+#
+# The first Test is the proposal's contract in one sequence: an address minted
+# with an attachment dies with it, a reserved address survives every
+# attachment, and the same reserved address moves to a different application.
+# Every assertion is on behaviour (phase, addresses, what the address serves);
+# nothing greps rendered manifests for implementation strings.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: endpointattachment-postgres
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: local.sdn.cozystack.io/v1alpha1
+      kind: EndpointAttachment
+  - describe:
+      apiVersion: local.sdn.cozystack.io/v1alpha1
+      kind: IPAddressClaim
+  - get:
+      apiVersion: v1
+      kind: Service
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: postgres-a.yaml
+    - apply:
+        file: postgres-b.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-ea-a
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-ea-b
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-ea-a-ro
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-ea-b-rw
+          (subsets[0].addresses[0].ip != null): true
+
+  # An operator-internal Service carries the lineage labels but is not a
+  # declared endpoint: the marker half of the authorization seam refuses it.
+  - name: refuse-internal-service
+    try:
+    - apply:
+        file: attach-a-internal.yaml
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-a-internal
+          status:
+            phase: Pending
+            (conditions[?type == 'Resolved']):
+            - status: "False"
+              reason: EndpointNotTenantFacing
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-a-internal
+
+  # Minted address: the read replicas of ea-a get an address from the default
+  # class, and the address serves a replica.
+  - name: attach-replicas-minted
+    try:
+    - apply:
+        file: attach-a-ro-minted.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-a-ro
+            labels:
+              apps.cozystack.io/application.kind: Postgres
+              apps.cozystack.io/application.name: ea-a
+          status:
+            phase: Attached
+            (addresses[0] != null): true
+            (claimName != null): true
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ip=$(kubectl -n "$NAMESPACE" get endpointattachment ea-a-ro -o jsonpath='{.status.addresses[0]}')
+          pod=$(kubectl -n "$NAMESPACE" get pod -l cnpg.io/cluster=postgres-ea-a,cnpg.io/instanceRole=primary -o name | head -n1)
+          # The attached address must answer as a replica, not as the primary
+          # the pod itself is: "t" from pg_is_in_recovery() proves the
+          # -ro selector was mirrored, not the -rw one.
+          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            env PGPASSWORD=xai7Wepo psql -h "$ip" -U testuser -d testdb -tAc 'SELECT pg_is_in_recovery()'
+        check:
+          ($error == null): true
+          (trim_space($stdout)): "t"
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          mkdir -p /tmp/endpointattachment-e2e
+          kubectl -n "$NAMESPACE" get endpointattachment ea-a-ro -o jsonpath='{.status.claimName}' > /tmp/endpointattachment-e2e/minted-claim
+          test -s /tmp/endpointattachment-e2e/minted-claim
+
+  # Deleting the attachment collects its Service and its minted claim.
+  - name: detach-minted
+    try:
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-a-ro
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-a-ro
+    # The minted claim's name is only known at runtime, so its absence is
+    # polled here rather than declared.
+    # TODO(e2e-replace-fixed-timeouts): model "owned claim collected" declaratively once the name can be templated.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          claim=$(cat /tmp/endpointattachment-e2e/minted-claim)
+          until ! kubectl -n "$NAMESPACE" get ipaddressclaim "$claim" >/dev/null 2>&1; do sleep 2; done
+        check:
+          ($error == null): true
+
+  # Reserved address: held before any attachment.
+  - name: reserve-address
+    try:
+    - apply:
+        file: claim-held.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: IPAddressClaim
+          metadata:
+            name: ea-held
+          status:
+            phase: Bound
+            (addresses[0].address != null): true
+    - script:
+        content: |
+          kubectl -n "$NAMESPACE" get ipaddressclaim ea-held -o jsonpath='{.status.addresses[0].address}' > /tmp/endpointattachment-e2e/held-ip
+
+  # Hold: the primary of ea-a on the reserved address.
+  - name: attach-primary-held
+    try:
+    - apply:
+        file: attach-a-rw-held.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-a-rw-held
+          status:
+            phase: Attached
+            claimName: ea-held
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ip=$(cat /tmp/endpointattachment-e2e/held-ip)
+          got=$(kubectl -n "$NAMESPACE" get endpointattachment ea-a-rw-held -o jsonpath='{.status.addresses[0]}')
+          [ "$got" = "$ip" ]
+          pod=$(kubectl -n "$NAMESPACE" get pod -l cnpg.io/cluster=postgres-ea-b -o name | head -n1)
+          # Probe from ea-b's pod so the answer cannot come from the local
+          # instance: the reserved address must reach ea-a's primary.
+          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            env PGPASSWORD=xai7Wepo psql -h "$ip" -U testuser -d testdb -tAc "SELECT current_setting('cluster_name') || ' ' || pg_is_in_recovery()"
+        check:
+          ($error == null): true
+          (trim_space($stdout)): "postgres-ea-a f"
+
+  # Detach: the reserved claim still holds the same address, nothing serves it.
+  - name: detach-held
+    try:
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-a-rw-held
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: IPAddressClaim
+          metadata:
+            name: ea-held
+            (ownerReferences == null): true
+          status:
+            phase: Bound
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ip=$(cat /tmp/endpointattachment-e2e/held-ip)
+          got=$(kubectl -n "$NAMESPACE" get ipaddressclaim ea-held -o jsonpath='{.status.addresses[0].address}')
+          [ "$got" = "$ip" ]
+        check:
+          ($error == null): true
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-a-rw-held
+
+  # Move: the same reserved address now serves a different application.
+  - name: reattach-held-to-other-application
+    try:
+    - apply:
+        file: attach-b-rw-held.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-b-rw-held
+          status:
+            phase: Attached
+            claimName: ea-held
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ip=$(cat /tmp/endpointattachment-e2e/held-ip)
+          got=$(kubectl -n "$NAMESPACE" get endpointattachment ea-b-rw-held -o jsonpath='{.status.addresses[0]}')
+          [ "$got" = "$ip" ]
+          pod=$(kubectl -n "$NAMESPACE" get pod -l cnpg.io/cluster=postgres-ea-a,cnpg.io/instanceRole=primary -o name | head -n1)
+          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            env PGPASSWORD=xai7Wepo psql -h "$ip" -U testuser -d testdb -tAc "SELECT current_setting('cluster_name') || ' ' || pg_is_in_recovery()"
+        check:
+          ($error == null): true
+          (trim_space($stdout)): "postgres-ea-b f"
+
+  # GC: deleting the application collects its attachment; the reserved claim
+  # is untouched.
+  - name: delete-application-collects-attachment
+    try:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Postgres
+          name: ea-b
+    - error:
+        timeout: 5m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-b-rw-held
+    - assert:
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: IPAddressClaim
+          metadata:
+            name: ea-held
+          status:
+            phase: Bound
+---
+# The VM datapath modes against cozy-proxy as deployed. The VM keeps
+# external: false, so the attachment is the only delegated Service on its pod:
+# current cozy-proxy holds one 1:1 slot per pod in both modes, and a chart
+# Service beside an attachment would steal it (see README.md).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: endpointattachment-vminstance
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: local.sdn.cozystack.io/v1alpha1
+      kind: EndpointAttachment
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-ea-vm
+  - get:
+      apiVersion: v1
+      kind: Service
+  steps:
+  - name: create-vm
+    try:
+    - apply:
+        file: vmdisk.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-ea-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-ea-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - apply:
+        file: vminstance.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-instance-ea-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-ea-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # PortList: one listed port reachable on the attached address.
+  - name: attach-portlist
+    try:
+    - apply:
+        file: attach-vm-portlist.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vm-ssh
+          status:
+            phase: Attached
+            (addresses[0] != null): true
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          ip=$(kubectl -n "$NAMESPACE" get endpointattachment ea-vm-ssh -o jsonpath='{.status.addresses[0]}')
+          # sshd inside the guest comes up after cloud-init; no condition
+          # models "the guest listens", so the port is polled.
+          # TODO(e2e-replace-fixed-timeouts): replace with a guest-readiness signal if KubeVirt grows one.
+          for _ in $(seq 1 60); do
+            if nc -z -w 3 "$ip" 22; then exit 0; fi
+            sleep 3
+          done
+          echo "port 22 on $ip never answered" >&2
+          exit 1
+        check:
+          ($error == null): true
+    - delete:
+        ref:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          name: ea-vm-ssh
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            labels:
+              cozystack.io/endpoint-attachment: ea-vm-ssh
+
+  # WholeIP: every port reachable, then a second whole-IP attachment on the
+  # same VM is refused with its own reason and the first keeps serving.
+  - name: attach-wholeip
+    try:
+    - apply:
+        file: attach-vm-wholeip.yaml
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vm-wholeip
+          status:
+            phase: Attached
+            (addresses[0] != null): true
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          ip=$(kubectl -n "$NAMESPACE" get endpointattachment ea-vm-wholeip -o jsonpath='{.status.addresses[0]}')
+          # TODO(e2e-replace-fixed-timeouts): same guest-listens wait as above.
+          for _ in $(seq 1 60); do
+            if nc -z -w 3 "$ip" 22; then exit 0; fi
+            sleep 3
+          done
+          echo "port 22 on $ip never answered through the whole-IP mapping" >&2
+          exit 1
+        check:
+          ($error == null): true
+    - apply:
+        file: attach-vm-wholeip-second.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vm-wholeip-second
+          status:
+            phase: Pending
+            (conditions[?type == 'Resolved']):
+            - status: "True"
+            (conditions[?type == 'Provisioned']):
+            - status: "False"
+              reason: BackendAlreadyDelegated
+    - assert:
+        resource:
+          apiVersion: local.sdn.cozystack.io/v1alpha1
+          kind: EndpointAttachment
+          metadata:
+            name: ea-vm-wholeip
+          status:
+            phase: Attached
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          [ -z "$(kubectl -n "$NAMESPACE" get svc -l cozystack.io/endpoint-attachment=ea-vm-wholeip-second -o name)" ]
+          ip=$(kubectl -n "$NAMESPACE" get endpointattachment ea-vm-wholeip -o jsonpath='{.status.addresses[0]}')
+          nc -z -w 3 "$ip" 22
+        check:
+          ($error == null): true

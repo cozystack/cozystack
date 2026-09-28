@@ -19,9 +19,25 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["referencegrants"]
   verbs: ["get", "list", "watch"]
+# EndpointAttachmentReconciler renders one additive LoadBalancer Service per
+# attachment and withdraws it; it identifies its own Services by controller
+# owner reference and never writes an application's Services.
 - apiGroups: [""]
   resources: ["services"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# EndpointAttachment is the one local.sdn.cozystack.io kind this controller
+# serves. The other kinds in the group belong to the address substrate: the
+# reconciler mints an IPAddressClaim per className attachment (owned by the
+# attachment, so garbage-collected with it) and reads classes and addresses
+# to set loadBalancerClass and detect a claim another Service already wears.
+# Those are read as unstructured; the grant is harmless where the substrate
+# is not installed.
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["endpointattachments", "endpointattachments/status"]
+  verbs: ['*']
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["ipaddressclaims"]
+  verbs: ["get", "list", "watch", "create", "delete"]
 # TenantGatewayReconciler renders the per-tenant Issuer and the
 # wildcard / per-listener Certificates the Gateway listeners reference.
 - apiGroups: ["cert-manager.io"]

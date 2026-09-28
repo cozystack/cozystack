@@ -30,3 +30,9 @@ spec:
         {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
         - --seaweedfs-metrics-endpoint={{ . }}
         {{- end }}
+        {{- if .Values.cozystackController.endpointAttachments.cozyProxyContractImplemented }}
+        - --cozy-proxy-contract-implemented
+        {{- end }}
+        {{- if .Values.cozystackController.endpointAttachments.allocateLoadBalancerNodePorts }}
+        - --endpoint-attachment-allocate-node-ports
+        {{- end }}
