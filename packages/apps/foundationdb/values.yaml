@@ -5,7 +5,6 @@
 ## @enum {string} Version
 ## @value v7.4
 ## @value v7.3
-## @value v7.1
 
 ## @param {Version} version - FoundationDB major.minor version to deploy
 version: v7.3
