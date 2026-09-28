@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   K8sClient,
@@ -137,6 +137,28 @@ describe("useSelfSubjectAccessReview", () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(result.current.allowed).toBe(false)
     expect(result.current.error).toBeTruthy()
+  })
+
+  it("exposes a refetch that can recover a transient error", async () => {
+    const client = new K8sClient()
+    const spy = vi
+      .spyOn(client, "create")
+      .mockRejectedValueOnce(new Error("server error"))
+      .mockResolvedValueOnce(ssarResult(true))
+    const { result } = renderHook(
+      () =>
+        useSelfSubjectAccessReview({
+          resourceAttributes: { resource: "nodes", verb: "list" },
+        }),
+      { wrapper: makeWrapper(client) },
+    )
+    await waitFor(() => expect(result.current.error).toBeTruthy())
+    await act(async () => {
+      await result.current.refetch()
+    })
+    await waitFor(() => expect(result.current.allowed).toBe(true))
+    expect(result.current.error).toBeNull()
+    expect(spy).toHaveBeenCalledTimes(2)
   })
 
   it("sends the spec verbatim in the POST body", async () => {
