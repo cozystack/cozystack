@@ -45,6 +45,7 @@ import { useResourcePresence } from "./use-resource-presence.ts"
 import { useApplicationConfigMaps } from "./use-app-configmaps.ts"
 import { ConfigMapsTab } from "./ConfigMapsTab.tsx"
 import { LogsTab } from "./LogsTab.tsx"
+import { DiskUploadPanel } from "./DiskUploadPanel.tsx"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
@@ -59,7 +60,7 @@ export function ApplicationDetailPage() {
     [defs, plural],
   )
 
-  const { data: instance, isLoading, error } = useK8sGet<ApplicationInstance>(
+  const { data: instance, isLoading, error, isPlaceholderData } = useK8sGet<ApplicationInstance>(
     {
       apiGroup: APPS_GROUP,
       apiVersion: APPS_VERSION,
@@ -80,7 +81,10 @@ export function ApplicationDetailPage() {
     namespace: tenantNamespace ?? undefined,
   })
 
-  const presence = useResourcePresence(ad, instance)
+  const kind = ad?.spec?.application.kind
+  const presence = useResourcePresence(ad, instance, {
+    enabled: kind !== "VMDisk" && kind !== "VMInstance",
+  })
   const configMaps = useApplicationConfigMaps(ad, instance, tenantNamespace ?? undefined)
 
   if (!plural || !name) return <Navigate to="/console" replace />
@@ -115,7 +119,6 @@ export function ApplicationDetailPage() {
   const ready = readyCondition(instance)
   const icon = iconDataUrl(ad)
   const base = `${basePath}/${plural}/${name}`
-  const kind = ad.spec?.application.kind
 
   // Module singletons are reached from the admin trees (Info from Tenants,
   // every other module from Modules), not from an instance list — send Back
@@ -229,7 +232,18 @@ export function ApplicationDetailPage() {
 
       <div className="flex-1 overflow-auto">
         <Routes>
-          <Route index element={<OverviewTab ad={ad} instance={instance} />} />
+          <Route
+            index
+            element={
+              <>
+                {/* A placeholder is the previous tenant's or disk's instance, so its command must not show. */}
+                {kind === "VMDisk" && !isPlaceholderData && (
+                  <DiskUploadPanel ad={ad} instance={instance} />
+                )}
+                <OverviewTab ad={ad} instance={instance} />
+              </>
+            }
+          />
           <Route
             path="workloads"
             element={<WorkloadsTab ad={ad} instance={instance} />}
