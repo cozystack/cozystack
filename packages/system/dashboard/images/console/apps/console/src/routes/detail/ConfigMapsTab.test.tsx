@@ -63,6 +63,7 @@ describe("application ConfigMaps", () => {
     expect(client.watch).toHaveBeenCalledWith("", "v1", "configmaps", namespace, "1",
       expect.any(Function), expect.any(Function), {
         labelSelector: undefined, fieldSelector: "metadata.name=foundationdb-demo-config",
+        onOpen: expect.any(Function),
       })
   })
 
