@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "uploadProxyURL": {
-      "description": "Upload proxy URL, set as uploadProxyURLOverride on the CDI object. Empty leaves it unset.",
+      "description": "Explicit upload endpoint, overriding the URL derived from exposed cdi-uploadproxy and root-host values.",
       "type": "string",
       "default": ""
     },
