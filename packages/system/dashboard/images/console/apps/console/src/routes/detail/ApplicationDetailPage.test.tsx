@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { beforeEach, describe, it, expect, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import { MemoryRouter, Routes, Route } from "react-router"
 
@@ -9,13 +9,20 @@ const h = vi.hoisted(() => ({
   appPlural: "postgreses",
   tabLabels: [] as string[],
   configMaps: [] as unknown[],
+  list: vi.fn((ref: { plural: string }, _options?: unknown) => {
+    void ref
+    void _options
+  }),
 }))
 
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
   // Presence probes (use-resource-presence.ts) — report empty lists.
-  useK8sList: (ref: { plural: string }) => ({ data: { items: ref.plural === "configmaps" ? h.configMaps : [] }, isLoading: false }),
+  useK8sList: (ref: { plural: string }, options?: unknown) => {
+    h.list(ref, options)
+    return { data: { items: ref.plural === "configmaps" ? h.configMaps : [] }, isLoading: false }
+  },
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -55,6 +62,8 @@ vi.mock("./VncTab.tsx", () => ({ VncTab: () => null }))
 vi.mock("./SerialTab.tsx", () => ({ SerialTab: () => null }))
 vi.mock("./VMPowerControls.tsx", () => ({ VMPowerControls: () => null }))
 
+vi.mock("./DiskUploadPanel.tsx", () => ({ DiskUploadPanel: () => <div>Disk upload panel</div> }))
+
 const { ApplicationDetailPage } = await import("./ApplicationDetailPage.tsx")
 
 function renderPage() {
@@ -65,6 +74,20 @@ function renderPage() {
       </Routes>
     </MemoryRouter>,
   )
+}
+
+beforeEach(() => {
+  h.get = { data: undefined, isLoading: true, error: undefined }
+  h.appKind = "Postgres"
+  h.appPlural = "postgreses"
+  h.tabLabels = []
+  h.configMaps = []
+  h.list.mockClear()
+})
+
+// The ConfigMaps lookup shares useK8sList but is not a presence probe.
+function presenceProbes() {
+  return h.list.mock.calls.filter(([ref]) => ref.plural !== "configmaps")
 }
 
 describe("ApplicationDetailPage guards", () => {
@@ -126,5 +149,53 @@ describe("ApplicationDetailPage configuration", () => {
     h.tabLabels = []
     renderPage()
     expect(h.tabLabels).toContain("ConfigMaps")
+  })
+})
+
+describe("ApplicationDetailPage presence probes", () => {
+  it.each([
+    ["VMDisk", "vmdisks"],
+    ["VMInstance", "vminstances"],
+  ])("disables all six unused probes for %s", (kind, plural) => {
+    h.appKind = kind
+    h.appPlural = plural
+    h.get = {
+      data: {
+        apiVersion: "apps.cozystack.io/v1alpha1",
+        kind,
+        metadata: { name: "demo", namespace: "tenant-test" },
+        spec: {},
+      },
+      isLoading: false,
+      error: undefined,
+    }
+    renderPage()
+    if (kind === "VMDisk") expect(screen.getByText("Disk upload panel")).toBeInTheDocument()
+    else expect(screen.queryByText("Disk upload panel")).not.toBeInTheDocument()
+    const probes = presenceProbes()
+    expect(probes).toHaveLength(6)
+    for (const call of probes) {
+      expect(call[1]).toEqual(expect.objectContaining({ enabled: false }))
+    }
+  })
+
+  it("keeps presence probes enabled for ordinary applications", () => {
+    h.get = {
+      data: {
+        apiVersion: "apps.cozystack.io/v1alpha1",
+        kind: "Postgres",
+        metadata: { name: "demo", namespace: "tenant-test" },
+        spec: {},
+      },
+      isLoading: false,
+      error: undefined,
+    }
+    renderPage()
+    expect(screen.queryByText("Disk upload panel")).not.toBeInTheDocument()
+    const probes = presenceProbes()
+    expect(probes).toHaveLength(6)
+    for (const call of probes) {
+      expect(call[1]).toEqual(expect.objectContaining({ enabled: true }))
+    }
   })
 })
