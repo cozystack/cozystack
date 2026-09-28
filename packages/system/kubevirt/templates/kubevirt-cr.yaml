@@ -47,7 +47,7 @@
   the self-heal contract; tests/kubevirt_cr_test.yaml carries one case per gate,
   which is what makes a name dropped from a copy visible.
 */ -}}
-{{- $staticFeatureGates := list "HotplugVolumes" "ExpandDisks" "LiveMigration" "AutoResourceLimitsGate" "CPUManager" "GPU" "VMExport" -}}
+{{- $staticFeatureGates := list "DeclarativeHotplugVolumes" "ExpandDisks" "LiveMigration" "AutoResourceLimitsGate" "CPUManager" "GPU" "VMExport" -}}
 {{- $staticDisabledFeatureGates := list "Template" "ExternalNetResourceInjection" -}}
 {{- if semverCompare "<1.35-0" .Capabilities.KubeVersion.Version -}}
 {{- $staticDisabledFeatureGates = append $staticDisabledFeatureGates "ImageVolume" -}}
@@ -98,12 +98,13 @@ spec:
       {{- end }}
       {{- end }}
       featureGates:
-      # HotplugVolumes: deprecated in 1.9, replaced by DeclarativeHotplugVolumes.
-      # Kept because virt-api accepts kubevirt-csi's VMI-level removevolume on a
-      # VM-owned VMI only while it is on — which also keeps the replacement inert.
-      # Dropping it means setting --enable-vmi-hotplug-fallback=false in
+      # HotplugVolumes is left off: it is deprecated since 1.9, and while on it
+      # keeps DeclarativeHotplugVolumes inert. Turning it back on means setting
+      # --enable-vmi-hotplug-fallback=true in
       # packages/apps/kubernetes/templates/csi/deploy.yaml in the same change.
-      - HotplugVolumes
+      # DeclarativeHotplugVolumes is Beta and on by default; it is listed so
+      # disabledFeatureGates cannot take away the only hotplug path left.
+      - DeclarativeHotplugVolumes
       - ExpandDisks
       - LiveMigration
       - AutoResourceLimitsGate

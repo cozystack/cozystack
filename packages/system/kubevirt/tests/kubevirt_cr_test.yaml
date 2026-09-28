@@ -17,7 +17,7 @@ tests:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate
@@ -109,7 +109,7 @@ tests:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate
@@ -118,6 +118,23 @@ tests:
           - VMExport
           - HostDevices
           - WorkloadEncryptionSEV
+
+  # The chart does not enable HotplugVolumes, so naming it off is a plain
+  # opt-out and must not trip the both-lists guard.
+  - it: accepts HotplugVolumes in disabledFeatureGates
+    set:
+      disabledFeatureGates:
+      - HotplugVolumes
+    asserts:
+      - notContains:
+          path: spec.configuration.developerConfiguration.featureGates
+          content: HotplugVolumes
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - HotplugVolumes
 
   - it: appends disabledFeatureGates after the static opt-outs
     set:
@@ -147,13 +164,17 @@ tests:
   # entry cannot be disabled from values at all. The three cases further down
   # that reach featureGates through extraFeatureGates get the message naming
   # both sides instead, which is the distinction the copy also decides.
-  - it: refuses to render when disabledFeatureGates repeats HotplugVolumes
+  #
+  # DeclarativeHotplugVolumes is Beta and on by default, so listing it only
+  # matters for this guard: with HotplugVolumes off, disabling it would leave
+  # virt-api refusing every volume hotplug, kubevirt-csi attach included.
+  - it: refuses to render when disabledFeatureGates repeats DeclarativeHotplugVolumes
     set:
       disabledFeatureGates:
-      - HotplugVolumes
+      - DeclarativeHotplugVolumes
     asserts:
       - failedTemplate:
-          errorMessage: 'feature gate "HotplugVolumes" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+          errorMessage: 'feature gate "DeclarativeHotplugVolumes" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
 
   - it: refuses to render when disabledFeatureGates repeats ExpandDisks
     set:
@@ -234,7 +255,7 @@ tests:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate
@@ -344,7 +365,7 @@ tests:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate

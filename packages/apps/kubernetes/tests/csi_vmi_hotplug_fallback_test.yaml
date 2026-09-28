@@ -11,11 +11,10 @@ release:
   namespace: tenant-test
 
 tests:
-  # The driver defaults the flag to true, which is what the KubeVirt CR needs
-  # while it enables HotplugVolumes. Rendering it anyway would crash a driver
-  # image built before the flag existed: Go's flag package exits on an
-  # unknown flag. This test does not read that CR; the two change together.
-  - it: leaves the VMI hotplug fallback at the driver default while the KubeVirt CR enables HotplugVolumes
+  # Pinned while packages/system/kubevirt leaves HotplugVolumes out of the
+  # static featureGates, so virt-api rejects the VMI-level removevolume on a
+  # VM-owned VMI. This test does not read that CR; the two change together.
+  - it: turns the VMI hotplug fallback off while the KubeVirt CR leaves HotplugVolumes off
     documentSelector:
       path: kind
       value: Deployment
@@ -23,5 +22,9 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].name
           value: csi-driver
-      - notExists:
-          path: spec.template.spec.containers[0].args[?(@ =~ /^--enable-vmi-hotplug-fallback/)]
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-vmi-hotplug-fallback=false"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-vmi-hotplug-fallback=true"
