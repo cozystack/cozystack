@@ -18,14 +18,6 @@ tests:
           path: spec.version
           value: "7.3.63"
 
-  - it: maps v7.1 to its tag
-    set:
-      version: v7.1
-    asserts:
-      - equal:
-          path: spec.version
-          value: "7.1.67"
-
   - it: maps v7.4 to its tag
     set:
       version: v7.4
@@ -39,12 +31,12 @@ tests:
       version: null
     asserts:
       - failedTemplate:
-          errorMessage: "FoundationDB version <nil> is not supported, allowed versions are [v7.1 v7.3 v7.4]"
+          errorMessage: "FoundationDB version <nil> is not supported, allowed versions are [v7.3 v7.4]"
 
   - it: ignores a leftover cluster.version
     set:
       cluster:
-        version: "7.1.0"
+        version: "7.3.69"
     asserts:
       - equal:
           path: spec.version
