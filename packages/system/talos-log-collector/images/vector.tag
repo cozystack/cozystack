@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/vector:0.56.0-alpine@sha256:0eb66216f5f9322264e2ba83f4606428ef77a2cd4dea619a5bea610ac80ccc43
+ghcr.io/cozystack/cozystack/vector:v1.7.0-alpha.3@sha256:4b5d6ee2d1802bca9b858e278978bc44131738997cbc4e0f37691da8c968f9c9

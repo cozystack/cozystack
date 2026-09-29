@@ -13,7 +13,7 @@ migrations:
   # below therefore lags targetVersion in-tree by design; run-migrations.sh
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.7.0-alpha.3@sha256:649ed7af349389fcf95772a48fe14d2d25ea49e484f9b97d099818aa6b2d1220
   targetVersion: 59
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
@@ -163,7 +163,6 @@ networking:
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
-
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
@@ -661,7 +660,6 @@ monitoring:
 # cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
-
 # backupStrategyController overrides for the platform-managed strategy CRs,
 # forwarded verbatim into the same Package as
 # components.backupstrategy-controller.values.backupStrategyController. The
@@ -863,7 +861,6 @@ gpu:
   # missing entries).
   vgpuDeviceManager:
     enabled: false
-
 # VM import from external virtualization platforms (opt-in; see the iaas bundle).
 vmImport:
   # Container image carrying the VMware Virtual Disk Development Kit, used by

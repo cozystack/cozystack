@@ -1,1 +1,1 @@
-quay.io/capk/capk-manager:v0.1.10@sha256:87c2a80413a0f64f65326d379f4905d3f3f2eaf9dab8a6a67a7f7973ca85aef6
+ghcr.io/cozystack/cozystack/cluster-api-provider-kubevirt:v1.7.0-alpha.3@sha256:1ff85360e77333f5d3818295da9a8b98c16173bd56944ef98bb000e4a716f358

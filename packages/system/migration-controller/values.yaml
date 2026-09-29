@@ -1,5 +1,5 @@
 migrationController:
-  image: "ghcr.io/cozystack/cozystack/migration-controller:latest"
+  image: "ghcr.io/cozystack/cozystack/migration-controller:v1.7.0-alpha.3@sha256:82f31412b52fb08e94840fb439a870e53eff97abda56c85773fbc215bb0554ea"
   replicas: 1
   debug: false
   metrics:
@@ -12,7 +12,6 @@ migrationController:
     limits:
       cpu: 500m
       memory: 256Mi
-
 ## The VMware Virtual Disk Development Kit image, delivered from the platform.
 ## Never a tenant value: naming an image the cluster will run is not a tenant's
 ## decision, and this one is built from a proprietary SDK that Cozystack can

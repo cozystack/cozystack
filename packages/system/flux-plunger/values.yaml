@@ -1,1 +1,1 @@
-image: "ghcr.io/cozystack/cozystack/flux-plunger:latest@sha256:6a6ec938973e6583c5e1573f7d25beddc1852a6699a089116b2407e29a564a72"
+image: "ghcr.io/cozystack/cozystack/flux-plunger:v1.7.0-alpha.3@sha256:81e3f7f448b495b217655feba18402cf8741d6136fc6005d56812d6321ea07c2"

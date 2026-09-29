@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0@sha256:e8bf0521d1d1d8b90ebe66e9013010887033ba2653901799d57f2df47c9d879e"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.7.0-alpha.3@sha256:4fbde037ac99e539eb1a128056903697b0df4fa838d531aa4e673b697a340423"
   # chBackupClientImage is the image rendered into the Altinity strategy
   # Pod: it drives clickhouse-backup's HTTP API via curl + jq.
   #
@@ -35,7 +35,7 @@ backupStrategyController:
   # retag both to the same stable tag, and the write-once guard in
   # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
   # asserts no repository is pinned at more than one digest.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.7.0-alpha.3@sha256:649ed7af349389fcf95772a48fe14d2d25ea49e484f9b97d099818aa6b2d1220"
   # rabbitmqBackupClientImage is the image rendered into the RabbitMQ Job
   # strategy (strategy-rabbitmq-default.yaml): its script needs only curl +
   # ca-certificates to call the RabbitMQ management API and push the
@@ -48,13 +48,13 @@ backupStrategyController:
   # dedicated alpine + curl + ca-certificates image built by this package's
   # Makefile, which also lets this pin move on its own.
   # DO NOT hand-edit: stamped by packages/core/platform/Makefile.
-  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.7.0-alpha.3@sha256:649ed7af349389fcf95772a48fe14d2d25ea49e484f9b97d099818aa6b2d1220"
   # redisBackupClientImage is rendered into the Redis strategy Pod. The
   # spotahome operator ships no backup CRD, so the strategy runs a one-shot Job
   # that dumps an RDB snapshot to S3 and, on restore, loads it into a throwaway
   # redis to emit a faithful replay stream. It ships its own image (redis 8 +
   # curl) built from images/redis-backup/; `make image` re-digests this value.
-  redisBackupClientImage: "ghcr.io/cozystack/cozystack/redis-backup:v1.6.0"
+  redisBackupClientImage: "ghcr.io/cozystack/cozystack/redis-backup:v1.7.0-alpha.3@sha256:a2e1094d370a5c010ccc9354c2d145c4a3f33fb1d384a8f05dff1217194851ed"
   # redisBackupActiveDeadlineSeconds bounds one backup/restore Job so a run that
   # wedges (e.g. a --rdb dump blocking on a stalled master) becomes a Failed Job
   # the driver reports, rather than a Running BackupJob a cron Plan stacks behind.
