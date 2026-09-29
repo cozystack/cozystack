@@ -161,21 +161,6 @@
         }
       }
     },
-    "images": {
-      "description": "Container images used by the operator.",
-      "type": "object",
-      "default": {},
-      "required": [
-        "opensearch"
-      ],
-      "properties": {
-        "opensearch": {
-          "description": "OpenSearch image.",
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
     "nodeRoles": {
       "description": "Node roles configuration.",
       "type": "object",

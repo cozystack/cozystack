@@ -100,11 +100,3 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 | `proxmox.storage`        | Proxmox storage for the cloned disk; needs `full: true`. A target storage is a full-clone parameter — a linked clone always lives on the template's storage, and Proxmox refuses the pair — so the render refuses it too. Empty keeps the template's storage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `string`   | `""`       |
 | `proxmox.dnsServers`     | Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.                                                                                                                                                                                                                                                                                                                                                                                                                                               | `[]string` | `[]`       |
 
-
-### Images
-
-| Name             | Description                                                                                                    | Type     | Value |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `images`         | Optional image overrides for air-gapped or rate-limited registries.                                            | `object` | `{}`  |
-| `images.kubectl` | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
-

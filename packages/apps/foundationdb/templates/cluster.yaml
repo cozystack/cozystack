@@ -1,4 +1,5 @@
 {{- $clusterDomain := index .Values._cluster "cluster-domain" | default "cozy.local" }}
+{{- include "foundationdb.checkLegacyVersion" . }}
 ---
 apiVersion: apps.foundationdb.org/v1beta2
 kind: FoundationDBCluster
@@ -9,7 +10,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  version: {{ .Values.cluster.version | quote }}
+  version: {{ include "foundationdb.versionMap" . | quote }}
 
   databaseConfiguration:
     redundancy_mode: {{ .Values.cluster.redundancyMode }}

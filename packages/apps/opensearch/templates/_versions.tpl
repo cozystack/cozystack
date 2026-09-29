@@ -1,13 +1,12 @@
-{{/*
-Version mapping helper
-Loads version mapping from files/versions.yaml and returns the full version for a given major version
-*/}}
-{{- define "opensearch.versionMap" -}}
-{{- $versions := .Files.Get "files/versions.yaml" | fromYaml -}}
-{{- $version := .Values.version | default "v2" -}}
-{{- if hasKey $versions $version -}}
-{{- index $versions $version -}}
-{{- else -}}
-{{- fail (printf "Invalid version '%s'. Available versions: %s" $version (keys $versions | join ", ")) -}}
-{{- end -}}
-{{- end -}}
+{{/* toString keeps an explicit `version: null` in the release values on the
+     unsupported-version message below. Helm drops such a key when it merges
+     the chart defaults, so indexing the map with it would fail on a template
+     type error naming neither the value nor the versions on offer. */}}
+{{- define "opensearch.versionMap" }}
+{{- $versionMap := .Files.Get "files/versions.yaml" | fromYaml }}
+{{- $version := .Values.version | toString }}
+{{- if not (hasKey $versionMap $version) }}
+    {{- printf `OpenSearch version %s is not supported, allowed versions are %s` $version (keys $versionMap | sortAlpha) | fail }}
+{{- end }}
+{{- index $versionMap $version }}
+{{- end }}
