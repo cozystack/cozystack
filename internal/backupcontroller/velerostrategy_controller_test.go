@@ -1570,3 +1570,55 @@ func TestReconcileVeleroRestore_FailedValidation(t *testing.T) {
 		t.Errorf("Ready condition = %+v, want message containing the validation error", ready)
 	}
 }
+
+func TestReconcileVelero_BackupFailedValidation(t *testing.T) {
+	started := metav1.Now()
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "bj", Namespace: "tenant-src"},
+		Status: backupsv1alpha1.BackupJobStatus{
+			Phase:     backupsv1alpha1.BackupJobPhaseRunning,
+			StartedAt: &started,
+		},
+	}
+	veleroBackup := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "vb", Namespace: veleroNamespace, Labels: map[string]string{
+			backupsv1alpha1.OwningJobNameLabel:      backupJob.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: backupJob.Namespace,
+		}},
+		Status: velerov1.BackupStatus{
+			Phase:            velerov1.BackupPhaseFailedValidation,
+			ValidationErrors: []string{"storage location not found"},
+		},
+	}
+	strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+	}
+
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = velerov1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+	reconciler := &BackupJobReconciler{Client: clientfake.NewClientBuilder().
+		WithScheme(testScheme).
+		WithObjects(backupJob, veleroBackup, strategy).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
+		Build()}
+	ctx := context.Background()
+
+	if _, err := reconciler.reconcileVelero(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileVelero() error = %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := reconciler.Get(ctx, client.ObjectKeyFromObject(backupJob), got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || !strings.Contains(ready.Message, "storage location not found") {
+		t.Errorf("Ready condition = %+v, want message containing the validation error", ready)
+	}
+}
