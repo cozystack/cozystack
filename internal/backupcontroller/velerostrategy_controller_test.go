@@ -1812,3 +1812,66 @@ func TestPrepareForRestore_KeepOriginalPVC_CacheLagsBehindWrites(t *testing.T) {
 		t.Error("DataVolume was not deleted after the rename completed")
 	}
 }
+
+func TestReconcileVeleroRestore_FailedValidation(t *testing.T) {
+	started := metav1.Now()
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "src-sb", Namespace: "tenant-src"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: new("apps.cozystack.io"),
+				Kind:     vmInstanceKind,
+				Name:     "src",
+			},
+			StrategyRef:    corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+			DriverMetadata: map[string]string{veleroBackupNameMetadataKey: "vb"},
+		},
+	}
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: "tenant-src"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "src-sb"}},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			StartedAt: &started,
+		},
+	}
+	veleroRestore := &velerov1.Restore{
+		ObjectMeta: metav1.ObjectMeta{Name: "vr", Namespace: veleroNamespace, Labels: map[string]string{
+			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+		}},
+		Status: velerov1.RestoreStatus{
+			Phase:            velerov1.RestorePhaseFailedValidation,
+			ValidationErrors: []string{"backup not found"},
+		},
+	}
+	strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil)
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = velerov1.AddToScheme(testScheme)
+	_ = strategyv1alpha1.AddToScheme(testScheme)
+	reconciler.Client = clientfake.NewClientBuilder().
+		WithScheme(testScheme).
+		WithObjects(restoreJob, backup, veleroRestore, strategy).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
+		Build()
+	ctx := context.Background()
+
+	if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+		t.Fatalf("reconcileVeleroRestore() error = %v", err)
+	}
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+		t.Fatalf("get RestoreJob: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", got.Status.Phase)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if ready == nil || !strings.Contains(ready.Message, "backup not found") {
+		t.Errorf("Ready condition = %+v, want message containing the validation error", ready)
+	}
+}
