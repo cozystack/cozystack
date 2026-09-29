@@ -65,6 +65,9 @@ type ConfigSpec struct {
 	// Cloud-init user data.
 	// +kubebuilder:default:=""
 	CloudInit string `json:"cloudInit"`
+	// Supply cloud-init network-data that requests DHCP on every `en*` and `eth*` interface and keeps the DNS search domains DHCP offers. Needed for a netplan guest (Ubuntu, Debian) to address a secondary network such as a VPC subnet. Leave it off for a guest rendered by anything other than netplan, which would lose DHCP on every interface, and for a guest that configures an interface statically through netplan, which this configuration would shadow. Turning it on for a VM that has neither `cloudInit` nor `sshKeys` adds a cloud-init disk, and the guest's next boot is then treated as a first boot.
+	// +kubebuilder:default:=false
+	NetplanDhcp bool `json:"netplanDhcp"`
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
