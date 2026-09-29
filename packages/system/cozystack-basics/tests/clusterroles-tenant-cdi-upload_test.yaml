@@ -1,0 +1,67 @@
+suite: cozystack-basics tenant ClusterRoles grant CDI image upload into VM disks
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# A tenant creates a VM disk with source: upload through the vm-disk app (admin
+# tier) and then pushes the image with `virtctl image-upload`. That command
+# reads the disk's DataVolume and PVC to wait for upload-ready and creates an
+# UploadTokenRequest to get an upload token. None of those three were granted at
+# any tier, so every tenant group hit Forbidden (issue #3759). The grant lives
+# at the use tier, so it aggregates into admin and super-admin; view stays
+# read-only and cannot upload. Every tenant RoleBinding is namespaced, so these
+# verbs never reach another tenant's namespace.
+tests:
+  - it: cozy:tenant:use:base grants create on upload.cdi.kubevirt.io uploadtokenrequests
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["upload.cdi.kubevirt.io"]
+            resources: ["uploadtokenrequests"]
+            verbs: ["create"]
+
+  - it: cozy:tenant:use:base grants read on cdi.kubevirt.io datavolumes
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cdi.kubevirt.io"]
+            resources: ["datavolumes"]
+            verbs: ["get", "list", "watch"]
+
+  - it: cozy:tenant:use:base grants read on core persistentvolumeclaims
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "watch"]
+
+  # Upload is a write path and must not leak into the read-only view tier: the
+  # create on uploadtokenrequests belongs to use and up, never to view.
+  - it: cozy:tenant:view:base does not grant the upload token create
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["upload.cdi.kubevirt.io"]
+            resources: ["uploadtokenrequests"]
+            verbs: ["create"]

@@ -1,5 +1,12 @@
 {{- if and .Values.source (hasKey .Values.source "upload") }}
 To upload your disk run:
 
-virtctl image-upload dv -n {{ .Release.Namespace }} {{ .Release.Name }} --image-path <path_to_image>
+virtctl image-upload dv -n {{ .Release.Namespace }} {{ .Release.Name }} --no-create --uploadproxy-url=https://cdi-uploadproxy.<your-cluster-domain> --image-path <path_to_image> --insecure
+
+Replace <your-cluster-domain> with the cluster root domain. The proxy is
+reachable only where the platform exposes the cdi-uploadproxy service, and the
+URL must be passed explicitly: a tenant cannot read the cluster-scoped CDIConfig
+that virtctl would otherwise discover it from. --insecure is required because
+the proxy is exposed over TLS passthrough and presents CDI's self-signed
+certificate, which is not valid for the ingress hostname.
 {{- end }}

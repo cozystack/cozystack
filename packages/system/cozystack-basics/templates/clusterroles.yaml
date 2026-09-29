@@ -212,6 +212,27 @@ rules:
   - tenantmodules
   - tenantsecrets
   verbs: ["get", "list", "watch"]
+# Upload an OS image into a VM disk the tenant owns, via `virtctl image-upload`.
+# The vm-disk chart creates the DataVolume (source: upload) and CDI the PVC; the
+# command reads the DataVolume and the disk's PVC (the CDI populator prime PVC on
+# CSI storage such as LINSTOR) to wait for upload-ready, and creates an
+# UploadTokenRequest for the token. It also lists Events while it waits, already
+# granted to the tenant at the base tier. The disk itself is still created
+# through the vm-disk app at the admin tier. Granted at "use" like the
+# console/power rules above, so it reaches admin and super-admin but not
+# read-only view. Every tenant RoleBinding is namespaced, so none of this reaches
+# another tenant's namespace, and the upload proxy is not discoverable here
+# (CDIConfig is cluster-scoped and tenants have no cluster-scoped read), so the
+# command must pass --uploadproxy-url explicitly.
+- apiGroups: ["upload.cdi.kubevirt.io"]
+  resources: ["uploadtokenrequests"]
+  verbs: ["create"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch"]
 ---
 # == admin cluster role ==
 # Aggregates use + all roles labeled for admin access
