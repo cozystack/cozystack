@@ -54,7 +54,7 @@ spec:
           ca_cert: /qdrant/tls/ca.crt
         {{- end }}
       {{- if $tlsEnabled }}
-      podAnnotations:
+      additionalAnnotations:
         secret.reloader.stakater.com/reload: "{{ .Release.Name }}-tls"
       additionalVolumes:
         - name: tls

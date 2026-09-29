@@ -303,7 +303,7 @@ tests:
         enabled: true
     asserts:
       - equal:
-          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+          path: spec.values.qdrant.additionalAnnotations["secret.reloader.stakater.com/reload"]
           value: "test-qdrant-tls"
 
   - it: does not set reloader annotation when tls.enabled is false
@@ -315,7 +315,7 @@ tests:
         enabled: false
     asserts:
       - notExists:
-          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+          path: spec.values.qdrant.additionalAnnotations["secret.reloader.stakater.com/reload"]
 
   - it: does not set reloader annotation when external is false and tls.enabled is unset
     release:
@@ -325,7 +325,7 @@ tests:
       external: false
     asserts:
       - notExists:
-          path: spec.values.qdrant.podAnnotations
+          path: spec.values.qdrant.additionalAnnotations
 
   - it: sets reloader annotation when external is true and tls.enabled is unset (tri-state b)
     release:
@@ -335,5 +335,5 @@ tests:
       external: true
     asserts:
       - equal:
-          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+          path: spec.values.qdrant.additionalAnnotations["secret.reloader.stakater.com/reload"]
           value: "test-qdrant-tls"
