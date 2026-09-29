@@ -73,6 +73,7 @@ func TestActiveRestoreTargeting(t *testing.T) {
 	anotherKind := corev1.TypedLocalObjectReference{APIGroup: new("apps.cozystack.io"), Kind: "MariaDB", Name: "pg"}
 	anotherGroup := corev1.TypedLocalObjectReference{APIGroup: new("example.com"), Kind: "Postgres", Name: "pg"}
 	vm := corev1.TypedLocalObjectReference{APIGroup: new("apps.cozystack.io"), Kind: "VMInstance", Name: "vm"}
+	vmInGroup := corev1.TypedLocalObjectReference{APIGroup: new("example.com"), Kind: "VMInstance", Name: "vm"}
 	pg2InGroup := corev1.TypedLocalObjectReference{APIGroup: new("example.com"), Kind: "Postgres", Name: "pg2"}
 	pg2Default := pgRef("pg2")
 	for _, tc := range []struct {
@@ -119,6 +120,14 @@ func TestActiveRestoreTargeting(t *testing.T) {
 		{"Velero restore naming its own namespace", &vm, []client.Object{
 			lockBackupBy("vm-1", vm, strategyv1alpha1.VeleroStrategyKind), lockRestore("r1", "vm-1", backupsv1alpha1.RestoreJobPhaseRunning, nil, `{"targetNamespace":"`+lockNS+`"}`),
 		}, "r1"},
+		// The Velero driver drops the target's API group and restores the
+		// Backup's resources, in the Backup's group.
+		{"Velero target naming another API group restores in the Backup's", &vm, []client.Object{
+			lockBackupBy("vm-1", vm, strategyv1alpha1.VeleroStrategyKind), lockRestore("r1", "vm-1", backupsv1alpha1.RestoreJobPhaseRunning, &corev1.TypedLocalObjectReference{APIGroup: new("example.com"), Kind: "VMInstance", Name: "vm"}, ""),
+		}, "r1"},
+		{"Velero target naming another API group does not hold that group", &vmInGroup, []client.Object{
+			lockBackupBy("vm-1", vm, strategyv1alpha1.VeleroStrategyKind), lockRestore("r1", "vm-1", backupsv1alpha1.RestoreJobPhaseRunning, &corev1.TypedLocalObjectReference{APIGroup: new("example.com"), Kind: "VMInstance", Name: "vm"}, ""),
+		}, ""},
 		{"Postgres restore carrying targetNamespace, which CNPG ignores", nil, []client.Object{
 			lockBackup("pg-1", pgRef("pg")), lockRestore("r1", "pg-1", backupsv1alpha1.RestoreJobPhaseRunning, nil, `{"targetNamespace":"tenant-other"}`),
 		}, "r1"},

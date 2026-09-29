@@ -70,7 +70,9 @@ func activeRestoreTargeting(ctx context.Context, c client.Client, namespace stri
 // Job-based paths): the Backup's applicationRef, with the target's kind and
 // name when a target is set — the CRD requires both — and the target's API
 // group only when it names one. A target without an API group therefore stays
-// in the Backup's group, which is not always the default one.
+// in the Backup's group, which is not always the default one. The Velero
+// driver drops the target's API group (resolveRestoreTarget) and restores the
+// Backup's resources, so a Velero restore always stays in the Backup's group.
 //
 // It reports false for a restore that writes nothing here. One whose Backup is
 // gone is failed by the restore controller on its next pass. A Velero restore
@@ -92,7 +94,7 @@ func restoreJobTarget(ctx context.Context, c client.Client, rj *backupsv1alpha1.
 	ref := backup.Spec.ApplicationRef
 	if t := rj.Spec.TargetApplicationRef; t != nil {
 		ref.Kind, ref.Name = t.Kind, t.Name
-		if t.APIGroup != nil {
+		if t.APIGroup != nil && backup.Spec.StrategyRef.Kind != strategyv1alpha1.VeleroStrategyKind {
 			ref.APIGroup = t.APIGroup
 		}
 	}
