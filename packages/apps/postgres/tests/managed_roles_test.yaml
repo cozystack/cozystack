@@ -1,0 +1,179 @@
+suite: init-script trusts only roles it marked itself
+
+# On PostgreSQL 16 a CREATEROLE holder may COMMENT ON ROLE every role it created,
+# and by creating a role through an intermediate role it then drops, it leaves no
+# pg_auth_members row that tells who did. Two passes trusted what it can forge:
+# the delete passes picked roles by their comment and handed their objects to the
+# superuser, so a forged comment turned a SECURITY DEFINER function into superuser
+# code; and the create passes adopted any role that already existed under a
+# declared name, so a role squatted before an admin declared it stayed under the
+# squatter's control. Membership in "cozystack:managed", which only the superuser
+# can grant, replaces the comment as the record, and objects go to
+# pg_database_owner. The behaviour is proven against live PostgreSQL 13, 15, 16
+# and 17; these tests pin the render.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: hands a removed user's or role's objects to pg_database_owner, never to the superuser
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY "\$user" TO pg_database_owner;'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY "\$role" TO pg_database_owner;'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY .* TO postgres'
+
+  # pg_database_owner exists from PostgreSQL 14 on, and createRole is refused below 16.
+  - it: keeps the superuser as the heir on PostgreSQL 13, which has no pg_database_owner
+    set:
+      version: v13
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY "\$user" TO postgres;'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'pg_database_owner'
+
+  - it: creates the marker once and marks the roles the chart had commented before it existed
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "IF NOT EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:managed'\\) THEN\\n\\s+CREATE ROLE \"cozystack:managed\" NOLOGIN;\\n\\s+FOR managed IN SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description IN \\('user managed by helm', 'role managed by helm'\\) LOOP\\n\\s+EXECUTE format\\('GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', 'cozystack:managed', managed.rolname\\);"
+
+  - it: selects the users and roles to delete by the marker, not by the comment alone
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "WHERE s.description = 'user managed by helm' AND r.oid IN \\(SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed'\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "WHERE s.description = 'role managed by helm' AND r.oid IN \\(SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed'\\)"
+
+  - it: marks every user and database role it creates, as a record that carries no privilege
+    set:
+      users:
+        app: {}
+      databases:
+        shop: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "cozystack:managed" TO "app" WITH INHERIT FALSE, SET FALSE;'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "cozystack:managed" TO "shop_admin" WITH INHERIT FALSE, SET FALSE;'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "cozystack:managed" TO "shop_readonly" WITH INHERIT FALSE, SET FALSE;'
+
+  # INHERIT and SET membership options arrived in PostgreSQL 16.
+  - it: marks with a plain GRANT before PostgreSQL 16
+    set:
+      version: v15
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'GRANT "cozystack:managed" TO "app";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'INHERIT FALSE'
+
+  - it: refuses to adopt an unmarked user role once createRole has been granted, before creating it
+    set:
+      users:
+        debezium:
+          replication: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "SELECT format\\('DO \\$\\$BEGIN RAISE EXCEPTION %L; END\\$\\$', 'role \"debezium\" already exists and this chart did not create it; [^']*'\\)\\nFROM pg_catalog.pg_roles r\\nWHERE r.rolname = 'debezium'\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec\\nSELECT 'CREATE ROLE \"debezium\" LOGIN INHERIT;'"
+
+  - it: refuses to adopt unmarked database roles once createRole has been granted, before creating the database
+    set:
+      databases:
+        newdb: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "WHERE r.rolname IN \\('newdb_admin', 'newdb_readonly'\\)\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec\\nSELECT 'CREATE DATABASE \"newdb\"'"
+
+  # The flag is set after every user is created and marked, so the run that first
+  # grants createRole still adopts a role that predates it, such as the one CNPG
+  # bootstraps for users.app, and before any CREATEROLE is granted, so no holder
+  # exists while it is unset.
+  - it: records createRole after creating and marking the users and before granting the attribute
+    set:
+      users:
+        app: {}
+        migrator:
+          createRole: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)GRANT \"cozystack:managed\" TO \"migrator\" WITH INHERIT FALSE, SET FALSE;\\nEOT\\npsql -v ON_ERROR_STOP=1 --echo-all -c \"ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';\".*ALTER ROLE \"migrator\" WITH PASSWORD :'pw' LOGIN INHERIT NOREPLICATION CREATEROLE"
+
+  - it: does not record createRole when no user holds it
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'SET cozystack.createrole_granted'
