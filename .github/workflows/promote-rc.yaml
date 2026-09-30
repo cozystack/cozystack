@@ -1000,7 +1000,7 @@ jobs:
 
           ${E2E_NOTE}
 
-          ℹ️ E2E already ran against the immutable rc, so this promote PR does not run E2E by default. A maintainer may add the \`full-e2e\` label to run the full suite again.
+          ℹ️ E2E already ran against the immutable rc, so this promote PR does not run E2E by default. A maintainer may add the \`e2e/full\` label to run the full suite again.
 
           ${CHANGELOG_NOTE}
 
@@ -1025,7 +1025,7 @@ jobs:
               echo "::warning::The open PR for ${STABLE_BRANCH} has a hand-edited body — leaving it untouched. Changelog status this run: ${CHANGELOG_PRESENT}."
             fi
           else
-            # Release-labelled promote PRs deliberately omit full-e2e: the rc
+            # Release-labelled promote PRs deliberately omit e2e/full: the rc
             # gate above already checked the immutable candidate. Adding the
             # label later is the explicit maintainer opt-in for a repeat run.
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
