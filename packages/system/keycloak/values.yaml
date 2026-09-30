@@ -45,6 +45,25 @@ themes: []
 # arrives via _cluster.branding, so no per-package values plumbing is required.
 
 imagePullSecrets: []
+
+# Placement of the Keycloak pods. Empty leaves it to the scheduler, which is
+# free to put both replicas in one failure domain; a StatefulSet does not
+# replace a pod stuck on an unreachable node, so that domain's loss then takes
+# every replica with it. Example spreading one replica per zone:
+#
+#   topologySpreadConstraints:
+#     - maxSkew: 1
+#       topologyKey: topology.kubernetes.io/zone
+#       whenUnsatisfiable: DoNotSchedule
+#       # Leave out nodes the pod cannot run on (an unreachable zone carries
+#       # the unreachable NoSchedule taint), so the constraint does not count
+#       # a lost zone as a domain the replacement pod must balance against.
+#       nodeTaintsPolicy: Honor
+#       labelSelector:
+#         matchLabels:
+#           app: keycloak-ha
+affinity: {}
+topologySpreadConstraints: []
 # - name: my-registry-secret
 
 # Extra environment variables to inject into the Keycloak container.
@@ -102,6 +121,11 @@ encryption:
   # Number of proxy replicas. >1 requires deksetSecretName (a shared wrapped
   # DEK set) so every replica encrypts deterministic columns under one key.
   replicas: 1
+  # Placement of the proxy pods, same shape as the top-level affinity and
+  # topologySpreadConstraints (the label is app: keycloak-kms-proxy). With more
+  # than one replica a PodDisruptionBudget keeps one of them up through drains.
+  affinity: {}
+  topologySpreadConstraints: []
   # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
   # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
   # an existing populated database — the proxy must reuse the DEK the backfill
