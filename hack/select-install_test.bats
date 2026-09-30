@@ -575,7 +575,9 @@ YAML
              cozystack.capi-provider-bootstrap-kubeadm \
              cozystack.capi-provider-core cozystack.capi-provider-cp-kamaji \
              cozystack.capi-provider-infra-kubevirt cozystack.keycloak \
-             cozystack.keycloak-operator; do
+             cozystack.keycloak-operator cozystack.multus \
+             cozystack.cozystack-scheduler cozystack.linstor-scheduler \
+             cozystack.flux-plunger cozystack.cozy-proxy cozystack.ouroboros; do
         case " $drop " in
             *" $b "*) echo "baseline package '$b' is in the disable list" >&2; exit 1 ;;
         esac

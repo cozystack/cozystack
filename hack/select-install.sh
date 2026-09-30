@@ -28,7 +28,7 @@
 #   can be reduced by subtraction with no new variant. Refuses on an empty
 #   selection, where the complement would be the whole platform.
 #
-#   Two limits worth knowing before consuming it.
+#   Three limits worth knowing before consuming it.
 #
 #   Subtraction governs a FRESH install only. Both package defines stamp
 #   `helm.sh/resource-policy: keep`, so adding a name on a live cluster stops
@@ -43,6 +43,13 @@
 #   needs that list set separately. Subtraction is correct for them either way,
 #   since an optional package absent from enabledPackages is not installed
 #   regardless.
+#
+#   A package that no selected suite owns or needs, and that the baseline does
+#   not keep, is not installed, including when select-e2e.sh answers with every
+#   suite. That is deliberate: nothing in the run looks at such packages
+#   (monitoring exporters like goldpinger and kubeovn-plunger, apps without a
+#   suite, provider-specific operators), so installing them only adds a
+#   readiness wait. A change to one of them gets no install check from this gate.
 #
 #   The declared graph is not the whole runtime contract. The standard E2E
 #   install waits for storage, load-balancer, CAPI and OIDC components which no
@@ -178,10 +185,10 @@ deps_of() {
 # inventory as a whole, so accepting a dangling edge or cycle elsewhere would
 # make the result depend on an invalid input snapshot.
 validate_graph() {
-  # One awk pass checks every reference and walks every node once. The former
-  # shell cycle walk restarted from each owner and the dangling check spawned a
-  # grep per edge, both too expensive once ordinary output shared validation.
-  # BWK awk rejects literal newlines in -v assignments.
+  # One awk pass checks every reference and walks every node once, because
+  # ordinary selection runs this validation too and the graph has ~100 nodes.
+  # The node list goes through the environment: BWK awk rejects literal
+  # newlines in -v assignments.
   if graph_errors=$(printf '%s\n' "$FORWARD" | SELECT_INSTALL_NODES="$NODES" awk -F'\t' '
     function visit(node, i, next_node) {
       if (state[node] == 1) {
@@ -341,6 +348,14 @@ validate_graph || exit 1
 # KubeVirt, storage controllers and CRDs remain graph-derived so losing those
 # declared edges stays observable in tests. Tenant HelmReleases carry a shard
 # label excluded by flux-aio, so the shard operator must supply their reconciler.
+#
+# Platform services no suite owns are kept as well, so a selective install still
+# runs the platform the way a full one does: multus (secondary networks), the
+# cozystack and LINSTOR schedulers, flux-plunger (repairs HelmReleases stuck on
+# "has no deployed releases"), cozy-proxy (external Services of VMs) and
+# ouroboros (hairpin NAT, asserted by the Kubernetes suites). Nothing waits for
+# them, so no graph edge reaches them; keeping them here leaves the product
+# PackageSources untouched.
 baseline="cozystack.cozystack-engine
 cozystack.flux-shard-operator
 cozystack.cozystack-basics
@@ -358,7 +373,13 @@ cozystack.capi-provider-core
 cozystack.capi-provider-cp-kamaji
 cozystack.capi-provider-infra-kubevirt
 cozystack.keycloak
-cozystack.keycloak-operator"
+cozystack.keycloak-operator
+cozystack.multus
+cozystack.cozystack-scheduler
+cozystack.linstor-scheduler
+cozystack.flux-plunger
+cozystack.cozy-proxy
+cozystack.ouroboros"
 
 missing=""
 for b in $baseline; do

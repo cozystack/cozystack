@@ -96,14 +96,24 @@ tests:
       bundles:
         system: {enabled: true, variant: isp-full}
     asserts:
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.goldpinger, any: true}
+        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.kubeovn-plunger, any: true}
+        not: true
+
+  - it: keeps the platform services no suite owns
+    template: templates/bundles/system.yaml
+    values:
+      - fixtures/selective-install-postgres-values.yaml
+    set:
+      bundles:
+        system: {enabled: true, variant: isp-full}
+    asserts:
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozy-proxy, any: true}
-        not: true
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.cozystack-scheduler, any: true}
-        not: true
+      - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.flux-plunger, any: true}
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.linstor-scheduler, any: true}
-        not: true
       - containsDocument: {apiVersion: cozystack.io/v1alpha1, kind: Package, name: cozystack.multus, any: true}
-        not: true
 
   - it: keeps the later OIDC upgrade packages
     template: templates/bundles/system.yaml
