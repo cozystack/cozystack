@@ -11,7 +11,7 @@ spec:
   parentRefs:
   - group: gateway.networking.k8s.io
     kind: Gateway
-    name: cozystack
+    name: cozystack-passthrough
     namespace: {{ $exposeIngress }}
     sectionName: tls-cdi-uploadproxy
   hostnames:

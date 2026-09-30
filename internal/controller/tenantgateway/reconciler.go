@@ -113,6 +113,25 @@ func renderedPassthroughServices(tgw *gatewayv1alpha1.TenantGateway) []string {
 	return tgw.Spec.TLSPassthroughServices
 }
 
+// passthroughGatewayName names the Gateway the tlsPassthroughServices
+// listeners render on. They share port 443 with the HTTPS-terminate
+// listeners, and Gateway API lets an implementation refuse HTTPS and
+// TLS listeners on one port of one address whatever their hostnames
+// ("Compatible Listeners" on Gateway.spec.listeners); Cilium marks the
+// pair ProtocolConflict from v1.19.6 and drops it from Envoy from v1.20.
+// A Gateway of their own gets an address of its own, which is the only
+// layout every implementation has to serve.
+func passthroughGatewayName(tgw *gatewayv1alpha1.TenantGateway) string {
+	return tgw.Name + "-passthrough"
+}
+
+func gatewayClassName(tgw *gatewayv1alpha1.TenantGateway) string {
+	if tgw.Spec.GatewayClassName == "" {
+		return "cilium"
+	}
+	return tgw.Spec.GatewayClassName
+}
+
 // gatewayIssuerName returns the per-tenant ACME Issuer name. The
 // Issuer lives in the same namespace as the TenantGateway and is
 // referenced by every Certificate this controller renders.
@@ -271,10 +290,10 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// exactly the hostnames a passthrough listener answers.
 	rendered := passthroughListeners(tgw)
 	byHostname := make(map[string]passthroughListener, len(rendered))
-	sections := make(map[string]string, len(rendered))
+	sections := make(map[string]passthroughListener, len(rendered))
 	for _, l := range rendered {
 		byHostname[l.hostname] = l
-		sections[l.section] = l.hostname
+		sections[l.section] = l
 	}
 	dynHostnames := make([]string, 0, len(claims))
 	withdrawn := map[routeRef][]withdrawnHostname{}
@@ -285,19 +304,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// answers its hostname, and the terminate listener rendered for
 		// the same hostname carries a content-addressed name of its
 		// own. Gateway API derives the kinds a TLS listener takes from
-		// the protocol and that is TLSRoute alone. The port-443
-		// passthrough listeners name HTTPRoute in allowedRoutes.kinds
-		// all the same, to keep every port-443 set uniform
-		// (cilium#45559), and the Gateway reports that entry back on the
-		// listener as ResolvedRefs=False/InvalidRouteKinds rather than
-		// as a grant.
-		//
-		// Nothing else tells the route. CheckGatewayRouteKindAllowed
-		// (operator/pkg/gateway-api/routechecks/gateway_checks.go,
-		// v1.19.5) reads each listener's kinds against every route on
-		// the Gateway rather than against the routes that named it, so
-		// that same HTTPRoute entry has Cilium report this route
-		// Accepted, and this condition is the only refusal.
+		// the protocol and that is TLSRoute alone.
 		//
 		// Such a ref then leaves the hostname before anything else is
 		// decided about it, the way a refused TLSRoute leaves the
@@ -546,7 +553,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 					w.answeredBy = ""
 				case withdrawnSectionMismatch:
 					w.section = string(*ref.parentRef.SectionName)
-					w.answeredBy = sections[w.section]
+					w.answeredBy = sections[w.section].hostname
 				case withdrawnPortMismatch:
 					w.port = int32(*ref.parentRef.Port)
 				case withdrawnForeignNamespace:
@@ -640,10 +647,10 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 				// listener" is false to a reader who named one that is
 				// rendered, and it hides the half they can fix.
 				if ref.parentRef.SectionName != nil {
-					if answers, exists := sections[string(*ref.parentRef.SectionName)]; exists {
+					if answers, exists := sections[string(*ref.parentRef.SectionName)]; exists && answers.gateway == string(ref.parentRef.Name) {
 						w.cause = withdrawnSectionMismatch
 						w.section = string(*ref.parentRef.SectionName)
-						w.answeredBy = answers
+						w.answeredBy = answers.hostname
 					}
 				}
 				withdrawn[ref] = append(withdrawn[ref], w)
@@ -910,7 +917,12 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		if isHTTPRedirectRoute(route, tgw) {
 			continue
 		}
-		matchingRefs := allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw)
+		// The passthrough Gateway carries TLS listeners alone, so an
+		// HTTPRoute naming it attaches to nothing there and claims
+		// nothing; its status is the class controller's to write.
+		matchingRefs := slices.DeleteFunc(allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw), func(ref gatewayv1.ParentReference) bool {
+			return string(ref.Name) != tgw.Name
+		})
 		if len(matchingRefs) == 0 {
 			continue
 		}
@@ -1041,6 +1053,9 @@ func tlsRouteClaims(route *gatewayv1alpha2.TLSRoute, ref gatewayv1.ParentReferen
 	named := ref.SectionName != nil
 	var out []string
 	for _, l := range rendered {
+		if string(ref.Name) != l.gateway {
+			continue
+		}
 		if named && string(*ref.SectionName) != l.section {
 			continue
 		}
@@ -1084,9 +1099,9 @@ func allAttachingParentRefs(refs []gatewayv1.ParentReference, routeNs string, tg
 }
 
 // parentRefAttachesTo answers the identity question alone — does this
-// parentRef name this Gateway — and deliberately does not read ref.Port,
-// though Gateway API counts the port when both it and a sectionName are
-// given. Matching it here would say less than the function's name
+// parentRef name one of the Gateways this TenantGateway renders — and
+// deliberately does not read ref.Port, though Gateway API counts the
+// port when both it and a sectionName are given. Matching it here would say less than the function's name
 // promises: whether a port pin selects a listener this Gateway actually
 // publishes is a serving verdict, and it lives with the other serving
 // verdicts in judgeHTTPRouteClaim, which refuses a route pinned to a
@@ -1109,7 +1124,7 @@ func parentRefAttachesTo(ref gatewayv1.ParentReference, routeNs string, tgw *gat
 	return (group == gatewayv1.GroupName || group == "") &&
 		kind == "Gateway" &&
 		ns == tgw.Namespace &&
-		string(ref.Name) == tgw.Name
+		(string(ref.Name) == tgw.Name || string(ref.Name) == passthroughGatewayName(tgw))
 }
 
 // reconcilePerListenerCertificates creates a Certificate for each
@@ -1237,17 +1252,48 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 	if err != nil {
 		return fmt.Errorf("render Gateway: %w", err)
 	}
+	if err := r.applyGateway(ctx, tgw, desired); err != nil {
+		return err
+	}
 
+	passthrough, err := r.renderPassthroughGateway(tgw)
+	if err != nil {
+		return fmt.Errorf("render passthrough Gateway: %w", err)
+	}
+	if passthrough != nil {
+		return r.applyGateway(ctx, tgw, passthrough)
+	}
+	stale := &gatewayv1.Gateway{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: passthroughGatewayName(tgw)}, stale)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		return nil
+	case getErr != nil:
+		return fmt.Errorf("get passthrough Gateway: %w", getErr)
+	case !ownedByTenantGateway(stale.OwnerReferences, tgw):
+		return nil
+	}
+	if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete passthrough Gateway: %w", err)
+	}
+	logger.V(1).Info("deleted passthrough Gateway", "namespace", tgw.Namespace, "name", stale.Name)
+	return nil
+}
+
+// applyGateway creates desired or brings the existing Gateway of that
+// name in line with it.
+func (r *Reconciler) applyGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, desired *gatewayv1.Gateway) error {
+	logger := log.FromContext(ctx)
 	existing := &gatewayv1.Gateway{}
-	getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}, existing)
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing)
 	switch {
 	case apierrors.IsNotFound(getErr):
 		if err := r.Create(ctx, desired); err != nil {
-			return fmt.Errorf("create Gateway: %w", err)
+			return fmt.Errorf("create Gateway %s: %w", desired.Name, err)
 		}
-		logger.V(1).Info("created Gateway", "namespace", tgw.Namespace, "name", tgw.Name)
+		logger.V(1).Info("created Gateway", "namespace", desired.Namespace, "name", desired.Name)
 	case getErr != nil:
-		return fmt.Errorf("get Gateway: %w", getErr)
+		return fmt.Errorf("get Gateway %s: %w", desired.Name, getErr)
 	default:
 		// Refuse to silently take over a Gateway that shares our
 		// derived name but is not owned by this TenantGateway. An
@@ -1258,7 +1304,7 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 		// orphan that doesn't cascade-delete with the
 		// TenantGateway.
 		if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
-			return fmt.Errorf("gateway %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this Gateway)", tgw.Namespace, tgw.Name, tgw.Name)
+			return fmt.Errorf("gateway %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this Gateway)", desired.Namespace, desired.Name, tgw.Name)
 		}
 		// Merge labels: keep keys other actors (Cilium operator,
 		// kubectl label, future controllers) wrote, only add /
@@ -1277,9 +1323,9 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 		existing.Spec = desired.Spec
 		existing.Labels = mergedLabels
 		if err := r.Update(ctx, existing); err != nil {
-			return fmt.Errorf("update Gateway: %w", err)
+			return fmt.Errorf("update Gateway %s: %w", desired.Name, err)
 		}
-		logger.V(1).Info("updated Gateway", "namespace", tgw.Namespace, "name", tgw.Name)
+		logger.V(1).Info("updated Gateway", "namespace", desired.Namespace, "name", desired.Name)
 	}
 	return nil
 }
@@ -1454,8 +1500,9 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // kubernetes.io/metadata.name In [...] list naming the tenant
 // namespace and the ACME challenge namespace, and the native-port
 // listeners from tlsPassthroughListeners pin the same label naming the
-// tenant namespace alone. The HTTPS-terminate and port-443 passthrough
-// listeners select on namespace.cozystack.io/gateway, which the controller
+// tenant namespace alone. The HTTPS-terminate listeners, and the
+// port-443 passthrough ones renderPassthroughGateway puts on the second
+// Gateway, select on namespace.cozystack.io/gateway, which the controller
 // stamps on the tenant namespace and on each
 // TenantGateway.Spec.AttachedNamespaces entry (cozy-* platform
 // namespaces), and which the tenant chart also stamps on every
@@ -1497,28 +1544,11 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		})
 	}
 
-	// All port-443 listeners (HTTPS-terminate and TLS-passthrough) share
-	// the same kinds set so that Cilium does not collapse them into a
-	// single listener (cilium#45559: divergent allowedRoutes.kinds on the
-	// same port triggers listener merging that drops HTTPRoutes). That
-	// constraint governs only that the sets match each other, so the
-	// contents are a least-privilege choice: nothing the platform ships
-	// needs gRPC, TCP or UDP routing on port 443, so those three kinds
-	// stay out of the set.
-	//
-	// Built per listener rather than cloned from one value. A clone
-	// gives each listener its own slice header while the elements go on
-	// sharing one *Group each, so narrowing a single listener's kinds
-	// later would still reach across all of them — the same hazard the
-	// clone was added to remove, one level down.
-	port443Kinds := func() []gatewayv1.RouteGroupKind {
-		return []gatewayv1.RouteGroupKind{
-			{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
-			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
-		}
-	}
+	// Spelled out rather than left to the protocol, as least privilege:
+	// an empty set admits every kind the protocol allows, and nothing
+	// the platform ships needs gRPC routing on port 443.
 	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = port443Kinds()
+	httpsAllowedRoutes.Kinds = []gatewayv1.RouteGroupKind{{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"}}
 
 	switch tgw.Spec.CertMode {
 	case gatewayv1alpha1.CertModeEdge:
@@ -1657,53 +1687,12 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		}
 	}
 
-	// TLS-passthrough listeners. One per service in
-	// Spec.TLSPassthroughServices, named "tls-<service>", hostname
-	// "<service>.<apex>", port 443, mode Passthrough. AllowedRoutes use
-	// the same port443Kinds set as the HTTPS-terminate listeners above so
-	// that Cilium does not collapse all port-443 listeners together
-	// (cilium#45559). In practice only TLSRoute attaches to a Passthrough
-	// listener, but listing HTTPRoute here is harmless — Gateway API
-	// rejects any HTTPRoute that references a Passthrough sectionName.
-	// NOTE: each tls-<svc> listener surfaces
-	// ResolvedRefs=False/InvalidRouteKinds on the raw Gateway object,
-	// because it lists a kind its own protocol does not support
-	// (cosmetic — Accepted, Programmed, traffic, and TenantGateway
-	// readiness are all unaffected). That condition is set by
-	// setListenerStatus, a different path from the route-side check
-	// cilium#45693 fixes, and that fix lands in v1.19.6 rather than
-	// waiting for 1.20. So the bump does not clear this one: it goes
-	// when the uniform-kinds workaround on port 443 goes, which is a
-	// separate cleanup.
-	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
-	// cdi-uploadproxy) attach to these listeners by sectionName.
-	for _, svc := range renderedPassthroughServices(tgw) {
-		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
-		passthroughAllowed := allowedRoutes.DeepCopy()
-		passthroughAllowed.Kinds = port443Kinds()
-		listeners = append(listeners, gatewayv1.Listener{
-			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
-			Port:     443,
-			Protocol: gatewayv1.TLSProtocolType,
-			Hostname: &host,
-			TLS: &gatewayv1.ListenerTLSConfig{
-				Mode: new(gatewayv1.TLSModePassthrough),
-			},
-			AllowedRoutes: passthroughAllowed,
-		})
-	}
-
 	// Layer-4 TLS-passthrough listeners. One
 	// "tls-<name>" listener per entry in Spec.TLSPassthroughListeners,
 	// on the entry's native Port, mode Passthrough, matching the
 	// entry's per-engine SNI Hostname, rendered alongside the port-443
 	// terminate listeners. What may attach is left to the protocol
-	// rather than declared: the port-443 TLSPassthroughServices
-	// listeners above must share their allowedRoutes.kinds with the
-	// terminate listeners to dodge Cilium's same-port listener collapse
-	// (cilium#45559), and these declare no kinds at all, because on the
-	// pinned Cilium a declared set is applied to every route on the
-	// Gateway rather than to the listener that declares it. A dedicated
+	// rather than declared, for the reason on Kinds below. A dedicated
 	// (port, SNI) pair still yields exactly one Envoy filter chain that
 	// SNI-routes to the attaching TLSRoute's backend. No engine is wired here: the
 	// TLSRoute, certificate, and CA plumbing land in later phases.
@@ -1753,27 +1742,57 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		})
 	}
 
-	className := tgw.Spec.GatewayClassName
-	if className == "" {
-		className = "cilium"
-	}
-
 	// Gateway API caps spec.listeners at 64 and rejects the object
 	// wholesale past that — every app's HTTPS listener included. No
 	// single field can prevent it, because the total is the sum of
-	// published hostnames, passthrough services and passthrough
-	// listeners, and each is bounded on its own. Catch the sum here so
-	// the tenant gets a named budget on TenantGateway status instead of
-	// an admission error on a Gateway they do not manage.
+	// published hostnames and passthrough listeners, and each is bounded
+	// on its own. Catch the sum here so the tenant gets a named budget
+	// on TenantGateway status instead of an admission error on a
+	// Gateway they do not manage.
 	if len(listeners) > maxGatewayListeners {
 		return nil, fmt.Errorf(
-			"gateway would have %d listeners, over the Gateway API cap of %d: reduce published hostnames, tlsPassthroughServices, or tlsPassthroughListeners (dns01 cert mode collapses per-hostname listeners into one wildcard listener)",
+			"gateway would have %d listeners, over the Gateway API cap of %d: reduce published hostnames or tlsPassthroughListeners (dns01 cert mode collapses per-hostname listeners into one wildcard listener)",
 			len(listeners), maxGatewayListeners)
 	}
+	return r.ownedGateway(tgw, tgw.Name, listeners)
+}
 
+// renderPassthroughGateway renders the Gateway carrying one port-443
+// TLS-passthrough listener per tlsPassthroughServices entry, or nil
+// when the mode renders none: the Gateway costs the tenant an address,
+// so it exists only while something is published through it. Why these
+// listeners do not share the main Gateway is on passthroughGatewayName.
+//
+// Nothing else is on this Gateway, so its listeners name TLSRoute
+// alone; the charts' TLSRoutes attach by sectionName tls-<svc>.
+func (r *Reconciler) renderPassthroughGateway(tgw *gatewayv1alpha1.TenantGateway) (*gatewayv1.Gateway, error) {
+	services := renderedPassthroughServices(tgw)
+	if len(services) == 0 {
+		return nil, nil
+	}
+	listeners := make([]gatewayv1.Listener, 0, len(services))
+	for _, svc := range services {
+		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
+		allowed := buildAllowedRoutes(tgw)
+		allowed.Kinds = []gatewayv1.RouteGroupKind{{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"}}
+		listeners = append(listeners, gatewayv1.Listener{
+			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
+			Port:     httpsListenerPort,
+			Protocol: gatewayv1.TLSProtocolType,
+			Hostname: &host,
+			TLS: &gatewayv1.ListenerTLSConfig{
+				Mode: new(gatewayv1.TLSModePassthrough),
+			},
+			AllowedRoutes: allowed,
+		})
+	}
+	return r.ownedGateway(tgw, passthroughGatewayName(tgw), listeners)
+}
+
+func (r *Reconciler) ownedGateway(tgw *gatewayv1alpha1.TenantGateway, name string, listeners []gatewayv1.Listener) (*gatewayv1.Gateway, error) {
 	gw := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      tgw.Name,
+			Name:      name,
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
 				"cozystack.io/gateway":  tgw.Namespace,
@@ -1781,7 +1800,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			},
 		},
 		Spec: gatewayv1.GatewaySpec{
-			GatewayClassName: gatewayv1.ObjectName(className),
+			GatewayClassName: gatewayv1.ObjectName(gatewayClassName(tgw)),
 			Listeners:        listeners,
 		},
 	}

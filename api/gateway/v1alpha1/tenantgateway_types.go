@@ -331,8 +331,10 @@ type TenantGatewaySpec struct {
 
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
-	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
-	// Not rendered when CertMode=edge.
+	// listener on port 443 of a second Gateway, <name>-passthrough,
+	// which exists only while this list is non-empty; HTTPRoutes attach
+	// to TLS-terminate listeners instead. Not rendered when
+	// CertMode=edge.
 	//
 	// An entry becomes both the listener name tls-<svc> and the listener
 	// hostname <svc>.<apex>, and Gateway API bounds each at 253
@@ -348,8 +350,8 @@ type TenantGatewaySpec struct {
 	// The cap bounds what THIS field contributes to the Gateway's 64
 	// listener slots; it does not by itself guarantee the total fits.
 	// The rendered count is the port-80 listener plus one per published
-	// hostname, one per tlsPassthroughServices entry, and one per entry
-	// here — so a tenant can exceed 64 with far fewer than 62 of these.
+	// hostname and one per entry here — so a tenant can exceed 64 with
+	// far fewer than 62 of these.
 	// The controller checks the assembled total and fails with a named
 	// budget; this cap only keeps a single field from consuming the
 	// whole allowance. It also bounds the cost estimate for the CEL

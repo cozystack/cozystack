@@ -63,6 +63,12 @@ tests:
         equal:
           path: spec.parentRefs[0].sectionName
           value: tls-api
+      # The port-443 passthrough listeners render on a Gateway of their
+      # own; the main one has no tls-api section.
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: spec.parentRefs[0].name
+          value: cozystack-passthrough
       - template: templates/api-ingress.yaml
         hasDocuments:
           count: 0

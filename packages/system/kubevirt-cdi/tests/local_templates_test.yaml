@@ -154,3 +154,6 @@ tests:
       - equal:
           path: spec.parentRefs[0].sectionName
           value: tls-cdi-uploadproxy
+      - equal:
+          path: spec.parentRefs[0].name
+          value: cozystack-passthrough

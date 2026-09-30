@@ -19,6 +19,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,61 +35,71 @@ import (
 // Gateway.Status.Conditions). Operators reading `kubectl get tgw`
 // see real readiness, not a fictional always-True flag.
 func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
-	gw := &gatewayv1.Gateway{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}, gw); err != nil {
-		return fmt.Errorf("get Gateway for status: %w", err)
+	names := []string{tgw.Name}
+	if len(renderedPassthroughServices(tgw)) > 0 {
+		names = append(names, passthroughGatewayName(tgw))
 	}
 
-	gwListenerStatus := indexListenerStatus(gw.Status.Listeners)
-
-	listeners := make([]gatewayv1alpha1.TenantGatewayListenerStatus, 0, len(gw.Spec.Listeners))
-	allReady := true
-	for _, l := range gw.Spec.Listeners {
-		ready, reason := listenerReadinessFromGatewayStatus(string(l.Name), gwListenerStatus)
-		s := gatewayv1alpha1.TenantGatewayListenerStatus{
-			Name:   string(l.Name),
-			Ready:  ready,
-			Reason: reason,
+	var listeners []gatewayv1alpha1.TenantGatewayListenerStatus
+	notAccepted, notProgrammed, notReady := "", "", ""
+	for _, name := range names {
+		gw := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: name}, gw); err != nil {
+			return fmt.Errorf("get Gateway %s for status: %w", name, err)
 		}
-		if l.Hostname != nil {
-			s.Hostname = string(*l.Hostname)
+		gwListenerStatus := indexListenerStatus(gw.Status.Listeners)
+		for _, l := range gw.Spec.Listeners {
+			ready, reason := listenerReadinessFromGatewayStatus(string(l.Name), gwListenerStatus)
+			s := gatewayv1alpha1.TenantGatewayListenerStatus{
+				Name:   string(l.Name),
+				Ready:  ready,
+				Reason: reason,
+			}
+			if l.Hostname != nil {
+				s.Hostname = string(*l.Hostname)
+			}
+			if l.TLS != nil && len(l.TLS.CertificateRefs) > 0 {
+				s.CertificateName = string(l.TLS.CertificateRefs[0].Name)
+			}
+			listeners = append(listeners, s)
+			if !ready && notReady == "" {
+				notReady = name
+			}
 		}
-		if l.TLS != nil && len(l.TLS.CertificateRefs) > 0 {
-			s.CertificateName = string(l.TLS.CertificateRefs[0].Name)
+		accepted, programmed := gatewayConditionStatus(gw.Status.Conditions)
+		if !accepted && notAccepted == "" {
+			notAccepted = name
 		}
-		listeners = append(listeners, s)
-		if !ready {
-			allReady = false
+		if !programmed && notProgrammed == "" {
+			notProgrammed = name
 		}
 	}
-
-	gwAccepted, gwProgrammed := gatewayConditionStatus(gw.Status.Conditions)
 
 	var ready metav1.Condition
 	switch {
-	case !gwAccepted:
+	case notAccepted != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "GatewayNotAccepted",
-			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been accepted by its controller yet", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been accepted by its controller yet", tgw.Namespace, notAccepted),
 		}
-	case !gwProgrammed:
+	case notProgrammed != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "GatewayNotProgrammed",
-			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been programmed by its controller yet", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been programmed by its controller yet", tgw.Namespace, notProgrammed),
 		}
-	case !allReady:
+	case notReady != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "ListenersNotReady",
-			Message:            fmt.Sprintf("One or more listeners on Gateway %s/%s are not ready", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("One or more listeners on Gateway %s/%s are not ready", tgw.Namespace, notReady),
 		}
 	default:
 		ready = metav1.Condition{
@@ -96,7 +107,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.T
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "Reconciled",
-			Message:            fmt.Sprintf("Gateway %s/%s programmed with %d listeners", tgw.Namespace, tgw.Name, len(listeners)),
+			Message:            fmt.Sprintf("Gateway %s/%s programmed with %d listeners", tgw.Namespace, strings.Join(names, ", "), len(listeners)),
 		}
 	}
 

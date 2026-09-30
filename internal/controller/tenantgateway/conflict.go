@@ -100,9 +100,10 @@ type routeRef struct {
 // h before asking; a hostname nothing answers is a different shape,
 // built by the caller with its own cause.
 //
-// sections maps a rendered passthrough listener name to the hostname it
-// answers, and holds nothing else, so a sectionName absent from it
-// names no passthrough listener. That covers two shapes and they do not
+// sections maps a rendered passthrough listener name to that listener,
+// across both Gateways, so a sectionName absent from it names no
+// passthrough listener, and one present names a listener only on the
+// Gateway the entry records. That covers two shapes and they do not
 // get the same answer. A name carrying the passthrough prefix is one
 // this controller renders the whole namespace of, so its absence is a
 // fact: the route attaches to nothing, and it is told so. A name
@@ -121,12 +122,15 @@ type routeRef struct {
 // send an operator to different places and one of them can fire on a
 // route inside the tenant, where a namespace refusal would contradict
 // the object it is written on.
-func servableOn(ref routeRef, h, tenantNamespace string, byHostname map[string]passthroughListener, sections map[string]string) (bool, withdrawalCause, string) {
+func servableOn(ref routeRef, h, tenantNamespace string, byHostname map[string]passthroughListener, sections map[string]passthroughListener) (bool, withdrawalCause, string) {
+	gateway := string(ref.parentRef.Name)
 	pinned := ""
 	if ref.parentRef.SectionName != nil {
 		name := string(*ref.parentRef.SectionName)
 		named, exists := sections[name]
-		if !exists {
+		// A listener of the other Gateway is no listener of the one the
+		// route named.
+		if !exists || named.gateway != gateway {
 			// Inside the passthrough listener namespace the answer is
 			// knowable, because every listener there is rendered from
 			// this spec: a name absent from sections names none, so the
@@ -140,7 +144,7 @@ func servableOn(ref routeRef, h, tenantNamespace string, byHostname map[string]p
 			}
 			return false, withdrawnNone, ""
 		}
-		pinned = named
+		pinned = named.hostname
 	}
 	// refusedBy is the name of a listener that matched and then turned
 	// this route away, and it is the third return because the message
@@ -154,7 +158,7 @@ func servableOn(ref routeRef, h, tenantNamespace string, byHostname map[string]p
 	sectionAnswers := false
 	portAnswers := ref.parentRef.Port == nil
 	for rh, l := range byHostname {
-		if !hostnamesOverlap(rh, h) {
+		if l.gateway != gateway || !hostnamesOverlap(rh, h) {
 			continue
 		}
 		if pinned != "" && rh != pinned {
@@ -257,13 +261,13 @@ const (
 // a listener the sectionName names is refused whatever port it sits on,
 // and a wildcard is refused only once the route is judged to want the
 // terminate listener at all.
-func judgeHTTPRouteClaim(ref routeRef, h string, tgw *gatewayv1alpha1.TenantGateway, sections map[string]string) (withdrawnHostname, httpClaimVerdict) {
+func judgeHTTPRouteClaim(ref routeRef, h string, tgw *gatewayv1alpha1.TenantGateway, sections map[string]passthroughListener) (withdrawnHostname, httpClaimVerdict) {
 	w := withdrawnHostname{hostname: h}
 	hasSection := ref.parentRef.SectionName != nil
 	section := ""
 	if hasSection {
 		section = string(*ref.parentRef.SectionName)
-		if _, rendersIt := sections[section]; rendersIt {
+		if l, rendersIt := sections[section]; rendersIt && l.gateway == tgw.Name {
 			w.section = section
 			w.cause = withdrawnKindNotAdmitted
 			return w, httpClaimRefused
