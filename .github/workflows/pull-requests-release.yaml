@@ -530,9 +530,13 @@ jobs:
       # them from the merge commit instead would pin a re-run to the very code
       # that failed, which is exactly how v1.6.0 ended up being repaired by hand.
       #
-      # The cost is that a broken promotion script on main breaks the next
+      # The cost is twofold. A broken promotion script on main breaks the next
       # release even when the merge commit carried a good one; hack/*_test.bats
-      # runs on main under `make unit-tests` to keep that honest.
+      # runs on main under `make unit-tests` to keep that honest. And trust
+      # widens: this job holds `packages: write` on the release registry, so the
+      # code that can write stable tags and the stable chart is no longer the
+      # reviewed release tree but whatever main holds when the job runs. A change
+      # to hack/promote-*.sh deserves the review of a release-path change.
       - name: Checkout promotion scripts from main
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

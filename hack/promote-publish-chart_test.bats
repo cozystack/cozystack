@@ -144,6 +144,10 @@ SHIM
   # yq keeps the original scalar's quoting style, so the stamped value lands
   # double-quoted exactly as it did when this ran inline in the workflow.
   grep -q 'platformVersion: "v9.9.9"' "$out/cozy-installer/values.yaml"
+
+  # The stamp goes into the package only: a manual recovery runs this in an
+  # operator's checkout, which must not be left with a modified tracked file.
+  grep -q 'platformVersion: ""' "$FIX/packages/core/installer/values.yaml"
 }
 
 @test "an identical published chart is left alone on a re-run" {
@@ -188,6 +192,8 @@ SHIM
   env -u REGISTRY "$ROOT/hack/promote-publish-chart.sh" v9.9.9 >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 1 ]
   [ ! -f "$FIXPUSHED" ]
+  # A failing run puts the tree back too, not only a successful one.
+  grep -q 'platformVersion: ""' "$FIX/packages/core/installer/values.yaml"
 
   # Break-glass: an operator who has looked at the diff can overwrite.
   : >"$FIXLOG_HELM"
