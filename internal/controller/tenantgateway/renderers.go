@@ -282,48 +282,21 @@ const maxGatewayListeners = 64
 // they are built from are bounded separately from their sum.
 const maxGatewayNameLength = 253
 
-// validatePassthroughListenerCertMode refuses passthrough listeners in
-// every certificate mode but http01.
+// validatePassthroughListenerCertMode refuses passthrough listeners
+// under edge, which ends TLS at the class provider and renders no TLS
+// listener for an entry to bind to.
 //
 // It judges the field against a sibling field rather than against
 // itself, which is why it is separate from
-// validateTLSPassthroughListeners. http01 publishes one terminate
-// listener per attached hostname, so a passthrough hostname is simply a
-// name no terminate listener answers. dns01 and existingSecret serve the
-// tenant from one terminate listener for "*.<apex>" on port 443 instead,
-// and a passthrough hostname has to sit inside the apex, so that
-// wildcard SNI-intersects every entry this field can hold. Suppression
-// cannot answer it either: those modes render no per-hostname listener
-// to withdraw, and the wildcard covers the whole apex. edge is refused
-// for the opposite reason — it ends TLS at the class provider and
-// renders no TLS listener at all, so the entry has nothing to bind to.
+// validateTLSPassthroughListeners. The wildcard "*.<apex>" terminate
+// listener of dns01 and existingSecret SNI-overlaps every entry, but on
+// another port: Gateway API treats listeners on different ports as
+// compatible, and the shipped Cilium (v1.20.2) gives each port its own
+// Envoy listener when their SNI overlaps (NeedsCrossProtocolSplit in
+// operator/pkg/model/model.go), so neither reaches the other's backend.
 //
-// The intersection matters because the Cilium this repo pins does not
-// keep the two apart. v1.19.5 collapses the Gateway into a single Envoy
-// listener, and toFilterChainMatch in
-// operator/pkg/model/translation/envoy_listener.go matches on
-// transport_protocol and server_names only, so the terminate chain for
-// "*.<apex>" and the passthrough chain for a name under it end up in one
-// listener with an exact match winning over the wildcard. Upstream
-// states the consequence above NeedsCrossProtocolSplit in
-// operator/pkg/model/model.go as of v1.19.6: a combined Envoy listener
-// "would otherwise erase the original Gateway listener port boundary and
-// route traffic for one listener to another". A TLS connection arriving
-// on 443 for that name reaches the database backend.
-//
-// v1.19.6 splits the Envoy listeners per port and this stops being
-// true, though not unconditionally: NeedsPerPortListeners requires
-// more than one HTTPS port, or more than one routed passthrough port,
-// or a cross-port SNI overlap. The passthrough side of every term is
-// counted from attached routes, so a listener with no TLSRoute behind
-// it contributes no port and no filter chain to any of the three, and
-// the listener is all this field creates: the split arrives with the
-// route rather than with the bump. The HTTPS side is not route-gated,
-// but this field adds nothing there.
-// Lifting the refusal for one of the wildcard modes means editing two
-// copies of it, this one and the matching CEL rule in the CRD, which is
-// a schema change even though no field or type moves. The pin is the
-// thing to watch: packages/system/cilium/images/cilium/Dockerfile.
+// Relaxing or tightening this means editing two copies, this one and
+// the matching CEL rule on TenantGatewaySpec.
 func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
 	if len(listeners) == 0 {
 		return nil
@@ -331,7 +304,7 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 	if rendersPassthroughListeners(mode) {
 		return nil
 	}
-	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; only http01 renders the per-hostname terminate listeners a passthrough hostname can sit beside. dns01 and existingSecret serve the whole apex from one wildcard terminate listener, and the pinned Cilium routes both by SNI alone in one Envoy listener, so a connection would reach the passthrough backend; edge terminates TLS at the class provider and renders no TLS listener at all", mode)
+	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; edge terminates TLS at the class provider and renders no TLS listener at all", mode)
 }
 
 // rendersPassthroughListeners reports whether a certificate mode renders
@@ -344,7 +317,7 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // same absence as http01.
 func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 	switch mode {
-	case gatewayv1alpha1.CertModeHTTP01, "":
+	case gatewayv1alpha1.CertModeHTTP01, gatewayv1alpha1.CertModeDNS01, gatewayv1alpha1.CertModeExistingSecret, "":
 		return true
 	}
 	return false

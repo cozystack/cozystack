@@ -210,16 +210,14 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 			certMode:  gatewayv1alpha1.CertModeHTTP01,
 		},
 		{
-			name:       "dns01 refuses a passthrough listener",
-			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
-			certMode:   gatewayv1alpha1.CertModeDNS01,
-			wantReject: true,
+			name:      "dns01 accepts a passthrough listener",
+			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:  gatewayv1alpha1.CertModeDNS01,
 		},
 		{
-			name:       "existingSecret refuses a passthrough listener",
-			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
-			certMode:   gatewayv1alpha1.CertModeExistingSecret,
-			wantReject: true,
+			name:      "existingSecret accepts a passthrough listener",
+			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:  gatewayv1alpha1.CertModeExistingSecret,
 		},
 		{
 			name:       "edge refuses a passthrough listener",
@@ -390,16 +388,14 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 // Ready.
 func TestEveryCertModeIsJudgedOnPassthroughListeners(t *testing.T) {
 	// true means the mode renders TLS listeners a passthrough entry can
-	// sit beside. Only http01 does: it publishes one terminate listener
-	// per attached hostname, so a passthrough hostname is a name no
-	// terminate listener answers. dns01 and existingSecret serve the
-	// whole apex off one wildcard terminate listener that SNI-intersects
-	// every entry this field can hold, and edge renders no TLS listener
-	// at all.
+	// sit beside. The entry has a port of its own, so the wildcard
+	// terminate listener of dns01 and existingSecret on 443 SNI-overlaps
+	// it without sharing a port, which Gateway API treats as compatible.
+	// edge renders no TLS listener at all.
 	verdicts := map[gatewayv1alpha1.CertMode]bool{
 		gatewayv1alpha1.CertModeHTTP01:         true,
-		gatewayv1alpha1.CertModeDNS01:          false,
-		gatewayv1alpha1.CertModeExistingSecret: false,
+		gatewayv1alpha1.CertModeDNS01:          true,
+		gatewayv1alpha1.CertModeExistingSecret: true,
 		gatewayv1alpha1.CertModeEdge:           false,
 	}
 
