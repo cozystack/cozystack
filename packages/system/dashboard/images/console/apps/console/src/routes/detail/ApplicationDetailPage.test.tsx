@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest"
+import { beforeEach, describe, it, expect, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import { MemoryRouter, Routes, Route } from "react-router"
 
@@ -8,13 +8,18 @@ const h = vi.hoisted(() => ({
   appKind: "Postgres",
   appPlural: "postgreses",
   tabLabels: [] as string[],
+  list: vi.fn((_ref: unknown, _options?: unknown) => {
+    void _ref
+    void _options
+    return { data: undefined, isLoading: false }
+  }),
 }))
 
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
   // Presence probes (use-resource-presence.ts) — report empty lists.
-  useK8sList: () => ({ data: undefined, isLoading: false }),
+  useK8sList: h.list,
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -54,6 +59,8 @@ vi.mock("./VncTab.tsx", () => ({ VncTab: () => null }))
 vi.mock("./SerialTab.tsx", () => ({ SerialTab: () => null }))
 vi.mock("./VMPowerControls.tsx", () => ({ VMPowerControls: () => null }))
 
+vi.mock("./DiskUploadPanel.tsx", () => ({ DiskUploadPanel: () => <div>Disk upload panel</div> }))
+
 const { ApplicationDetailPage } = await import("./ApplicationDetailPage.tsx")
 
 function renderPage() {
@@ -65,6 +72,14 @@ function renderPage() {
     </MemoryRouter>,
   )
 }
+
+beforeEach(() => {
+  h.get = { data: undefined, isLoading: true, error: undefined }
+  h.appKind = "Postgres"
+  h.appPlural = "postgreses"
+  h.tabLabels = []
+  h.list.mockClear()
+})
 
 describe("ApplicationDetailPage guards", () => {
   it("renders the not-found message on a failed GET instead of an infinite spinner", () => {
@@ -107,5 +122,52 @@ describe("ApplicationDetailPage tabs for a virtual machine", () => {
       "Services",
       "Events",
     ])
+  })
+})
+
+
+describe("ApplicationDetailPage presence probes", () => {
+  it.each([
+    ["VMDisk", "vmdisks"],
+    ["VMInstance", "vminstances"],
+  ])("disables all six unused probes for %s", (kind, plural) => {
+    h.appKind = kind
+    h.appPlural = plural
+    h.get = {
+      data: {
+        apiVersion: "apps.cozystack.io/v1alpha1",
+        kind,
+        metadata: { name: "demo", namespace: "tenant-test" },
+        spec: {},
+      },
+      isLoading: false,
+      error: undefined,
+    }
+    renderPage()
+    if (kind === "VMDisk") expect(screen.getByText("Disk upload panel")).toBeInTheDocument()
+    else expect(screen.queryByText("Disk upload panel")).not.toBeInTheDocument()
+    expect(h.list).toHaveBeenCalledTimes(6)
+    for (const call of h.list.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ enabled: false }))
+    }
+  })
+
+  it("keeps presence probes enabled for ordinary applications", () => {
+    h.get = {
+      data: {
+        apiVersion: "apps.cozystack.io/v1alpha1",
+        kind: "Postgres",
+        metadata: { name: "demo", namespace: "tenant-test" },
+        spec: {},
+      },
+      isLoading: false,
+      error: undefined,
+    }
+    renderPage()
+    expect(screen.queryByText("Disk upload panel")).not.toBeInTheDocument()
+    expect(h.list).toHaveBeenCalledTimes(6)
+    for (const call of h.list.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ enabled: true }))
+    }
   })
 })

@@ -30,7 +30,7 @@ include ../../../hack/package.mk
 # the recipe.
 .PHONY: test update generate
 
-# No -r: this package ships no README for cozyvalues-gen to update.
+# No -r: the README contains operator guidance, not a generated parameter table.
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json
 

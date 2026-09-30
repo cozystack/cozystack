@@ -4,7 +4,7 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 
 
-{{- if and (has "cdi-uploadproxy" $exposeServices) (ne $gatewayEnabled "true") }}
+{{- if and $host (has "cdi-uploadproxy" $exposeServices) (ne $gatewayEnabled "true") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
