@@ -44,6 +44,7 @@ import (
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/backendca"
 	"github.com/cozystack/cozystack/internal/controller/cacert"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
@@ -275,6 +276,15 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
+	}
+
+	if err = (&backendca.Reconciler{
+		Client: mgr.GetClient(),
+		Reader: mgr.GetAPIReader(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BackendCA")
 		os.Exit(1)
 	}
 
