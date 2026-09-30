@@ -4,6 +4,8 @@ bundles:
   disabledPackages:
     - cozystack.bootbox
     - cozystack.bootbox-application
+    - cozystack.capi-provider-infra-proxmox
+    - cozystack.capi-provider-ipam-in-cluster
     - cozystack.clickhouse-application
     - cozystack.clickhouse-operator
     - cozystack.cluster-autoscaler-azure
