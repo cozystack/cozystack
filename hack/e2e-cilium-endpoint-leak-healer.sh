@@ -203,8 +203,8 @@ while true; do
     # bitmap empty, then re-reserves the ingress IP via a path decoupled from
     # pod-endpoint restore, so a CNI ADD in that window can be handed the ingress
     # IP again -- the same restore-window race that produced this wedge. (Upstream
-    # cilium host-scope IPAM + Gateway API restore-window race; no released fix as
-    # of v1.19.5.) So surface it and reschedule the wedged pod best-effort, but
+    # cilium host-scope IPAM + Gateway API restore-window race; no released fix
+    # known to address it.) So surface it and reschedule the wedged pod best-effort, but
     # never count it toward or trigger the agent restart. Gated on an EXACT match
     # (ip_is_node_ingress; an empty ingress IP never matches) so a false positive
     # can never suppress a restart that would clear a real in-memory leak.
