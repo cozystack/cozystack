@@ -1,0 +1,48 @@
+suite: tenant namespace ownerReferences (lookup-driven)
+# namespace.yaml stamps an ownerReference to the parent namespace, uid taken
+# from a `lookup` of .Release.Namespace. The lookup is mocked through
+# kubernetesProvider; a suite without one resolves it to nil, the same shape
+# `helm template` returns offline.
+templates:
+  - templates/namespace.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+set:
+  _cluster:
+    root-host: example.com
+tests:
+  - it: owns the child namespace by the parent when the parent namespace is found
+    kubernetesProvider:
+      scheme:
+        "v1/Namespace":
+          gvr:
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+      objects:
+        - apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-root
+            uid: 0f8c1c2e-6b1a-4a55-9d0e-2f6f3f1d7a10
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.ownerReferences
+          value:
+            - apiVersion: v1
+              blockOwnerDeletion: true
+              controller: true
+              kind: Namespace
+              name: tenant-root
+              uid: 0f8c1c2e-6b1a-4a55-9d0e-2f6f3f1d7a10
+
+  - it: omits ownerReferences when the parent namespace is not found
+    asserts:
+      - documentIndex: 0
+        isKind:
+          of: Namespace
+      - documentIndex: 0
+        notExists:
+          path: metadata.ownerReferences
