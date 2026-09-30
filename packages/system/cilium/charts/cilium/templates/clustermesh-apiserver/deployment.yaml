@@ -15,6 +15,7 @@ metadata:
     k8s-app: clustermesh-apiserver
     app.kubernetes.io/part-of: cilium
     app.kubernetes.io/name: clustermesh-apiserver
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -45,6 +46,7 @@ spec:
         app.kubernetes.io/part-of: cilium
         app.kubernetes.io/name: clustermesh-apiserver
         k8s-app: clustermesh-apiserver
+        helm.sh/chart: {{ include "cilium.chart" . }}
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -195,7 +197,7 @@ spec:
         - --cluster-name=$(CLUSTER_NAME)
         - --cluster-id=$(CLUSTER_ID)
         - --kvstore-opt=etcd.config=/var/lib/cilium/etcd-config.yaml
-        - --kvstore-opt=etcd.qps=20
+        - --kvstore-opt=etcd.qps={{ .Values.clustermesh.apiserver.etcdQPS }}
         - --kvstore-opt=etcd.bootstrapQps=10000
         {{- if hasKey .Values.clustermesh "maxConnectedClusters" }}
         - --max-connected-clusters={{ .Values.clustermesh.maxConnectedClusters }}
@@ -209,12 +211,13 @@ spec:
         - --prometheus-serve-addr=:{{ .Values.clustermesh.apiserver.metrics.port }}
         - --controller-group-metrics=all
         {{- end }}
-        {{- if or .Values.clustermesh.mcsapi.enabled .Values.clustermesh.enableMCSAPISupport }}
+        {{- if .Values.clustermesh.mcsapi.enabled }}
         - --clustermesh-enable-mcs-api
         {{- end }}
         {{- if .Values.ciliumEndpointSlice.enabled }}
         - --enable-cilium-endpoint-slice
         {{- end }}
+        - --clustermesh-default-global-namespace={{ .Values.clustermesh.defaultGlobalNamespace }}
         {{- include "clustermesh.apiserver.args.extra" . | nindent 8 }}
         {{- with .Values.clustermesh.apiserver.extraArgs }}
         {{- toYaml . | trim | nindent 8 }}
@@ -296,7 +299,7 @@ spec:
         - --cluster-name=$(CLUSTER_NAME)
         - --cluster-id=$(CLUSTER_ID)
         - --kvstore-opt=etcd.config=/var/lib/cilium/etcd-config.yaml
-        - --kvstore-opt=etcd.qps=100
+        - --kvstore-opt=etcd.qps={{ .Values.clustermesh.apiserver.kvstoremesh.etcdQPS }}
         {{- if ne .Values.clustermesh.apiserver.kvstoremesh.kvstoreMode "external" }}
         - --kvstore-opt=etcd.bootstrapQps=10000
         {{- end }}
@@ -507,7 +510,8 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if and .Values.clustermesh.config.enabled .Values.clustermesh.apiserver.kvstoremesh.enabled }}
+      {{/* TODO: remove hostAliases for the v1.21 release as this is now handled via a static dialer to avoid pod restart */}}
+      {{- if and .Values.clustermesh.config.enabled .Values.clustermesh.apiserver.kvstoremesh.enabled (not .Values.clustermesh.disableKubernetesHostAliases) }}
       hostAliases:
       {{- range $_, $cluster := (include "clustermesh-clusters" . | fromJson) }}
       {{- range $ip := $cluster.ips }}

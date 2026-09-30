@@ -36,25 +36,17 @@ spec:
             - "--ca-secret-namespace={{ include "cilium.namespace" . }}"
             - "--ca-secret-name=cilium-ca"
             - "--ca-common-name=Cilium CA"
+            - "--ca-enforce-validity-throughout-leaves-duration={{ .Values.certgen.enforceCAValidityThroughoutLeavesDuration }}"
           env:
             - name: CILIUM_CERTGEN_CONFIG
               value: |
                 certs:
                 - name: clustermesh-apiserver-server-cert
                   namespace: {{ include "cilium.namespace" . }}
-                  commonName: "clustermesh-apiserver.cilium.io"
+                  commonName: {{ include "clustermesh-apiserver-generate-certs.server-common-name" . }}
                   hosts:
-                  - "clustermesh-apiserver.cilium.io"
-                  - "*.mesh.cilium.io"
-                  - "clustermesh-apiserver.{{ include "cilium.namespace" . }}.svc"
-                  {{- range $dns := .Values.clustermesh.apiserver.tls.server.extraDnsNames }}
-                  - {{ $dns | quote }}
-                  {{- end }}
-                  - "127.0.0.1"
-                  - "::1"
-                  {{- range $ip := .Values.clustermesh.apiserver.tls.server.extraIpAddresses }}
-                  - {{ $ip | quote }}
-                  {{- end }}
+                  {{- include "clustermesh-apiserver-generate-certs.server-dns-names" . | nindent 18 }}
+                  {{- include "clustermesh-apiserver-generate-certs.server-ip-addresses" . | nindent 18 }}
                   usage:
                   - signing
                   - key encipherment
