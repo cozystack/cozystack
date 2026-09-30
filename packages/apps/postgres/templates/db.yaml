@@ -56,8 +56,8 @@ spec:
   # Operator-managed TLS. CNPG auto-generates its own self-signed CA and signs
   # server + client + replication certs from it. The operator's default SAN list
   # already covers the three built-in services (rw/r/ro) in four DNS forms each
-  # (bare, .ns, .ns.svc, .ns.svc.<cluster-domain>); only the external hostname
-  # needs to be appended via serverAltDNSNames.
+  # (bare, .ns, .ns.svc, .ns.svc.<cluster-domain>); only the external hostnames
+  # need to be appended via serverAltDNSNames.
   #
   # serverAltDNSNames is mutually exclusive with serverTLSSecret per the CNPG
   # admission webhook, which is why the chart no longer renders a cert-manager
@@ -69,9 +69,17 @@ spec:
   # core.cozystack.io tenantsecrets API. It is neither <release>-credentials,
   # which is chart-rendered and holds user passwords only, nor CNPG's
   # <release>-ca, which holds the CA private key next to ca.crt.
+  #
+  # The second name is the per-engine one, meant for SNI routing through a
+  # TLS-passthrough listener on the tenant Gateway (*.postgres.<apex>). Both
+  # are issued so that a later move between the two hostname schemes reissues
+  # no certificate and changes no client's trust anchor; clients still change
+  # the host they dial.
+  {{- $apex := include "cozy-lib.ns-host-required" . }}
   certificates:
     serverAltDNSNames:
-      - {{ printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .) }}
+      - {{ printf "%s.%s" .Release.Name $apex }}
+      - {{ printf "%s.postgres.%s" .Release.Name $apex }}
   {{- end }}
   {{/*
     s3Credentials points at the operator-supplied Secret when
