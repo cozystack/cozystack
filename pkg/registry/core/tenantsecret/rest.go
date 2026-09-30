@@ -358,7 +358,13 @@ func (r *REST) Update(
 		cur = previous
 	}
 
-	newObj, err := objInfo.UpdatedObject(ctx, nil)
+	// The apiserver's patch handler builds the patched object from the old
+	// object alone; a nil old object makes it answer 404 (and admit as CREATE).
+	var oldObj runtime.Object
+	if cur != nil {
+		oldObj = secretToTenant(cur)
+	}
+	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
 	if err != nil {
 		return nil, false, err
 	}
