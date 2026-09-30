@@ -109,3 +109,74 @@
     return 1
   fi
 }
+
+@test "a selector list is emitted under one disabledPackages key, merged with the container pair" {
+  manifest=$(COZY_LINSTOR_DRBD_ENABLED=false COZY_DISABLED_PACKAGES="cozystack.goldpinger cozystack.linstor cozystack.keda" hack/e2e-platform-packages.sh)
+  disabled=$(printf '%s\n' "$manifest" | yq 'select(.metadata.name == "cozystack.cozystack-platform") | .spec.components.platform.values.bundles.disabledPackages | join(",")')
+
+  if [ "$disabled" != "cozystack.linstor,cozystack.kubevirt-cdi,cozystack.goldpinger,cozystack.keda" ]; then
+    echo "selector list was not merged once with the container pair: $disabled" >&2
+    return 1
+  fi
+}
+
+@test "a selector list alone leaves the platform-managed packages in place" {
+  manifest=$(COZY_DISABLED_PACKAGES="cozystack.goldpinger cozystack.keda" hack/e2e-platform-packages.sh)
+  names=$(printf '%s\n' "$manifest" | yq -N '.metadata.name')
+  disabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.disabledPackages | join(",")')
+
+  if [ "$names" != "cozystack.cozystack-platform" ]; then
+    echo "a selector list unexpectedly replaced a platform package: $names" >&2
+    return 1
+  fi
+  if [ "$disabled" != "cozystack.goldpinger,cozystack.keda" ]; then
+    echo "selector list was not emitted as given: $disabled" >&2
+    return 1
+  fi
+}
+
+@test "no selector list emits no disabledPackages key" {
+  manifest=$(hack/e2e-platform-packages.sh)
+  key=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles | has("disabledPackages")')
+
+  if [ "$key" != "false" ]; then
+    echo "default manifest carries disabledPackages: $key" >&2
+    return 1
+  fi
+}
+
+@test "a malformed package name fails before emitting YAML" {
+  for bad in "goldpinger" "cozystack." "cozystack.Gold" "cozystack.a;b"; do
+    if manifest=$(COZY_DISABLED_PACKAGES="cozystack.keda $bad" hack/e2e-platform-packages.sh 2>/dev/null); then
+      echo "malformed package name '$bad' unexpectedly succeeded" >&2
+      return 1
+    fi
+    if [ -n "$manifest" ]; then
+      echo "malformed package name '$bad' emitted a partial manifest" >&2
+      return 1
+    fi
+  done
+}
+
+@test "both gating workflows select before installing and forward the list" {
+  make_command=$(make -n -C packages/core/testing SANDBOX_NAME=test COZY_DISABLED_PACKAGES="cozystack.keda" install-cozystack)
+  if ! printf '%s\n' "$make_command" | grep -Fq -- '-e COZY_DISABLED_PACKAGES="cozystack.keda"'; then
+    echo "testing Makefile does not forward COZY_DISABLED_PACKAGES" >&2
+    return 1
+  fi
+
+  for wf in .github/workflows/pull-requests.yaml .github/workflows/e2e-fork.yaml; do
+    select_at=$(yq '.jobs.e2e.steps | to_entries | .[] | select(.value.name == "Select E2E tests") | .key' "$wf")
+    install_at=$(yq '.jobs.e2e.steps | to_entries | .[] | select(.value.name == "Install Cozystack into sandbox") | .key' "$wf")
+    forwarded=$(yq '.jobs.e2e.steps[] | select(.name == "Install Cozystack into sandbox") | .env.COZY_DISABLED_PACKAGES' "$wf")
+
+    if [ -z "$select_at" ] || [ -z "$install_at" ] || [ "$select_at" -ge "$install_at" ]; then
+      echo "$wf: selection (step $select_at) does not precede the install (step $install_at)" >&2
+      return 1
+    fi
+    if [ "$forwarded" != '${{ steps.select.outputs.disabled }}' ]; then
+      echo "$wf: install does not take the selector list: $forwarded" >&2
+      return 1
+    fi
+  done
+}

@@ -1034,40 +1034,6 @@ jobs:
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
-      # ▸ Install Cozystack
-      - name: Install Cozystack into sandbox
-        env:
-          # This lane has no ARP VIP: .11 is a plain control-plane node standing
-          # in for the QEMU lane's 192.168.123.10.
-          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
-          # Talos containers share the runner kernel and cannot load DRBD, so the
-          # harness suppresses DRBD-dependent chart content, registers the host's
-          # pre-created zpools and keeps LINSTOR's local ZFS path.
-          COZY_LINSTOR_DRBD_ENABLED: "false"
-          # Root monitoring is the one root-tenant workload whose chart selects
-          # `replicated` explicitly instead of inheriting the default class. The
-          # install leaves it off but still seeds its local-storage override, so
-          # a run that turns it on does not create a replicated PVC.
-          COZY_E2E_STORAGE_CLASS: local
-        run: |
-          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
-            echo "❌ Install failed (no retry — see diagnostics below)"
-            echo "::group::Diagnostics: HelmRelease status"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
-            echo "::endgroup::"
-            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
-              | while read -r ns name; do
-                  echo "--- $ns/$name ---"
-                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
-                done
-            echo "::endgroup::"
-            echo "::group::Diagnostics: recent events"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
-            echo "::endgroup::"
-            exit 1
-          fi
-
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
       # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
@@ -1097,6 +1063,51 @@ jobs:
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          # The complement of what the selected suites need, for a reduced
+          # install. An empty selection installs everything as before.
+          disabled=""
+          if [ -n "${apps}" ]; then
+            disabled="$(./hack/select-install.sh --disabled "${apps}")"
+          fi
+          echo "Disabled packages: ${disabled:-<none>}"
+          echo "disabled=${disabled}" >> $GITHUB_OUTPUT
+
+      # ▸ Install Cozystack
+      - name: Install Cozystack into sandbox
+        env:
+          # This lane has no ARP VIP: .11 is a plain control-plane node standing
+          # in for the QEMU lane's 192.168.123.10.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # Talos containers share the runner kernel and cannot load DRBD, so the
+          # harness suppresses DRBD-dependent chart content, registers the host's
+          # pre-created zpools and keeps LINSTOR's local ZFS path.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          # Root monitoring is the one root-tenant workload whose chart selects
+          # `replicated` explicitly instead of inheriting the default class. The
+          # install leaves it off but still seeds its local-storage override, so
+          # a run that turns it on does not create a replicated PVC.
+          COZY_E2E_STORAGE_CLASS: local
+          # Empty on the full-e2e label and on an empty selection, which keeps
+          # the full install.
+          COZY_DISABLED_PACKAGES: ${{ steps.select.outputs.disabled }}
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
           fi
 
       - name: Run OpenAPI tests
