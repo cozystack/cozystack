@@ -35,6 +35,12 @@
 # image tags, that makes re-running the whole registry step after a partial
 # failure safe.
 #
+# The already-published probe fails closed on any registry answer it does not
+# recognise. GHCR can answer for a repository that does not exist yet with
+# `denied` or `unauthorized` instead of a name-unknown code, so the first-ever
+# push of a brand new chart repository may abort here and need one manual
+# `helm push`. That is the probe being cautious, not a bug.
+#
 # Requires: yq (mikefarah), helm, skopeo, and a registry login already done.
 set -eu
 
@@ -75,7 +81,12 @@ mkdir -p "$WORKDIR/fresh" "$WORKDIR/published" "$WORKDIR/fresh-tree" "$WORKDIR/p
 # build time, and this env override is what corrects it. Done on the working
 # tree only (never committed): committing it would leak platformVersion=vX.Y.Z
 # onto main/the release line when the promote PR merges, mis-stamping the next
-# rc built from that branch.
+# rc built from that branch. The file is put back on exit, because the manual
+# recovery path runs this in an operator's own checkout, where a stamped tracked
+# file would be left behind.
+VALUES_FILE=packages/core/installer/values.yaml
+cp "$VALUES_FILE" "$WORKDIR/values.yaml.orig"
+trap 'cp "$WORKDIR/values.yaml.orig" "$VALUES_FILE"; rm -rf "$WORKDIR"' EXIT
 export STABLE_VERSION
 yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
   packages/core/installer/values.yaml
