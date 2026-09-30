@@ -1,0 +1,24 @@
+suite: cnpg default alerts
+
+templates:
+  - templates/alerts.yaml
+
+release:
+  name: postgres-operator
+  namespace: cozy-postgres-operator
+
+tests:
+  # One instance down while another serves is not an offline cluster.
+  # The cluster is derived from the instance pod name (<cluster>-<N>):
+  # a `cluster` label cannot be relied on, since an external label of the
+  # same name on the scraper overwrites it.
+  - it: pages only when no instance of a CNPG cluster is up
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[?(@.alert=="CNPGClusterOffline")].expr
+          value: sum by (namespace, job, cnpg_cluster) (label_replace(cnpg_collector_up, "cnpg_cluster", "$1", "pod", "(.+)-[0-9]+")) == 0
+      - equal:
+          path: spec.groups[0].rules[?(@.alert=="CNPGClusterOffline")].labels.cnpg_cluster
+          value: "{{ $labels.cnpg_cluster }}"
+      - notExists:
+          path: spec.groups[0].rules[?(@.alert=="CNPGClusterOffline")].labels.pod

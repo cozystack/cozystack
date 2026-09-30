@@ -87,15 +87,18 @@ spec:
       annotations:
         summary: CNPG Cluster has no running instances!
         description: |-
-          CloudNativePG Cluster Namespace: {{ $labels.namespace }} Job: {{ $labels.job }} Pod: {{ $labels.pod }} has no ready instances.
+          CloudNativePG Cluster {{ $labels.cnpg_cluster }} in Namespace: {{ $labels.namespace }} Job: {{ $labels.job }} has no ready instances.
           Having an offline cluster means your applications will not be able to access the database, leading to
           potential service disruption and/or data loss.
         runbook_url: https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterOffline.md
-      expr: |
-        (sum by (namespace, pod) (cnpg_collector_up) OR on() vector(0)) == 0
+      # Grouped per cluster, with the cluster taken from the instance pod
+      # name (<cluster>-<N>): a `cluster` label is not reliable, since an
+      # external label of the same name on the scraper overwrites it.
+      expr: |-
+        sum by (namespace, job, cnpg_cluster) (label_replace(cnpg_collector_up, "cnpg_cluster", "$1", "pod", "(.+)-[0-9]+")) == 0
       for: 5m
       labels:
         severity: critical
         namespace: "{{ $labels.namespace }}"
         job: "{{ $labels.job }}"
-        pod: "{{ $labels.pod }}"
+        cnpg_cluster: "{{ $labels.cnpg_cluster }}"
