@@ -96,7 +96,6 @@ spec:
         {{- $replicas := int .Values.clickhouseKeeper.replicas }}
         {{- $keeper := include "clickhouse.keeperName" $ }}
         {{- $namespace := .Release.Namespace }}
-        {{- $clusterDomain := .Values.clusterDomain }}
         {{- range $i := until $replicas }}
         - host: "chk-{{ $keeper }}-cluster1-0-{{ $i }}.{{ $namespace }}.svc.{{ $clusterDomain }}"
           port: 2181

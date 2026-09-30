@@ -3,7 +3,6 @@ suite: keeper name budget
 set:
   _cluster:
     cluster-domain: cluster.local
-  clusterDomain: cluster.local
 
 tests:
   - it: "keeps <release>-keeper for a short release name"
