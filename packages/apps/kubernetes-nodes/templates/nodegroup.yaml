@@ -485,6 +485,16 @@ spec:
                      safe here. The clone path's name below is quoted because no
                      existing worker renders it. */}}
               url: {{ $httpURL }}
+              {{- /* Only when talos.imageFactoryCA is set: a self-hosted factory
+                    served with a certificate from an internal CA. CDI appends the
+                    bundle to the system pool instead of replacing it, so a
+                    publicly-trusted endpoint verifies either way. The ConfigMap
+                    is rendered by templates/image-factory-ca.yaml. certConfigMap
+                    is a field of source.http only, so the clone path above never
+                    carries it. */}}
+              {{- if (include "kubernetes-nodes.talosImageFactoryCA" $) }}
+              certConfigMap: {{ include "kubernetes-nodes.talosImageFactoryCAConfigMapName" $ }}
+              {{- end }}
           {{- end }}
           storage:
             resources:
