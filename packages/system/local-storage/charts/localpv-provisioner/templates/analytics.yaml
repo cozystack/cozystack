@@ -1,0 +1,27 @@
+{{/*
+Chart-managed Lease for analytics leader election (node-deployment mode only).
+
+Elects a single analytics emitter across DaemonSet pods. Helm-managed so
+`helm uninstall` cleanly removes it; without this, the Lease would persist
+in the namespace with the previous holder's identity, and the next install
+would have to wait out LeaseDuration before acquiring leadership.
+*/}}
+{{- if .Values.localpv.enabled }}
+{{- $analyticsEnabled := .Values.analytics.enabled -}}
+{{- if kindIs "bool" .Values.global.analytics.enabled -}}
+  {{- $analyticsEnabled = .Values.global.analytics.enabled -}}
+{{- end -}}
+{{- if and $analyticsEnabled .Values.localpv.nodeDeployment.enabled }}
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: {{ include "localpv.analyticsLease.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+spec: {}
+{{- end }}
+{{- end }}
