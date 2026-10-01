@@ -95,7 +95,8 @@ type PluginConfiguration struct {
 }
 
 type ClusterStatus struct {
-	Phase string `json:"phase,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	PhaseReason string `json:"phaseReason,omitempty"`
 }
 
 type BackupConfiguration struct {
