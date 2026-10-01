@@ -19,8 +19,10 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -75,8 +77,21 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.T
 		}
 	}
 
+	unsupported, err := r.classLacksTLSRoute(ctx, tgw)
+	if err != nil {
+		return err
+	}
+
 	var ready metav1.Condition
 	switch {
+	case unsupported:
+		ready = metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: tgw.Generation,
+			Reason:             "GatewayClassUnsupported",
+			Message:            fmt.Sprintf("GatewayClass %s does not list TLSRoute in status.supportedFeatures, so nothing serves the TLS-passthrough listeners this TenantGateway renders", gatewayClassName(tgw)),
+		}
 	case notAccepted != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
@@ -121,6 +136,30 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.T
 	}
 	tgw.Status = stale.Status
 	return r.Status().Update(ctx, tgw)
+}
+
+// classLacksTLSRoute reports whether the spec renders TLS-passthrough
+// listeners on a GatewayClass that declares it does not serve TLSRoute.
+// A class that declares no features at all, or that does not exist, is
+// not judged: status.supportedFeatures is how a class says what it
+// serves, and implementations predating the field leave it empty.
+func (r *Reconciler) classLacksTLSRoute(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (bool, error) {
+	if len(renderedPassthroughServices(tgw)) == 0 && (len(tgw.Spec.TLSPassthroughListeners) == 0 || !rendersPassthroughListeners(tgw.Spec.CertMode)) {
+		return false, nil
+	}
+	class := &gatewayv1.GatewayClass{}
+	if err := r.Get(ctx, types.NamespacedName{Name: gatewayClassName(tgw)}, class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get GatewayClass %s: %w", gatewayClassName(tgw), err)
+	}
+	if len(class.Status.SupportedFeatures) == 0 {
+		return false, nil
+	}
+	return !slices.ContainsFunc(class.Status.SupportedFeatures, func(f gatewayv1.SupportedFeature) bool {
+		return f.Name == "TLSRoute"
+	}), nil
 }
 
 // indexListenerStatus turns Gateway.Status.Listeners into a name→status

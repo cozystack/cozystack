@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -150,6 +151,7 @@ const (
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes;tlsroutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status;tlsroutes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;update;patch;delete
 
@@ -1975,6 +1977,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gatewayv1beta1.ReferenceGrant{},
 			r.backendToTenantGateways(),
+		).
+		Watches(
+			&gatewayv1.GatewayClass{},
+			handler.EnqueueRequestsFromMapFunc(r.mapGatewayClassToTenantGateways),
 		).
 		Complete(r)
 }

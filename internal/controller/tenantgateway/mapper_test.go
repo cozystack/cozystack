@@ -18,6 +18,7 @@ package tenantgateway
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -303,5 +304,40 @@ func TestServiceExistenceChanged(t *testing.T) {
 	after.Spec.Ports = []corev1.ServicePort{{Port: 5432}}
 	if p.Update(event.TypedUpdateEvent[client.Object]{ObjectOld: before, ObjectNew: after}) {
 		t.Error("a Service update must not reach the mapper; nothing here reads a Service beyond its existence")
+	}
+}
+
+// TestMapGatewayClassToTenantGateways pins that a GatewayClass event
+// requeues exactly the TenantGateways on that class, the unset class
+// counting as cilium: GatewayClassUnsupported is read off the class's
+// status, so without the requeue a class that fills in or extends
+// supportedFeatures leaves Ready where an earlier pass put it.
+func TestMapGatewayClassToTenantGateways(t *testing.T) {
+	s := newScheme(t)
+	tgw := func(ns, class string) *gatewayv1alpha1.TenantGateway {
+		return &gatewayv1alpha1.TenantGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: ns},
+			Spec:       gatewayv1alpha1.TenantGatewaySpec{Apex: ns + ".example.com", GatewayClassName: class},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw("tenant-a", "other"), tgw("tenant-b", ""), tgw("tenant-c", "cilium")).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	for _, tc := range []struct {
+		class string
+		want  []string
+	}{
+		{"other", []string{"tenant-a"}},
+		{"cilium", []string{"tenant-b", "tenant-c"}},
+		{"unused", nil},
+	} {
+		reqs := r.mapGatewayClassToTenantGateways(context.TODO(), &gatewayv1.GatewayClass{ObjectMeta: metav1.ObjectMeta{Name: tc.class}})
+		var got []string
+		for _, req := range reqs {
+			got = append(got, req.Namespace)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("class %s requeued %v, want %v", tc.class, got, tc.want)
+		}
 	}
 }

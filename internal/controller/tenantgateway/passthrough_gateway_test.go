@@ -19,6 +19,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -645,5 +646,63 @@ func TestReconcile_TLSRouteOnAServiceSectionOfTheMainGatewayIsRefused(t *testing
 				t.Errorf("route on a section the main Gateway no longer has reads Accepted=True: %+v", cond)
 			}
 		}
+	}
+}
+
+// TestReconcile_ReadyNamesAClassThatCannotServePassthrough pins the
+// portability contract: a GatewayClass declares what it supports in
+// status.supportedFeatures, and a TenantGateway rendering passthrough
+// listeners on one that lacks TLSRoute reports it rather than reading
+// Ready on listeners nothing will serve. A class that declares nothing
+// is not judged, since older implementations do not fill the field in.
+func TestReconcile_ReadyNamesAClassThatCannotServePassthrough(t *testing.T) {
+	apiListener := []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 6443, Hostname: "api.foo.example.com"}}
+	for _, tc := range []struct {
+		name      string
+		features  []gatewayv1.FeatureName
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+		wantClass bool
+	}{
+		{"class without TLSRoute, passthrough listener", []gatewayv1.FeatureName{"Gateway", "HTTPRoute"}, apiListener, true},
+		{"class with TLSRoute", []gatewayv1.FeatureName{"Gateway", "HTTPRoute", "TLSRoute"}, apiListener, false},
+		{"class declaring nothing", nil, apiListener, false},
+		{"class without TLSRoute, no passthrough", []gatewayv1.FeatureName{"Gateway", "HTTPRoute"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                    "foo.example.com",
+					CertMode:                gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:        "other",
+					TLSPassthroughListeners: tc.listeners,
+				},
+			}
+			class := &gatewayv1.GatewayClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "other"},
+				Spec:       gatewayv1.GatewayClassSpec{ControllerName: "example.com/other"},
+			}
+			for _, f := range tc.features {
+				class.Status.SupportedFeatures = append(class.Status.SupportedFeatures, gatewayv1.SupportedFeature{Name: f})
+			}
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, class).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+			r := &Reconciler{Client: c, Scheme: s}
+			key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("first reconcile: %v", err)
+			}
+			programGateway(t, c, key)
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("second reconcile: %v", err)
+			}
+			ready := readyCondition(t, c, key)
+			if got := ready.Reason == "GatewayClassUnsupported"; got != tc.wantClass {
+				t.Errorf("Ready=%s reason=%s (%s), want the class refusal: %v", ready.Status, ready.Reason, ready.Message, tc.wantClass)
+			}
+			if tc.wantClass && (ready.Status != metav1.ConditionFalse || !strings.Contains(ready.Message, "TLSRoute") || !strings.Contains(ready.Message, "other")) {
+				t.Errorf("refusal must be Ready=False naming the class and the feature: %+v", ready)
+			}
+		})
 	}
 }

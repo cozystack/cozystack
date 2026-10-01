@@ -87,6 +87,28 @@ func (r *Reconciler) mapRouteToTenantGateways(ctx context.Context, obj client.Ob
 	return out
 }
 
+// mapGatewayClassToTenantGateways requeues the TenantGateways on a
+// class, because GatewayClassUnsupported is judged from the class's
+// status.supportedFeatures, which a class writes after it is accepted
+// and may change on an upgrade of its controller, with nothing on the
+// TenantGateway changing.
+func (r *Reconciler) mapGatewayClassToTenantGateways(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &gatewayv1alpha1.TenantGatewayList{}
+	if err := r.List(ctx, list); err != nil {
+		log.FromContext(ctx).Error(err, "list TenantGateways for GatewayClass mapper")
+		return nil
+	}
+	var out []reconcile.Request
+	for i := range list.Items {
+		tgw := &list.Items[i]
+		if gatewayClassName(tgw) != obj.GetName() {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}})
+	}
+	return out
+}
+
 // backendToTenantGateways returns an EventHandler that maps a Service
 // or ReferenceGrant change back to the TenantGateways whose withdrawal
 // decision it can flip.
