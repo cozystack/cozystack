@@ -1484,6 +1484,132 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 	}
 }
 
+// defaultStrategyServerName is the serverName the cozy-default-cnpg Strategy
+// renders; tests/strategy_cnpg_test.yaml in the backupstrategy-controller chart
+// pins the chart to this same string.
+const defaultStrategyServerName = "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}{{ with .Application.metadata.uid }}-{{ . }}{{ end }}"
+
+func TestRenderCNPGTemplate_DefaultServerName(t *testing.T) {
+	tmpl := strategyv1alpha1.CNPGTemplate{ServerName: defaultStrategyServerName}
+	for _, tc := range []struct {
+		name string
+		uid  types.UID
+		want string
+	}{
+		{name: "uid present", uid: "8f14e45f-ceea-467a-9575-6f0d6e2c1a3b", want: "tenant-pg-8f14e45f-ceea-467a-9575-6f0d6e2c1a3b"},
+		{name: "uid absent", want: "tenant-pg"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newPostgresApp("pg", "tenant")
+			app.UID = tc.uid
+			got, err := renderCNPGTemplate(tmpl, app, nil)
+			if err != nil {
+				t.Fatalf("renderCNPGTemplate: %v", err)
+			}
+			if got.ServerName != tc.want {
+				t.Fatalf("serverName = %q, want %q", got.ServerName, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileCNPG_RecreatedAppArchivesUnderAFreshPrefix deletes a Postgres
+// and recreates it under the same name, then runs a BackupJob against each.
+// The destinationPath is keyed by name, so only the serverName keeps the new
+// Cluster from writing its WALs and base backups into the old one's archive;
+// the empty-archive check that would refuse it is gone by the time the first
+// BackupJob attaches the plugin. A Cluster that already archives keeps its
+// serverName, so existing archives stay continuous.
+func TestReconcileCNPG_RecreatedAppArchivesUnderAFreshPrefix(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	archiver := true
+
+	backUp := func(t *testing.T, strategyServerName string, appUID types.UID, plugins []cnpgtypes.PluginConfiguration) string {
+		t.Helper()
+		started := metav1.NewTime(time.Now())
+		job := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+			Spec: backupsv1alpha1.BackupJobSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+			},
+			Status: backupsv1alpha1.BackupJobStatus{StartedAt: &started},
+		}
+		strategy := &strategyv1alpha1.CNPG{
+			ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-cnpg"},
+			Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+				ServerName: strategyServerName,
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{
+					DestinationPath: "s3://bucket/{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/",
+				},
+			}},
+		}
+		app := newPostgresApp("pg", "tenant")
+		app.UID = appUID
+		cluster := &cnpgtypes.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-pg", UID: types.UID("cluster-" + appUID)},
+		}
+		cluster.Spec.Plugins = plugins
+
+		c := newCNPGStrategyTestClient(t, job, strategy, app, cluster)
+		r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
+		resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name,
+		}}
+		j := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
+			t.Fatalf("get BackupJob: %v", err)
+		}
+		if _, err := r.reconcileCNPG(context.Background(), j, resolved); err != nil {
+			t.Fatalf("reconcileCNPG: %v", err)
+		}
+		if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("BackupJob failed: %+v", j.Status.Conditions)
+		}
+
+		patched := &cnpgtypes.Cluster{}
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(cluster), patched); err != nil {
+			t.Fatalf("get Cluster: %v", err)
+		}
+		if got := currentBarmanServerName(patched); got != "" {
+			return got
+		}
+		t.Fatalf("BackupJob left the barman-cloud plugin unattached: %+v", patched.Spec.Plugins)
+		return ""
+	}
+
+	for _, tc := range []struct {
+		name               string
+		strategyServerName string
+	}{
+		{name: "default strategy", strategyServerName: defaultStrategyServerName},
+		{name: "strategy without serverName", strategyServerName: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := backUp(t, tc.strategyServerName, "3c2ee41b-346f-4ae2-98d2-5d629c96f744", nil)
+			second := backUp(t, tc.strategyServerName, "9eb8feed-7d49-467e-b719-d1896c0602d5", nil)
+			if first == second {
+				t.Fatalf("both instances of tenant/pg archive under serverName %q: the recreated one writes into its predecessor's archive", first)
+			}
+			for _, name := range []string{first, second} {
+				if strings.Contains(name, "<no value>") {
+					t.Fatalf("serverName %q rendered a missing key", name)
+				}
+			}
+
+			const legacy = "tenant-pg"
+			kept := backUp(t, tc.strategyServerName, "9eb8feed-7d49-467e-b719-d1896c0602d5", []cnpgtypes.PluginConfiguration{{
+				Name:          cnpgtypes.PluginName,
+				IsWALArchiver: &archiver,
+				Parameters:    map[string]string{barmanObjectNameParam: "postgres-pg", barmanServerNameParam: legacy},
+			}})
+			if kept != legacy {
+				t.Fatalf("a Cluster already archiving under %q moved to %q, splitting its archive", legacy, kept)
+			}
+		})
+	}
+}
+
 // barman configuration and SSA-patches the Cluster's spec.plugins to reference
 // it via the barman-cloud plugin (the plugin replaces the deprecated native
 // spec.backup.barmanObjectStore). serverName must land on the Cluster plugin

@@ -1,0 +1,31 @@
+suite: CNPG strategy — per-instance WAL-archive prefix
+
+# The backup-controller renders these strings against the Postgres app, so the
+# assertions pin the template text itself. TestRenderCNPGTemplate_DefaultServerName
+# and TestReconcileCNPG_RecreatedAppArchivesUnderAFreshPrefix in
+# internal/backupcontroller exercise the same serverName string.
+
+templates:
+  - templates/strategy-cnpg-default.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+set:
+  backupStorage.bucketNameOverride: test-bucket
+
+tests:
+  - it: "serverName carries the app uid, guarded so an app without one renders no '<no value>'"
+    asserts:
+      - equal:
+          path: spec.template.serverName
+          value: "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}{{ with .Application.metadata.uid }}-{{ . }}{{ end }}"
+
+  # The driver re-applies destinationPath on every BackupJob, so a change here
+  # splits every existing archive; only the serverName may vary per instance.
+  - it: "destinationPath stays keyed by namespace and name"
+    asserts:
+      - equal:
+          path: spec.template.barmanObjectStore.destinationPath
+          value: "s3://test-bucket/{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/"
