@@ -5,13 +5,15 @@ import { MemoryRouter, Routes, Route } from "react-router"
 // Drive useK8sGet's result per test; the page's loading/error guards are the unit under test.
 const h = vi.hoisted(() => ({
   get: { data: undefined as unknown, isLoading: true, error: undefined as unknown },
+  configMaps: [] as unknown[],
+  tabLabels: [] as string[],
 }))
 
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
   // Presence probes (use-resource-presence.ts) — report empty lists.
-  useK8sList: () => ({ data: undefined, isLoading: false }),
+  useK8sList: (ref: { plural: string }) => ({ data: { items: ref.plural === "configmaps" ? h.configMaps : [] }, isLoading: false }),
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -19,13 +21,20 @@ vi.mock("../../lib/app-definitions.ts", () => ({
   }),
   appDisplayName: () => "Postgres",
   iconDataUrl: () => null,
+  releasePrefix: () => "",
+  isTenantModule: () => false,
 }))
 vi.mock("../../lib/tenant-context.tsx", () => ({
   useTenantContext: () => ({ tenantNamespace: "tenant-test" }),
 }))
 // Stub the tab tree — the loading/error branches return before any tab renders,
 // and these modules pull heavy deps (noVNC, Monaco) we don't want in jsdom.
-vi.mock("./tabs.tsx", () => ({ TabBar: () => null }))
+vi.mock("./tabs.tsx", () => ({
+  TabBar: ({ tabs }: { tabs: { label: string }[] }) => {
+    h.tabLabels = tabs.map((t) => t.label)
+    return null
+  },
+}))
 vi.mock("./OverviewTab.tsx", () => ({ OverviewTab: () => null }))
 vi.mock("./WorkloadsTab.tsx", () => ({ WorkloadsTab: () => null }))
 vi.mock("./ServicesTab.tsx", () => ({ ServicesTab: () => null }))
@@ -62,5 +71,22 @@ describe("ApplicationDetailPage guards", () => {
     h.get = { data: undefined, isLoading: true, error: undefined }
     renderPage()
     expect(screen.getByText("Loading…")).toBeInTheDocument()
+  })
+})
+
+
+describe("ApplicationDetailPage configuration", () => {
+  it("offers ConfigMaps declared by the application's resource map", () => {
+    h.get = {
+      data: { kind: "Postgres", metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.configMaps = [{ metadata: { name: "demo-resourcemap" }, data: {
+      resources: "- apiVersion: v1\n  kind: ConfigMap\n  name: postgres-demo-config",
+    } }]
+    h.tabLabels = []
+    renderPage()
+    expect(h.tabLabels).toContain("ConfigMaps")
   })
 })
