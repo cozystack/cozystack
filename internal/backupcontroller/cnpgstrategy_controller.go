@@ -110,6 +110,20 @@ const (
 	cnpgDefaultBackupDeadline = 30 * time.Minute
 
 	cnpgClusterHealthyPhase = "Cluster in healthy state"
+
+	// Condition Type recorded on a BackupJob that has to attach the
+	// barman-cloud plugin to a Cluster carrying none: a fresh platform-flow
+	// app, or one an in-place restore re-rendered. Attaching it changes the
+	// instance pod spec (the plugin injects its sidecar), so CNPG rolls every
+	// instance, and a cnpg.io/Backup created meanwhile fails with "requested
+	// plugin is not available" or "instance manager was restarted during
+	// backup" and never recovers. False holds the Backup back; its
+	// LastTransitionTime, written before the plugin is attached, is what the
+	// instance pods must postdate (see cnpgPluginRolloutPending).
+	backupCondPluginRolledOut = "PluginRolledOut"
+
+	cnpgPodRoleLabel    = "cnpg.io/podRole"
+	cnpgPodRoleInstance = "instance"
 )
 
 // cnpgClusterNameForApp returns the cnpg.io Cluster name for a Postgres
@@ -227,7 +241,18 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		serverName = defaultCNPGServerName(clusterName, app.UID)
 	}
 
+<<<<<<< HEAD
 	effectiveServerName, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName)
+=======
+	existingBackup, err := r.findCNPGBackupForJob(ctx, j)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	rollout := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+	awaitingRollout := existingBackup == nil && rollout != nil && rollout.Status == metav1.ConditionFalse
+
+	attachment, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName, existingBackup != nil || awaitingRollout)
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// HelmRelease has not yet rendered the Cluster (fresh app, or
@@ -248,18 +273,84 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to attach barman-cloud plugin to Cluster: %v", err))
 	}
-	if effectiveServerName != serverName {
+	if attachment.serverName != serverName {
 		logger.Info("preserving the live Cluster's barman serverName over the strategy template's",
-			"cluster", clusterName, "live", effectiveServerName, "strategy", serverName)
-		serverName = effectiveServerName
+			"cluster", clusterName, "live", attachment.serverName, "strategy", serverName)
+		serverName = attachment.serverName
 	}
+<<<<<<< HEAD
+=======
+
+	rolledOut := false
+	if existingBackup == nil && (attachment.missing || awaitingRollout) {
+		if !awaitingRollout {
+			// Latch before attaching: if this write is lost, the next pass
+			// still finds the plugin missing instead of a Cluster that looks
+			// ready to back up while CNPG rolls it.
+			message := fmt.Sprintf("attaching the barman-cloud plugin to cnpg.io/Cluster %s/%s, which rolls its instances", j.Namespace, clusterName)
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    backupCondPluginRolledOut,
+				Status:  metav1.ConditionFalse,
+				Reason:  "WaitingForPluginRollout",
+				Message: message,
+			})
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "WaitingForPluginRollout",
+				Message: message,
+			})
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		}
+		pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, rollout.LastTransitionTime)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if pending != "" {
+			if cnpgBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"barman-cloud plugin rollout did not finish within %s: %s", cnpgDefaultBackupDeadline, pending))
+			}
+			if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "WaitingForPluginRollout",
+				Message: pending,
+			}) {
+				if err := r.Status().Update(ctx, j); err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		}
+		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    backupCondPluginRolledOut,
+			Status:  metav1.ConditionTrue,
+			Reason:  "PluginRolledOut",
+			Message: fmt.Sprintf("every instance of cnpg.io/Cluster %s/%s restarted with the barman-cloud plugin", j.Namespace, clusterName),
+		})
+		apimeta.RemoveStatusCondition(&j.Status.Conditions, "Ready")
+		rolledOut = true
+	}
+
+	// The chart refuses a flavor change on a live Cluster, but the app keeps
+	// the refused value: the Backup records the image family the data was
+	// written by, which is what a restore has to match.
+	if specFlavor := cnpgFlavor(app.Spec.Flavor); specFlavor != attachment.flavor {
+		logger.Info("recording the live Cluster's image flavor over the application's",
+			"cluster", clusterName, "live", attachment.flavor, "application", specFlavor)
+	}
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 
 	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure cnpg.io/Backup: %v", err))
 	}
 
-	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning || rolledOut {
 		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
 		if err := r.Status().Update(ctx, j); err != nil {
 			return ctrl.Result{}, err
@@ -274,7 +365,11 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
+<<<<<<< HEAD
 		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, rendered, app)
+=======
+		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, rendered, app)
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -424,14 +519,46 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // mid-stream splits the archive across two prefixes — WALs around the flip
 // land under the old prefix while the base backup indexes under the new one,
 // and the eventual restore fails with "WAL not found".
+<<<<<<< HEAD
 func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
 	existing := &cnpgtypes.Cluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
 		return "", err
+=======
+//
+// It also returns the flavor of the image the live Cluster runs, read from
+// the same object.
+//
+// With attach unset, a Cluster that has no barman-cloud plugin yet is left
+// untouched and only reported missing, so the caller can record that it is
+// about to roll the Cluster before it does.
+func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string, attach bool) (cnpgPluginAttachment, error) {
+	// Live read: the cached Cluster can predate a restore re-render, and the
+	// serverName, the flavor and the UID below must come from the current
+	// object.
+	existing := &cnpgtypes.Cluster{}
+	live, err := r.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, clusterName, metav1.GetOptions{})
+	if err != nil {
+		return cnpgPluginAttachment{}, err
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(live.Object, existing); err != nil {
+		return cnpgPluginAttachment{}, fmt.Errorf("decode Cluster %s/%s: %w", namespace, clusterName, err)
+	}
+	attachment := cnpgPluginAttachment{
+		serverName:    serverName,
+		flavor:        cnpgImageFlavor(existing.Spec.ImageName),
+		clusterStatus: existing.Status,
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 	}
 	if live := currentBarmanServerName(existing); live != "" {
-		serverName = live
+		attachment.serverName = live
+	} else {
+		attachment.missing = true
+		if !attach {
+			return attachment, nil
+		}
 	}
+	serverName = attachment.serverName
 
 	// The ObjectStore is named after the Cluster (distinct kind, same
 	// namespace). serverName is deliberately left off the ObjectStore
@@ -459,15 +586,89 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 		InstanceSidecarConfiguration: barmanSidecarConfiguration(),
 	}
 	if err := r.Patch(ctx, objStore, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
+<<<<<<< HEAD
 		return "", fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
+=======
+		return cnpgPluginAttachment{}, fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 	}
 
 	patch := newCNPGClusterPatch(namespace, clusterName)
 	patch.Spec.Plugins = []cnpgtypes.PluginConfiguration{buildBarmanPlugin(objStoreName, serverName)}
 	if err := r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
+<<<<<<< HEAD
 		return "", err
 	}
 	return serverName, nil
+=======
+		return cnpgPluginAttachment{}, err
+	}
+	return attachment, nil
+}
+
+// cnpgPluginAttachment is what applyClusterPluginBackup read off the live
+// Cluster before applying the plugin.
+type cnpgPluginAttachment struct {
+	// serverName is the serverName the Cluster effectively archives under.
+	serverName string
+	// flavor is the image flavor the live Cluster runs.
+	flavor string
+	// missing reports a Cluster that carried no barman-cloud plugin.
+	missing       bool
+	clusterStatus cnpgtypes.ClusterStatus
+}
+
+// cnpgPluginRolloutPending returns why the rollout that attaching the
+// barman-cloud plugin started is not over yet, or "" once it is: CNPG reports
+// the Cluster healthy and every instance pod was created after attachedAt,
+// and is Ready.
+//
+// The phase alone cannot tell: the Cluster status carries no
+// observedGeneration and its Ready condition is derived from the phase, so
+// until CNPG reconciles the new spec the phase still reads healthy from
+// before. Nor can status.pluginStatus, which also lists plugins referenced
+// only from externalClusters, as on a Cluster an in-place restore
+// re-rendered. A pod spec change cannot be applied in place, so the instance
+// pods are recreated, and pods newer than the attach are the ones that run
+// the plugin sidecar.
+func (r *BackupJobReconciler) cnpgPluginRolloutPending(ctx context.Context, namespace, clusterName string, attachment cnpgPluginAttachment, attachedAt metav1.Time) (string, error) {
+	if phase := attachment.clusterStatus.Phase; phase != cnpgClusterHealthyPhase {
+		pending := fmt.Sprintf("cnpg.io/Cluster %s/%s is in phase %q", namespace, clusterName, phase)
+		if reason := attachment.clusterStatus.PhaseReason; reason != "" {
+			pending += ": " + reason
+		}
+		return pending, nil
+	}
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{
+		cnpgClusterLabel: clusterName,
+		cnpgPodRoleLabel: cnpgPodRoleInstance,
+	}); err != nil {
+		return "", err
+	}
+	if len(pods.Items) == 0 {
+		return fmt.Sprintf("cnpg.io/Cluster %s/%s has no instance pod", namespace, clusterName), nil
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !pod.CreationTimestamp.After(attachedAt.Time) {
+			return fmt.Sprintf("instance pod %s/%s predates the barman-cloud plugin", namespace, pod.Name), nil
+		}
+		if pod.DeletionTimestamp != nil || !podReady(pod) {
+			return fmt.Sprintf("instance pod %s/%s is not ready", namespace, pod.Name), nil
+		}
+	}
+	return "", nil
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 }
 
 // currentBarmanServerName returns the serverName the Cluster's barman-cloud

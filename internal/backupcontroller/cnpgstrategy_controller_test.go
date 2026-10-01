@@ -1019,7 +1019,11 @@ func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
+<<<<<<< HEAD
 	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
+=======
+	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing", true)
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1399,6 +1403,414 @@ func TestCNPGClusterFullyGone(t *testing.T) {
 	})
 }
 
+<<<<<<< HEAD
+=======
+func TestLogIndicatesRecoveryTargetUnreachable(t *testing.T) {
+	cases := []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{
+			name: "empty log",
+			log:  "",
+			want: false,
+		},
+		{
+			name: "healthy replay progress",
+			log:  "LOG: restored log file \"000000010000000000000005\" from archive\nLOG: consistent recovery state reached",
+			want: false,
+		},
+		{
+			name: "transient recovery-pod crash (API unreachable) does not match",
+			log:  `{"level":"error","msg":"while building the manager","error":"failed to get server groups: Get \"https://10.96.0.1:443/api\": dial tcp 10.96.0.1:443: i/o timeout"}`,
+			want: false,
+		},
+		{
+			name: "target unreachable FATAL matches",
+			log:  "LOG:  redo done at 0/50000A8\nFATAL:  recovery ended before configured recovery target was reached\nLOG:  startup process exited with exit code 1",
+			want: true,
+		},
+		{
+			name: "target unreachable FATAL embedded in JSON log line matches",
+			log:  `{"level":"info","record":{"error_severity":"FATAL","message":"recovery ended before configured recovery target was reached"}}`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := logIndicatesRecoveryTargetUnreachable(tc.log); got != tc.want {
+				t.Fatalf("logIndicatesRecoveryTargetUnreachable(%q) = %v, want %v", tc.log, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveryUnreachableFromLogs: any recovery log carrying the unreachable-
+// target FATAL classifies the (already deadline-expired) restore as
+// target-unreachable; logs without it do not.
+func TestRecoveryUnreachableFromLogs(t *testing.T) {
+	fatal := "LOG: redo done\nFATAL:  " + cnpgRecoveryTargetUnreachableLog
+	healthy := "LOG: restored log file from archive\nLOG: consistent recovery state reached"
+	cases := []struct {
+		name string
+		logs []string
+		want bool
+	}{
+		{"no logs", nil, false},
+		{"only healthy/progress logs", []string{healthy, healthy}, false},
+		{"a FATAL among others", []string{healthy, fatal}, true},
+		{"all FATAL", []string{fatal, fatal}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recoveryUnreachableFromLogs(tc.logs); got != tc.want {
+				t.Fatalf("recoveryUnreachableFromLogs = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveryPodsToInspect pins the filter/order/cap contract of the pod
+// selection the fail-fast guard relies on: only full-recovery pods, newest
+// first, capped at cnpgRecoveryMaxInspectPods. A regression here (wrong sort
+// direction, off-by-one cap, broken container filter) would silently degrade
+// the fail-fast back into a 30-minute deadline hang.
+func TestRecoveryPodsToInspect(t *testing.T) {
+	recoveryPod := func(name string, ageSeconds int64) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				CreationTimestamp: metav1.NewTime(time.Unix(ageSeconds, 0)),
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgRecoveryContainerName}}},
+		}
+	}
+
+	t.Run("no pods -> empty", func(t *testing.T) {
+		if got := recoveryPodsToInspect(nil); len(got) != 0 {
+			t.Fatalf("expected empty, got %d", len(got))
+		}
+	})
+
+	t.Run("skips non-recovery pods (no full-recovery container)", func(t *testing.T) {
+		pods := []corev1.Pod{
+			recoveryPod("rec-1", 100),
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "primary-newest", CreationTimestamp: metav1.NewTime(time.Unix(999, 0))},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}},
+			},
+		}
+		got := recoveryPodsToInspect(pods)
+		if len(got) != 1 || got[0].Name != "rec-1" {
+			t.Fatalf("expected only the full-recovery pod, got %v", names(got))
+		}
+	})
+
+	t.Run("newest-first order and cap at cnpgRecoveryMaxInspectPods", func(t *testing.T) {
+		// Seed two more recovery pods than the cap, out of order, plus a
+		// non-recovery pod that is the newest of all (must be excluded). The
+		// result must be exactly the cap-many newest recovery pods, newest-first.
+		n := cnpgRecoveryMaxInspectPods + 2
+		var pods []corev1.Pod
+		for i := range n {
+			// age i*100 so higher i == newer.
+			pods = append(pods, recoveryPod(fmt.Sprintf("rec-%d", i), int64(i*100)))
+		}
+		pods = append(pods, corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "primary", CreationTimestamp: metav1.NewTime(time.Unix(9_999_999, 0))},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}},
+		})
+		got := recoveryPodsToInspect(pods)
+		want := make([]string, 0, cnpgRecoveryMaxInspectPods)
+		for i := range cnpgRecoveryMaxInspectPods {
+			want = append(want, fmt.Sprintf("rec-%d", n-1-i)) // newest-first
+		}
+		if gotNames := names(got); !equalStrings(gotNames, want) {
+			t.Fatalf("expected %v, got %v", want, gotNames)
+		}
+	})
+}
+
+func names(pods []*corev1.Pod) []string {
+	out := make([]string, len(pods))
+	for i, p := range pods {
+		out[i] = p.Name
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// recoveryTargetUnreachable is nil-safe when no Clientset is wired, so the
+// deadline stays the backstop instead of the driver panicking.
+func TestRecoveryTargetUnreachable_NilClientsetReportsFalse(t *testing.T) {
+	r := &RestoreJobReconciler{Client: newCNPGStrategyTestClient(t)}
+	unreachable, pod, forbidden, err := r.recoveryTargetUnreachable(context.Background(), "tenant", "postgres-app")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unreachable || pod != "" || forbidden {
+		t.Fatalf("expected (false, \"\", false) with no Clientset, got (%v, %q, %v)", unreachable, pod, forbidden)
+	}
+}
+
+// TestRecoveryTargetUnreachable_ClassifiesFromLogs drives the log-based
+// classification through an injected reader (the fake Clientset's GetLogs
+// can't return specific content or a Forbidden), covering the three outcomes
+// the deadline path branches on: the unreachable-target FATAL is present
+// (-> unreachable, newest pod), it is absent (-> not unreachable), and the log
+// read is Forbidden (-> forbidden flagged so the caller surfaces the missing
+// pods/log RBAC instead of failing silently-generic).
+func TestRecoveryTargetUnreachable_ClassifiesFromLogs(t *testing.T) {
+	const (
+		ns      = "tenant"
+		cluster = "postgres-app"
+	)
+	recPod := func(name string, ageSeconds int64) client.Object {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:         ns,
+				Name:              name,
+				Labels:            map[string]string{cnpgClusterLabel: cluster},
+				CreationTimestamp: metav1.NewTime(time.Unix(ageSeconds, 0)),
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgRecoveryContainerName}}},
+		}
+	}
+	seed := func() []client.Object { return []client.Object{recPod("rec-old", 100), recPod("rec-new", 200)} }
+	fatalLog := "LOG:  redo done\nFATAL:  " + cnpgRecoveryTargetUnreachableLog
+
+	t.Run("FATAL present -> unreachable, reports newest pod", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client:     newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) { return fatalLog, nil },
+		}
+		un, pod, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !un || forb || pod != "rec-new" {
+			t.Fatalf("got unreachable=%v pod=%q forbidden=%v, want (true, rec-new, false)", un, pod, forb)
+		}
+	})
+
+	t.Run("no FATAL -> not unreachable", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client: newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) {
+				return "LOG: consistent recovery state reached", nil
+			},
+		}
+		un, _, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if un || forb {
+			t.Fatalf("got unreachable=%v forbidden=%v, want (false, false)", un, forb)
+		}
+	})
+
+	t.Run("Forbidden log read -> forbidden flagged, not unreachable", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client: newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) {
+				return "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "rec-new", fmt.Errorf("pods/log grant missing"))
+			},
+		}
+		un, _, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if un || !forb {
+			t.Fatalf("got unreachable=%v forbidden=%v, want (false, true)", un, forb)
+		}
+	})
+}
+
+// TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache seeds the cached
+// and the live client with the Cluster before and after an in-place restore
+// re-rendered it, and asserts the driver takes both the serverName and the
+// ObjectStore owner UID from the live one.
+func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
+	archiver := true
+	purged := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "uid-before-restore"},
+	}
+	purged.Spec.Plugins = []cnpgtypes.PluginConfiguration{{
+		Name:          cnpgtypes.PluginName,
+		IsWALArchiver: &archiver,
+		Parameters:    map[string]string{barmanObjectNameParam: "postgres-app", barmanServerNameParam: "postgres-app"},
+	}}
+
+	rebootstrapped := purged.DeepCopy()
+	rebootstrapped.UID = "uid-after-restore"
+	rebootstrapped.Spec.Plugins[0].Parameters[barmanServerNameParam] = "postgres-app-restore-0123456789abcdef"
+
+	c := newCNPGStrategyTestClient(t, purged)
+	r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, rebootstrapped)}
+	tmpl := &strategyv1alpha1.CNPGTemplate{
+		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
+	}
+
+	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "postgres-app-restore-0123456789abcdef"; got.serverName != want {
+		t.Fatalf("effective serverName = %q, want %q: the restored cluster would archive onto the source's prefix", got.serverName, want)
+	}
+
+	store := &cnpgtypes.ObjectStore{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, store); err != nil {
+		t.Fatalf("get ObjectStore after apply: %v", err)
+	}
+	owners := store.GetOwnerReferences()
+	if len(owners) != 1 {
+		t.Fatalf("ObjectStore owner references = %v, want exactly the live Cluster", owners)
+	}
+	if got := string(owners[0].UID); got != "uid-after-restore" {
+		t.Fatalf("ObjectStore owned by UID %q, want the live Cluster's: it would be garbage-collected immediately", got)
+	}
+}
+
+// TestReconcileCNPG_RecordsTheLiveClusterFlavor: the chart refuses a flavor
+// change on a live Cluster, but the Postgres app keeps the refused value. The
+// Backup must record the flavor the Cluster actually runs, or a restore would
+// accept a target of the wrong image family and refuse the right one.
+func TestReconcileCNPG_RecordsTheLiveClusterFlavor(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	const ns, appName = "tenant", "pg"
+	clusterName := cnpgClusterNameForApp(appName)
+
+	cases := []struct {
+		name       string
+		liveImage  string
+		specFlavor string
+		want       string
+	}{
+		{name: "app switched to postgis on a postgresql cluster", liveImage: "ghcr.io/cloudnative-pg/postgresql:17.5", specFlavor: "postgis", want: "postgresql"},
+		{name: "app switched to postgresql on a postgis cluster", liveImage: "ghcr.io/cloudnative-pg/postgis:17-3.5", specFlavor: "", want: "postgis"},
+		{name: "cluster on the CNPG default image", liveImage: "", specFlavor: "postgis", want: "postgresql"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			startedAt := metav1.Now()
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+			}
+			strategy := &strategyv1alpha1.CNPG{
+				ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+				Spec: strategyv1alpha1.CNPGSpec{
+					Template: strategyv1alpha1.CNPGTemplate{
+						BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+					},
+				},
+			}
+			app := newPostgresApp(appName, ns)
+			app.Spec.Flavor = tc.specFlavor
+			cluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, UID: "cluster-uid"},
+				Spec:       cnpgtypes.ClusterSpec{ImageName: tc.liveImage},
+			}
+			cnpgBackup := &cnpgtypes.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj-cnpg", Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				}},
+				Spec:   cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+				Status: cnpgtypes.BackupStatus{Phase: cnpgBackupPhaseComplete},
+			}
+			c := newCNPGStrategyTestClient(t, job, strategy, app, cluster, cnpgBackup)
+			r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name},
+			}
+
+			j := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := r.reconcileCNPG(context.Background(), j, resolved); err != nil {
+				t.Fatalf("reconcileCNPG: %v", err)
+			}
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+				t.Fatalf("BackupJob phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+			}
+
+			backup := &backupsv1alpha1.Backup{}
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: job.Name}, backup); err != nil {
+				t.Fatalf("get Backup artifact: %v", err)
+			}
+			snap, err := unmarshalCNPGBackupSnapshot(backup)
+			if err != nil {
+				t.Fatalf("unmarshal snapshot: %v", err)
+			}
+			if got := cnpgFlavor(snap.Flavor); got != tc.want {
+				t.Fatalf("Backup records flavor %q, want the live Cluster's %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCNPGImageFlavor pins the image-to-flavor mapping to the chart's
+// postgres.flavorGuard: only the image name counts, never the host, tag or
+// digest.
+func TestCNPGImageFlavor(t *testing.T) {
+	cases := map[string]string{
+		"":                                       "postgresql",
+		"ghcr.io/cloudnative-pg/postgresql:18.1": "postgresql",
+		"ghcr.io/cloudnative-pg/postgis:18-3.6":  "postgis",
+		"mirror.local:5000/cloudnative-pg/postgis:18-3.6@sha256:0123": "postgis",
+		"postgis@sha256:0123": "postgis",
+	}
+	for image, want := range cases {
+		if got := cnpgImageFlavor(image); got != want {
+			t.Errorf("cnpgImageFlavor(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+// cnpgDynamicFor builds the dynamic client applyClusterPluginBackup reads
+// Clusters through, seeded independently of the typed client.
+func cnpgDynamicFor(t *testing.T, clusters ...*cnpgtypes.Cluster) dynamic.Interface {
+	t.Helper()
+	s := runtime.NewScheme()
+	s.AddKnownTypeWithName(cnpgtypes.GroupVersion.WithKind("Cluster"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(cnpgtypes.GroupVersion.WithKind("ClusterList"), &unstructured.UnstructuredList{})
+	s.AddKnownTypeWithName(cnpgtypes.BarmanGroupVersion.WithKind("ObjectStore"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(cnpgtypes.BarmanGroupVersion.WithKind("ObjectStoreList"), &unstructured.UnstructuredList{})
+
+	objs := make([]runtime.Object, 0, len(clusters))
+	for _, c := range clusters {
+		raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(c)
+		if err != nil {
+			t.Fatalf("converting Cluster %s: %v", c.Name, err)
+		}
+		u := &unstructured.Unstructured{Object: raw}
+		u.SetAPIVersion(cnpgtypes.GroupVersion.String())
+		u.SetKind("Cluster")
+		objs = append(objs, u)
+	}
+	return dynamicfake.NewSimpleDynamicClient(s, objs...)
+}
+
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 // testCNPGScheme returns a runtime.Scheme that knows the unstructured
 // HelmRelease GVK used by the dynamic-client tests above.
 func testCNPGScheme(t *testing.T) *runtime.Scheme {
@@ -1462,12 +1874,16 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 			}
 
+<<<<<<< HEAD
 			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+=======
+			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true)
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tc.wantServer {
-				t.Fatalf("effective serverName = %q, want %q", got, tc.wantServer)
+			if got.serverName != tc.wantServer {
+				t.Fatalf("effective serverName = %q, want %q", got.serverName, tc.wantServer)
 			}
 
 			patched := &cnpgtypes.Cluster{}
@@ -1556,23 +1972,27 @@ func TestReconcileCNPG_RecreatedAppArchivesUnderAFreshPrefix(t *testing.T) {
 		resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
 			APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name,
 		}}
-		j := &backupsv1alpha1.BackupJob{}
-		if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
-			t.Fatalf("get BackupJob: %v", err)
-		}
-		if _, err := r.reconcileCNPG(context.Background(), j, resolved); err != nil {
-			t.Fatalf("reconcileCNPG: %v", err)
-		}
-		if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-			t.Fatalf("BackupJob failed: %+v", j.Status.Conditions)
-		}
-
+		// A Cluster without the plugin takes two passes: the first only
+		// records that the driver is about to roll it, the second attaches.
 		patched := &cnpgtypes.Cluster{}
-		if err := c.Get(context.Background(), client.ObjectKeyFromObject(cluster), patched); err != nil {
-			t.Fatalf("get Cluster: %v", err)
-		}
-		if got := currentBarmanServerName(patched); got != "" {
-			return got
+		for range 2 {
+			j := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := r.reconcileCNPG(context.Background(), j, resolved); err != nil {
+				t.Fatalf("reconcileCNPG: %v", err)
+			}
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("BackupJob failed: %+v", j.Status.Conditions)
+			}
+
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(cluster), patched); err != nil {
+				t.Fatalf("get Cluster: %v", err)
+			}
+			if got := currentBarmanServerName(patched); got != "" {
+				return got
+			}
 		}
 		t.Fatalf("BackupJob left the barman-cloud plugin unattached: %+v", patched.Spec.Plugins)
 		return ""
@@ -1627,7 +2047,11 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
+<<<<<<< HEAD
 	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
+=======
+	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app", true); err != nil {
+>>>>>>> 54ab863 (fix(backups): hold a Postgres backup until the plugin rollout is over)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1838,6 +2262,239 @@ func TestReconcileCNPG_StartedAtReturnsEarlyToAvoidStaleResourceVersion(t *testi
 	// the next reconcile picks up cleanly with the post-patch RV.
 	if persisted.Status.Phase != "" {
 		t.Errorf("expected Phase unchanged after StartedAt early return, got %q", persisted.Status.Phase)
+	}
+}
+
+// cnpgRolloutFixture drives reconcileCNPG against one Postgres app whose
+// Cluster and instance pods a test swaps between passes, standing in for
+// CNPG rolling the instances.
+type cnpgRolloutFixture struct {
+	t        *testing.T
+	c        client.Client
+	r        *BackupJobReconciler
+	resolved *ResolvedBackupConfig
+}
+
+const (
+	rolloutNS      = "tenant"
+	rolloutApp     = "app"
+	rolloutCluster = "postgres-app"
+)
+
+func newCNPGRolloutFixture(t *testing.T, j *backupsv1alpha1.BackupJob, cluster *cnpgtypes.Cluster, pods ...*corev1.Pod) *cnpgRolloutFixture {
+	t.Helper()
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	objs := []client.Object{j, strategy, newPostgresApp(rolloutApp, rolloutNS), cluster}
+	for _, p := range pods {
+		objs = append(objs, p)
+	}
+	c := newCNPGStrategyTestClient(t, objs...)
+	return &cnpgRolloutFixture{
+		t: t,
+		c: c,
+		r: &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)},
+		resolved: &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: &strategyGroup,
+			Kind:     strategyv1alpha1.CNPGStrategyKind,
+			Name:     strategy.Name,
+		}},
+	}
+}
+
+func newRolloutBackupJob(startedAt time.Time) *backupsv1alpha1.BackupJob {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	started := metav1.NewTime(startedAt)
+	return &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: "bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: rolloutApp},
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &started},
+	}
+}
+
+func newRolloutCluster(phase string, plugins ...cnpgtypes.PluginConfiguration) *cnpgtypes.Cluster {
+	return &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: rolloutCluster, UID: "cluster-uid"},
+		Spec:       cnpgtypes.ClusterSpec{Plugins: plugins},
+		Status:     cnpgtypes.ClusterStatus{Phase: phase},
+	}
+}
+
+func newRolloutInstancePod(created time.Time) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:         rolloutNS,
+			Name:              rolloutCluster + "-1",
+			CreationTimestamp: metav1.NewTime(created),
+			Labels:            map[string]string{cnpgClusterLabel: rolloutCluster, cnpgPodRoleLabel: cnpgPodRoleInstance},
+		},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	}
+}
+
+// pass runs one reconcile and returns the persisted BackupJob and the
+// cnpg.io/Backups that exist afterwards.
+func (f *cnpgRolloutFixture) pass() (*backupsv1alpha1.BackupJob, []cnpgtypes.Backup) {
+	f.t.Helper()
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: rolloutNS, Name: "bj"}
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, key, j); err != nil {
+		f.t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(ctx, j, f.resolved); err != nil {
+		f.t.Fatalf("reconcileCNPG: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, key, got); err != nil {
+		f.t.Fatalf("get BackupJob after reconcile: %v", err)
+	}
+	backups := &cnpgtypes.BackupList{}
+	if err := f.c.List(ctx, backups, client.InNamespace(rolloutNS)); err != nil {
+		f.t.Fatalf("list cnpg.io/Backups: %v", err)
+	}
+	return got, backups.Items
+}
+
+// observeCNPG makes the next live read see cluster, as CNPG has written it.
+func (f *cnpgRolloutFixture) observeCNPG(cluster *cnpgtypes.Cluster) {
+	f.r.Interface = cnpgDynamicFor(f.t, cluster)
+}
+
+func (f *cnpgRolloutFixture) replacePod(old, recreated *corev1.Pod) {
+	f.t.Helper()
+	if err := f.c.Delete(context.Background(), old); err != nil {
+		f.t.Fatalf("delete pod: %v", err)
+	}
+	if err := f.c.Create(context.Background(), recreated); err != nil {
+		f.t.Fatalf("create pod: %v", err)
+	}
+}
+
+// TestReconcileCNPG_WaitsForPluginRolloutBeforeBackup covers the first backup
+// of a Cluster that had no barman-cloud plugin. Attaching it makes CNPG roll
+// every instance, and a cnpg.io/Backup created before the rollout is over
+// fails for good ("requested plugin is not available"). No Backup may exist
+// until the instances have been recreated and CNPG reports the Cluster
+// healthy again, including in the window where CNPG has not reconciled the
+// new spec yet and the phase still reads healthy from before.
+func TestReconcileCNPG_WaitsForPluginRolloutBeforeBackup(t *testing.T) {
+	oldPod := newRolloutInstancePod(time.Now().Add(-time.Hour).Truncate(time.Second))
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Minute)),
+		newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+
+	j, backups := f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created before the plugin was even attached: %+v", backups)
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut); cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("%s condition = %+v, want False before the plugin is attached", backupCondPluginRolledOut, cond)
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond == nil || cond.Reason != "WaitingForPluginRollout" {
+		t.Fatalf("Ready condition = %+v, want reason WaitingForPluginRollout", cond)
+	}
+	attachedAt := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut).LastTransitionTime
+
+	_, backups = f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created in the pass that attached the plugin: %+v", backups)
+	}
+	attached := &cnpgtypes.Cluster{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
+		t.Fatalf("get Cluster: %v", err)
+	}
+	if currentBarmanServerName(attached) == "" {
+		t.Fatalf("the barman-cloud plugin was never attached: %+v", attached.Spec.Plugins)
+	}
+
+	// CNPG has not picked the new spec up yet: its phase is the one from
+	// before the attach.
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...))
+	j, backups = f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created on a stale healthy phase, against instances without the plugin: %+v", backups)
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond == nil || !strings.Contains(cond.Message, "predates") {
+		t.Fatalf("Ready condition = %+v, want the instance pod that predates the plugin in its message", cond)
+	}
+
+	rolling := newRolloutCluster("Upgrading cluster", attached.Spec.Plugins...)
+	rolling.Status.PhaseReason = "Restarting instance postgres-app-1, because: volumes: element plugins has been added"
+	f.observeCNPG(rolling)
+	recreated := newRolloutInstancePod(attachedAt.Add(time.Minute))
+	f.replacePod(oldPod, recreated)
+	j, backups = f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created while CNPG was rolling the instances: %+v", backups)
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond == nil || !strings.Contains(cond.Message, "Upgrading cluster") {
+		t.Fatalf("Ready condition = %+v, want the rolling phase in its message", cond)
+	}
+
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...))
+	j, backups = f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups once the rollout is over, want 1", len(backups))
+	}
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+		t.Errorf("BackupJob phase = %q, want Running", j.Status.Phase)
+	}
+	if !apimeta.IsStatusConditionTrue(j.Status.Conditions, backupCondPluginRolledOut) {
+		t.Errorf("%s condition = %+v, want True", backupCondPluginRolledOut, apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut))
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond != nil {
+		t.Errorf("Ready condition = %+v left over from the wait while the backup runs", cond)
+	}
+}
+
+// TestReconcileCNPG_AttachedPluginDoesNotDelayBackup: a Cluster that already
+// runs the plugin is not rolled by the driver, so its Backup is created on the
+// first pass, whatever the age of its pods.
+func TestReconcileCNPG_AttachedPluginDoesNotDelayBackup(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Minute)),
+		newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+		newRolloutInstancePod(time.Now().Add(-time.Hour)))
+
+	j, backups := f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups on the first pass, want 1", len(backups))
+	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut); cond != nil {
+		t.Errorf("%s condition = %+v on a Cluster the driver did not roll", backupCondPluginRolledOut, cond)
+	}
+}
+
+// TestReconcileCNPG_PluginRolloutWaitIsBounded: a rollout that never ends
+// fails the BackupJob at the backup deadline instead of holding it Running.
+func TestReconcileCNPG_PluginRolloutWaitIsBounded(t *testing.T) {
+	startedAt := time.Now().Add(-cnpgDefaultBackupDeadline - time.Minute)
+	j := newRolloutBackupJob(startedAt)
+	j.Status.Conditions = []metav1.Condition{{
+		Type:               backupCondPluginRolledOut,
+		Status:             metav1.ConditionFalse,
+		Reason:             "WaitingForPluginRollout",
+		LastTransitionTime: metav1.NewTime(startedAt),
+	}}
+	f := newCNPGRolloutFixture(t, j,
+		newRolloutCluster("Waiting for user action", buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+		newRolloutInstancePod(startedAt.Add(-time.Hour)))
+
+	got, backups := f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created against an unfinished rollout: %+v", backups)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("BackupJob phase = %q, want Failed past the deadline", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "Waiting for user action") {
+		t.Errorf("BackupJob message = %q, want the phase CNPG is stuck in", got.Status.Message)
 	}
 }
 
