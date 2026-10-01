@@ -165,6 +165,17 @@
             "x-cozystack-options": {
               "source": "storageclass"
             }
+          },
+          "talos": {
+            "description": "Allowlisted Talos worker configuration for this node group. There is intentionally no arbitrary machine-config or sysctl passthrough.",
+            "type": "object",
+            "properties": {
+              "userNamespacesLimit": {
+                "description": "Maximum number of unprivileged user namespaces available to this worker pool. Zero preserves Talos KSPP's default of disabling them. A positive value emits only `machine.sysctls.user.max_user_namespaces` in this pool's worker machine configuration; it does not affect the control plane or any other node group.",
+                "type": "integer",
+                "default": 0
+              }
+            }
           }
         }
       }

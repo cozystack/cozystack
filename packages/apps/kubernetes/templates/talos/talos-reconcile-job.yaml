@@ -214,6 +214,8 @@ subjects:
        computed values set on it, so $.Release / $.Values resolve as usual
        and the loop/computed locals are read as .group, .groupName, etc. */}}
 {{- define "kubernetes.talos-reconcile-job-spec" -}}
+{{- $groupTalos := .group.talos | default dict -}}
+{{- $userNamespacesLimit := $groupTalos.userNamespacesLimit | default 0 | int -}}
 spec:
   {{- /* Each pod attempt runs the ~10-minute (120 × 5s) input-wait loop, so this
          backoffLimit sets the self-heal window to roughly 5 hours. The Job does
@@ -344,6 +346,10 @@ spec:
                       machine:
                         type: worker
                         token: ${TALOS_TOKEN}
+                        {{- if gt $userNamespacesLimit 0 }}
+                        sysctls:
+                          user.max_user_namespaces: "{{ $userNamespacesLimit }}"
+                        {{- end }}
                         network:
                           # Management CoreDNS as the worker's host
                           # resolver, plus management cluster search
@@ -539,6 +545,11 @@ spec:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{- $groupTalos := $group.talos | default dict }}
+{{- $userNamespacesLimit := $groupTalos.userNamespacesLimit | default 0 | int }}
+{{- if lt $userNamespacesLimit 0 }}
+{{- fail (printf "nodeGroup %s: talos.userNamespacesLimit must be zero or a positive value, got %d" $groupName $userNamespacesLimit) }}
+{{- end }}
 {{- /* Render the Job spec, then hash it to a name suffix so the immutable
        Job is churn-free across upgrades (see the header comment). Mirrors
        the KubevirtMachineTemplate content-hash idiom in cluster.yaml. */}}

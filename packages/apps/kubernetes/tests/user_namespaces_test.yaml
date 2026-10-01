@@ -1,0 +1,73 @@
+suite: per-worker-pool Talos user namespace limit
+
+templates:
+  - templates/talos/talos-reconcile-job.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+set:
+  _namespace:
+    etcd: etcd
+    ingress: nginx
+    host: example.com
+  _cluster:
+    cluster-domain: cozy.local
+  nodeGroups:
+    default:
+      minReplicas: 1
+      maxReplicas: 2
+      instanceType: u1.medium
+      diskSize: 20Gi
+      storageClass: replicated
+      roles: []
+      resources: {}
+      gpus: []
+      kubelet: {}
+    agents:
+      minReplicas: 1
+      maxReplicas: 2
+      instanceType: u1.medium
+      diskSize: 20Gi
+      storageClass: replicated
+      roles: []
+      resources: {}
+      gpus: []
+      kubelet: {}
+      talos:
+        userNamespacesLimit: 11255
+
+tests:
+  - it: preserves the default by omitting the sysctl from an unconfigured pool
+    documentIndex: 7
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'user.max_user_namespaces'
+
+  - it: emits the sysctl only for the opted-in worker pool
+    documentIndex: 6
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'sysctls:\s*\n\s+user.max_user_namespaces: "11255"'
+
+  - it: rejects a negative user namespace limit
+    set:
+      nodeGroups:
+        agents:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: u1.medium
+          diskSize: 20Gi
+          storageClass: replicated
+          roles: []
+          resources: {}
+          gpus: []
+          kubelet: {}
+          talos:
+            userNamespacesLimit: -1
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup agents: talos.userNamespacesLimit must be zero or a positive value, got -1"
