@@ -58,6 +58,14 @@ spec:
   values:
     gatewayClassName: {{ . | quote }}
   {{- end }}
+  # The operator writes observedGeneration with Ready; the poller rejects
+  # status from an older generation before evaluating this condition.
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+    - apiVersion: gateway.cozystack.io/v1alpha1
+      kind: TenantGateway
+      current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values

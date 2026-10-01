@@ -254,3 +254,26 @@
 {{-   end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* fromYaml returns an Error map on malformed YAML. Never hash that map. */}}
+{{- define "monitoring.grafana.validatedBase" -}}
+{{- $base := include "monitoring.grafana.base" . | fromYaml -}}
+{{- if not (kindIs "map" $base) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- if or (hasKey $base "Error") (not (hasKey $base "spec")) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- if not (kindIs "map" $base.spec) -}}
+{{- fail "Grafana base must be a resource map with a spec map" -}}
+{{- end -}}
+{{- toYaml $base -}}
+{{- end -}}
+
+{{- /* The input is the complete rendered spec before adding this annotation. */}}
+{{- define "monitoring.grafana.specHash" -}}
+{{- if hasKey (dig "deployment" "spec" "template" "metadata" "annotations" dict .) "monitoring.cozystack.io/grafana-spec-hash" -}}
+{{- fail "Grafana base must not contain its own spec hash" -}}
+{{- end -}}
+{{- toJson . | sha256sum -}}
+{{- end -}}

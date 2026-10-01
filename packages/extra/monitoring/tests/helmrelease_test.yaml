@@ -101,3 +101,50 @@ tests:
       - equal:
           path: spec.healthCheckExprs[2].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  - it: also gates on the metrics VM* CRs and the CNPG Cluster
+    asserts:
+      - lengthEqual:
+          path: spec.healthCheckExprs
+          count: 8
+      - equal:
+          path: spec.healthCheckExprs[3].kind
+          value: VMCluster
+      - equal:
+          path: spec.healthCheckExprs[3].apiVersion
+          value: operator.victoriametrics.com/v1beta1
+      - equal:
+          path: spec.healthCheckExprs[7].apiVersion
+          value: postgresql.cnpg.io/v1
+      - equal:
+          path: spec.healthCheckExprs[7].kind
+          value: Cluster
+      - notExists:
+          path: spec.healthCheckExprs[7].inProgress
+      - notExists:
+          path: spec.healthCheckExprs[7].failed
+
+  - it: keeps the timeout aligned with the outer release and OIDC job
+    asserts:
+      - equal:
+          path: spec.timeout
+          value: 15m
+
+  - it: retries failed installs and upgrades without uninstalling database owners
+    asserts:
+      - equal:
+          path: spec.install.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.upgrade.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
+      - notExists:
+          path: spec.install.disableHooks
+      - notExists:
+          path: spec.upgrade.disableHooks

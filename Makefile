@@ -1,4 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers test-health-checks preflight
 
 # Before any include, the last file make has read is this one: MAKEFILES and
 # -f files given before it are earlier in the list, -f files after it are not
@@ -122,7 +122,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness test-health-checks migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -173,6 +173,10 @@ test-controllers:
 #   go test ./test/check-readiness/ -update
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
+
+# The isolated module pins the CEL evaluator shipped by helm-controller.
+test-health-checks:
+	go -C test/healthchecks test ./... -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. This glob is one level deep: live-cluster suites under
