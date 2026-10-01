@@ -289,6 +289,14 @@ type NodeGroup struct {
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 	StorageClass string `json:"storageClass,omitempty"`
+	// Allowlisted Talos worker configuration for this node group. There is intentionally no arbitrary machine-config or sysctl passthrough.
+	Talos NodeGroupTalos `json:"talos,omitempty"`
+}
+
+type NodeGroupTalos struct {
+	// Maximum number of unprivileged user namespaces available to this worker pool. Zero preserves Talos KSPP's default of disabling them. A positive value emits only `machine.sysctls.user.max_user_namespaces` in this pool's worker machine configuration; it does not affect the control plane or any other node group.
+	// +kubebuilder:default:=0
+	UserNamespacesLimit int `json:"userNamespacesLimit,omitempty"`
 }
 
 type NodeHealthCheck struct {
