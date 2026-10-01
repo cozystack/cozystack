@@ -146,6 +146,7 @@ jobs:
               'harbor':              'area/storage',
               'backups':             'area/storage',
               'csi':                 'area/storage',
+              'local-storage':       'area/storage',
 
               // area/tenant
               'tenant':              'area/tenant',
