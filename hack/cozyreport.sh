@@ -85,14 +85,15 @@
 #                         per read but sits outside every budget window -- the three
 #                         object deadlines are set AFTER their own listing read.
 #                                                                 6 x 35 =  210s
-#   LINSTOR EXEC READS  = the three listings, the error-report index, the
-#                         controller bundle, and ONE BUNDLE PER SATELLITE. Bounded
+#   LINSTOR EXEC READS  = the four listings, the ZFS pool map, the error-report
+#                         index, the controller bundle, and UP TO TWO PER SATELLITE
+#                         (its dataset listing and its bundle). Bounded
 #                         per read, in no budget window, and the only reads here
 #                         whose duration is a workload's rather than the
 #                         apiserver's. Written with its n rather than with a
 #                         cluster's worth folded in, because this is the term that
 #                         grows with the storage nodes.
-#                                                          (5 + n) x 35 = 175 + 35n
+#                                                       (7 + 2n) x 35 = 245 + 70n
 #   EVERY OTHER READ    = literally the rest of the file -- the listings, the
 #                         gates, the sandbox-host commands, and every per-object walk
 #                         EXCEPT the four capped ones above. Written as "the rest"
@@ -109,7 +110,7 @@
 #                         400 x 35 = 14000s in that one walk.
 #                                                          not a constant: see above
 #                                                                          ------
-#                                              2055s + 35n + whatever the walks cost
+#                                              2125s + 70n + whatever the walks cost
 #
 # No total is stated, and no partial sum either. Three attempts at a summarising
 # figure here were each wrong on arrival -- the terms are arithmetic over five
@@ -189,7 +190,7 @@ fi
 # cobra CLI exits 0 or 1 and `df`/`free`/`ps` exit 0, 1 or 2, so the conclusion is
 # unchanged -- but an enumeration that stops listing what reaches it stops being
 # something a reader can check. The one construct that would break that is
-# `kubectl exec`, which propagates the remote command's status. Six bounded reads
+# `kubectl exec`, which propagates the remote command's status. The LINSTOR reads
 # ARE execs, so the invariant is narrower than "no bounded read is an exec": none
 # of them is described by THIS helper. They go through cozyreport_read_exec, which
 # states the ambiguity rather than resolving it and never calls in here, and a test
@@ -780,7 +781,7 @@ cozyreport_read_object() {
 # first member, which a truncated gzip still lists) OR removed as zero bytes when
 # the stream never started. This path runs before that check, so it names both.
 #
-# The four TEXT reads keep the remote command's message in the .txt itself, whole.
+# The TEXT reads keep the remote command's message in the .txt itself, whole.
 # `tail -n 1` is right where a failing read buries its cause under klog preambles;
 # on an exec it is backwards, because `kubectl exec` appends `command terminated
 # with exit code N` last.
@@ -789,9 +790,8 @@ cozyreport_read_exec() {
   shift
   # Before the redirect below, not after it. The same guard the selector and the
   # probe carry, and it protects the OUTPUT as well as the note -- placed under the
-  # read it is meant to precede, it could not fire for either. Both call sites
-  # create the directory today, so this is defence; defence that runs too late is
-  # not defence.
+  # read it is meant to precede, it could not fire for either. The per-satellite
+  # ZFS listings rely on it for linstor/zfs/.
   mkdir -p "$(dirname "$_cre_file")" 2>/dev/null || true
   _cre_err=$(mktemp "${TMPDIR:-/tmp}/cozyreport-exec.XXXXXX" 2>/dev/null) || _cre_err=""
   # Status taken in an explicit `else`, for the reason the readers above spell
@@ -843,7 +843,7 @@ cozyreport_read_exec() {
   # expands backslash escapes, so a message carrying one could forge a line in a
   # file a triager reads as fact.
   if cozyreport_timed_out "$_cre_rc"; then
-    # The four tables get the marker IN the file as well, like every other .txt in
+    # The tables get the marker IN the file as well, like every other .txt in
     # the tarball. A `nodes.txt` cut at the ceiling is a short node list that reads
     # as a small cluster, and "the note is one directory up" is exactly the walk a
     # triager does not make. Only the two archives cannot take it -- a line of
@@ -2057,6 +2057,22 @@ if cozyreport_probe "linstor" kubectl get deploy -n cozy-linstor linstor-control
   cozyreport_read_exec "$DIR/resources.txt" \
     kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
     -- linstor --no-color r l
+  cozyreport_read_exec "$DIR/volumes.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller \
+    -- linstor --no-color v l
+  # The zpool behind each ZFS storage pool, one `<node> <zpool>` per line, so the
+  # dataset listings below read exactly the pools LINSTOR uses rather than names
+  # guessed from how the lanes happen to create them. StorDriver/StorPoolName is
+  # the only key that carries it: the controller's REST layer renames
+  # StorDriver/ZPool and StorDriver/ZPoolThin to it on create. The listing is taken first
+  # and its status kept: piped straight into jq, a refused read is a clean empty
+  # table.
+  # shellcheck disable=SC2016  # expanded by the controller's shell, not this one
+  cozyreport_read_exec "$DIR/zfs-pools.txt" \
+    kubectl exec -n cozy-linstor deploy/linstor-controller --container=linstor-controller -- sh -c '
+    sp=$(linstor --machine-readable sp l) || exit $?
+    printf "%s\n" "$sp" | jq -r "first | .[] | select(.provider_kind | test(\"^ZFS\")) | \"\(.node_name) \(.props[\"StorDriver/StorPoolName\"] // empty)\""
+  '
   # Cluster-wide ErrorReport index (IDs + timestamps + node + category)
   # for fast triage before diving into the per-satellite bundles below.
   cozyreport_read_exec "$DIR/error-reports-index.txt" \
@@ -2102,10 +2118,48 @@ if cozyreport_probe "linstor" kubectl get deploy -n cozy-linstor linstor-control
     # possible but the bundle would still land in a distinct file).
     # Bounded with the bare wrapper: the value is read into a variable, not into
     # a file, so there is nothing for a marker to be attached to, and the fallback
-    # on the next line is what covers a read that does not answer.
+    # below is what covers a read that does not answer.
     # shellcheck disable=SC2086  # empty COZYREPORT_BOUND must vanish, not become ""
     node=$($COZYREPORT_BOUND kubectl -n cozy-linstor get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
-    [ -z "$node" ] && node=$(basename "$pod")
+    # Every dataset of this node's LINSTOR pools, snapshots included, on green
+    # runs as well as red: only a dataset listing names what holds a pool's
+    # space, and a red listing needs a green one to be read against. Exact bytes
+    # and `avail`, so the sizes of leftover datasets can be summed against the
+    # pool root's `avail`; the rounded form loses a sub-GiB difference on a pool
+    # of 100 GiB or more. `linstor sp l` can legitimately disagree with that
+    # `avail`: on a node with only thick pools the controller serves the free
+    # capacity cached at the satellite's last report. `freeing` is the backlog
+    # of an asynchronous destroy, read rather than inferred. LINSTOR may name a
+    # dataset inside a pool, so `zpool` gets the pool part of each name and
+    # `zfs` the whole name. `zpool get` goes on past a pool it cannot open and
+    # only sets its status, so its message and status go into the listing and
+    # `zfs list` runs either way; the read's own status is left to `zfs list`,
+    # since a failure there is the one that cuts the listing short. A node with
+    # no pool gets a note and no read: `zfs list -r` with no pool argument lists
+    # every pool on the machine.
+    if [ -z "$node" ]; then
+      node=$(basename "$pod")
+      pools=""
+      why="spec.nodeName of $pod could not be read, so it was not matched to a LINSTOR node and no dataset was listed"
+    else
+      pools=$(awk -v n="$node" '$1 == n { print $2 }' "$REPORT_DIR/linstor/zfs-pools.txt" 2>/dev/null | tr '\n' ' ')
+      why="linstor/zfs-pools.txt names no ZFS pool for node $node, so no dataset was listed; that file says whether LINSTOR answered"
+    fi
+    if [ -z "$pools" ]; then
+      mkdir -p "$REPORT_DIR/linstor/zfs"
+      printf '%s\n' "# [cozyreport] $why" > "$REPORT_DIR/linstor/zfs/$node.txt" || true
+    else
+      # The pool names go in as arguments, never into the script text.
+      # shellcheck disable=SC2016,SC2086  # expanded by the satellite's shell; $pools splits into arguments on purpose
+      cozyreport_read_exec "$REPORT_DIR/linstor/zfs/$node.txt" \
+        kubectl -n cozy-linstor exec "$pod" --container=linstor-satellite -- sh -c '
+        zp=""
+        for d in "$@"; do zp="$zp ${d%%/*}"; done
+        zpool get -p freeing,leaked,allocated,free $zp 2>&1 ||
+          echo "# [cozyreport] zpool get exited $?; the zfs list below ran regardless"
+        exec zfs list -p -t all -o name,used,avail,refer,origin,creation -r "$@"
+      ' sh $pools
+    fi
     # Tar the ErrorReport-*.log files into a per-satellite bundle so a
     # burst of retry-loop reports (dozens per incident) does not explode
     # the artefact tree, and a missing directory or empty set never
