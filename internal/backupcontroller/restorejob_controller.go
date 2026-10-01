@@ -49,6 +49,11 @@ type RestoreJobReconciler struct {
 	// (missing pods/log RBAC) branch - is unit-testable without a live cluster.
 	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader, through which a driver
+	// re-reads the RestoreJob before it creates a driver object or starts
+	// rewriting the target application (see ensureJobNotFinished). Wired in
+	// SetupWithManager.
+	APIReader client.Reader
 }
 
 func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -174,6 +179,7 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {

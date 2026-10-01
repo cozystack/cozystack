@@ -190,6 +190,9 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	}
 
 	mdbBackup, err := r.ensureMariaDBBackup(ctx, j, rendered)
+	if stopped, res, gerr := stoppedByJobGuard(err); stopped {
+		return res, gerr
+	}
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure k8s.mariadb.com/Backup: %v", err))
 	}
@@ -310,6 +313,9 @@ func (r *BackupJobReconciler) ensureMariaDBBackup(ctx context.Context, j *backup
 		},
 	}
 
+	if err := ensureJobNotFinished(ctx, r.apiReader(), j); err != nil {
+		return nil, err
+	}
 	if err := r.Create(ctx, obj); err != nil {
 		return nil, err
 	}
@@ -564,6 +570,9 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 	}
 
 	mdbRestore, err := r.ensureMariaDBRestore(ctx, restoreJob, sourceBackupName, targetMDBName)
+	if stopped, res, gerr := stoppedByJobGuard(err); stopped {
+		return res, gerr
+	}
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure k8s.mariadb.com/Restore: %v", err))
 	}
@@ -641,6 +650,9 @@ func (r *RestoreJobReconciler) ensureMariaDBRestore(ctx context.Context, rj *bac
 				Name: sourceBackupName,
 			},
 		},
+	}
+	if err := ensureJobNotFinished(ctx, r.apiReader(), rj); err != nil {
+		return nil, err
 	}
 	if err := r.Create(ctx, obj); err != nil {
 		return nil, err

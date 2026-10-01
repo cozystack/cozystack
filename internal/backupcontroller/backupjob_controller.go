@@ -35,6 +35,10 @@ type BackupJobReconciler struct {
 	Scheme            *runtime.Scheme
 	Recorder          record.EventRecorder
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader, through which a driver
+	// re-reads the BackupJob before creating its driver object (see
+	// ensureJobNotFinished). Wired in SetupWithManager.
+	APIReader client.Reader
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -230,6 +234,7 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
