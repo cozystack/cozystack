@@ -123,3 +123,22 @@ tests:
       - equal:
           path: spec.healthCheckExprs[3].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The collector a central tenant writes through enforces the rate tenant-root
+  # sets for it, so its image is the platform's. The apps API defaults the
+  # Monitoring spec but does not prune keys its schema leaves out, so a key set
+  # there would otherwise reach the inner chart and swap the collector for one
+  # without the limiter.
+  - it: does not pass a collector image set on the Monitoring application through
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+        image: docker.io/example/collector:1
+    asserts:
+      - notExists:
+          path: spec.values.tracingCollector.image
+      - equal:
+          path: spec.values.tracingCollector.replicas
+          value: 1

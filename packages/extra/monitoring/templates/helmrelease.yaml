@@ -91,4 +91,11 @@ spec:
   valuesFrom:
   - kind: Secret
     name: cozystack-values
-  values: {{- .Values | toYaml | nindent 4 }}
+  {{- /* The apps API does not prune keys the Monitoring schema leaves out, and
+         a central tenant's collector enforces tenant-root's rate on it, so its
+         image stays the platform's. */}}
+  {{- $values := deepCopy .Values }}
+  {{- if kindIs "map" $values.tracingCollector }}
+  {{-   $_ := unset $values.tracingCollector "image" }}
+  {{- end }}
+  values: {{- $values | toYaml | nindent 4 }}
