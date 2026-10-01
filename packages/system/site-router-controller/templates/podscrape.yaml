@@ -1,0 +1,18 @@
+{{- /*
+  Scrape the controller's Prometheus metrics endpoint (site_router_tunnel_up,
+  site_router_bgp_session_up, site_router_config_apply_errors_total) so the
+  platform monitoring picks them up. Cozystack ships the VictoriaMetrics operator
+  and its vmagent runs with selectAllByDefault, discovering VMPodScrape objects
+  cluster-wide — a Prometheus PodMonitor would NOT be scraped. Mirrors the
+  kube-ovn-plunger in-house controller's podscrape shape.
+*/ -}}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: site-router-controller
+spec:
+  podMetricsEndpoints:
+    - port: metrics
+  selector:
+    matchLabels:
+      app: site-router-controller

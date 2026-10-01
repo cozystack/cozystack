@@ -1,0 +1,28 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.site-router-controller
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    # kube-ovn + Cilium: the controller patches the tenant namespace routes and
+    # the gateway pod's port_security, which only exist once networking is up.
+    - cozystack.networking
+    # VictoriaMetrics operator: the chart unconditionally creates a VMPodScrape
+    # (operator.victoriametrics.com/v1beta1). Without the operator's CRD
+    # established first, Helm fails resource mapping on a fresh install. Mirrors
+    # how other scrape-creating charts (linstor, monitoring-agents) declare it.
+    - cozystack.victoria-metrics-operator
+    components:
+    - name: site-router-controller
+      path: system/site-router-controller
+      install:
+        namespace: cozy-site-router
+        releaseName: site-router-controller

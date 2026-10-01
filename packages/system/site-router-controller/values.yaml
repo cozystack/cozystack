@@ -1,0 +1,24 @@
+siteRouterController:
+  image: "ghcr.io/cozystack/cozystack/site-router-controller:v0.0.0"
+  # Single replica: the controller is leader-elected, so a second replica would
+  # only ever stand by.
+  replicas: 1
+  debug: false
+  # Leave empty. The controller then reads the cluster pod CIDR from the
+  # cozy-system/cozystack ConfigMap — the same source the site-router chart seeds
+  # the VyOS first-boot management firewall from — so the rule the chart seeds and
+  # the rule the controller re-stamps cannot disagree. This used to be a hard-coded
+  # 10.244.0.0/16 on this side only, which agreed with the chart on a cluster whose
+  # networking.podCIDR was the default one and silently firewalled the controller
+  # out of its own gateway on every other cluster. Set a value only to override
+  # that, when the controller reaches the gateway from somewhere other than the pod
+  # network; it must then still match what the guest was seeded with.
+  managementCidr: ""
+  allowOpenManagement: false
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
