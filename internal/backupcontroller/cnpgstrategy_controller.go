@@ -188,6 +188,21 @@ func cnpgClusterNameForApp(appName string) string {
 	return postgresAppPrefix + appName
 }
 
+// defaultCNPGServerName is the WAL-archive serverName of a Cluster whose
+// strategy names none. It is keyed by the application UID because the
+// destinationPath is keyed by name only: a Postgres deleted and recreated under
+// the same name would otherwise archive into its predecessor's prefix, and
+// barman-cloud's empty-archive check cannot catch it, since CNPG removes
+// .check-empty-wal-archive once ContinuousArchiving turns True, which happens
+// on the first no-op archive_command, long before a BackupJob attaches the
+// plugin.
+func defaultCNPGServerName(clusterName string, appUID types.UID) string {
+	if appUID == "" {
+		return clusterName
+	}
+	return clusterName + "-" + string(appUID)
+}
+
 // validateCNPGApplicationRef rejects ApplicationRefs that name a Kind/APIGroup
 // the CNPG driver does not own. The driver assumes apps.cozystack.io/Postgres;
 // without this gate a ref like other.example.com/Postgres would be accepted
@@ -278,7 +293,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	clusterName := cnpgClusterNameForApp(j.Spec.ApplicationRef.Name)
 	serverName := rendered.ServerName
 	if serverName == "" {
-		serverName = clusterName
+		serverName = defaultCNPGServerName(clusterName, app.UID)
 	}
 
 	effectiveServerName, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName)
