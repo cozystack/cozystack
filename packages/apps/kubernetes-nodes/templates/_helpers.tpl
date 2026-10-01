@@ -402,6 +402,46 @@ dict the result is written into), groupName (named in every error message).
 {{- $_ := set .out "clone" $clone -}}
 {{- end -}}
 
+{{/*
+Name of the ConfigMap carrying the CA bundle CDI verifies the Talos Image
+Factory against. Shared by the ConfigMap itself (templates/image-factory-ca.yaml)
+and the DataVolume that references it through source.http.certConfigMap
+(templates/nodegroup.yaml), so the two cannot drift.
+
+Deliberately free of a content hash: CDI resolves certConfigMap by name at
+import time, so a stable name lets a CA rotation land by updating the object
+in place. A hashed name would instead require the DataVolume — and therefore
+the whole KubevirtMachineTemplate, which is immutable — to be rebuilt.
+*/}}
+{{- define "kubernetes-nodes.talosImageFactoryCAConfigMapName" -}}
+{{- printf "%s-talos-factory-ca" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Validated .Values.talos.imageFactoryCA: renders the trimmed PEM when the value
+is set, and nothing at all when it is empty. Callers therefore gate on it with
+`if`, and an unset value leaves the render byte-for-byte as before — required,
+because the DataVolume source it joins is hashed into the
+KubevirtMachineTemplate name.
+
+The PEM guards live in cozy-lib.tls.validateCACert: the value is emitted
+verbatim into a ConfigMap readable by anything that can read the namespace, so
+it must be complete certificate blocks and nothing else, and must never carry
+a private key.
+
+Note what neither side does: a Helm template has no x509 parser, so a body
+spelled in base64 characters passes however meaningless. CDI reports such a
+bundle at import time — AppendCertsFromPEM simply adds nothing and verification
+still fails.
+*/}}
+{{- define "kubernetes-nodes.talosImageFactoryCA" -}}
+{{- $ca := printf "%v" (default "" .Values.talos.imageFactoryCA) -}}
+{{- if ne (trim $ca) "" -}}
+{{-   include "cozy-lib.tls.validateCACert" (dict "caCert" $ca "field" "talos.imageFactoryCA") -}}
+{{-   trim $ca -}}
+{{- end -}}
+{{- end }}
+
 {{- /*
 Name of the cluster's default StorageClass, or the empty string when there is
 none (and always under `helm template`, which has no cluster to read).
