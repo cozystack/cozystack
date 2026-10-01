@@ -26,7 +26,12 @@
   {{- range $username, $password := $passwords }}
     {{- $users = append $users (dict "user" $username "password" $password) }}
   {{- end }}
-  {{- $merge = mergeOverwrite $merge (dict "accounts" (dict "A" (dict "users" $users))) }}
+  {{- $account := dict "users" $users }}
+  {{- $existingAccount := get ($merge.accounts | default dict) "A" | default dict }}
+  {{- if and .Values.jetstream.enabled (not (hasKey $existingAccount "jetstream")) }}
+    {{- $_ := set $account "jetstream" true }}
+  {{- end }}
+  {{- $merge = mergeOverwrite $merge (dict "accounts" (dict "A" $account)) }}
 {{- end }}
 
 {{- if .Values.users }}
