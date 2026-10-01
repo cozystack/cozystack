@@ -332,9 +332,10 @@ type TenantGatewaySpec struct {
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
 	// listener on port 443 of a second Gateway, <name>-passthrough,
-	// which exists only while this list is non-empty; HTTPRoutes attach
-	// to TLS-terminate listeners instead. Not rendered when
-	// CertMode=edge.
+	// rendered only while this list is non-empty and the platform values
+	// name this tenant as publishing under passthroughMode
+	// separateAddress; HTTPRoutes attach to TLS-terminate listeners
+	// instead. Not rendered when CertMode=edge.
 	//
 	// An entry becomes both the listener name tls-<svc> and the listener
 	// hostname <svc>.<apex>, and Gateway API bounds each at 253

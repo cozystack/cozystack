@@ -258,8 +258,8 @@ const passthroughListenerPrefix = "tls-"
 // Gateway API admits either — its listener uniqueness rule keys on
 // (port, protocol, hostname), so differing protocols are distinct — and
 // calls for the conflict to surface as Conflicted on both listeners,
-// which then serve nothing. That is the specification rather than the
-// pinned behaviour: v1.19.5 sets no Conflicted condition anywhere, and
+// which then serve nothing. That is the specification rather than what
+// every Cilium release does: v1.19.5 sets no Conflicted condition, and
 // v1.19.6 adds one in samePortCrossProtocolConflictedListeners, keyed on
 // the listener specs alone. Rejecting the entry up front turns either
 // into a per-field error on TenantGateway status instead.
@@ -339,8 +339,8 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // and its HTTP-01 order would reach a Gateway with no port-80 listener.
 //
 // A TLSPassthroughListeners entry sits on its own port, and before
-// v1.19.6 that was not the protection it looks like. v1.19.5
-// (packages/system/cilium/images/cilium/Dockerfile) translated the whole
+// v1.19.6 that was not the protection it looks like. v1.19.5 translated
+// the whole
 // Gateway into a single Envoy listener and hangs the ports off
 // AdditionalAddresses; toFilterChainMatch in
 // operator/pkg/model/translation/envoy_listener.go matches on
@@ -355,15 +355,17 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // NeedsPerPortListeners holds, which needs a TLSRoute behind the
 // native-port listener before that listener counts at all; v1.19.5
 // has neither the split nor the diagnostic, so the answer here was to
-// keep the pair from being rendered. The shipped v1.20.2 splits, and the
-// withdrawal stays because removing it would change what route status
-// says.
+// keep the pair from being rendered. The shipped v1.20.2 splits, so the
+// rule no longer protects the dataplane; it holds as a policy instead: a
+// name a passthrough listener serves is reserved to it, so an app cannot
+// take a platform name on another port.
 //
 // The cost is that an HTTPRoute claiming a hostname declared here gets
 // no listener wherever a TLSRoute is servable on the overlapping entry.
 // Nothing hostile is needed to reach that on the publishing tenant: the
-// chart writes api, vm-exportproxy and cdi-uploadproxy there, so an app
-// of that tenant named after one of them collides with a platform
+// chart writes the api entry there under singleAddress, and all three of
+// api, vm-exportproxy and cdi-uploadproxy under separateAddress, so an
+// app of that tenant named after one of them collides with a platform
 // default. Suppression is not what breaks that hostname —
 // the same collision already rendered a terminate listener and a
 // passthrough listener under one SNI, and with a route on the
@@ -374,14 +376,14 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // terminate listener answers it and keeps it.
 //
 // What the withdrawal takes away is the record of the collision on the
-// Gateway, which on the pin is nothing and on v1.19.6 would be the
+// Gateway, which on v1.19.5 is nothing and from v1.19.6 is the
 // Conflicted condition. updateRouteStatuses puts it on the route
 // instead, as Accepted=False with NoMatchingListenerHostname naming the
 // passthrough hostname that answers the claim.
 //
 // The caller matches a claimed hostname against these by SNI overlap
 // rather than by equality, because a "*.db.<apex>" entry answers
-// "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
+// "pg.db.<apex>" on Cilium v1.19.5 exactly as an explicit entry would:
 // the filter chain match carries ServerNames and no port. Comparing by
 // equality leaves that pair rendered and exposed to the translation this
 // filter exists to avoid. What the overlap settles is which entry

@@ -1057,15 +1057,14 @@ spec:
         check:
           ($error == null): true
 ---
-# What a tlsPassthroughServices name costs an HTTPRoute that publishes it,
-# measured on the objects rather than on the renderer. The chart ships api,
-# vm-exportproxy and cdi-uploadproxy on every tenant Gateway while the platform
-# TLSRoutes for them exist once cluster-wide and name one tenant's Gateway, so
-# a tenant that is not that one renders all three listeners with a route on
-# none. Both halves of the rule live in that gap: a declared listener nothing
-# attaches to contributes no Envoy filter chain, so the terminate listener is
-# what answers the name and keeps it; once a TLSRoute can be served on the
-# listener the two chains carry one server name and the terminate listener goes.
+# What a passthrough listener costs an HTTPRoute that publishes its name,
+# measured on the objects rather than on the renderer. The listener is the
+# shape the publishing tenant renders for the Kubernetes API under
+# gateway.passthroughMode=singleAddress: api.<apex> passed through on 6443.
+# Both halves of the rule are measured: a declared listener nothing attaches
+# to contributes no Envoy filter chain, so the terminate listener is what
+# answers the name and keeps it; once a TLSRoute can be served on the
+# listener, the terminate listener goes.
 #
 # The two phases are one measurement on purpose. Asserting the terminate
 # listener is present proves nothing on its own — a withdrawal that is merely
@@ -1165,8 +1164,7 @@ spec:
           tgw_ready='jsonpath={range .status.conditions[?(@.type=="Ready")]}{.status}{"\n"}{end}'
           tgw_listener='jsonpath={range .status.listeners[?(@.name=="tls-pgprobe")]}{.ready}{"\n"}{end}'
 
-          # A tenant owning its own Gateway, which is where the shipped
-          # tlsPassthroughServices entries land with nothing routed to them.
+          # A tenant owning its own Gateway.
           kubectl apply -n "$ns" -f - <<EOF
           apiVersion: apps.cozystack.io/v1alpha1
           kind: Tenant
@@ -1181,6 +1179,12 @@ spec:
           apex=$(kubectl get ns "$tenant_ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
           [ -n "$apex" ]
           route_host="api.${apex}"
+
+          # Patched onto the TenantGateway because only the publishing
+          # tenant's chart renders this listener. It survives the patch
+          # because helm-controller runs here with drift detection off.
+          api_listener=$(printf '{"name":"api","port":6443,"hostname":"%s"}' "$route_host")
+          kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p "{\"spec\":{\"tlsPassthroughListeners\":[${api_listener}]}}"
 
           # Without the passthrough listener the rest measures an ordinary
           # HTTPRoute and says nothing about the withdrawal.
@@ -1278,20 +1282,15 @@ spec:
           # ...and the HTTPRoute hears why its hostname went away.
           poll present 60 NoMatchingListenerHostname kubectl -n "$tenant_ns" get httproute api-probe -o "$accepted_reason"
 
-          # Phase 3: the native-port form, which nothing above reaches. The
-          # entry renders a listener on its own port with no TLSRoute behind
-          # it, which is the shape the package README rests a claim on: the
-          # pinned Cilium judges a listener on its protocol, its allowed
-          # kinds and its certificate refs and never on its route set, so a
-          # routeless passthrough listener is Accepted and Programmed and
-          # tenant readiness is untouched. The unit tests run against a fake
-          # client and cannot measure that; only a cluster can.
-          #
-          # Patched onto the TenantGateway because no chart value reaches
-          # this field yet. It survives the patch because helm-controller
-          # runs here with drift detection off, the same fact the README
-          # documents.
-          patch=$(printf '{"spec":{"tlsPassthroughListeners":[{"name":"pgprobe","port":5432,"hostname":"pgprobe.%s"}]}}' "$apex")
+          # Phase 3: a native-port listener with no TLSRoute behind it. The
+          # package README rests a claim on that shape: Cilium judges a
+          # listener on its protocol, its allowed kinds and its certificate
+          # refs and never on its route set, so a routeless passthrough
+          # listener is Accepted and Programmed and tenant readiness is
+          # untouched. The unit tests run against a fake client and cannot
+          # measure that; only a cluster can. The api listener stays in the
+          # list, which the merge patch replaces whole.
+          patch=$(printf '{"spec":{"tlsPassthroughListeners":[%s,{"name":"pgprobe","port":5432,"hostname":"pgprobe.%s"}]}}' "$api_listener" "$apex")
           kubectl -n "$tenant_ns" patch tenantgateway cozystack --type=merge -p "$patch"
 
           # The per-listener entry is the measurement, and it is read before

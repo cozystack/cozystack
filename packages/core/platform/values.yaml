@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 59
+  targetVersion: 60
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -180,6 +180,8 @@ publishing:
     - dashboard
     - vm-exportproxy
     - cdi-uploadproxy
+  # With gateway.enabled and gateway.passthroughMode singleAddress the
+  # Gateway serves the API on port 6443, e.g. "https://api.example.org:6443".
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
   # Native loadBalancerClass for the host ingress. When externalIPs is empty the
@@ -537,12 +539,12 @@ gateway:
   #     keycloak, harbor, bucket, grafana) render an HTTPRoute attached to
   #     the tenant's Gateway.
   #   - The three that present a certificate of their own (api,
-  #     vm-exportproxy, cdi-uploadproxy) render a TLSRoute instead, pinned
-  #     by sectionName to the tls-<name> TLS-passthrough listener the
-  #     per-tenant gateway chart declares for it. The cozystack-api,
-  #     kubevirt and kubevirt-cdi packages ship one each, cluster-wide,
-  #     attached to the Gateway in the namespace publishing.ingressName
-  #     selects.
+  #     vm-exportproxy, cdi-uploadproxy) are published as passthroughMode
+  #     below says, by routes the cozystack-api, kubevirt and kubevirt-cdi
+  #     packages ship, attached to the Gateway in the namespace
+  #     publishing.ingressName selects. Under singleAddress the API route
+  #     ships with that tenant's gateway chart instead, since cozystack-api
+  #     installs before the tenant namespace exists.
   # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
   # materialises the Gateway itself. This flag only controls platform-wide
   # Gateway API integration (cert-manager solver + the per-service routes).
@@ -559,8 +561,11 @@ gateway:
   # that selects such a class gets it: the TenantGateway controller then
   # issues no certificates for that Gateway, renders plain HTTP listeners
   # for the apex and its wildcards, and skips the TLS-passthrough listeners
-  # — which leaves the tenant Kubernetes API, VM export and CDI upload
-  # endpoints unpublished through it, their TLSRoutes matching no listener.
+  # — which leaves the tenant Kubernetes API unpublished through it, and
+  # under passthroughMode separateAddress the VM export and CDI upload
+  # endpoints too, their TLSRoutes matching no listener. Under
+  # singleAddress those two are HTTPRoutes and attach to the edge
+  # listeners like any application.
   #
   # Listing a class here is a claim about that class and nothing validates
   # it: name the bundled `cilium` and its Gateways publish every app
@@ -592,6 +597,36 @@ gateway:
   # class here when moving the default. Reaches the per-tenant gateway
   # chart as _cluster.gateway-tenant-classes.
   tenantSelectableClasses: []
+  # How the three exposed services that present a certificate of their
+  # own (api, vm-exportproxy, cdi-uploadproxy) reach the publishing
+  # tenant's Gateway. Gateway API lets an implementation refuse TLS
+  # passthrough next to HTTPS termination on one port of one address, so
+  # they cannot be passed through on 443 beside the tenant's HTTPS
+  # listeners.
+  #   singleAddress: no second address. The Kubernetes API is passed
+  #     through on port 6443, so publishing.apiServerEndpoint has to name
+  #     that port for issued kubeconfigs to use the Gateway. Not on the
+  #     isp-full-generic variant, where Cilium and KubeOVN reach
+  #     kube-apiserver through that same value and must not depend on a
+  #     Gateway they serve; keep it on a direct address there. The VM
+  #     export and CDI upload proxies are terminated on 443 and
+  #     re-encrypted to the backend under a BackendTLSPolicy,
+  #     which the GatewayClass has to support.
+  #   separateAddress: all three are passed through on 443 of a second
+  #     Gateway with an address of its own; their DNS records have to
+  #     point at that address.
+  # Left unset, a new install gets singleAddress, while a cluster that
+  # already ran the Gateway (gateway.enabled), or turns it on in the
+  # upgrade that brings this setting, gets separateAddress, so its API URL
+  # stays on port 443, though DNS for the three names has to move to the
+  # second Gateway's address: migration 59 pins it in the Package, and on
+  # variants that run no migrations the platform chart keeps choosing it
+  # from the version stamp. That stamp
+  # never moves there, so on such a variant installed before this release
+  # separateAddress is also what a Gateway turned on later gets; set the
+  # mode to choose otherwise. A value set here always wins. Reaches charts
+  # as _cluster.gateway-passthrough-mode.
+  passthroughMode: ""
   # Advertise HTTP/2 on every Gateway API listener served by the bundled
   # Cilium dataplane. Browsers negotiate HTTP/2 exclusively through TLS ALPN
   # "h2"; with this off, Envoy advertises no ALPN protocols and every client
@@ -631,9 +666,12 @@ gateway:
   # somebody else's Gateway, which prevents hostname hijacking across
   # tenants.
   #
-  # The `default` namespace is included because the Kubernetes API's
-  # TLSRoute (shipped by the cozystack-api package) has to live next to
-  # the `kubernetes` Service it points at, which is always in `default`.
+  # The `default` namespace is needed under passthroughMode
+  # separateAddress only: there the Kubernetes API's TLSRoute (shipped by
+  # the cozystack-api package) lives next to the `kubernetes` Service it
+  # points at, which is always in `default`. Under singleAddress the route
+  # lives in the publishing tenant's namespace and reaches that Service
+  # through a ReferenceGrant.
   attachedNamespaces:
     - cozy-cert-manager
     - cozy-dashboard

@@ -38,6 +38,24 @@ import (
 
 var shippedPassthroughServices = []string{"api", "vm-exportproxy", "cdi-uploadproxy"}
 
+// platformValues is the values channel saying the platform publishes
+// its passthrough services in mode from publishingNs, or nil for a
+// channel that is not there.
+func platformValues(mode, publishingNs string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: platformValuesKey.Namespace, Name: platformValuesKey.Name},
+		Data: map[string][]byte{"values.yaml": []byte(fmt.Sprintf(
+			"_cluster:\n  gateway-passthrough-mode: %q\n  expose-ingress: %q\n", mode, publishingNs))},
+	}
+}
+
+// newFakeClientBuilder seeds the values channel most tests assume: the
+// passthrough services published on a second Gateway from tenant-foo.
+// Tests about the channel itself build their client without it.
+func newFakeClientBuilder() *fake.ClientBuilder {
+	return fake.NewClientBuilder().WithObjects(platformValues("separateAddress", "tenant-foo"))
+}
+
 // renderedGateways returns every Gateway the spec renders, the
 // passthrough one only when the spec asks for it.
 func renderedGateways(t *testing.T, tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) []*gatewayv1.Gateway {
@@ -217,7 +235,7 @@ func TestReconcile_PassthroughGatewayFollowsTheServiceList(t *testing.T) {
 			TLSPassthroughServices: shippedPassthroughServices,
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
 	ptKey := types.NamespacedName{Name: "cozystack-passthrough", Namespace: "tenant-foo"}
@@ -271,7 +289,7 @@ func TestReconcile_PassthroughGatewayRefusesAForeignGateway(t *testing.T) {
 					Listeners:        []gatewayv1.Listener{{Name: "x", Port: 8443, Protocol: gatewayv1.TLSProtocolType}},
 				},
 			}
-			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw).Build()
+			c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw).Build()
 			r := &Reconciler{Client: c, Scheme: s}
 			_, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}})
 			if services != nil && err == nil {
@@ -343,7 +361,7 @@ func TestReconcile_ReadyWaitsForThePassthroughGateway(t *testing.T) {
 			TLSPassthroughServices: []string{"api"},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 	key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
 	ptKey := types.NamespacedName{Name: "cozystack-passthrough", Namespace: "tenant-foo"}
@@ -453,7 +471,7 @@ func TestReconcile_TLSRouteOnThePassthroughGatewayHoldsItsHostname(t *testing.T)
 	}
 	route := httpRouteAttached("api", "tenant-foo", hostname)
 	claimant := passthroughGatewayTLSRoute("api-tls", "tenant-foo", hostname, "api")
-	c := fake.NewClientBuilder().
+	c := newFakeClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, route, claimant).
 		WithObjects(tlsRouteBackends(claimant)...).
@@ -473,6 +491,85 @@ func TestReconcile_TLSRouteOnThePassthroughGatewayHoldsItsHostname(t *testing.T)
 	}
 }
 
+// TestReconcile_PassthroughGatewayFollowsThePlatformValues pins that the
+// second Gateway is rendered only where the platform says it publishes
+// the passthrough services there: separateAddress, on the publishing
+// tenant. A chart from before the mode wrote tlsPassthroughServices
+// onto every tenant, and a controller acting on that during an upgrade
+// would take a load-balancer address per tenant before the charts
+// re-render, so neither a missing channel nor any other answer renders
+// it.
+func TestReconcile_PassthroughGatewayFollowsThePlatformValues(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ns     string
+		values *corev1.Secret
+		want   bool
+	}{
+		{"separateAddress on the publishing tenant", "tenant-foo", platformValues("separateAddress", "tenant-foo"), true},
+		{"separateAddress on another tenant", "tenant-foo", platformValues("separateAddress", "tenant-root"), false},
+		{"publishing tenant defaults to tenant-root", "tenant-root", platformValues("separateAddress", ""), true},
+		{"singleAddress", "tenant-foo", platformValues("singleAddress", "tenant-foo"), false},
+		{"no mode in the channel", "tenant-foo", platformValues("", "tenant-foo"), false},
+		{"no channel", "tenant-foo", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: tc.ns},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:       "cilium",
+					TLSPassthroughServices: shippedPassthroughServices,
+				},
+			}
+			objs := []client.Object{tgw}
+			if tc.values != nil {
+				objs = append(objs, tc.values)
+			}
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(tgw).Build()
+			r := &Reconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tgw)}); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			err := c.Get(context.TODO(), types.NamespacedName{Namespace: tc.ns, Name: passthroughGatewayName(tgw)}, &gatewayv1.Gateway{})
+			if got := err == nil; got != tc.want {
+				t.Errorf("passthrough Gateway rendered: %v, want %v (get: %v)", got, tc.want, err)
+			}
+		})
+	}
+}
+
+// TestReconcile_UnreadablePlatformValuesReachTheStatus pins that a values
+// channel the controller cannot parse fails the pass on the TenantGateway
+// itself, as Ready=False/ReconcileError, instead of leaving the previous
+// Ready standing over a reconcile that no longer runs.
+func TestReconcile_UnreadablePlatformValuesReachTheStatus(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: shippedPassthroughServices,
+		},
+	}
+	broken := platformValues("separateAddress", "tenant-foo")
+	broken.Data["values.yaml"] = []byte("_cluster: [unterminated")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, broken).WithStatusSubresource(tgw).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	key := client.ObjectKeyFromObject(tgw)
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err == nil {
+		t.Fatal("reconcile succeeded over a values channel it cannot parse")
+	}
+	ready := readyCondition(t, c, key)
+	if ready.Status != metav1.ConditionFalse || ready.Reason != "ReconcileError" || !strings.Contains(ready.Message, "platform values") {
+		t.Errorf("Ready = %s/%s %q, want False/ReconcileError naming the platform values", ready.Status, ready.Reason, ready.Message)
+	}
+}
+
 // reconcileServices reconciles a TenantGateway publishing services on
 // the passthrough Gateway, with objs alongside.
 func reconcileServices(t *testing.T, services []string, objs ...client.Object) client.Client {
@@ -487,7 +584,7 @@ func reconcileServices(t *testing.T, services []string, objs ...client.Object) c
 			TLSPassthroughServices: services,
 		},
 	}
-	c := fake.NewClientBuilder().
+	c := newFakeClientBuilder().
 		WithScheme(s).
 		WithObjects(append([]client.Object{tgw}, objs...)...).
 		WithStatusSubresource(append([]client.Object{tgw}, objs...)...).
@@ -623,7 +720,7 @@ func TestReconcile_TLSRouteOnAServiceSectionOfTheMainGatewayIsRefused(t *testing
 		},
 	}
 	stale := tlsRouteAttached("api-tls", "tenant-foo", hostname, passthroughListenerPrefix+"api", "tenant-foo")
-	c := fake.NewClientBuilder().
+	c := newFakeClientBuilder().
 		WithScheme(s).
 		WithObjects(tgw, stale).
 		WithObjects(tlsRouteBackends(stale)...).
@@ -686,7 +783,7 @@ func TestReconcile_ReadyNamesAClassThatCannotServePassthrough(t *testing.T) {
 			for _, f := range tc.features {
 				class.Status.SupportedFeatures = append(class.Status.SupportedFeatures, gatewayv1.SupportedFeature{Name: f})
 			}
-			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, class).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+			c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw, class).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
 			r := &Reconciler{Client: c, Scheme: s}
 			key := types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}
 			if _, err := r.Reconcile(context.TODO(), ctrl.Request{NamespacedName: key}); err != nil {

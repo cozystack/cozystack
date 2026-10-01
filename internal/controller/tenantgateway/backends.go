@@ -28,8 +28,8 @@ import (
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
-// tlsRouteForwards reports whether route names at least one backend the
-// pinned Cilium would forward to, which is what decides whether the
+// tlsRouteForwards reports whether route names at least one backend
+// Cilium would forward to, which is what decides whether the
 // route puts a filter chain on its hostname.
 //
 // The question is answered exactly as v1.19.5 answers it and no more

@@ -783,9 +783,9 @@ func (r *Reconciler) updateRouteStatuses(
 // Edge renders no TLS-passthrough listener, so every attached TLSRoute
 // pins a section that is gone and is told so. NoMatchingParent is
 // Gateway API's reason for a parentRef whose port or sectionName
-// matches no listener on the Gateway, which is what the platform's own
-// api, vm-exportproxy and cdi-uploadproxy routes now have: all three
-// pin sectionName tls-<svc>.
+// matches no listener on the Gateway, which is what every platform
+// TLSRoute has here: each pins sectionName tls-<svc>, and edge renders
+// no such listener.
 //
 // The other whole-apex modes render those listeners and serve them, but
 // this controller collects no claims there and so has no basis to judge

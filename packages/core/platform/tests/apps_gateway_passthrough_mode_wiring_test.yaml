@@ -1,0 +1,114 @@
+suite: apps.yaml gateway.passthroughMode → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The gateway chart and the three system charts whose routes carry the
+# TLS-passthrough services all read the mode from this one key, so they
+# cannot disagree about where those services are published.
+
+tests:
+  - it: defaults to singleAddress
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"singleAddress"'
+
+  # A Gateway install that predates the mode keeps separateAddress.
+  # Migration 59 pins it in the Package, but only as the pre-upgrade hook
+  # of the render it would have to change, so that render reads the
+  # version stamp and decides the same way.
+  - it: keeps an existing Gateway install on separateAddress
+    set:
+      gateway:
+        enabled: true
+    kubernetesProvider: &version59
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            version: v1
+            resource: configmaps
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cozystack-version
+            namespace: cozy-system
+          data:
+            version: "59"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"separateAddress"'
+
+  - it: gives an existing install with the Gateway off the new default
+    kubernetesProvider: *version59
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"singleAddress"'
+
+  - it: gives a cluster past migration 59 the default
+    set:
+      gateway:
+        enabled: true
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr:
+            version: v1
+            resource: configmaps
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cozystack-version
+            namespace: cozy-system
+          data:
+            version: "60"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"singleAddress"'
+
+  - it: gives a fresh Gateway install the default
+    set:
+      gateway:
+        enabled: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"singleAddress"'
+
+  - it: lets a set mode win over the version stamp
+    set:
+      gateway:
+        enabled: true
+        passthroughMode: singleAddress
+    kubernetesProvider: *version59
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"singleAddress"'
+
+  - it: writes separateAddress when chosen
+    set:
+      gateway:
+        passthroughMode: separateAddress
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-passthrough-mode:\s*"separateAddress"'
+
+  - it: refuses any other mode
+    set:
+      gateway:
+        passthroughMode: sameAddress
+    asserts:
+      - failedTemplate:
+          errorPattern: "gateway.passthroughMode must be singleAddress or separateAddress"

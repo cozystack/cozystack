@@ -182,6 +182,26 @@ stringData:
       proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
       gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
+      {{- $passthroughMode := .Values.gateway.passthroughMode | default "" }}
+      {{- if not $passthroughMode }}
+        {{- /* Unset means singleAddress, except on a Gateway install that
+               predates the mode: migration 59 pins separateAddress there,
+               but only as this render's pre-upgrade hook, so this render
+               has to make the same choice or the cluster would spend one
+               reconcile on singleAddress. A variant that runs no
+               migrations keeps its old stamp, so it stays on
+               separateAddress through this alone. A fresh install has no
+               version stamp yet. */}}
+        {{- $passthroughMode = "singleAddress" }}
+        {{- $versionCm := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
+        {{- if and $versionCm (eq (toString .Values.gateway.enabled) "true") (lt (dig "data" "version" "0" $versionCm | int) 60) }}
+          {{- $passthroughMode = "separateAddress" }}
+        {{- end }}
+      {{- end }}
+      {{- if not (has $passthroughMode (list "singleAddress" "separateAddress")) }}
+      {{- fail (printf "gateway.passthroughMode must be singleAddress or separateAddress, got %v" $passthroughMode) }}
+      {{- end }}
+      gateway-passthrough-mode: {{ $passthroughMode | quote }}
       {{- /* Normalised once here rather than at each reader: two charts
              compare this scalar against the comma-joined lists below,
              which trim their own entries on split, so a padded name that

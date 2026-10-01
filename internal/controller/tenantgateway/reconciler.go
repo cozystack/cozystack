@@ -48,9 +48,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
@@ -126,6 +128,49 @@ func passthroughGatewayName(tgw *gatewayv1alpha1.TenantGateway) string {
 	return tgw.Name + "-passthrough"
 }
 
+// platformValuesKey names the values channel the platform writes from
+// packages/core/platform/templates/apps.yaml, the one the wildcardsecret
+// controller reads as well.
+var platformValuesKey = types.NamespacedName{Namespace: "cozy-system", Name: "cozystack-values"}
+
+// publishesPassthroughGateway reports whether the platform publishes
+// tgw's tlsPassthroughServices on a second Gateway: under
+// gateway.passthroughMode separateAddress, and on the publishing tenant
+// alone. A gateway chart from before that mode wrote the services onto
+// every non-edge tenant, and acting on them while those charts are still
+// to re-render would take a load-balancer address per tenant, so a
+// channel that does not say so, or is not there, renders no second
+// Gateway.
+func (r *Reconciler) publishesPassthroughGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (bool, error) {
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, platformValuesKey, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get platform values: %w", err)
+	}
+	var values struct {
+		Cluster struct {
+			PassthroughMode string `json:"gateway-passthrough-mode"`
+			ExposeIngress   string `json:"expose-ingress"`
+		} `json:"_cluster"`
+	}
+	if err := sigsyaml.Unmarshal(secret.Data["values.yaml"], &values); err != nil {
+		return false, fmt.Errorf("parse platform values: %w", err)
+	}
+	publishing := values.Cluster.ExposeIngress
+	if publishing == "" {
+		publishing = "tenant-root"
+	}
+	return values.Cluster.PassthroughMode == "separateAddress" && tgw.Namespace == publishing, nil
+}
+
+// isPlatformValues narrows the Secret watch to the values channel, so
+// no other Secret requeues every TenantGateway.
+func isPlatformValues(o client.Object) bool {
+	return client.ObjectKeyFromObject(o) == platformValuesKey
+}
+
 func gatewayClassName(tgw *gatewayv1alpha1.TenantGateway) string {
 	if tgw.Spec.GatewayClassName == "" {
 		return "cilium"
@@ -152,6 +197,7 @@ const (
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status;tlsroutes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=referencegrants,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;update;patch;delete
 
@@ -180,7 +226,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.Get(ctx, req.NamespacedName, tgw); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-
 	if err := r.runReconcileSteps(ctx, tgw); err != nil {
 		// A route-status write that failed retryably cost the pass
 		// nothing else: every desired-state step already ran, so the
@@ -220,6 +265,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // out from Reconcile keeps the error-handling/status-update wrapper
 // in one place.
 func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	// Dropped in memory only, so every step below reads one answer;
+	// status writes go through the subresource and leave the spec alone.
+	// Here rather than in Reconcile so a channel that cannot be read
+	// reaches the TenantGateway status like any other failure.
+	if len(tgw.Spec.TLSPassthroughServices) > 0 {
+		publish, err := r.publishesPassthroughGateway(ctx, tgw)
+		if err != nil {
+			return err
+		}
+		if !publish {
+			tgw.Spec.TLSPassthroughServices = nil
+		}
+	}
 	// Judged before anything reads the passthrough lists. The
 	// enumeration below keys listeners by hostname, so two entries
 	// answering one name would have one of them silently dropped by a
@@ -247,9 +305,12 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// certificate when an HTTPRoute claims it and no passthrough
 	// listener answers it. Both forms of passthrough count, the
 	// port-443 tlsPassthroughServices entry and the native-port
-	// tlsPassthroughListeners one: the pinned Cilium selects a
+	// tlsPassthroughListeners one: Cilium before v1.19.6 selected a
 	// passthrough filter chain by SNI without the port, so a native
-	// port is not the separation it looks like. Both halves of the
+	// port was not the separation it looks like, and a name a
+	// passthrough listener serves stays reserved to it on the shipped
+	// release too, so an app cannot take a platform name on another
+	// port. Both halves of the
 	// rule matter, and neither is the hostname's conflict winner:
 	//
 	// A TLSRoute attaches to a passthrough listener, where the backend
@@ -384,7 +445,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			recount(claimants)
 		}
 		// Matched by SNI overlap rather than by string equality,
-		// because the pinned Cilium answers a passthrough listener by
+		// because Cilium v1.19.5 answered a passthrough listener by
 		// SNI without the port. A "*.db.<apex>" entry therefore answers
 		// every published name beneath it, and a TLSRoute claiming one
 		// of those names puts its chain on that exact name, beside the
@@ -426,8 +487,8 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		if answeredBy != "" {
 			// Whether the passthrough listener takes the hostname over
 			// is decided by the routes on it, not by the spec that
-			// declared it. On the pinned Cilium,
-			// tlsPassthroughFilterChains
+			// declared it. On Cilium v1.19.5, which this was read
+			// against, tlsPassthroughFilterChains
 			// (operator/pkg/model/translation/envoy_listener.go, v1.19.5)
 			// walks listener.Routes and skips a route with no backends,
 			// so a listener no TLSRoute attaches to emits no filter
@@ -1007,8 +1068,8 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 //
 // A route that declares spec.hostnames claims those. A route that
 // declares none claims the hostname of every rendered passthrough
-// listener ref selects, because that is the name the pinned Cilium
-// serves it on: ComputeHosts (operator/pkg/model/helpers.go, v1.19.5)
+// listener ref selects, because that is the name Cilium serves it on:
+// ComputeHosts (operator/pkg/model/helpers.go, read at v1.19.5)
 // substitutes the listener's own hostname for a route with no
 // hostnames, toTLSRoutes carries that into the model route
 // (operator/pkg/model/ingestion/gateway.go) and the filter chain is
@@ -1103,9 +1164,10 @@ func allAttachingParentRefs(refs []gatewayv1.ParentReference, routeNs string, tg
 // parentRefAttachesTo answers the identity question alone — does this
 // parentRef name one of the Gateways this TenantGateway renders — and
 // deliberately does not read ref.Port, though Gateway API counts the
-// port when both it and a sectionName are given. Matching it here would say less than the function's name
-// promises: whether a port pin selects a listener this Gateway actually
-// publishes is a serving verdict, and it lives with the other serving
+// port when both it and a sectionName are given. Matching it here would
+// say less than the function's name promises: whether a port pin
+// selects a listener this Gateway actually publishes is a serving
+// verdict, and it lives with the other serving
 // verdicts in judgeHTTPRouteClaim, which refuses a route pinned to a
 // port the Gateway does not publish before the claim can reach
 // dynHostnames. A caller that needs the port answered must read that
@@ -1696,8 +1758,10 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// terminate listeners. What may attach is left to the protocol
 	// rather than declared, for the reason on Kinds below. A dedicated
 	// (port, SNI) pair still yields exactly one Envoy filter chain that
-	// SNI-routes to the attaching TLSRoute's backend. No engine is wired here: the
-	// TLSRoute, certificate, and CA plumbing land in later phases.
+	// SNI-routes to the attaching TLSRoute's backend. No database engine
+	// is wired here: its TLSRoute, certificate, and CA plumbing land in
+	// later phases. The platform's own api entry brings its TLSRoute
+	// from the gateway chart.
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
 		host := gatewayv1.Hostname(pl.Hostname)
 		// Own namespace only, by the label kube-apiserver writes, and
@@ -1705,32 +1769,24 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		// label is stamped on every inheriting child tenant namespace,
 		// so reusing it would put a native database port within reach
 		// of the whole subtree. Narrowing costs nothing while no chart
-		// value exposes this field; once something depends on the wide
-		// form, narrowing becomes a behaviour change instead.
-		// Kinds is left unset on purpose, and the reason is upstream
-		// rather than stylistic. CheckGatewayRouteKindAllowed at the
-		// pinned v1.19.5 walks every listener on the Gateway with no
-		// port and no sectionName filter, skips the ones that declare
-		// no kinds, and overwrites the route's Accepted condition on
-		// each of the rest, last one winning. A listener declaring
-		// TLSRoute alone would therefore reject every HTTPRoute on the
-		// Gateway, whatever port it sits on. Declaring nothing keeps
-		// this listener out of that loop. What it opens is bounded by
-		// the implementation rather than by the spec: Gateway API says
-		// only that an absent Kinds derives the set from the listener
-		// protocol and leaves the mapping to the implementation, and
-		// the conventional table pairs TLS with TCPRoute as well as
-		// TLSRoute. Cilium implements neither TCPRoute nor UDPRoute, so
-		// on the pinned version TLSRoute is what a TLS listener admits,
-		// and the listener pins kubernetes.io/metadata.name to the
-		// publishing tenant regardless.
-		//
-		// This one lifts on a patch bump rather than with the rest of
-		// the pin: v1.19.6 skips listeners the parentRef's sectionName
-		// or port does not name and returns on the first match, so
-		// declaring TLSRoute here would then bind to this listener
-		// alone. Spelling it out again is safe from that release on,
-		// and pointless, since the protocol already says TLSRoute.
+		// value lets an operator add entries, the platform's api route
+		// living in the tenant namespace itself; once something depends
+		// on the wide form, narrowing becomes a behaviour change instead.
+		// Kinds is left unset because the protocol already says
+		// TLSRoute. Before v1.19.6, CheckGatewayRouteKindAllowed applied
+		// a listener's declared kinds to every route on the Gateway, so
+		// declaring TLSRoute here would have rejected every HTTPRoute.
+		// From that release it judges a route against the listener its
+		// sectionName or port names alone, which is also what lets the
+		// HTTPS listeners declare HTTPRoute alone beside this one.
+		// What an unset Kinds opens is bounded by the implementation
+		// rather than by the spec: Gateway API leaves the
+		// protocol-to-kind mapping to it, and the conventional table
+		// pairs TLS with TCPRoute as well as TLSRoute. Cilium implements
+		// neither TCPRoute nor UDPRoute, so TLSRoute is what a TLS
+		// listener admits, and the listener pins
+		// kubernetes.io/metadata.name to the publishing tenant
+		// regardless.
 		passthroughAllowed := allowedRoutesFromValues([]string{tgw.Namespace})
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(passthroughListenerPrefix + pl.Name),
@@ -1981,6 +2037,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gatewayv1.GatewayClass{},
 			handler.EnqueueRequestsFromMapFunc(r.mapGatewayClassToTenantGateways),
+		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.mapPlatformValuesToTenantGateways),
+			builder.WithPredicates(predicate.NewPredicateFuncs(isPlatformValues)),
 		).
 		Complete(r)
 }

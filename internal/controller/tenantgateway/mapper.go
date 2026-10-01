@@ -109,6 +109,22 @@ func (r *Reconciler) mapGatewayClassToTenantGateways(ctx context.Context, obj cl
 	return out
 }
 
+// mapPlatformValuesToTenantGateways requeues every TenantGateway when the
+// platform values channel changes, since whether a TenantGateway gets a
+// passthrough Gateway is read from it (publishesPassthroughGateway).
+func (r *Reconciler) mapPlatformValuesToTenantGateways(ctx context.Context, _ client.Object) []reconcile.Request {
+	list := &gatewayv1alpha1.TenantGatewayList{}
+	if err := r.List(ctx, list); err != nil {
+		log.FromContext(ctx).Error(err, "list TenantGateways for platform values mapper")
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+	}
+	return out
+}
+
 // backendToTenantGateways returns an EventHandler that maps a Service
 // or ReferenceGrant change back to the TenantGateways whose withdrawal
 // decision it can flip.

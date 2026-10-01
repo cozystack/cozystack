@@ -21,3 +21,6 @@ tests:
       - template: templates/vm-exportproxy-tlsroute.yaml
         hasDocuments:
           count: 0
+      - template: templates/vm-exportproxy-httproute.yaml
+        hasDocuments:
+          count: 0

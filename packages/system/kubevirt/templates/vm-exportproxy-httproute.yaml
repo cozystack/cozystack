@@ -1,0 +1,55 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- /* The platform always writes the mode, so an absent one is a values
+       channel from before it: no route until it is written. */}}
+{{- $passthroughMode := (index .Values._cluster "gateway-passthrough-mode") | default "" }}
+{{- if and (has "vm-exportproxy" $exposeServices) (eq $gatewayEnabled "true") (eq $passthroughMode "singleAddress") }}
+{{- /* The proxy authenticates the export token rather than a client
+       certificate, so the Gateway can terminate TLS on 443 beside the
+       other HTTPS listeners and re-encrypt to it. */}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: vm-exportproxy
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: {{ $exposeIngress }}
+  hostnames:
+  - {{ printf "vm-exportproxy.%s" $host | quote }}
+  rules:
+  - backendRefs:
+    - name: virt-exportproxy
+      port: 443
+    {{- /* An export streams a whole disk image in one response. Gateway
+           API leaves the default request timeout to the implementation,
+           so it is disabled here rather than left to one; zero disables
+           it per the spec. */}}
+    timeouts:
+      request: 0s
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: virt-exportproxy
+  {{- /* kubevirt-ca, not kubevirt-export-ca: virt-operator signs the
+         proxy's own serving certificate with the main KubeVirt CA, and
+         the export CA signs only the per-VMExport servers behind it. */}}
+  annotations:
+    gateway.cozystack.io/ca-bundle-from: kubevirt-ca/ca-bundle
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: virt-exportproxy
+  validation:
+    caCertificateRefs:
+    - group: ""
+      kind: ConfigMap
+      name: virt-exportproxy-ca
+    hostname: {{ printf "virt-exportproxy.%s.svc" .Release.Namespace | quote }}
+{{- end }}

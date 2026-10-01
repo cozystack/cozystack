@@ -1,0 +1,125 @@
+suite: vm-exportproxy route by _cluster.gateway-passthrough-mode
+templates:
+  - templates/vm-exportproxy-tlsroute.yaml
+  - templates/vm-exportproxy-httproute.yaml
+
+release:
+  name: kubevirt
+  namespace: cozy-kubevirt
+
+tests:
+  # The platform always writes the mode, so a channel without it predates
+  # the mode; publishing in a guessed layout could be the wrong one.
+  - it: an absent mode renders neither route
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "vm-exportproxy"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/vm-exportproxy-tlsroute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vm-exportproxy-httproute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: separateAddress passes the proxy through the passthrough Gateway
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "vm-exportproxy"
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+    asserts:
+      - template: templates/vm-exportproxy-tlsroute.yaml
+        equal:
+          path: spec.parentRefs[0].name
+          value: cozystack-passthrough
+      - template: templates/vm-exportproxy-httproute.yaml
+        hasDocuments:
+          count: 0
+
+  # The proxy authenticates the export token, not a client certificate,
+  # so the Gateway can terminate TLS in front of it and re-encrypt.
+  - it: singleAddress terminates at the Gateway and re-encrypts to the proxy
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "vm-exportproxy"
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+    asserts:
+      - template: templates/vm-exportproxy-tlsroute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: kind
+          value: HTTPRoute
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: spec.parentRefs[0]
+          value:
+            group: gateway.networking.k8s.io
+            kind: Gateway
+            name: cozystack
+            namespace: tenant-root
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: spec.hostnames
+          value: [vm-exportproxy.example.org]
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: spec.rules[0].backendRefs[0]
+          value:
+            name: virt-exportproxy
+            port: 443
+      # An export streams a whole disk image in one response, and the
+      # default request timeout is the implementation's to choose.
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: spec.rules[0].timeouts.request
+          value: 0s
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 1
+        equal:
+          path: kind
+          value: BackendTLSPolicy
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 1
+        equal:
+          path: metadata.annotations["gateway.cozystack.io/ca-bundle-from"]
+          value: kubevirt-ca/ca-bundle
+      - template: templates/vm-exportproxy-httproute.yaml
+        documentIndex: 1
+        equal:
+          path: spec
+          value:
+            targetRefs:
+              - group: ""
+                kind: Service
+                name: virt-exportproxy
+            validation:
+              caCertificateRefs:
+                - group: ""
+                  kind: ConfigMap
+                  name: virt-exportproxy-ca
+              hostname: virt-exportproxy.cozy-kubevirt.svc
+
+  - it: nothing when the proxy is not exposed
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/vm-exportproxy-httproute.yaml
+        hasDocuments:
+          count: 0

@@ -21,6 +21,9 @@ tests:
       - template: templates/cdi-uploadproxy-tlsroute.yaml
         hasDocuments:
           count: 0
+      - template: templates/cdi-uploadproxy-httproute.yaml
+        hasDocuments:
+          count: 0
 
   # Counterpart to the case above: with _cluster populated the way the
   # platform populates it, both routes have to appear. Without this the
@@ -41,12 +44,30 @@ tests:
         hasDocuments:
           count: 0
 
-  - it: swaps the ingress for a TLSRoute when the gateway is enabled
+  - it: swaps the ingress for an HTTPRoute when the gateway is enabled
     set:
       _cluster:
         root-host: example.com
         expose-services: cdi-uploadproxy
         gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+    asserts:
+      - template: templates/cdi-uploadproxy-httproute.yaml
+        documentIndex: 0
+        equal:
+          path: spec.hostnames[0]
+          value: cdi-uploadproxy.example.com
+      - template: templates/cdi-uploadproxy-ingress.yaml
+        hasDocuments:
+          count: 0
+
+  - it: swaps the ingress for a TLSRoute under separateAddress
+    set:
+      _cluster:
+        root-host: example.com
+        expose-services: cdi-uploadproxy
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
     asserts:
       - template: templates/cdi-uploadproxy-tlsroute.yaml
         equal:

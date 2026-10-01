@@ -265,6 +265,9 @@ tests:
         solver: http01
         expose-ingress: tenant-root
         issuer-name: letsencrypt-prod
+        expose-services: "api,vm-exportproxy,cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
       _namespace:
         host: example.org
     asserts:
@@ -339,6 +342,9 @@ tests:
         expose-ingress: tenant-root
         issuer-name: letsencrypt-prod
         wildcard-secret-name: wildcard-tls
+        expose-services: "api,vm-exportproxy,cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
       _namespace:
         host: example.org
     asserts:
