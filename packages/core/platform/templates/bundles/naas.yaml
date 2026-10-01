@@ -10,4 +10,22 @@
 {{- if and .Values.bundles.naas.enabled (has .Values.bundles.system.variant (list "isp-full" "isp-full-generic" "isp-hosted" "isp-slim" "isp-slim-generic" "isp-hosted-slim")) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.tcp-balancer-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.vpn-application" $) }}
+{{- /*
+  site-router runs its gateway in a KubeVirt VM whose boot disk is a CDI
+  import of the digest-pinned appliance containerDisk, so it requires the IaaS
+  bundle (KubeVirt + CDI). NaaS can be enabled on isp-hosted and the slim
+  variants, where IaaS is not available (iaas.yaml permits bundles.iaas.enabled
+  only on isp-full / isp-full-generic), so emitting site-router unconditionally
+  would leave both packages dependency-blocked forever there. Gate them on the
+  IaaS bundle being enabled — the same switch iaas.yaml uses to emit
+  KubeVirt/CDI.
+
+  The appliance image needs no package of its own: the boot disk imports it
+  straight from the registry, so there is nothing to install into cozy-public and
+  nothing for an operator to disable out from under the app.
+*/ -}}
+{{- if .Values.bundles.iaas.enabled }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.site-router-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.site-router-controller" $) }}
+{{- end }}
 {{- end }}
