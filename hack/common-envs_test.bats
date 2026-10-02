@@ -120,7 +120,35 @@
   if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
 }
 
-@test "CACHE_TAG moves the default cache ref and an explicit cache tag still wins" {
+@test "LOAD and PUSH from the environment reach buildx, and LOAD=1 alone does not push" {
+  out=$(LOAD=1 PUSH=0 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: environment LOAD=1 PUSH=0 ignored"; false; }
+  if echo "$out" | grep -q -- '--platform'; then echo "FAIL: environment LOAD=1 still builds a multi-arch index"; false; fi
+  out=$(LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: LOAD=1 alone pushes"; false; }
+  # An explicit PUSH still wins over the LOAD-derived default.
+  out=$(LOAD=1 PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=1'
+  # The fork export must keep beating an environment PUSH=1.
+  out=$(PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b OCI_EXPORT_DIR=/tmp/ocitest)
+  echo "$out" | grep -q -- '--push=0 --load=0'
+}
+
+@test "an empty PUSH or LOAD in the environment falls back to the default" {
+  out=$(PUSH= LOAD= make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=0' || { echo "FAIL: empty PUSH/LOAD reach buildx as empty flags"; false; }
+  out=$(PUSH= LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1'
+}
+
+@test "talos publishes nothing to the registry with PUSH=0" {
+  out=$(make -n -B -C packages/core/talos image-talos PUSH=0 PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0)
+  echo "$out" | grep -q 'docker://'
+  pushes=$(echo "$out" | grep 'docker://' | grep -vF '[ "0" = "1" ]' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes with PUSH=0: $pushes"; false; fi
+}
+
+@test "CACHE_TAG moves the cache ref of every image" {
   # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
   # make every write from one leg evict the other's layers.
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1)
@@ -129,14 +157,13 @@
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
   echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64 '
   echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64,'
-  # The second argument of cache-args names a per-iteration cache; CACHE_TAG
-  # must not override it.
+  # No per-call tag may bypass CACHE_TAG, or both legs write one cache ref.
   tmp=$(mktemp -d)
   printf 'include %s/hack/common-envs.mk\nprobe:\n\t@echo $(call cache-args,img,percall)\n' "$(pwd)" > "$tmp/Makefile"
   out=$(make -s -C "$tmp" probe COZYSTACK_VERSION=0 WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
   rm -rf "$tmp"
-  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:percall '
-  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:percall,'
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:buildcache-arm64 '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:buildcache-arm64,'
 }
 
 @test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {
@@ -158,7 +185,7 @@
   if echo "$tags" | grep -q -- '-$'; then echo "FAIL: a tag ends in '-': $tags"; false; fi
 }
 
-@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset or exporting" {
+@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset, exporting or not pushing" {
   # The stitch moves exactly these tags onto the multi-arch index. A component
   # version pushed under PUBLISH_VERSIONED=1 is named by no ref in the tree, so
   # a tag missing here would stay on the amd64-only image.
@@ -173,6 +200,10 @@
   make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
     OCI_EXPORT_DIR=/tmp/ocitest PUSHED_TAGS_LOG="$tmp/export-log" >/dev/null
   [ ! -e "$tmp/export-log" ]
+  # A build that does not push must not hand its tags to the stitch.
+  LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
+    PUSHED_TAGS_LOG="$tmp/load-log" >/dev/null
+  if [ -s "$tmp/load-log" ]; then echo "FAIL: LOAD=1 logs tags it never pushed: $(cat "$tmp/load-log")"; false; fi
   rm -rf "$tmp"
 }
 

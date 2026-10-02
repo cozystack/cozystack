@@ -21,10 +21,11 @@
 #      if it points at A, so none is left naming the amd64 half alone: <tag>,
 #      the tag <t> the ref carries, and every <repo>:<tag> line in the file
 #      PUSHED_TAGS_LOG names. image-tags in hack/common-envs.mk writes that
-#      log when the variable is set, and it is how the component version
-#      pushed beside <image-tag> under PUBLISH_VERSIONED=1 is found, since
-#      most refs name only <image-tag>. These are the only tags read; a tag of
-#      another build that sits on the same bytes is not this build's to move.
+#      log when the variable is set and PUSH=1, and it is how the component
+#      version pushed beside <image-tag> under PUBLISH_VERSIONED=1 is found,
+#      since most refs name only <image-tag>. These are the only tags read;
+#      a tag of another build that sits on the same bytes is not this build's
+#      to move.
 #      PUSHED_TAGS_LOG set to a file that does not exist fails the run.
 #   3. A is replaced with the index digest in the files hack/lib/image-refs.sh
 #      enumerates, and nowhere else.

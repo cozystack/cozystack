@@ -30,9 +30,9 @@ image-talos: talos-installer
 	for a in $(TALOS_ARCHES); do skopeo copy docker-archive:$(ASSETS)/installer-$$a.tar oci:$(ASSETS)/installer-oci:$$a; done; \
 	hack/installer-index.sh $(ASSETS)/installer-oci $(TALOS_ARCHES); \
 	SRC=oci:$(ASSETS)/installer-oci:index; \
-	$(if $(strip $(OCI_EXPORT_DIR)),mkdir -p "$(OCI_EXPORT_DIR)"; skopeo copy --all "$$SRC" "oci-archive:$(OCI_EXPORT_DIR)/talos.oci.tar:$(IMAGE_TAG)",skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:$(IMAGE_TAG)); \
-	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
-	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:latest; fi
+	$(if $(strip $(OCI_EXPORT_DIR)),mkdir -p "$(OCI_EXPORT_DIR)"; skopeo copy --all "$$SRC" "oci-archive:$(OCI_EXPORT_DIR)/talos.oci.tar:$(IMAGE_TAG)",if [ "$(PUSH)" = "1" ]; then skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:$(IMAGE_TAG); fi); \
+	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUSH)" = "1" ] && [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
+	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUSH)" = "1" ] && [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy --all "$$SRC" docker://$(REGISTRY)/talos:latest; fi
 	rm -rf $(ASSETS)/installer-oci
 
 image-matchbox: $(call assets,kernel-%,$(BOOT_ARCHES)) $(call assets,initramfs-metal-%.xz,$(BOOT_ARCHES))
