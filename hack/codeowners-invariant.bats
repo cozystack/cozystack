@@ -20,6 +20,8 @@
 # policy discussion linked.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "every CODEOWNERS rule that lists owners repeats the catch-all owners" {
   [ -f .github/CODEOWNERS ]
 

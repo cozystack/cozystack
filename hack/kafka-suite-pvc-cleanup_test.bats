@@ -6,6 +6,8 @@
 # space. These tests read hack/e2e-chainsaw/kafka/chainsaw-test.yaml, because
 # running it needs a cluster.
 
+load test_helper
+
 SUITE=hack/e2e-chainsaw/kafka/chainsaw-test.yaml
 
 @test "kafka test deletes its PVCs in the cleanup of the step that applies the app" {

@@ -6,7 +6,9 @@
 # nothing. helm-unittest asserts one template at a time and cannot compare them,
 # so this renders both together and compares.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests).
+# Run from the repo root: bats hack/tracing-central-credentials.bats.
+
+load test_helper
 
 MONITORING_CHART=packages/system/monitoring
 

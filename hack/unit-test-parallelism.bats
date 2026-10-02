@@ -1,34 +1,30 @@
 #!/usr/bin/env bats
-# Contract for the bounded parallel unit-test fan-out used by PR CI.
+# Bats owns per-test parallelism; Make also schedules the non-Bats targets.
 
-@test "every non-E2E BATS file is an independent Make target" {
-    # --output-sync arrived in GNU Make 4.0, and macOS still ships 3.81, where
-    # this invocation dies on an unknown option rather than telling the reader
-    # why. CI is on 4.x, so the contract is still enforced where it gates a
-    # merge; skipping here keeps the suite runnable on a contributor's machine
-    # instead of failing for a reason that has nothing to do with the contract.
-    make_major=$(make --version 2>/dev/null | sed -n '1s/^GNU Make \([0-9][0-9]*\).*/\1/p')
-    if [ -z "$make_major" ] || [ "$make_major" -lt 4 ]; then
-        echo "skipped: this make has no --output-sync (needs GNU Make >= 4.0)" >&2
-        return 0
-    fi
-    expected=$(find hack -maxdepth 1 -type f -name '*.bats' ! -name 'e2e-*.bats' | wc -l)
-    output=$(make -n -j4 --output-sync=target bats-unit-tests)
-    # The COZYTEST_TRACE prefix is part of the pattern on purpose: the switch is
-    # per-target now that the serial loop is gone, and a target that loses it
-    # would go back to streaming full xtrace for every suite.
-    actual=$(printf '%s\n' "$output" | grep -c '^COZYTEST_TRACE=[^ ]* hack/cozytest.sh "hack/.*\.bats"$')
-    [ "$actual" -eq "$expected" ] || {
-        echo "make scheduled $actual BATS files independently, expected $expected" >&2
-        exit 1
+load test_helper
+
+@test "the Bats invocation receives every discovered unit file exactly once" {
+    tmp=$(mktemp -d)
+    mkdir "$tmp/bin"
+    printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" >> "$BATS_ARG_LOG"' > "$tmp/bin/bats"
+    chmod +x "$tmp/bin/bats"
+    expected=$(MAKEFLAGS= MAKELEVEL= make --no-print-directory -s print-bats-unit-files)
+    [ -n "$expected" ]
+    MAKEFLAGS= MAKELEVEL= PATH="$tmp/bin:$PATH" BATS_ARG_LOG="$tmp/args" \
+        make --no-print-directory -s BATS_JOBS=4 "BATS_REPORT_DIR=$tmp/reports" bats-unit-tests
+    actual=$(grep '^hack/.*\.bats$' "$tmp/args")
+    [ "$actual" = "$expected" ] || {
+        echo "Bats did not receive the discovered unit files exactly once" >&2
+        cat "$tmp/args" >&2
+        false
     }
-    if printf '%s\n' "$output" | grep -q 'for f in'; then
-        echo "bats-unit-tests still serializes the suite in a shell loop" >&2
-        exit 1
-    fi
+    [ "$(sed -n '1,2p' "$tmp/args")" = "$(printf '%s\n' -j 4)" ]
+    rm -rf "$tmp"
 }
 
-@test "PR workflow shares four slots across unit and controller targets" {
+@test "PR workflow schedules unit and controller targets with four Make jobs and -k" {
+    # -k is what lets test-controllers start when a unit-tests prerequisite
+    # fails first; without it a red Bats file hides the Go controller suite.
     grep -qF 'run: make unit-tests test-controllers -j4 -k --output-sync=target' \
         .github/workflows/pull-requests.yaml || {
         echo "PR checks do not use the bounded four-slot make invocation" >&2

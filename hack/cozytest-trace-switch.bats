@@ -30,6 +30,8 @@
 # Run with: hack/cozytest.sh hack/cozytest-trace-switch.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 RUNNER="$HACK_DIR/cozytest.sh"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"
@@ -162,11 +164,11 @@ count_streamed_marker_lines() {
   rm -rf "$dir"
 }
 
-@test "the unit lane recipe asks for the quiet runner" {
+@test "the POSIX compatibility lane asks for the quiet runner" {
   # Without this the 31MB job log comes back the first time somebody tidies the
   # recipe, and every test above keeps passing while it happens.
   grep -qE '^COZYTEST_TRACE \?= 0' "$REPO_ROOT/Makefile"
-  grep -qF 'COZYTEST_TRACE=$(COZYTEST_TRACE) hack/cozytest.sh' "$REPO_ROOT/Makefile"
+  grep -qF 'COZYTEST_TRACE=$(COZYTEST_TRACE) "$(BATS_POSIX_SHELL)" hack/cozytest.sh' "$REPO_ROOT/Makefile"
 }
 
 @test "the e2e recipes do not silence their runner" {

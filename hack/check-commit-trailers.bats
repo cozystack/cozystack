@@ -14,6 +14,8 @@
 # Each test runs in its own subshell, so the `cd` into the fixture does not leak.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHECK="$REPO_ROOT/hack/check-commit-trailers.sh"
 

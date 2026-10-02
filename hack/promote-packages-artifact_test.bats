@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # Behavioural tests for the stable-candidate packages artifact publisher.
-# Run with: hack/cozytest.sh hack/promote-packages-artifact_test.bats
+# Run with: bats hack/promote-packages-artifact_test.bats
+
+load test_helper
 
 _test_workspace() {
   if [ -n "${BATS_TEST_TMPDIR:-}" ]; then

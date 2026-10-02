@@ -59,6 +59,8 @@
 # Run with: hack/cozytest.sh hack/migration-57-seaweedfs-size-limit.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-57-seaweedfs-size-limit"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
 RUNBOOK="$PWD/docs/operations/seaweedfs-lowering-the-volume-size-limit.md"

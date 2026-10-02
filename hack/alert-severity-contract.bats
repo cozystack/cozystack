@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+load test_helper
+
 # Alerta's default alarm model, the set the webhook accepts. `none` is left out
 # on purpose: the Alertmanager config routes severity="none" to a blackhole
 # receiver, so such an alert is never delivered, which is the outcome this

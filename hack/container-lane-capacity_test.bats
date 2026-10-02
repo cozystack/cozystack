@@ -3,6 +3,8 @@
 # container nodes. The live BATS suite checks the resulting Node status; this
 # file pins the arithmetic and the cross-process plumbing without a cluster.
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 CONTAINER_UP="$HACK_DIR/e2e-container-up.sh"
 E2E_CONTAINER_UP_LIB=true . "$CONTAINER_UP"

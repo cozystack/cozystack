@@ -6,6 +6,8 @@
 # refs/pull/... there without the opt-in fails the publish job for every fork
 # PR, and the required "E2E Tests" status never turns green.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 FORK="$REPO_ROOT/.github/workflows/e2e-fork.yaml"
 

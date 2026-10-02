@@ -23,6 +23,8 @@
 # --list, the comma-value bracket grouping, the replication-factor divergence
 # guard, and the cleanup delete's HTTP handling.
 
+load test_helper
+
 SCRIPT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)/packages/system/backupstrategy-controller/files/kafka-backup.sh"
 
 # init_stubs builds a fresh workspace with stub kafka CLIs (the script's $BIN)

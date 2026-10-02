@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # Structural contract for abandoned stable-candidate artifact retention.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 RETENTION="$REPO_ROOT/.github/workflows/retention.yaml"
 

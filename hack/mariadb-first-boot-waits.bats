@@ -70,6 +70,8 @@
 # Run with: hack/cozytest.sh hack/mariadb-first-boot-waits.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 MBW_SCRIPT="examples/backups/mariadb/run-all.sh"
 MBW_CHART="packages/apps/mariadb/templates/mariadb.yaml"
 MBW_SUITE="hack/e2e-chainsaw/mariadb/chainsaw-test.yaml"

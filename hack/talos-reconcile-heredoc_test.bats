@@ -37,9 +37,11 @@
 #
 # A field that is in neither arm is the regression this file exists to catch.
 #
-# Needs `helm` + `yq`; cozytest.sh runs from the repo root.
-# Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
+# Needs `helm` + `yq` and must run from the repo root.
+# Run with: bats hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "kubernetes-nodes refuses hostile Talos image coordinates at render" {
     work=$(mktemp -d)

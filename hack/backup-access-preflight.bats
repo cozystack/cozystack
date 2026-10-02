@@ -2,6 +2,8 @@
 # Unit tests for the E2E-only S3 access gate that runs before expensive backup
 # workloads. All cluster and S3 calls are shell stubs.
 
+load test_helper
+
 @test "preflight helper remains sourceable by the POSIX test runner" {
     helper=hack/e2e-chainsaw/_lib/backup-access-preflight.sh
     [ "$(sed -n '1p' "$helper")" = '#!/bin/sh' ]

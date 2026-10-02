@@ -8,6 +8,8 @@
 # is the only way to exercise that backstop, and it is the case the backstop
 # exists for.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/apps/postgres"
 

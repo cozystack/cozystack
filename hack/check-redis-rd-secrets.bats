@@ -39,6 +39,8 @@
 #     Secrets it creates, both of these among them, so one such entry grants
 #     the CA private key while every name in the file stays correct.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/system/redis-rd"
 

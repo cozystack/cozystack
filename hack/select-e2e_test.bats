@@ -2,17 +2,19 @@
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Each test runs as a shell
-# function under `set -eu -x`, so assertions are direct shell tests that exit
-# non-zero on failure. setup()/teardown() are not honored — each test creates
-# and cleans its own scratch dir.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path and use
+# direct shell assertions with inline fixture cleanup.
 #
 # Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
 # Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 #
-# Run with: hack/cozytest.sh hack/select-e2e_test.bats
+# Run with: bats hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 # Assert that a selection is the WHOLE suite list, not merely a long one.
 #
@@ -502,6 +504,24 @@ assert_full_suite() {
     done
     # And an inert unit bats file beside a real app path must not mask it.
     printf '%s\n' hack/select-e2e_test.bats packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+    rm -rf "$tmp"
+}
+
+@test "the shared unit Bats helper selects nothing" {
+    # test_helper.bash is loaded only by BATS_UNIT_FILES. Enumerate this exact
+    # helper as inert rather than matching hack/*.bash: a future production
+    # helper must still hit the unclassified fail-safe until someone decides
+    # which e2e lane exercises it.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/test_helper.bash" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    # Inert means this path contributes nothing; it must not mask a real app
+    # path beside it.
+    printf '%s\n' hack/test_helper.bash packages/apps/postgres/values.yaml > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
     rm -rf "$tmp"

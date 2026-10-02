@@ -13,8 +13,11 @@
 # and no Pod is deleted; the listing-plus-shell-match form does not.
 # -----------------------------------------------------------------------------
 
-# hack/cozytest.sh runs @test bodies as POSIX sh functions and knows no
-# setup/teardown, so each test calls prepare_loop and removes $work itself.
+load test_helper
+
+# The legacy hack/cozytest.sh translator runs @test bodies as POSIX sh functions
+# and knows no setup/teardown; the tests stay compatible with it, so each test
+# calls prepare_loop and removes $work itself.
 prepare_loop() {
     work=$(mktemp -d)
     cat > "$work/vals.yaml" <<'VALS'

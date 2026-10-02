@@ -3,6 +3,8 @@
 # registration, management StorageClasses, and downstream Chainsaw fixtures.
 # The library guard keeps this suite cluster-free under hack/cozytest.sh.
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 POST_PREP="$HACK_DIR/e2e-post-install-prep.sh"
 # shellcheck source=/dev/null

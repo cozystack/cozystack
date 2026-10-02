@@ -4,9 +4,9 @@
 # pushed as. A wrong digest or size makes that push fail; a wrong or missing
 # platform makes a node pull the other arch's installer.
 #
-# Written for POSIX sh: hack/cozytest.sh sources this file into /bin/sh.
-#
 # Requires: jq, sha256sum.
+
+load test_helper
 
 @test "installer-index.sh indexes each arch's manifest under its platform" {
   layout="$(mktemp -d)"

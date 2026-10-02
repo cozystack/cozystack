@@ -7,10 +7,13 @@
 # talosctl is a stub: it prints the `images ls` table held in
 # $MOCK_TALOS/<node>-<namespace>, or fails for a node listed in $MOCK_TALOS/down.
 #
-# Harness note: run by hack/cozytest.sh, not real bats; each @test is a shell
-# function under `set -eu`, sourced into POSIX sh (dash on CI).
+# Harness note: the unit lane runs this file under Bats. The bodies stay POSIX
+# sh (no `run`, no [[ ]]; each @test a shell function under `set -eu`), so
+# hack/cozytest.sh can still run it under dash by hand.
 #
-# Run with: hack/cozytest.sh hack/collect-images_test.bats
+# Run with: bats hack/collect-images_test.bats
+
+load test_helper
 
 _stub_talos() {
   MOCK_TALOS="$1"

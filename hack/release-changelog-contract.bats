@@ -74,6 +74,8 @@
 # Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
 # Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 GENERATE="$REPO_ROOT/.github/workflows/changelog-generate.yaml"

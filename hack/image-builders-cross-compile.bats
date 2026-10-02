@@ -20,9 +20,9 @@
 # per command: a stage with `RUN echo $TARGETARCH` and a bare `go build` would
 # pass.
 #
-# Written for POSIX sh: hack/cozytest.sh sources this file into /bin/sh.
-#
 # Requires: awk, sed.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 

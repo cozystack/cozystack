@@ -69,7 +69,7 @@ Root targets (run from the repo root):
 
 ```bash
 make build          # Build all Docker images (needs: docker, skopeo, jq, gh, helm, yq, GNU tar/sed/awk)
-make unit-tests     # Run the unit tests (Helm, BATS, Go, etc.); does not reach ./internal/...
+make unit-tests     # Run unit tests (requires bats-core >= 1.5; GNU parallel is optional)
 make test-controllers # Run the Go tests under ./internal/... (controllers, contract tests)
 make generate       # Code generation (hack/update-codegen.sh) — CRDs, DeepCopy, clients, RBAC
 make manifests      # Generate CRD manifests and operator YAML variants
@@ -106,7 +106,7 @@ A chart also declares the limits on its own resource name there, with `## @name 
 
 ## Testing
 
-- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). A `test` target is expected to run helm-unittest: the sweep fails a package whose run reports no suite, because exiting 0 having asserted nothing is indistinguishable from passing. A target that drives something else belongs under another name, as `packages/core/testing` already does with its sandbox flow. `make unit-tests` runs the unit suite — Helm, BATS, Go, and the preset/readiness checks. It does not reach the controller and contract tests under `./internal/...`, which have their own target, `make test-controllers`, so covering both locally means running that target as well; CI runs them as two steps of one job.
+- **Helm and BATS unit tests:** `make helm-unit-tests` runs `hack/helm-unit-tests.sh` over every package that defines a `test` target. A `test` target is expected to run helm-unittest: the sweep fails a package whose run reports no suite, because exiting 0 having asserted nothing is indistinguishable from passing. A target that drives something else belongs under another name, as `packages/core/testing` already does with its sandbox flow. `make bats-unit-tests` requires bats-core 1.5 or newer; GNU parallel is optional and the target runs serially without it. Run the complete local BATS and POSIX-compatibility pass with `pre-commit run bats-unit-tests --hook-stage manual --all-files`; pull-request CI runs both lanes for code changes and the BATS contracts for docs-only changes. On a host whose `/bin/sh` differs from CI, `make BATS_POSIX_SHELL=dash bats-posix-compat-tests` selects the same interpreter explicitly. `make unit-tests` runs the full unit suite — Helm, BATS, the targeted POSIX-shell compatibility pass, Go, and the preset/readiness checks. It does not include the controller tests under `./internal/...`; run `make test-controllers` as well. CI invokes both targets together.
 - **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
 
@@ -171,4 +171,3 @@ Before working on these areas, read the relevant doc first:
 
 ### Core Components
 - Do not modify `packages/core/platform/` without understanding migration impact
-

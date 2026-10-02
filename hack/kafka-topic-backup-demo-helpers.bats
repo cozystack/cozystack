@@ -12,6 +12,8 @@
 # a column-0 `}` into `return 0`, so the helpers below close on an indented
 # brace to keep run_replication_factor's exit status.
 
+load test_helper
+
 make_stubs() {
     stub=$(mktemp -d)
     cat > "$stub/kubectl" <<'EOF'

@@ -75,7 +75,6 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
-      trigger_map: ${{ steps.p.outputs.trigger_map }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -162,23 +161,6 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-          # docs/agents/contributing.md carries the downstream trigger map, which
-          # hack/downstream-trigger-map.bats asserts against: every path the map
-          # cites still exists, and its repository list still matches the PR
-          # template. Editing the map alone is a docs-only PR, which would skip the
-          # unit tests and exempt the map from its own guard. This flag lets the
-          # unit-test job opt back in, and only that job: it deliberately does not
-          # feed `code`, so a docs PR still builds nothing.
-          #
-          # Detect the map by its old path too, which is why this reads the
-          # rename-blind list above: a PR that moves the map would otherwise skip
-          # the very test that pins the literal below to it, and break for
-          # whoever pushes next.
-          if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
-            echo "trigger_map=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "trigger_map=false" >> "$GITHUB_OUTPUT"
           fi
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
@@ -301,12 +283,12 @@ jobs:
     permissions:
       contents: read
     needs: ["plan"]
-    # trigger_map opts a docs-only PR back in when it edits the downstream trigger
-    # map, so hack/downstream-trigger-map.bats still guards it. No other job reads
-    # that flag: a docs PR runs the unit tests and nothing heavier.
+    # Unit contracts read both code and documentation. Run this job for every
+    # non-release PR: code changes take the complete unit path, while docs-only
+    # changes run the Bats lane that owns those cross-tree contracts. Builds and
+    # E2E remain gated on `code` below.
     if: |
-      (needs.plan.outputs.code == 'true' || needs.plan.outputs.trigger_map == 'true')
-      && !contains(github.event.pull_request.labels.*.name, 'release')
+      !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -315,14 +297,26 @@ jobs:
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. Install if absent (idempotent).
       - name: Set up test toolchain
+        env:
+          CODE_CHANGED: ${{ needs.plan.outputs.code }}
+          BATS_VERSION: "1.14.0"
+          BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
         run: |
-          helm plugin list 2>/dev/null | grep -q unittest \
-            || helm plugin install https://github.com/helm-unittest/helm-unittest
-      # The make processes share one four-slot jobserver. Each BATS file is a
-      # separate target, so the long tail no longer runs as one nine-minute shell
-      # loop; Helm and Go targets share the same bounded pool. Output stays
-      # grouped by target instead of four test logs interleaving.
-      #
+          set -euo pipefail
+          if [ "$CODE_CHANGED" = true ]; then
+            helm plugin list 2>/dev/null | grep -q unittest \
+              || helm plugin install https://github.com/helm-unittest/helm-unittest
+          fi
+          # Source archive bytes can change; verify the tag's commit before install.
+          if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
+            bats_parent=$(mktemp -d "$RUNNER_TEMP/bats-core.XXXXXX")
+            bats_source="$bats_parent/source"
+            git clone --quiet --depth=1 --branch "v$BATS_VERSION" \
+              https://github.com/bats-core/bats-core.git "$bats_source"
+            test "$(git -C "$bats_source" rev-parse HEAD)" = "$BATS_COMMIT"
+            sudo "$bats_source/install.sh" /usr/local
+          fi
+          bats --version | grep -qx "Bats $BATS_VERSION"
       # -k is required, not cosmetic: unit-tests and test-controllers are two
       # independent goals on the same command line, and without -k make stops
       # handing out new work the moment any unit-tests prerequisite fails —
@@ -330,7 +324,18 @@ jobs:
       # file hides the entire Go controller suite. -k lets already-schedulable
       # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
+        if: needs.plan.outputs.code == 'true'
         run: make unit-tests test-controllers -j4 -k --output-sync=target
+      - name: Run Bats unit tests for docs-only changes
+        if: needs.plan.outputs.code == 'false'
+        run: make bats-unit-tests
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bats-unit-report
+          path: _out/test-reports/
+          if-no-files-found: ignore
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit

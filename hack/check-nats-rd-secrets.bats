@@ -27,6 +27,8 @@
 # or by a fullname helper -- all of which grant the CA private key while the
 # guard stays green.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/nats-rd/cozyrds/nats.yaml"
 CHART="$REPO_ROOT/packages/apps/nats"

@@ -3,6 +3,8 @@
 # hack/e2e-platform-packages.sh. This suite runs through hack/cozytest.sh, so it
 # uses direct shell assertions rather than bats' run/status helpers.
 
+load test_helper
+
 @test "QEMU defaults keep the platform-managed LINSTOR package" {
   manifest=$(hack/e2e-platform-packages.sh)
   names=$(printf '%s\n' "$manifest" | yq -N '.metadata.name')

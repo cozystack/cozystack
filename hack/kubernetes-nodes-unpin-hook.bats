@@ -17,10 +17,13 @@
 # Requires helm (present in the unit-tests CI toolchain; the same job installs
 # the helm-unittest plugin).
 #
-# cozytest.sh awk parser: @test blocks only, a bare `}` at column 0 ends a test,
-# no run/$status/setup/teardown. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/kubernetes-nodes-unpin-hook.bats
+# For compatibility with the legacy cozytest.sh translator, tests avoid
+# run/$status and file-local setup/teardown, and keep bare `}` lines out of test
+# bodies. Assertions are direct shell tests.
+# Run with: bats hack/kubernetes-nodes-unpin-hook.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/kubernetes-nodes-unpin"
 CHART="$PWD/packages/apps/kubernetes-nodes"

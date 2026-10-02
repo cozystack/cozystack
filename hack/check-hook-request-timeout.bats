@@ -22,6 +22,8 @@
 # activeDeadlineSeconds bounds the whole Job, which is what
 # packages/apps/tenant/templates/cleanup-job.yaml uses and documents.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 @test "no in-cluster kubectl call carries a non-zero --request-timeout" {

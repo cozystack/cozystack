@@ -9,6 +9,8 @@
 # rules so narrowing the real runner cannot silently leave this audit green.
 # A new runner needs an entry here. Park unused suites with .bats.disabled.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 E2E_MAKEFILE_REL="packages/core/testing/Makefile"
 
@@ -151,20 +153,11 @@ brc_audit() {
   printf '%s\n' "$makefile" | grep -qF 'BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))' \
     || { echo "FAIL: bats-unit-tests no longer selects files the way brc_unit_reachable models it (one level, hack/e2e-* excluded). Update the model in hack/bats-runner-coverage.bats in the same change."; false; }
 
-  printf '%s\n' "$makefile" | grep -qF 'BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))' \
-    || { echo "FAIL: update the unit target model in hack/bats-runner-coverage.bats."; false; }
-
   printf '%s\n' "$makefile" | grep -qF 'bats-unit-tests: bats-unit-files-check' \
-    || { echo "FAIL: bats-unit-tests no longer checks that unit files were discovered."; false; }
+    || { echo "FAIL: bats-unit-tests no longer checks for an empty discovery."; false; }
 
-  printf '%s\n' "$makefile" | grep -qF -- '--keep-going $(BATS_UNIT_TARGETS)' \
-    || { echo "FAIL: bats-unit-tests no longer runs every discovered unit file past a failing one."; false; }
-
-  printf '%s\n' "$makefile" | grep -qF '$(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats' \
-    || { echo "FAIL: each unit target must depend on its discovered bats file."; false; }
-
-  printf '%s\n' "$makefile" | grep -qF 'hack/cozytest.sh "$<"' \
-    || { echo "FAIL: bats-unit-tests no longer runs its files through hack/cozytest.sh; the reachability model assumes it does."; false; }
+  printf '%s\n' "$makefile" | grep -qF 'bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)' \
+    || { echo "FAIL: update the Bats invocation model in hack/bats-runner-coverage.bats."; false; }
 
   printf '%s\n' "$makefile" | grep -qE '^unit-tests:.*bats-unit-tests' \
     || { echo "FAIL: unit-tests no longer depends on bats-unit-tests, so nothing in CI runs the bats sweep -- this guard included."; false; }

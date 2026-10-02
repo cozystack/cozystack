@@ -16,9 +16,9 @@
 # what they build is amd64 by nature; they must yield exactly that platform
 # whatever the command line says.
 #
-# Written for POSIX sh: hack/cozytest.sh sources this file into /bin/sh.
-#
 # Requires: make.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROBE_PLATFORM="linux/riscv64"

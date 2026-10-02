@@ -11,16 +11,17 @@
 # the live master. Blanking the object key or breaking the rfs-redis- sentinel
 # prefix is caught the same way — by what the stubs are actually called with.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. Each @test builds its own fixture; a
-# load-bearing assertion is never the last line (cozytest.sh rewrites a lone
-# `}` into `return 0` + `}`, which would swallow the final command's status).
+# Run from the repo root with make bats-unit-tests. To retain compatibility
+# with cozytest, assertions precede inline cleanup: its translator would
+# replace a final assertion's status with return 0 at a lone closing brace.
 #
 # The rendered script is run with `bash`, not `sh`: it opens `set -euo
 # pipefail`, which the production image's busybox ash supports but the CI
 # runner's /bin/sh (dash) rejects at line 1. bash matches ash's pipefail
 # semantics; same reason hack/migration-50-etcd-adopt.bats runs its script
 # with bash.
+
+load test_helper
 
 CHART=packages/system/backupstrategy-controller
 

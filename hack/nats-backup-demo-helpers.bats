@@ -16,6 +16,8 @@
 # helper functions close on an indented brace because the runner rewrites a
 # column-0 `}` into `return 0`, which would mask run_stream_count's exit status.
 
+load test_helper
+
 make_stubs() {
     stub=$(mktemp -d)
     cat > "$stub/kubectl" <<'EOF'

@@ -20,13 +20,15 @@
 # deliberately (backupstrategy-controller reuses platform-migrations as a
 # curl+jq runner rather than shipping a second one-binary tag).
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
-# `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
-# a shell function under `set -eu -x`, so a non-zero exit is the failure.
-# Paths are repo-root-relative: BATS_TEST_DIRNAME is unset and would abort the
-# whole suite under `set -u`.
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, so it avoids `run`, `$status`, `$output`,
+# `skip`, and setup()/teardown(). Paths stay repo-root-relative for both
+# runners.
 #
-# Run with: hack/cozytest.sh hack/image-pin-consistency.bats
+# Run with: bats hack/image-pin-consistency.bats
+
+load test_helper
 
 @test "no image repository is pinned at more than one digest" {
   tmp=$(mktemp -d)

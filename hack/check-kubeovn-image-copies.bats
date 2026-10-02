@@ -16,6 +16,8 @@
 # tests, and an expected failure is written as `if CHECK ...; then ... exit 1`.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHECK="$REPO_ROOT/hack/check-kubeovn-image-copies.sh"
 OURS="$REPO_ROOT/packages/system/kubeovn/images/kubeovn/Dockerfile"
