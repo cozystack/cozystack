@@ -63,8 +63,7 @@ step_line() {
   prepare="$(step_block 'Prepare stable branch' "$PROMOTE")"
 
   printf '%s\n' "$job" | code_lines | grep -qF '      packages: write'
-  printf '%s\n' "$job" | code_lines | grep -qF 'FLUX_VERSION: "2.8.6"'
-  printf '%s\n' "$job" | code_lines | grep -qF 'flux version --client'
+  printf '%s\n' "$job" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
   printf '%s\n' "$login" | code_lines | grep -qF 'DOCKER_CONFIG: ${{ runner.temp }}/.docker'
   printf '%s\n' "$prepare" | code_lines | grep -qF 'DOCKER_CONFIG: ${{ runner.temp }}/.docker'
 }
@@ -73,16 +72,15 @@ step_line() {
   # A release gate whose tooling comes from `releases/latest/download` is not a
   # fixed input: the bytes that decide whether vX.Y.Z may be created, and the
   # yq that rewrites the installer pin, change whenever upstream publishes.
-  # Pinned by version, and pinned to STAY pinned — the unpinned one-liner is
-  # still the idiom in the workflows outside this pipeline, so it comes back by
-  # copy-paste rather than by anyone deciding to unpin a release step.
+  # Pinned by version, and pinned to STAY pinned — an unpinned one-liner comes
+  # back by copy-paste rather than by anyone deciding to unpin a release step.
+  # flux is pinned by hack/ci-tool-installs-contract.bats across every workflow.
   for step_and_file in \
-    "Set up toolchain (flux, yq)|$PROMOTE" \
-    "Set up promotion toolchain (flux, yq)|$PULL_REQUESTS" \
-    "Set up promotion toolchain (flux, skopeo, yq, helm)|$FINALIZE"; do
+    "Set up toolchain (yq)|$PROMOTE" \
+    "Set up promotion toolchain (yq)|$PULL_REQUESTS" \
+    "Set up promotion toolchain (skopeo, yq, helm)|$FINALIZE"; do
     block="$(step_block "${step_and_file%%|*}" "${step_and_file#*|}")"
     [ -n "$block" ]
-    printf '%s\n' "$block" | code_lines | grep -qF 'FLUX_VERSION: "'
     printf '%s\n' "$block" | code_lines | grep -qF 'YQ_VERSION: "'
     count="$(printf '%s\n' "$block" | code_lines | grep -c 'releases/latest/download' || true)"
     [ "${count:-0}" -eq 0 ]
@@ -116,9 +114,8 @@ step_line() {
   block="$(step_block 'Verify stable packages candidate' "$FINALIZE")"
   printf '%s\n' "$block" | code_lines | grep -qF '.release-tooling/hack/verify-promoted-packages.sh "${TAG#v}"'
 
-  setup="$(step_block 'Set up promotion toolchain (flux, skopeo, yq, helm)' "$FINALIZE")"
-  printf '%s\n' "$setup" | code_lines | grep -qF 'FLUX_VERSION: "2.8.6"'
-  printf '%s\n' "$setup" | code_lines | grep -qF 'flux version --client'
+  setup="$(step_block 'Set up flux' "$FINALIZE")"
+  printf '%s\n' "$setup" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
 }
 
 @test "promote rejects an old target base before publishing a candidate" {
@@ -153,7 +150,7 @@ step_line() {
   printf '%s\n' "$job" | code_lines | grep -qF "github.event.pull_request.user.login == 'cozystack-ci[bot]'"
   printf '%s\n' "$job" | code_lines | grep -qF 'ref: ${{ github.event.pull_request.base.sha }}'
   printf '%s\n' "$job" | code_lines | grep -qF '.release-tooling/hack/verify-promoted-packages.sh "$STABLE_VERSION"'
-  printf '%s\n' "$job" | code_lines | grep -qF 'FLUX_VERSION: "2.8.6"'
+  printf '%s\n' "$job" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
 
   report="$(job_block e2e-report "$PULL_REQUESTS")"
   printf '%s\n' "$report" | code_lines | grep -qF '"verify-release-candidate"'

@@ -375,10 +375,9 @@ _make_world() {
   echo "$tool" | grep -q 'yq --version | grep -q mikefarah'
   # prepare-release pushes the packages artifact with flux, so it installs the
   # same flux build-amd64 does rather than whatever is latest.
-  echo "$tool" | grep -qF 'grep -Fqx "flux: v${FLUX_VERSION}"'
-  want=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Set up build toolchain") | .env.FLUX_VERSION' "$wf")
+  want=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Set up flux") | .with.version' "$wf")
   [ -n "$want" ] && [ "$want" != null ]
-  [ "$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Set up build toolchain") | .env.FLUX_VERSION' "$wf")" = "$want" ]
+  [ "$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Set up flux") | .with.version' "$wf")" = "$want" ]
 }
 
 @test "the amd64 release job rebuilds matchbox as a two-arch index before it captures the tree" {

@@ -349,22 +349,13 @@ jobs:
     outputs:
       packages_digest: ${{ steps.push.outputs.packages_digest }}
     steps:
-      - name: Set up toolchain (skopeo, flux)
-        env:
-          # Pin the flux CLI instead of install.sh's rolling latest. This is the
-          # one privileged job that runs a remote installer as root right before
-          # the OCIR token is loaded, where a pinned installer matters most;
-          # keep it in step with the flux distro cozystack ships
-          # (internal/fluxinstall/manifests/fluxcd.yaml, v2.8.0).
-          FLUX_VERSION: "2.8.6"
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+      - name: Set up toolchain (skopeo)
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
-            s="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$s"
-            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
-            rm -f "$s"
-          fi
       # The base repo's own merge ref — safe to fetch, not fork-controlled code
       # execution. pr.patch is applied as DATA below; nothing from the tree runs.
       - name: Checkout PR merge ref
@@ -581,8 +572,18 @@ jobs:
           got="$(git rev-parse HEAD^2)"
           [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
       - name: Set up toolchain (yq)
+        env:
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
       - name: Download pr.patch
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
