@@ -68,18 +68,23 @@
        pointing their one DNS opening at an address with no DNS behind it.
        clusterDNS follows the kubeadm convention (the service CIDR's .10)
        unless networking.clusterDNS says otherwise. */ -}}
-{{- $cozyplaneComponents := dict -}}
-{{- if .Values.networking -}}
-{{- $egress := dict "clusterCIDR" .Values.networking.podCIDR "serviceCIDR" .Values.networking.serviceCIDR -}}
-{{- $clusterDNS := dig "clusterDNS" "" .Values.networking -}}
+{{- $net := .Values.networking | default dict -}}
+{{- /* Validated loudly: an empty podCIDR would silently drop the agent's
+       masquerade and the controller's internal denies, and the clusterDNS
+       derivation below reads IPv4 octets. */ -}}
+{{- if not (and (dig "podCIDR" "" $net) (dig "serviceCIDR" "" $net)) -}}
+{{- fail "networkingVariant cozyplane requires networking.podCIDR and networking.serviceCIDR" -}}
+{{- end -}}
+{{- $clusterDNS := dig "clusterDNS" "" $net -}}
 {{- if not $clusterDNS -}}
-{{- $svcBase := splitList "/" .Values.networking.serviceCIDR | first -}}
-{{- $octets := splitList "." $svcBase -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$" $net.serviceCIDR) -}}
+{{- fail (printf "cannot derive networking.clusterDNS from serviceCIDR %q (not an IPv4 CIDR); set networking.clusterDNS explicitly" $net.serviceCIDR) -}}
+{{- end -}}
+{{- $octets := splitList "." (splitList "/" $net.serviceCIDR | first) -}}
 {{- $clusterDNS = printf "%s.%s.%s.10" (index $octets 0) (index $octets 1) (index $octets 2) -}}
 {{- end -}}
-{{- $_ := set $egress "clusterDNS" $clusterDNS -}}
-{{- $_ := set $cozyplaneComponents "cozyplane" (dict "values" (dict "egress" $egress)) -}}
-{{- end -}}
+{{- $egress := dict "clusterCIDR" $net.podCIDR "serviceCIDR" $net.serviceCIDR "clusterDNS" $clusterDNS -}}
+{{- $cozyplaneComponents := dict "cozyplane" (dict "values" (dict "egress" $egress)) -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "cozyplane" $ $cozyplaneComponents) }}
 {{- else }}
 {{include "cozystack.platform.package.networking" (list $ $networkingComponents "kubeovn-cilium" "cilium") }}

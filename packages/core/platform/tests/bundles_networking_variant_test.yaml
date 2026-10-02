@@ -209,3 +209,47 @@ tests:
         equal:
           path: spec.components.cozyplane.values.egress.clusterDNS
           value: "10.43.0.53"
+
+  - it: refuses cozyplane without the networking CIDRs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        podCIDR: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'requires networking.podCIDR and networking.serviceCIDR'
+
+  - it: refuses to derive clusterDNS from a non-IPv4 service CIDR
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "fd00:10:96::/112"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'set networking.clusterDNS explicitly'
+
+  - it: accepts a non-IPv4 service CIDR with an explicit clusterDNS
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "fd00:10:96::/112"
+        clusterDNS: "fd00:10:96::a"
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.components.cozyplane.values.egress.clusterDNS
+          value: "fd00:10:96::a"
