@@ -309,6 +309,9 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	}
 
 	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName)
+	if stopped, res, gerr := stoppedByJobGuard(err); stopped {
+		return res, gerr
+	}
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure cnpg.io/Backup: %v", err))
 	}
@@ -584,6 +587,9 @@ func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1
 		},
 	}
 
+	if err := ensureJobNotFinished(ctx, r.apiReader(), j); err != nil {
+		return nil, err
+	}
 	if err := r.Create(ctx, obj); err != nil {
 		return nil, err
 	}
@@ -915,6 +921,12 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		if backupID == "" {
 			logger.Info("restore does not pin its base backup; the barman-cloud plugin picks one from the catalog",
 				"backup", backup.Name, "recoveryTime", options.RecoveryTime)
+		}
+		// From here the target is rewritten: HelmRelease suspended, app spec
+		// patched, Cluster and PVCs deleted.
+		if err := ensureJobNotFinished(ctx, r.apiReader(), restoreJob); err != nil {
+			_, res, gerr := stoppedByJobGuard(err)
+			return res, gerr
 		}
 		hrName := postgresAppPrefix + target.AppName
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {

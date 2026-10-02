@@ -266,6 +266,9 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		// Create Velero Backup
 		logger.Debug("Velero Backup not found, creating new one")
 		if err := r.createVeleroBackup(ctx, j, veleroStrategy, resolved); err != nil {
+			if stopped, res, gerr := stoppedByJobGuard(err); stopped {
+				return res, gerr
+			}
 			logger.Error(err, "failed to create Velero Backup")
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 		}
@@ -482,6 +485,9 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		},
 		Spec: *veleroBackupSpec,
 	}
+	if err := ensureJobNotFinished(ctx, r.apiReader(), backupJob); err != nil {
+		return err
+	}
 	name := veleroBackup.GenerateName
 	if err := r.Create(ctx, veleroBackup); err != nil {
 		if veleroBackup.Name != "" {
@@ -688,6 +694,10 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 		// Resolve underlying resources once; prefer Backup status, fall back to Velero annotation.
 		ur := r.resolveUnderlyingResourcesForRestore(ctx, backup, veleroBackupName)
 
+		if err := ensureJobNotFinished(ctx, r.apiReader(), restoreJob); err != nil {
+			_, res, gerr := stoppedByJobGuard(err)
+			return res, gerr
+		}
 		// Pre-restore: graceful shutdown, suspend HRs, rename PVCs (skipped for copy)
 		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup, ur, target, restoreOpts)
 		if err != nil {
@@ -701,6 +711,9 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 		// Create Velero Restore
 		logger.Debug("Velero Restore not found, creating new one")
 		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName, ur, target, restoreOpts); err != nil {
+			if stopped, res, gerr := stoppedByJobGuard(err); stopped {
+				return res, gerr
+			}
 			logger.Error(err, "failed to create Velero Restore")
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err))
 		}
@@ -1402,6 +1415,10 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 		if len(vmRes.DataVolumes) > 0 {
 			logger.Debug("added VMDisk label selectors to Velero restore", "count", len(vmRes.DataVolumes))
 		}
+	}
+
+	if err := ensureJobNotFinished(ctx, r.apiReader(), restoreJob); err != nil {
+		return err
 	}
 
 	// Create resourceModifiers ConfigMap
