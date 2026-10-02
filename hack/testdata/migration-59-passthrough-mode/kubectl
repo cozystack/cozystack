@@ -1,0 +1,51 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-59-passthrough-mode.bats. It serves only the
+# calls migration 59 (and lib/cozystack-version.sh) makes; behaviour is driven by
+# FAKE_* env and every invocation is appended to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG     file to append a one-line record of each call to
+#   FAKE_VALUES     JSON of spec.components.platform.values on the platform
+#                   Package, or "-" for no Package at all
+#   FAKE_GET_FAIL   non-empty => reading the Package exits 1, as an apiserver
+#                   error
+#   FAKE_PATCH_FAIL non-empty => the patch exits 1
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+case "$args" in
+  "get packages.cozystack.io cozystack.cozystack-platform -o json --ignore-not-found")
+    if [ -n "${FAKE_GET_FAIL:-}" ]; then
+      printf 'fake kubectl: the server is currently unable to handle the request\n' >&2
+      exit 1
+    fi
+    [ "${FAKE_VALUES:--}" = "-" ] && exit 0
+    printf '{"metadata":{"name":"cozystack.cozystack-platform"},"spec":{"components":{"platform":{"values":%s}}}}\n' "$FAKE_VALUES"
+    exit 0
+    ;;
+
+  "patch packages.cozystack.io cozystack.cozystack-platform --type=merge -p "*)
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
+      printf 'fake kubectl: admission webhook denied the patch\n' >&2
+      exit 1
+    fi
+    log "PATCH $(arg_after -p "$@")"
+    exit 0
+    ;;
+
+  *"apply --filename -"*)
+    manifest=$(cat)
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

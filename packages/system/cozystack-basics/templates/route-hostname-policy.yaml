@@ -21,7 +21,8 @@
 
   GRPCRoute is gated for the same reason as the other two. The port-443
   listeners the tenant gateway controller renders pin
-  allowedRoutes.kinds to HTTPRoute and TLSRoute, but the port-80
+  allowedRoutes.kinds, to HTTPRoute on the HTTPS listeners and to
+  TLSRoute on the passthrough ones, but the port-80
   listener leaves kinds unset, and an unset kinds list resolves to
   whatever the listener protocol supports -- for HTTP that includes
   GRPCRoute, which carries spec.hostnames of its own.

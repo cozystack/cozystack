@@ -1,0 +1,266 @@
+suite: platform TLS-passthrough services by _cluster.gateway-passthrough-mode
+templates:
+  - templates/tenantgateway.yaml
+
+release:
+  name: gateway
+  namespace: tenant-root
+
+# The TLS-passthrough services are platform routes attached to the
+# publishing tenant's Gateway, so only that tenant renders anything for
+# them, and only for what the platform exposes. The mode decides where:
+# separateAddress puts all of them on port 443 of the controller's second
+# Gateway, singleAddress passes the Kubernetes API through on 6443 of the
+# main one and leaves the other two to HTTPRoutes their own charts render.
+
+tests:
+  - it: separateAddress publishes every exposed passthrough service on 443
+    set:
+      _cluster: &publishing
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        expose-services: "api,dashboard,vm-exportproxy,cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value: [api, vm-exportproxy, cdi-uploadproxy]
+      - notExists:
+          path: spec.tlsPassthroughListeners
+
+  - it: separateAddress leaves out a service the platform does not expose
+    set:
+      _cluster:
+        <<: *publishing
+        expose-services: "api,dashboard"
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value: [api]
+
+  - it: singleAddress passes the Kubernetes API through on 6443 and nothing on 443
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-passthrough-mode: singleAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.tlsPassthroughServices
+      - documentIndex: 0
+        equal:
+          path: spec.tlsPassthroughListeners
+          value:
+            - name: api
+              port: 6443
+              hostname: api.example.org
+
+  # The platform always writes the mode, so a channel without it predates
+  # the mode and is still to be rewritten; publishing in a guessed layout
+  # for that reconcile could be the wrong one.
+  - it: renders none of them while the platform has not written a mode
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        expose-services: "api,vm-exportproxy,cdi-uploadproxy"
+        gateway-enabled: "true"
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.tlsPassthroughServices
+      - notExists:
+          path: spec.tlsPassthroughListeners
+
+  # The routes for these services render only while the platform
+  # gateway is on, so anything rendered for them while it is off is a
+  # listener, and under separateAddress an address, nothing will use.
+  - it: separateAddress renders no passthrough services while the platform gateway is off
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.tlsPassthroughServices
+
+  - it: singleAddress renders no API listener while the platform gateway is off
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "false"
+        gateway-passthrough-mode: singleAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.tlsPassthroughListeners
+
+  - it: singleAddress renders no listener when the API is not exposed
+    set:
+      _cluster:
+        <<: *publishing
+        expose-services: "dashboard,vm-exportproxy"
+        gateway-passthrough-mode: singleAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughListeners
+
+  - it: a tenant that does not publish the platform renders none of them
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        <<: *publishing
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughServices
+      - notExists:
+          path: spec.tlsPassthroughListeners
+
+  # The api listener admits routes from this namespace alone, and
+  # cozystack-api installs before tenant-root exists, so the route for
+  # it ships here, beside the listener, with the grant that lets it
+  # reach the kubernetes Service in default.
+  - it: singleAddress ships the API route in the tenant and its grant in default
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: TLSRoute
+      - documentIndex: 1
+        notExists:
+          path: metadata.namespace
+      - documentIndex: 1
+        equal:
+          path: spec
+          value:
+            parentRefs:
+              - group: gateway.networking.k8s.io
+                kind: Gateway
+                name: cozystack
+                sectionName: tls-api
+            hostnames:
+              - api.example.org
+            rules:
+              - backendRefs:
+                  - name: kubernetes
+                    namespace: default
+                    port: 443
+      - documentIndex: 2
+        equal:
+          path: kind
+          value: ReferenceGrant
+      - documentIndex: 2
+        equal:
+          path: metadata.namespace
+          value: default
+      - documentIndex: 2
+        equal:
+          path: spec
+          value:
+            from:
+              - group: gateway.networking.k8s.io
+                kind: TLSRoute
+                namespace: tenant-root
+            to:
+              - group: ""
+                kind: Service
+                name: kubernetes
+
+  - it: separateAddress leaves the API route to cozystack-api
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: TenantGateway
+
+  - it: singleAddress ships no API route from a tenant that does not publish the platform
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: singleAddress ships no API route on an edge class
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+        gateway-edge-classes: cilium
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: separateAddress writes no passthrough services on an edge class
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+        gateway-edge-classes: cilium
+      _namespace:
+        host: example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughServices
+
+  - it: an unknown mode is refused
+    set:
+      _cluster:
+        <<: *publishing
+        gateway-passthrough-mode: sameAddress
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: "gateway-passthrough-mode"

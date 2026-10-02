@@ -2,7 +2,14 @@
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
-{{- if and (has "api" $exposeServices) (eq $gatewayEnabled "true") }}
+{{- /* The platform always writes the mode, so an absent one is a values
+       channel from before it: no route until it is written. */}}
+{{- $passthroughMode := (index .Values._cluster "gateway-passthrough-mode") | default "" }}
+{{- /* singleAddress passes the API through a native-port listener that
+       admits routes from the publishing tenant's namespace alone, so that
+       route ships with the tenant's gateway chart: this release installs
+       before the namespace exists. */}}
+{{- if and (has "api" $exposeServices) (eq $gatewayEnabled "true") (eq $passthroughMode "separateAddress") }}
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TLSRoute
 metadata:
@@ -12,7 +19,7 @@ spec:
   parentRefs:
   - group: gateway.networking.k8s.io
     kind: Gateway
-    name: cozystack
+    name: cozystack-passthrough
     namespace: {{ $exposeIngress }}
     sectionName: tls-api
   hostnames:

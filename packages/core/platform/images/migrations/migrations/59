@@ -1,0 +1,58 @@
+#!/bin/sh
+# Migration 59 --> 60
+# Keep a cluster that already runs the Gateway on
+# gateway.passthroughMode=separateAddress.
+#
+# The default mode, singleAddress, moves the tenant Kubernetes API from
+# api.<host>:443 to :6443, where every kubeconfig issued so far does not
+# look, and terminates the VM export and CDI upload proxies at the Gateway.
+# separateAddress keeps all three passed through on port 443, on a second
+# Gateway address, so it is what an existing Gateway install is pinned to:
+# the URLs stay as issued, and only the DNS records for the three names have
+# to follow the new address.
+#
+# A mode the operator already set is left alone, and so is a cluster with the
+# Gateway off: nothing is published through a Gateway there yet, so it takes
+# the new default when it turns the Gateway on in a later upgrade. Turning it
+# on in the very upgrade that brings this migration counts as already on.
+#
+# This runs as the platform chart's pre-upgrade hook, after the chart has
+# rendered. templates/apps.yaml makes the same choice for that render from the
+# version stamp this migration moves, so the cluster never spends a reconcile
+# on singleAddress in between.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+PACKAGE_NAME="cozystack.cozystack-platform"
+
+# A failed read aborts under set -e rather than reading as "no Package": a
+# swallowed error would stamp past a cluster that then flips to singleAddress.
+pkg=$(kubectl get packages.cozystack.io "$PACKAGE_NAME" -o json --ignore-not-found)
+if [ -z "$pkg" ]; then
+  echo "Package $PACKAGE_NAME not found; nothing to pin"
+  stamp_cozystack_version 60
+  exit 0
+fi
+
+mode=$(printf '%s' "$pkg" | jq -r '.spec.components.platform.values.gateway.passthroughMode // ""')
+if [ -n "$mode" ]; then
+  echo "gateway.passthroughMode is already set to $mode; leaving it"
+  stamp_cozystack_version 60
+  exit 0
+fi
+
+enabled=$(printf '%s' "$pkg" | jq -r '.spec.components.platform.values.gateway.enabled // false')
+if [ "$enabled" != "true" ]; then
+  echo "Gateway API is off; the new default applies when it is turned on"
+  stamp_cozystack_version 60
+  exit 0
+fi
+
+echo "Gateway API is on with no passthroughMode; pinning separateAddress"
+kubectl patch packages.cozystack.io "$PACKAGE_NAME" --type=merge \
+  -p '{"spec":{"components":{"platform":{"values":{"gateway":{"passthroughMode":"separateAddress"}}}}}}'
+
+stamp_cozystack_version 60

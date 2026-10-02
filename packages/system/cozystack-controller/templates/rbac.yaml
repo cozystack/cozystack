@@ -19,9 +19,22 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["referencegrants"]
   verbs: ["get", "list", "watch"]
+# Read-only, to report a class whose supportedFeatures leave out a
+# route kind the tenant Gateway renders listeners for.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gatewayclasses"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["services"]
   verbs: ["get", "list", "watch"]
+# BackendCAReconciler copies a backend's CA bundle into the ca.crt
+# ConfigMap an annotated BackendTLSPolicy validates against.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["backendtlspolicies"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "update"]
 # TenantGatewayReconciler renders the per-tenant Issuer and the
 # wildcard / per-listener Certificates the Gateway listeners reference.
 - apiGroups: ["cert-manager.io"]

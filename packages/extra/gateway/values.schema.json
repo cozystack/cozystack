@@ -8,7 +8,7 @@
       "default": ""
     },
     "tlsPassthroughServices": {
-      "description": "Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute. Ignored when this tenant's Gateway is on a class the platform lists in `gateway.edgeTerminatedClasses`: an HTTP-only edge cannot carry a TLS listener, so those services are not published through the tenant Gateway at all.",
+      "description": "Platform services (from publishing.exposedServices) that present a certificate of their own. Read only on the publishing tenant's Gateway, only while the platform's `gateway.enabled` is on, and only for services the platform exposes. With `gateway.passthroughMode: separateAddress` each one gets a tls-\u003cname\u003e TLS-passthrough listener on port 443 of a second Gateway; with `singleAddress` the `api` entry is passed through on port 6443 of the main Gateway and the others are terminated by HTTPRoutes their own charts render. Ignored when this tenant's Gateway is on a class the platform lists in `gateway.edgeTerminatedClasses`: an HTTP-only edge cannot carry a TLS listener, so those services are not published through the tenant Gateway at all.",
       "type": "array",
       "default": [
         "api",

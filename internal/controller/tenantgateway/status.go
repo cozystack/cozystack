@@ -19,7 +19,10 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,61 +37,84 @@ import (
 // Gateway.Status.Conditions). Operators reading `kubectl get tgw`
 // see real readiness, not a fictional always-True flag.
 func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
-	gw := &gatewayv1.Gateway{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: tgw.Name}, gw); err != nil {
-		return fmt.Errorf("get Gateway for status: %w", err)
+	names := []string{tgw.Name}
+	if len(renderedPassthroughServices(tgw)) > 0 {
+		names = append(names, passthroughGatewayName(tgw))
 	}
 
-	gwListenerStatus := indexListenerStatus(gw.Status.Listeners)
-
-	listeners := make([]gatewayv1alpha1.TenantGatewayListenerStatus, 0, len(gw.Spec.Listeners))
-	allReady := true
-	for _, l := range gw.Spec.Listeners {
-		ready, reason := listenerReadinessFromGatewayStatus(string(l.Name), gwListenerStatus)
-		s := gatewayv1alpha1.TenantGatewayListenerStatus{
-			Name:   string(l.Name),
-			Ready:  ready,
-			Reason: reason,
+	var listeners []gatewayv1alpha1.TenantGatewayListenerStatus
+	notAccepted, notProgrammed, notReady := "", "", ""
+	for _, name := range names {
+		gw := &gatewayv1.Gateway{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: name}, gw); err != nil {
+			return fmt.Errorf("get Gateway %s for status: %w", name, err)
 		}
-		if l.Hostname != nil {
-			s.Hostname = string(*l.Hostname)
+		gwListenerStatus := indexListenerStatus(gw.Status.Listeners)
+		for _, l := range gw.Spec.Listeners {
+			ready, reason := listenerReadinessFromGatewayStatus(string(l.Name), gwListenerStatus)
+			s := gatewayv1alpha1.TenantGatewayListenerStatus{
+				Name:   string(l.Name),
+				Ready:  ready,
+				Reason: reason,
+			}
+			if l.Hostname != nil {
+				s.Hostname = string(*l.Hostname)
+			}
+			if l.TLS != nil && len(l.TLS.CertificateRefs) > 0 {
+				s.CertificateName = string(l.TLS.CertificateRefs[0].Name)
+			}
+			listeners = append(listeners, s)
+			if !ready && notReady == "" {
+				notReady = name
+			}
 		}
-		if l.TLS != nil && len(l.TLS.CertificateRefs) > 0 {
-			s.CertificateName = string(l.TLS.CertificateRefs[0].Name)
+		accepted, programmed := gatewayConditionStatus(gw.Status.Conditions)
+		if !accepted && notAccepted == "" {
+			notAccepted = name
 		}
-		listeners = append(listeners, s)
-		if !ready {
-			allReady = false
+		if !programmed && notProgrammed == "" {
+			notProgrammed = name
 		}
 	}
 
-	gwAccepted, gwProgrammed := gatewayConditionStatus(gw.Status.Conditions)
+	unsupported, err := r.classLacksTLSRoute(ctx, tgw)
+	if err != nil {
+		return err
+	}
 
 	var ready metav1.Condition
 	switch {
-	case !gwAccepted:
+	case unsupported:
+		ready = metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: tgw.Generation,
+			Reason:             "GatewayClassUnsupported",
+			Message:            fmt.Sprintf("GatewayClass %s does not list TLSRoute in status.supportedFeatures, so nothing serves the TLS-passthrough listeners this TenantGateway renders", gatewayClassName(tgw)),
+		}
+	case notAccepted != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "GatewayNotAccepted",
-			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been accepted by its controller yet", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been accepted by its controller yet", tgw.Namespace, notAccepted),
 		}
-	case !gwProgrammed:
+	case notProgrammed != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "GatewayNotProgrammed",
-			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been programmed by its controller yet", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("Underlying Gateway %s/%s has not been programmed by its controller yet", tgw.Namespace, notProgrammed),
 		}
-	case !allReady:
+	case notReady != "":
 		ready = metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "ListenersNotReady",
-			Message:            fmt.Sprintf("One or more listeners on Gateway %s/%s are not ready", tgw.Namespace, tgw.Name),
+			Message:            fmt.Sprintf("One or more listeners on Gateway %s/%s are not ready", tgw.Namespace, notReady),
 		}
 	default:
 		ready = metav1.Condition{
@@ -96,7 +122,7 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.T
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: tgw.Generation,
 			Reason:             "Reconciled",
-			Message:            fmt.Sprintf("Gateway %s/%s programmed with %d listeners", tgw.Namespace, tgw.Name, len(listeners)),
+			Message:            fmt.Sprintf("Gateway %s/%s programmed with %d listeners", tgw.Namespace, strings.Join(names, ", "), len(listeners)),
 		}
 	}
 
@@ -110,6 +136,30 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, tgw *gatewayv1alpha1.T
 	}
 	tgw.Status = stale.Status
 	return r.Status().Update(ctx, tgw)
+}
+
+// classLacksTLSRoute reports whether the spec renders TLS-passthrough
+// listeners on a GatewayClass that declares it does not serve TLSRoute.
+// A class that declares no features at all, or that does not exist, is
+// not judged: status.supportedFeatures is how a class says what it
+// serves, and implementations predating the field leave it empty.
+func (r *Reconciler) classLacksTLSRoute(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (bool, error) {
+	if len(renderedPassthroughServices(tgw)) == 0 && (len(tgw.Spec.TLSPassthroughListeners) == 0 || !rendersPassthroughListeners(tgw.Spec.CertMode)) {
+		return false, nil
+	}
+	class := &gatewayv1.GatewayClass{}
+	if err := r.Get(ctx, types.NamespacedName{Name: gatewayClassName(tgw)}, class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get GatewayClass %s: %w", gatewayClassName(tgw), err)
+	}
+	if len(class.Status.SupportedFeatures) == 0 {
+		return false, nil
+	}
+	return !slices.ContainsFunc(class.Status.SupportedFeatures, func(f gatewayv1.SupportedFeature) bool {
+		return f.Name == "TLSRoute"
+	}), nil
 }
 
 // indexListenerStatus turns Gateway.Status.Listeners into a name→status

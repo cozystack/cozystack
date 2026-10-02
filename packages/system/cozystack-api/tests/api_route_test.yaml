@@ -36,13 +36,17 @@ tests:
         hasDocuments:
           count: 0
 
-  - it: gateway-enabled=true renders TLSRoute only
+  - it: separateAddress passes the API through the passthrough Gateway
     set:
       _cluster:
         root-host: example.org
         expose-services: "api"
         gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
     asserts:
+      - template: templates/api-tlsroute.yaml
+        hasDocuments:
+          count: 1
       - template: templates/api-tlsroute.yaml
         equal:
           path: kind
@@ -63,7 +67,46 @@ tests:
         equal:
           path: spec.parentRefs[0].sectionName
           value: tls-api
+      # The port-443 passthrough listeners render on a Gateway of their
+      # own; the main one has no tls-api section.
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: spec.parentRefs[0].name
+          value: cozystack-passthrough
       - template: templates/api-ingress.yaml
+        hasDocuments:
+          count: 0
+
+  # This release installs before cozystack-basics creates tenant-root,
+  # so anything it put there would fail a first install with the
+  # gateway on. The singleAddress route and its ReferenceGrant ship
+  # with the publishing tenant's gateway chart instead.
+  - it: singleAddress renders neither a route nor an Ingress
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+    asserts:
+      - template: templates/api-tlsroute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/api-ingress.yaml
+        hasDocuments:
+          count: 0
+
+  # The platform always writes the mode, so a channel without it predates
+  # the mode and gets no route until it is written.
+  - it: an absent mode renders no route
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/api-tlsroute.yaml
         hasDocuments:
           count: 0
 
@@ -73,6 +116,7 @@ tests:
         root-host: example.org
         expose-services: "dashboard"
         gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
     asserts:
       - template: templates/api-tlsroute.yaml
         hasDocuments:
@@ -81,13 +125,14 @@ tests:
         hasDocuments:
           count: 0
 
-  - it: gateway-enabled=true with custom expose-ingress targets that namespace's Gateway
+  - it: separateAddress with custom expose-ingress targets that namespace's Gateway
     set:
       _cluster:
         root-host: example.org
         expose-services: "api"
         expose-ingress: "tenant-foo"
         gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
     asserts:
       - template: templates/api-tlsroute.yaml
         equal:

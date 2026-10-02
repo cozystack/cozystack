@@ -184,9 +184,10 @@ type TLSPassthroughListener struct {
 	// native port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique
 	// across the list, and neither 80 nor 443 — the Gateway's own http
 	// (80) and TLS-terminate (443) listeners already own those ports.
-	// It is not an access boundary: on the Cilium version this
-	// platform pins, the backend answers this listener's SNI on every
-	// port the Gateway exposes, so the hostname is what gates reach.
+	// It is not an access boundary: an implementation may serve every
+	// port of the Gateway from one proxy listener matched by SNI alone,
+	// and Cilium does so until the Gateway carries a configuration that
+	// splits it per port, so the hostname is what gates reach.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +required
@@ -246,7 +247,7 @@ type TLSPassthroughListener struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
-// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || self.certMode == 'http01'",message="tlsPassthroughListeners: supported with certMode http01 only; dns01 and existingSecret serve the tenant from one wildcard terminate listener that the pinned Cilium cannot keep apart from a passthrough listener under the same apex, and edge terminates TLS upstream and renders no TLS listener to sit beside"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || self.certMode != 'edge'",message="tlsPassthroughListeners: unsupported with certMode edge, which terminates TLS upstream and renders no TLS listener to sit beside"
 type TenantGatewaySpec struct {
 	// MaxLength is the DNS ceiling, so it rejects nothing resolvable,
 	// and it is not cosmetic: it is one of the three bounds the
@@ -330,8 +331,11 @@ type TenantGatewaySpec struct {
 
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
-	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
-	// Not rendered when CertMode=edge.
+	// listener on port 443 of a second Gateway, <name>-passthrough,
+	// rendered only while this list is non-empty and the platform values
+	// name this tenant as publishing under passthroughMode
+	// separateAddress; HTTPRoutes attach to TLS-terminate listeners
+	// instead. Not rendered when CertMode=edge.
 	//
 	// An entry becomes both the listener name tls-<svc> and the listener
 	// hostname <svc>.<apex>, and Gateway API bounds each at 253
@@ -347,8 +351,8 @@ type TenantGatewaySpec struct {
 	// The cap bounds what THIS field contributes to the Gateway's 64
 	// listener slots; it does not by itself guarantee the total fits.
 	// The rendered count is the port-80 listener plus one per published
-	// hostname, one per tlsPassthroughServices entry, and one per entry
-	// here — so a tenant can exceed 64 with far fewer than 62 of these.
+	// hostname and one per entry here — so a tenant can exceed 64 with
+	// far fewer than 62 of these.
 	// The controller checks the assembled total and fails with a named
 	// budget; this cap only keeps a single field from consuming the
 	// whole allowance. It also bounds the cost estimate for the CEL

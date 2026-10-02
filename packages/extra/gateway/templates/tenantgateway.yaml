@@ -190,12 +190,84 @@ spec:
     - {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- /* Not written at all in edge mode: the controller renders no TLS
-         listener for these, so an object advertising them would send an
-         operator looking for endpoints that are not published. */}}
-  {{- with (ternary (list) .Values.tlsPassthroughServices (eq $tlsTermination "edge")) }}
+  {{- /* The passthrough services are platform routes attached to the
+         publishing tenant's Gateway, so any other tenant rendering them
+         would reserve names and, under separateAddress, an address for
+         routes that never come. The same holds while the platform
+         gateway is off, since those routes are rendered only when it is
+         on. None in edge mode: the controller renders no TLS listener
+         there. */}}
+  {{- /* None either while the mode is absent: the platform always writes
+         it, so its absence is a values channel from before the mode, and
+         guessing one would publish the API in a layout the cluster may not
+         be on for the reconcile it takes the channel to catch up. */}}
+  {{- $passthroughMode := (index .Values._cluster "gateway-passthrough-mode") | default "" }}
+  {{- if not (has $passthroughMode (list "" "singleAddress" "separateAddress")) }}
+    {{- fail (printf "packages/extra/gateway: unsupported _cluster.gateway-passthrough-mode=%q. Supported values: singleAddress, separateAddress." $passthroughMode) }}
+  {{- end }}
+  {{- $exposed := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+  {{- $passthrough := list }}
+  {{- if and $passthroughMode (ne $tlsTermination "edge") (eq .Release.Namespace ((index .Values._cluster "expose-ingress") | default "tenant-root")) (eq (toString ((index .Values._cluster "gateway-enabled") | default "false")) "true") }}
+    {{- range .Values.tlsPassthroughServices }}
+      {{- if has . $exposed }}
+        {{- $passthrough = append $passthrough . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if eq $passthroughMode "separateAddress" }}
+  {{- with $passthrough }}
   tlsPassthroughServices:
     {{- range . }}
     - {{ . | quote }}
     {{- end }}
   {{- end }}
+  {{- else if has "api" $passthrough }}
+  {{- /* The other two are terminated on 443 by HTTPRoutes their own
+         charts render; the API is passed through, so its client
+         certificates reach kube-apiserver, on the port it is served on
+         elsewhere. */}}
+  tlsPassthroughListeners:
+    - name: api
+      port: 6443
+      hostname: {{ printf "api.%s" $host | quote }}
+  {{- end }}
+{{- /* The route for that listener ships here rather than with
+       cozystack-api: the listener admits routes from this namespace
+       alone, and cozystack-api installs before cozystack-basics creates
+       tenant-root, so a route of its own there fails the first install.
+       Under separateAddress cozystack-api ships the route, in default. */}}
+{{- if and (eq $passthroughMode "singleAddress") (has "api" $passthrough) }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kubernetes-api
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    sectionName: tls-api
+  hostnames:
+  - {{ printf "api.%s" $host | quote }}
+  rules:
+  - backendRefs:
+    - name: kubernetes
+      namespace: default
+      port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: kubernetes-api-tlsroute
+  namespace: default
+spec:
+  from:
+  - group: gateway.networking.k8s.io
+    kind: TLSRoute
+    namespace: {{ .Release.Namespace | quote }}
+  to:
+  - group: ""
+    kind: Service
+    name: kubernetes
+{{- end }}

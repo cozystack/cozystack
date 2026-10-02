@@ -18,12 +18,13 @@ package tenantgateway
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -31,6 +32,7 @@ import (
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 )
 
 // TestMapRouteToTenantGateways_HTTPRouteEnqueuesMatchingTGW pins the
@@ -46,7 +48,7 @@ func TestMapRouteToTenantGateways_HTTPRouteEnqueuesMatchingTGW(t *testing.T) {
 			GatewayClassName: "cilium",
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).Build()
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 
 	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
@@ -68,7 +70,7 @@ func TestMapRouteToTenantGateways_NoMatchingTGWReturnsNil(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
 		Spec:       gatewayv1alpha1.TenantGatewaySpec{Apex: "foo.example.com"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).Build()
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 
 	otherGroup := gatewayv1.Group(gatewayv1.GroupName)
@@ -96,7 +98,7 @@ func TestMapRouteToTenantGateways_NoMatchingTGWReturnsNil(t *testing.T) {
 // reconciliation.
 func TestMapRouteToTenantGateways_EmptyParentRefsReturnsNil(t *testing.T) {
 	s := newScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := newFakeClientBuilder().WithScheme(s).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 
 	route := &gatewayv1.HTTPRoute{
@@ -181,7 +183,7 @@ func TestMapBackendToTenantGateways(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScheme(t)
-			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, local, remote).Build()
+			c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw, local, remote).Build()
 			r := &Reconciler{Client: c, Scheme: s}
 			if reqs := r.mapBackendToTenantGateways(context.TODO(), tc.obj); len(reqs) != tc.want {
 				t.Errorf("requests = %+v, want %d", reqs, tc.want)
@@ -206,7 +208,7 @@ func TestMapBackendToTenantGateways_OneRequestPerGateway(t *testing.T) {
 	first := tlsRouteAttached("api-tls", "tenant-foo", "api.foo.example.com", "tls-api", "tenant-foo")
 	second := tlsRouteAttached("db-tls", "tenant-foo", "db.foo.example.com", "tls-db", "tenant-foo")
 
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, first, second).Build()
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw, first, second).Build()
 	r := &Reconciler{Client: c, Scheme: s}
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: tlsRouteBackendName, Namespace: "tenant-foo"}}
 	if reqs := r.mapBackendToTenantGateways(context.TODO(), svc); len(reqs) != 1 {
@@ -237,7 +239,7 @@ func TestMapBackendToTenantGateways_GatewayListOnlyOnMatch(t *testing.T) {
 	countLists := func(objs ...client.Object) (client.Client, *int) {
 		s := newScheme(t)
 		calls := 0
-		c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
+		c := newFakeClientBuilder().WithScheme(s).WithObjects(objs...).
 			WithInterceptorFuncs(interceptor.Funcs{
 				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 					if _, isGateways := list.(*gatewayv1alpha1.TenantGatewayList); isGateways {
@@ -295,7 +297,7 @@ func TestServiceExistenceChanged(t *testing.T) {
 	}
 
 	// Ports are the update most likely to look relevant. It is not:
-	// the pinned Cilium builds a filter chain from a backendRef whose
+	// Cilium v1.19.5 builds a filter chain from a backendRef whose
 	// Service exists without reading its ports, and tlsRouteForwards
 	// answers the question the same way.
 	before := svc.DeepCopy()
@@ -303,5 +305,81 @@ func TestServiceExistenceChanged(t *testing.T) {
 	after.Spec.Ports = []corev1.ServicePort{{Port: 5432}}
 	if p.Update(event.TypedUpdateEvent[client.Object]{ObjectOld: before, ObjectNew: after}) {
 		t.Error("a Service update must not reach the mapper; nothing here reads a Service beyond its existence")
+	}
+}
+
+// TestMapPlatformValuesToTenantGateways pins that a change to the values
+// channel requeues every TenantGateway, since each reads from it whether
+// it gets a passthrough Gateway.
+func TestMapPlatformValuesToTenantGateways(t *testing.T) {
+	s := newScheme(t)
+	tgw := func(ns string) *gatewayv1alpha1.TenantGateway {
+		return &gatewayv1alpha1.TenantGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: ns},
+			Spec:       gatewayv1alpha1.TenantGatewaySpec{Apex: ns + ".example.com"},
+		}
+	}
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw("tenant-a"), tgw("tenant-b")).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	if reqs := r.mapPlatformValuesToTenantGateways(context.TODO(), platformValues("separateAddress", "tenant-a")); len(reqs) != 2 {
+		t.Errorf("requeued %v, want both TenantGateways", reqs)
+	}
+	if !isPlatformValues(platformValues("separateAddress", "tenant-a")) {
+		t.Error("the values channel is filtered out of the Secret watch")
+	}
+	other := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: platformValuesKey.Namespace, Name: "other"}}
+	if isPlatformValues(other) {
+		t.Error("an unrelated Secret passes the Secret watch filter")
+	}
+}
+
+// TestPlatformValuesChannelIsInTheSecretCache pins that the manager's
+// Secret cache, scoped by wildcardsecret, still holds the values channel.
+// The reconciler reads it through that cache and reads NotFound as
+// "publish no passthrough Gateway", so narrowing the selector would drop
+// every second Gateway with no error, and the fake client here models no
+// cache scope to catch it.
+func TestPlatformValuesChannelIsInTheSecretCache(t *testing.T) {
+	scope, ok := wildcardsecret.SecretCacheByObject().Namespaces[platformValuesKey.Namespace]
+	if !ok || scope.FieldSelector == nil {
+		t.Fatalf("Secret cache has no field-selected entry for %s", platformValuesKey.Namespace)
+	}
+	if !scope.FieldSelector.Matches(fields.Set{"metadata.name": platformValuesKey.Name}) {
+		t.Errorf("Secret cache selector %q leaves out %s", scope.FieldSelector, platformValuesKey)
+	}
+}
+
+// TestMapGatewayClassToTenantGateways pins that a GatewayClass event
+// requeues exactly the TenantGateways on that class, the unset class
+// counting as cilium: GatewayClassUnsupported is read off the class's
+// status, so without the requeue a class that fills in or extends
+// supportedFeatures leaves Ready where an earlier pass put it.
+func TestMapGatewayClassToTenantGateways(t *testing.T) {
+	s := newScheme(t)
+	tgw := func(ns, class string) *gatewayv1alpha1.TenantGateway {
+		return &gatewayv1alpha1.TenantGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: ns},
+			Spec:       gatewayv1alpha1.TenantGatewaySpec{Apex: ns + ".example.com", GatewayClassName: class},
+		}
+	}
+	c := newFakeClientBuilder().WithScheme(s).WithObjects(tgw("tenant-a", "other"), tgw("tenant-b", ""), tgw("tenant-c", "cilium")).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	for _, tc := range []struct {
+		class string
+		want  []string
+	}{
+		{"other", []string{"tenant-a"}},
+		{"cilium", []string{"tenant-b", "tenant-c"}},
+		{"unused", nil},
+	} {
+		reqs := r.mapGatewayClassToTenantGateways(context.TODO(), &gatewayv1.GatewayClass{ObjectMeta: metav1.ObjectMeta{Name: tc.class}})
+		var got []string
+		for _, req := range reqs {
+			got = append(got, req.Namespace)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("class %s requeued %v, want %v", tc.class, got, tc.want)
+		}
 	}
 }

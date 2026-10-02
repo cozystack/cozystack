@@ -44,6 +44,7 @@ import (
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/backendca"
 	"github.com/cozystack/cozystack/internal/controller/cacert"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
@@ -202,8 +203,14 @@ func main() {
 		// Scope the shared Secret informer so the WildcardSecret reconciler's
 		// cluster-wide Secret watch does not cache every Secret (and its key
 		// material) in memory. Only managed wildcard replicas and the values
-		// channel are cached; no other reconciler reads Secrets through THIS
-		// (the manager's) typed Secret cache. See wildcardsecret.SecretCacheByObject.
+		// channel are cached. Two reconcilers read through THIS (the
+		// manager's) typed Secret cache: wildcardsecret, and tenantgateway,
+		// which reads the values channel to decide whether a TenantGateway
+		// gets a passthrough Gateway and reads its absence as "no". Dropping
+		// the channel from the selector would therefore remove every
+		// passthrough Gateway without an error;
+		// TestPlatformValuesChannelIsInTheSecretCache pins it. See
+		// wildcardsecret.SecretCacheByObject.
 		//
 		// The CA-extraction reconciler does NOT use this cache at all — neither its
 		// typed Secret informer nor a metadata one. A metadata informer for
@@ -211,8 +218,8 @@ func main() {
 		// wildcard-replica label selector, so its source watch would never fire for
 		// an unlabelled CA source. It therefore owns a SEPARATE metadata-only cache
 		// (caSecretCluster, below) and reads the one source it projects through the
-		// uncached APIReader. So this manager-level Secret scoping is
-		// wildcardsecret's alone.
+		// uncached APIReader. So this manager-level Secret scoping serves
+		// wildcardsecret and tenantgateway alone.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
@@ -275,6 +282,15 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
+	}
+
+	if err = (&backendca.Reconciler{
+		Client: mgr.GetClient(),
+		Reader: mgr.GetAPIReader(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "BackendCA")
 		os.Exit(1)
 	}
 

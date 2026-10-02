@@ -145,12 +145,106 @@ tests:
           path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-passthrough"]
           value: "true"
 
-  - it: renders the upload-proxy TLSRoute when the gateway is on
+  - it: separateAddress passes the upload proxy through the passthrough Gateway
+    template: cdi-uploadproxy-tlsroute.yaml
+    set:
+      _cluster:
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+    asserts:
+      - equal:
+          path: spec.parentRefs[0].sectionName
+          value: tls-cdi-uploadproxy
+      - equal:
+          path: spec.parentRefs[0].name
+          value: cozystack-passthrough
+
+  # The upload proxy authenticates a bearer upload token, not a client
+  # certificate, so the Gateway can terminate TLS in front of it.
+  - it: singleAddress terminates the upload proxy at the Gateway and re-encrypts
+    template: cdi-uploadproxy-httproute.yaml
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+    asserts:
+      - equal:
+          path: kind
+          value: HTTPRoute
+        documentIndex: 0
+      - equal:
+          path: spec
+          value:
+            parentRefs:
+              - group: gateway.networking.k8s.io
+                kind: Gateway
+                name: cozystack
+                namespace: tenant-root
+            hostnames:
+              - cdi-uploadproxy.example.com
+            rules:
+              - backendRefs:
+                  - name: cdi-uploadproxy
+                    port: 443
+                timeouts:
+                  request: 0s
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["gateway.cozystack.io/ca-bundle-from"]
+          value: cdi-uploadproxy-signer-bundle/ca-bundle.crt
+        documentIndex: 1
+      - equal:
+          path: spec
+          value:
+            targetRefs:
+              - group: ""
+                kind: Service
+                name: cdi-uploadproxy
+            validation:
+              caCertificateRefs:
+                - group: ""
+                  kind: ConfigMap
+                  name: cdi-uploadproxy-ca
+              hostname: cdi-uploadproxy.cozy-kubevirt-cdi.svc
+        documentIndex: 1
+
+  - it: singleAddress renders no TLSRoute
+    template: cdi-uploadproxy-tlsroute.yaml
+    set:
+      _cluster:
+        gateway-enabled: "true"
+        gateway-passthrough-mode: singleAddress
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: separateAddress renders no HTTPRoute
+    template: cdi-uploadproxy-httproute.yaml
+    set:
+      _cluster:
+        gateway-enabled: "true"
+        gateway-passthrough-mode: separateAddress
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The platform always writes the mode, so a channel without it predates
+  # the mode; publishing in a guessed layout could be the wrong one.
+  - it: an absent mode renders no HTTPRoute
+    template: cdi-uploadproxy-httproute.yaml
+    set:
+      _cluster:
+        gateway-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: an absent mode renders no TLSRoute
     template: cdi-uploadproxy-tlsroute.yaml
     set:
       _cluster:
         gateway-enabled: "true"
     asserts:
-      - equal:
-          path: spec.parentRefs[0].sectionName
-          value: tls-cdi-uploadproxy
+      - hasDocuments:
+          count: 0

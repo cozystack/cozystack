@@ -251,15 +251,15 @@ const passthroughListenerPrefix = "tls-"
 // isReservedGatewayPort reports whether port is one renderGateway always
 // occupies with its own listeners: 80 (the http listener carrying the
 // ACME challenge and the http->https redirect) and 443 (the
-// HTTPS-terminate listeners and the port-443 TLSPassthroughServices
-// listeners). A native-port passthrough listener must avoid both: a TLS
-// listener on port 80 alongside the HTTP listener, or on 443 alongside a
-// terminate listener for the same hostname, is a protocol conflict.
+// HTTPS-terminate listeners). A native-port passthrough listener must
+// avoid both: a TLS listener on port 80 alongside the HTTP listener, or
+// on 443 alongside a terminate listener for the same hostname, is a
+// protocol conflict.
 // Gateway API admits either — its listener uniqueness rule keys on
 // (port, protocol, hostname), so differing protocols are distinct — and
 // calls for the conflict to surface as Conflicted on both listeners,
-// which then serve nothing. That is the specification rather than the
-// pinned behaviour: v1.19.5 sets no Conflicted condition anywhere, and
+// which then serve nothing. That is the specification rather than what
+// every Cilium release does: v1.19.5 sets no Conflicted condition, and
 // v1.19.6 adds one in samePortCrossProtocolConflictedListeners, keyed on
 // the listener specs alone. Rejecting the entry up front turns either
 // into a per-field error on TenantGateway status instead.
@@ -282,48 +282,21 @@ const maxGatewayListeners = 64
 // they are built from are bounded separately from their sum.
 const maxGatewayNameLength = 253
 
-// validatePassthroughListenerCertMode refuses passthrough listeners in
-// every certificate mode but http01.
+// validatePassthroughListenerCertMode refuses passthrough listeners
+// under edge, which ends TLS at the class provider and renders no TLS
+// listener for an entry to bind to.
 //
 // It judges the field against a sibling field rather than against
 // itself, which is why it is separate from
-// validateTLSPassthroughListeners. http01 publishes one terminate
-// listener per attached hostname, so a passthrough hostname is simply a
-// name no terminate listener answers. dns01 and existingSecret serve the
-// tenant from one terminate listener for "*.<apex>" on port 443 instead,
-// and a passthrough hostname has to sit inside the apex, so that
-// wildcard SNI-intersects every entry this field can hold. Suppression
-// cannot answer it either: those modes render no per-hostname listener
-// to withdraw, and the wildcard covers the whole apex. edge is refused
-// for the opposite reason — it ends TLS at the class provider and
-// renders no TLS listener at all, so the entry has nothing to bind to.
+// validateTLSPassthroughListeners. The wildcard "*.<apex>" terminate
+// listener of dns01 and existingSecret SNI-overlaps every entry, but on
+// another port: Gateway API treats listeners on different ports as
+// compatible, and the shipped Cilium (v1.20.2) gives each port its own
+// Envoy listener when their SNI overlaps (NeedsCrossProtocolSplit in
+// operator/pkg/model/model.go), so neither reaches the other's backend.
 //
-// The intersection matters because the Cilium this repo pins does not
-// keep the two apart. v1.19.5 collapses the Gateway into a single Envoy
-// listener, and toFilterChainMatch in
-// operator/pkg/model/translation/envoy_listener.go matches on
-// transport_protocol and server_names only, so the terminate chain for
-// "*.<apex>" and the passthrough chain for a name under it end up in one
-// listener with an exact match winning over the wildcard. Upstream
-// states the consequence above NeedsCrossProtocolSplit in
-// operator/pkg/model/model.go as of v1.19.6: a combined Envoy listener
-// "would otherwise erase the original Gateway listener port boundary and
-// route traffic for one listener to another". A TLS connection arriving
-// on 443 for that name reaches the database backend.
-//
-// v1.19.6 splits the Envoy listeners per port and this stops being
-// true, though not unconditionally: NeedsPerPortListeners requires
-// more than one HTTPS port, or more than one routed passthrough port,
-// or a cross-port SNI overlap. The passthrough side of every term is
-// counted from attached routes, so a listener with no TLSRoute behind
-// it contributes no port and no filter chain to any of the three, and
-// the listener is all this field creates: the split arrives with the
-// route rather than with the bump. The HTTPS side is not route-gated,
-// but this field adds nothing there.
-// Lifting the refusal for one of the wildcard modes means editing two
-// copies of it, this one and the matching CEL rule in the CRD, which is
-// a schema change even though no field or type moves. The pin is the
-// thing to watch: packages/system/cilium/images/cilium/Dockerfile.
+// Relaxing or tightening this means editing two copies, this one and
+// the matching CEL rule on TenantGatewaySpec.
 func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
 	if len(listeners) == 0 {
 		return nil
@@ -331,7 +304,7 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 	if rendersPassthroughListeners(mode) {
 		return nil
 	}
-	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; only http01 renders the per-hostname terminate listeners a passthrough hostname can sit beside. dns01 and existingSecret serve the whole apex from one wildcard terminate listener, and the pinned Cilium routes both by SNI alone in one Envoy listener, so a connection would reach the passthrough backend; edge terminates TLS at the class provider and renders no TLS listener at all", mode)
+	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; edge terminates TLS at the class provider and renders no TLS listener at all", mode)
 }
 
 // rendersPassthroughListeners reports whether a certificate mode renders
@@ -344,7 +317,7 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // same absence as http01.
 func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 	switch mode {
-	case gatewayv1alpha1.CertModeHTTP01, "":
+	case gatewayv1alpha1.CertModeHTTP01, gatewayv1alpha1.CertModeDNS01, gatewayv1alpha1.CertModeExistingSecret, "":
 		return true
 	}
 	return false
@@ -360,24 +333,14 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // get an HTTPS-terminate listener, and the reason differs by field
 // only in which layer refuses.
 //
-// A TLSPassthroughServices entry shares port 443 with the terminate
-// listeners, so a hostname claimed by both produces two listeners on one
-// port under one name. Gateway API admits the pair and then requires
-// both to report Conflicted, after which neither serves. What the pinned
-// Cilium does with it is a different question, and the two answers are
-// one patch release apart: v1.19.5 has no Conflicted condition at all —
-// setListenerStatus in operator/pkg/gateway-api/gateway_reconcile.go
-// writes Accepted, Programmed and ResolvedRefs and nothing else — so the
-// pair reaches Envoy as two filter chains whose FilterChainMatch carries
-// one transport protocol and one server name. v1.19.6 adds
-// samePortCrossProtocolConflictedListeners, which finds the pair from
-// the listener specs alone and marks both Conflicted and not Accepted.
-// So on the pin the collision is invisible on the objects, and on the
-// next patch release the declaration alone is enough to kill both.
+// A TLSPassthroughServices entry renders on the passthrough Gateway,
+// which DNS points the name at under separateAddress, so a terminate
+// listener for the same name on the main Gateway would answer nothing
+// and its HTTP-01 order would reach a Gateway with no port-80 listener.
 //
-// A TLSPassthroughListeners entry sits on its own port, and that is not
-// the protection it looks like on the Cilium this repo pins. v1.19.5
-// (packages/system/cilium/images/cilium/Dockerfile) translates the whole
+// A TLSPassthroughListeners entry sits on its own port, and before
+// v1.19.6 that was not the protection it looks like. v1.19.5 translated
+// the whole
 // Gateway into a single Envoy listener and hangs the ports off
 // AdditionalAddresses; toFilterChainMatch in
 // operator/pkg/model/translation/envoy_listener.go matches on
@@ -391,15 +354,19 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // v1.19.6 answers it by splitting the Envoy listeners per port when
 // NeedsPerPortListeners holds, which needs a TLSRoute behind the
 // native-port listener before that listener counts at all; v1.19.5
-// has neither the split nor the diagnostic, so the answer here is to
-// keep the pair from being rendered. Revisit when the pin moves.
+// has neither the split nor the diagnostic, so the answer here was to
+// keep the pair from being rendered. The shipped v1.20.2 splits, so the
+// rule no longer protects the dataplane; it holds as a policy instead: a
+// name a passthrough listener serves is reserved to it, so an app cannot
+// take a platform name on another port.
 //
 // The cost is that an HTTPRoute claiming a hostname declared here gets
 // no listener wherever a TLSRoute is servable on the overlapping entry.
-// Nothing hostile is needed to reach that: tlsPassthroughServices is a
-// chart value shipped defaulted to api, vm-exportproxy and
-// cdi-uploadproxy, so a tenant app named after one of them collides with
-// a platform default. Suppression is not what breaks that hostname —
+// Nothing hostile is needed to reach that on the publishing tenant: the
+// chart writes the api entry there under singleAddress, and all three of
+// api, vm-exportproxy and cdi-uploadproxy under separateAddress, so an
+// app of that tenant named after one of them collides with a platform
+// default. Suppression is not what breaks that hostname —
 // the same collision already rendered a terminate listener and a
 // passthrough listener under one SNI, and with a route on the
 // passthrough side which of them answered was not something the objects
@@ -409,14 +376,14 @@ func rendersPassthroughListeners(mode gatewayv1alpha1.CertMode) bool {
 // terminate listener answers it and keeps it.
 //
 // What the withdrawal takes away is the record of the collision on the
-// Gateway, which on the pin is nothing and on v1.19.6 would be the
+// Gateway, which on v1.19.5 is nothing and from v1.19.6 is the
 // Conflicted condition. updateRouteStatuses puts it on the route
 // instead, as Accepted=False with NoMatchingListenerHostname naming the
 // passthrough hostname that answers the claim.
 //
 // The caller matches a claimed hostname against these by SNI overlap
 // rather than by equality, because a "*.db.<apex>" entry answers
-// "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
+// "pg.db.<apex>" on Cilium v1.19.5 exactly as an explicit entry would:
 // the filter chain match carries ServerNames and no port. Comparing by
 // equality leaves that pair rendered and exposed to the translation this
 // filter exists to avoid. What the overlap settles is which entry
@@ -430,6 +397,9 @@ type passthroughListener struct {
 	// section is the rendered Gateway listener name, which is also the
 	// sectionName a route pins itself to.
 	section string
+	// gateway is the Gateway the listener renders on, which a route
+	// has to name in its parentRef to reach it.
+	gateway string
 	// hostname is the SNI the listener answers.
 	hostname string
 	// port is the Gateway port the listener is published on: 443 for a
@@ -445,9 +415,9 @@ type passthroughListener struct {
 }
 
 // passthroughListeners enumerates them: one per rendered
-// TLSPassthroughServices entry on port 443, then one per
-// TLSPassthroughListeners entry on its native port, in the order
-// renderGateway emits them.
+// TLSPassthroughServices entry on port 443 of the passthrough Gateway,
+// then one per TLSPassthroughListeners entry on its native port of the
+// main one.
 //
 // Rendered, not declared: the port-443 entries are the ones the mode
 // actually turns into listeners, which is none under edge. Reading the
@@ -466,6 +436,7 @@ func passthroughListeners(tgw *gatewayv1alpha1.TenantGateway) []passthroughListe
 	for _, svc := range services {
 		out = append(out, passthroughListener{
 			section:  passthroughListenerPrefix + svc,
+			gateway:  passthroughGatewayName(tgw),
 			hostname: svc + "." + tgw.Spec.Apex,
 			port:     443,
 		})
@@ -473,6 +444,7 @@ func passthroughListeners(tgw *gatewayv1alpha1.TenantGateway) []passthroughListe
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
 		out = append(out, passthroughListener{
 			section:    passthroughListenerPrefix + pl.Name,
+			gateway:    tgw.Name,
 			hostname:   pl.Hostname,
 			port:       pl.Port,
 			tenantOnly: true,
