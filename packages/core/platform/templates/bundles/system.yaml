@@ -380,6 +380,20 @@ variants and opt-in on the slim ones. */}}
 {{- $cfTunnelController = dict "clusterDomain" . -}}
 {{- end }}
 {{- $cfTunnelComponents := dict "cloudflare-tunnel-gateway-controller" (dict "values" (dict "cloudflare-tunnel-gateway-controller" (dict "controller" $cfTunnelController))) -}}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.cloudflare-tunnel-gateway-controller" $ $cfTunnelComponents) }}
+{{- /* Disable hazard guard, the same shape as the ouroboros one above.
+       helm.sh/resource-policy: keep means that taking the name out of
+       enabledPackages (or vetoing it through disabledPackages) stops
+       rendering the Package and deletes nothing: the controller keeps its
+       cluster-wide Secret read and Deployment write on a cluster whose
+       values say it is off. No acknowledgement flag is needed to get past
+       it, because deleting the Package is the exit: the next render's
+       lookup comes back empty. lookup is also empty under helm template
+       and dry-run, so CI and fresh installs never trip it. */ -}}
+{{- $cfTunnelName := "cozystack.cloudflare-tunnel-gateway-controller" -}}
+{{- $cfTunnelRendered := and (has $cfTunnelName (default (list) .Values.bundles.enabledPackages)) (not (has $cfTunnelName (default (list) .Values.bundles.disabledPackages))) -}}
+{{- if and (not $cfTunnelRendered) (lookup "cozystack.io/v1alpha1" "Package" "" $cfTunnelName) -}}
+{{- fail (printf "%s is no longer rendered (it is missing from bundles.enabledPackages or listed in bundles.disabledPackages), but its Package still exists on the cluster. helm.sh/resource-policy: keep leaves that Package, its HelmRelease and the controller's cluster-wide RBAC running. Either list it in bundles.enabledPackages again, or remove it: delete every Gateway on the cloudflare-tunnel class first (the controller is the only thing that clears the GatewayClass finalizer), then `kubectl delete package.cozystack.io %s`; the next platform reconcile then renders cleanly." $cfTunnelName $cfTunnelName) -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list $cfTunnelName $ $cfTunnelComponents) }}
 
 {{- end }}
