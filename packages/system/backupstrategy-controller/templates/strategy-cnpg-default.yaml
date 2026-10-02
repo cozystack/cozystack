@@ -6,7 +6,13 @@ metadata:
   name: cozy-default-cnpg
 spec:
   template:
-    serverName: {{ printf "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}" | quote }}
+    {{- /*
+      The uid keeps a Postgres deleted and recreated under the same name off
+      its predecessor's archive: destinationPath is per name, and CNPG drops
+      the empty-archive guard before the first BackupJob attaches the plugin.
+      The driver keeps the serverName of a Cluster already archiving.
+    */}}
+    serverName: {{ printf "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}{{ with .Application.metadata.uid }}-{{ . }}{{ end }}" | quote }}
     barmanObjectStore:
       destinationPath: {{ printf "s3://%s/{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" $bucketName | quote }}
       endpointURL: {{ include "backupstrategy-controller.endpoint" . | quote }}

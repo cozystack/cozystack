@@ -79,8 +79,11 @@ type CNPGTemplate struct {
 	BarmanObjectStore BarmanObjectStoreTemplate `json:"barmanObjectStore"`
 
 	// ServerName overrides the Barman server name used as the storage path
-	// prefix. When empty, the driver defaults it to the application name.
-	// Templating is supported.
+	// prefix. When empty, the driver defaults it to the Cluster name suffixed
+	// with the application UID, so a recreated application never archives
+	// into its predecessor's prefix. A Cluster that already has the
+	// barman-cloud plugin attached keeps its serverName. Templating is
+	// supported.
 	// +optional
 	ServerName string `json:"serverName,omitempty"`
 }
