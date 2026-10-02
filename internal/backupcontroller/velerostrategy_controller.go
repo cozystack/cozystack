@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -1017,7 +1018,9 @@ func shortHash(input string) string {
 // (e.g. restore requested when app was already deleted). Each action emits
 // a Kubernetes Event on the RestoreJob for observability. The rename is the
 // exception: the DataVolume deletion after it would hand a disk that was not
-// kept to the restore, as keepOriginalPVC=false does, so it fails the restore.
+// kept to the restore, as keepOriginalPVC=false does. A failed rename holds
+// the restore back and is retried, and an -orig name another PVC holds fails
+// the restore.
 //
 // postRestoreRename renames VMInstance HelmRelease after Velero Restore completes.
 // Velero resource modifiers cannot change metadata.name, so this step creates
@@ -1114,7 +1117,13 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 	// than fail halfway through a multi-disk rename.
 	if opts.GetKeepOriginalPVC() && vmRes != nil {
 		for _, dv := range vmRes.DataVolumes {
-			if _, err := r.checkOrigPVCName(ctx, restoreJob, ns, dv.DataVolumeName+origSuffix); err != nil {
+			origPVC, err := r.getOrigPVC(ctx, ns, dv.DataVolumeName+origSuffix)
+			if err != nil {
+				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
+					fmt.Sprintf("Failed to check PVC %s: %v", dv.DataVolumeName+origSuffix, err))
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+			}
+			if err := foreignOrigPVC(origPVC, restoreJob); err != nil {
 				return false, ctrl.Result{}, err
 			}
 		}
@@ -1167,7 +1176,7 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 			if err := r.renamePVC(ctx, restoreJob, ns, dv.DataVolumeName, dv.DataVolumeName+origSuffix); err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 					fmt.Sprintf("Failed to keep old PVC %s: %v", dv.DataVolumeName, err))
-				return false, ctrl.Result{}, fmt.Errorf("failed to keep PVC %s: %w", dv.DataVolumeName, err)
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
 			}
 		}
 	}
@@ -1257,21 +1266,26 @@ func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name st
 	return nil
 }
 
-// checkOrigPVCName fails when newName is already taken by a PVC this
-// RestoreJob did not create. Proceeding would hand the live disk to the
-// restore under its own name, as keepOriginalPVC=false does, while the -orig
-// name holds some other disk. It returns the PVC this RestoreJob did create,
-// or nil.
-func (r *RestoreJobReconciler) checkOrigPVCName(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns, newName string) (*corev1.PersistentVolumeClaim, error) {
-	existing := &corev1.PersistentVolumeClaim{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: newName}, existing); err != nil {
+// getOrigPVC returns the PVC named name, or nil when there is none. It reads
+// past the cache: a retried rename must see the -orig PVC it created, not
+// take the name for free and fail to create it again.
+func (r *RestoreJobReconciler) getOrigPVC(ctx context.Context, ns, name string) (*corev1.PersistentVolumeClaim, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, pvc); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
-	if existing.Annotations[origPVCRestoreJobUIDAnnotation] != string(restoreJob.UID) {
-		return nil, fmt.Errorf("PVC %s/%s already exists and was not created by this RestoreJob, so the current disk cannot be kept under that name: "+
-			"remove that PVC or create the RestoreJob under another name", ns, newName)
+	return pvc, nil
+}
+
+// foreignOrigPVC fails when pvc exists and restoreJob did not create it.
+// Proceeding would hand the live disk to the restore under its own name, as
+// keepOriginalPVC=false does, while the -orig name holds some other disk.
+func foreignOrigPVC(pvc *corev1.PersistentVolumeClaim, restoreJob *backupsv1alpha1.RestoreJob) error {
+	if pvc == nil || pvc.Annotations[origPVCRestoreJobUIDAnnotation] == string(restoreJob.UID) {
+		return nil
 	}
-	return existing, nil
+	return fmt.Errorf("PVC %s/%s already exists and was not created by this RestoreJob, so the current disk cannot be kept under that name: "+
+		"remove that PVC or create the RestoreJob under another name", pvc.Namespace, pvc.Name)
 }
 
 // renamePVC preserves an existing PVC by rebinding it under a new name.
@@ -1282,14 +1296,17 @@ func (r *RestoreJobReconciler) checkOrigPVCName(ctx context.Context, restoreJob 
 func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns, oldName, newName string) error {
 	logger := getLogger(ctx)
 
-	newPVC, err := r.checkOrigPVCName(ctx, restoreJob, ns, newName)
+	newPVC, err := r.getOrigPVC(ctx, ns, newName)
 	if err != nil {
+		return err
+	}
+	if err := foreignOrigPVC(newPVC, restoreJob); err != nil {
 		return err
 	}
 	resuming := newPVC != nil
 
 	oldPVC := &corev1.PersistentVolumeClaim{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: oldName}, oldPVC); err != nil {
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: oldName}, oldPVC); err != nil {
 		if !errors.IsNotFound(err) {
 			return err
 		}
@@ -1311,7 +1328,7 @@ func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backup
 
 		// Patch PV reclaim policy to Retain so it survives PVC deletion.
 		// A policy already recorded is the one from before any rename.
-		if err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
 			return fmt.Errorf("failed to get PV %s: %w", pvName, err)
 		}
 		originalPolicy, recorded := pv.Annotations[originalReclaimPolicyAnnotation]
@@ -1344,12 +1361,10 @@ func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backup
 				VolumeName:       pvName,
 			},
 		}
+		// Create fills in the UID the claimRef needs. Reading the PVC back
+		// through the cache can miss it, as it is this reconcile's own write.
 		if err := r.Create(ctx, newPVC); err != nil {
 			return fmt.Errorf("failed to create -orig PVC %s: %w", newName, err)
-		}
-		// Re-read to get UID for the claimRef
-		if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: newName}, newPVC); err != nil {
-			return fmt.Errorf("failed to get -orig PVC %s: %w", newName, err)
 		}
 	}
 
@@ -1364,21 +1379,31 @@ func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backup
 
 	// Point the PV's claimRef directly to the new -orig PVC.
 	// This is atomic — no window where the PV is Available for other PVCs to grab.
-	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
-		return fmt.Errorf("failed to re-fetch PV %s: %w", pvName, err)
-	}
-	if ref := pv.Spec.ClaimRef; ref != nil && ref.Namespace == ns && ref.Name == newName && ref.UID == newPVC.UID {
-		return nil
-	}
-	pv.Spec.ClaimRef = &corev1.ObjectReference{
-		APIVersion: "v1",
-		Kind:       "PersistentVolumeClaim",
-		Namespace:  ns,
-		Name:       newName,
-		UID:        newPVC.UID,
-	}
-	if err := r.Update(ctx, pv); err != nil {
+	// The PV controller writes the PV too once the original PVC is gone, so
+	// the read is uncached and a conflict is retried.
+	rebound := false
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
+			return err
+		}
+		if ref := pv.Spec.ClaimRef; ref != nil && ref.Namespace == ns && ref.Name == newName && ref.UID == newPVC.UID {
+			return nil
+		}
+		pv.Spec.ClaimRef = &corev1.ObjectReference{
+			APIVersion: "v1",
+			Kind:       "PersistentVolumeClaim",
+			Namespace:  ns,
+			Name:       newName,
+			UID:        newPVC.UID,
+		}
+		rebound = true
+		return r.Update(ctx, pv)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to rebind PV %s to %s: %w", pvName, newName, err)
+	}
+	if !rebound {
+		return nil
 	}
 
 	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",

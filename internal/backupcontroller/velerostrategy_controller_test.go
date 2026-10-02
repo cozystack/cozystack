@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -1432,17 +1433,88 @@ func TestRenamePVC_RecordsOriginalReclaimPolicy(t *testing.T) {
 	}
 }
 
-// Any failure to keep the disk must stop the restore before its DataVolume
-// is deleted, not only a taken -orig name.
+// Any failure to keep the disk must hold the restore back before its
+// DataVolume is deleted, not only a taken -orig name, and the retry must
+// finish the rename once the cause is gone.
 func TestPrepareForRestore_KeepOriginalPVC_FailedRenameKeepsDataVolume(t *testing.T) {
 	f := newKeepPVCFixture(t)
 	r := f.reconciler(t, f.livePVC) // PV pv-current is missing
 	ctx := context.Background()
 
-	if _, _, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts); err == nil {
-		t.Error("prepareForRestore() succeeded although the PVC could not be kept")
+	ready, result, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || ready || result.RequeueAfter == 0 {
+		t.Errorf("prepareForRestore() = ready %v, %+v, error %v; want a requeue without failing the restore", ready, result, err)
 	}
 	if !f.dataVolumeExists(t, r) {
-		t.Error("DataVolume was deleted although the disk could not be kept")
+		t.Fatal("DataVolume was deleted although the disk could not be kept")
+	}
+
+	if err := r.Create(ctx, f.pv); err != nil {
+		t.Fatal(err)
+	}
+	ready, _, err = r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || !ready {
+		t.Fatalf("retry: prepareForRestore() = ready %v, error %v; want ready", ready, err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Errorf("retry: -orig PVC: %v", err)
+	}
+	if f.dataVolumeExists(t, r) {
+		t.Error("retry: DataVolume was not deleted after the rename completed")
+	}
+}
+
+// laggingCacheReconciler serves every cached read from the objects as they
+// were seeded, as an informer that has not caught up with this reconcile's
+// own writes would; APIReader sees the writes.
+func (f *keepPVCFixture) laggingCacheReconciler(t *testing.T, objects ...client.Object) *RestoreJobReconciler {
+	t.Helper()
+	r := f.reconciler(t, objects...)
+	seeded := append([]client.Object{f.restoreJob, f.backup}, objects...)
+	for i, obj := range seeded {
+		seeded[i] = obj.DeepCopyObject().(client.Object)
+	}
+	cache := clientfake.NewClientBuilder().WithScheme(r.Scheme).WithObjects(seeded...).Build()
+	apiServer := r.Client.(client.WithWatch)
+	r.Client = interceptor.NewClient(apiServer, interceptor.Funcs{
+		Get: func(ctx context.Context, _ client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			return cache.Get(ctx, key, obj, opts...)
+		},
+	})
+	r.APIReader = apiServer
+	return r
+}
+
+// On the lab, a two-disk restore failed one disk with "failed to get -orig
+// PVC ...: not found": the PVC had just been created, and the cache had not
+// seen it yet. The rename must not depend on the cache seeing its own writes.
+func TestPrepareForRestore_KeepOriginalPVC_CacheLagsBehindWrites(t *testing.T) {
+	f := newKeepPVCFixture(t)
+	r := f.laggingCacheReconciler(t, f.livePVC, f.pv)
+	ctx := context.Background()
+
+	ready, _, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || !ready {
+		t.Fatalf("prepareForRestore() = ready %v, error %v; want ready", ready, err)
+	}
+	kept := &corev1.PersistentVolumeClaim{}
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, kept); err != nil {
+		t.Fatalf("-orig PVC: %v", err)
+	}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(f.livePVC), &corev1.PersistentVolumeClaim{}); !errors.IsNotFound(err) {
+		t.Errorf("original PVC still exists (err %v)", err)
+	}
+	pv := &corev1.PersistentVolume{}
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: "pv-current"}, pv); err != nil {
+		t.Fatal(err)
+	}
+	if ref := pv.Spec.ClaimRef; ref == nil || ref.Name != f.origName || ref.UID != kept.UID {
+		t.Errorf("PV claimRef = %+v, want %s", ref, f.origName)
+	}
+	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("PV policy = %s, want Retain", pv.Spec.PersistentVolumeReclaimPolicy)
+	}
+	if f.dataVolumeExists(t, r) {
+		t.Error("DataVolume was not deleted after the rename completed")
 	}
 }
