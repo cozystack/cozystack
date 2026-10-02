@@ -113,3 +113,10 @@ tests:
           path: data["fluent-bit.conf"]
           pattern: 'Rule \$kubernetes_namespace_name \^\(tenant-inherits-root\|tenant-root\)\$ tenant\.tenant-root\.\$TAG false'
 
+  # Fluent Bit's net.io_timeout defaults to 0s (no timeout) and keepalive is on,
+  # so one stalled connection to vlinsert blocks every input sharing the output.
+  - it: bounds every http output with net.io_timeout, tenant outputs included
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '(?s)Match kube\.\*\n.*?net\.io_timeout 30s\n.*?Match events\.\*\n.*?net\.io_timeout 30s\n.*?Match audit\.\*\n.*?net\.io_timeout 30s\n.*?Match tenant\.tenant-a\.\*\n.*?net\.io_timeout 30s\n.*?Match tenant\.tenant-b\.\*\n.*?net\.io_timeout 30s\n'
