@@ -921,13 +921,41 @@ assert_full_suite() {
     # ingress application, and tenant Kubernetes clusters. The gateway suite
     # owns the host-cluster Ingress admission regression, while the two
     # Kubernetes suites cover the copies installed inside tenant clusters --
-    # two, not four, since the OIDC pair was folded into kubernetes-latest.
+    # two, not four, since the OIDC pair was folded into kubernetes-latest --
+    # and computeplane covers the copy its module pins inside its cluster.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/ingress-nginx/templates/admission-webhook-egress-policy.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_selection "an ingress-nginx change must exercise every installed copy" \
-        "$output" "gateway kubernetes-latest kubernetes-previous"
+        "$output" "computeplane gateway kubernetes-latest kubernetes-previous"
+    rm -rf "$tmp"
+}
+
+@test "a kubernetes-nodes pool chart change selects computeplane and both kubernetes suites" {
+    # apps/kubernetes-nodes belongs to kubernetes-nodes-application and to
+    # computeplane-application. The kubernetes suites create KubernetesNodes
+    # natively and computeplane renders pools through its module, so a pool
+    # chart change has to reach all three, not only the source that happens
+    # to have a suite of its own name.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/kubernetes-nodes/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_selection "a pool chart change must exercise native and module pools" \
+        "$output" "computeplane kubernetes-latest kubernetes-previous"
+    rm -rf "$tmp"
+}
+
+@test "a kubernetes-nodes-rd change selects computeplane and both kubernetes suites" {
+    # kubernetes-nodes-rd ships only in kubernetes-nodes-application, which
+    # maps to the same three suites as the pool chart it registers.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_selection "a kubernetes-nodes-rd change must exercise native and module pools" \
+        "$output" "computeplane kubernetes-latest kubernetes-previous"
     rm -rf "$tmp"
 }
 
