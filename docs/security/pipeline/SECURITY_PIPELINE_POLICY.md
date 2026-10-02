@@ -71,9 +71,9 @@ Triage questions:
 ### 7. Disclosure
 
 - **CRITICAL/HIGH (confirmed):** GitHub Security Advisory (draft, then published after fix)
-- **MEDIUM/LOW:** Mentioned in monthly public security summary
+- **Monthly public summary:** a finding is named (CVE identifier, package, fixed version) only once its fix is released. **In-progress and accepted-risk findings are published as severity counts only — CVE identifiers and package names are withheld until a fix is released**, because a named unfixed CVE crossed with this project's public, version-pinned component list locates unpatched exposure in a running deployment. The monthly report generator enforces this.
 - **Raw scanner output** is never published
-- **False positives and accepted risks** are documented internally but not published
+- **False positives** are documented internally but not published
 
 ## What Is Private
 

@@ -13,14 +13,13 @@ Usage:
 """
 
 import argparse
-import json
 import os
-import re
 import subprocess
 import time
-from datetime import datetime, timezone
 
-from statelib import load_json, save_json, override_suppresses, age_drops, cve_age_days
+from statelib import (
+    load_json, save_json, filter_decision, cve_age_days, AGE_DROPPED,
+)
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
@@ -39,14 +38,21 @@ SEVERITY_LABELS = {
 
 
 def should_skip(cve_id, data, triage):
-    """Apply the same filters as report.py — via the shared statelib helpers, so
-    the CRITICAL/HIGH age carve-out and the review_after check cannot drift out of
-    sync between the two scripts (which is exactly what happened before)."""
-    if override_suppresses(cve_id, triage):
-        return True, f"triaged as {triage[cve_id].get('status', '')}"
-    if age_drops(data, cve_id):
-        return True, f"unfixed {cve_age_days(cve_id)}d"
-    return False, None
+    """The same decision as report.classify_filter: both call statelib.filter_decision,
+    so they cannot drift.
+
+    dev_only is False because a reported-cves record keeps only target repositories,
+    not the component paths that decide it; a record exists only because report.py
+    already ruled the finding not dev-only when it reported it.
+
+    This is a repair tool: it only decides whether to create an issue. It neither
+    performs the re-review transition for a review-due override nor persists an
+    age-drop — report.py owns both on its next run, so there is no mutation to keep
+    mirrored between the two scripts."""
+    skip, reason = filter_decision(cve_id, data, triage, dev_only=False)
+    if reason == AGE_DROPPED:
+        reason = f"unfixed {cve_age_days(cve_id)}d"
+    return skip, reason
 
 
 def create_issue(cve_id, data):
@@ -163,7 +169,7 @@ def main():
             # Rate limit: GitHub allows 100 requests/min for authenticated users
             time.sleep(1)
         else:
-            print(f"    Failed, stopping to avoid rate limit issues")
+            print("    Failed, stopping to avoid rate limit issues")
             break
 
     save_json(REPORTED_FILE, reported)

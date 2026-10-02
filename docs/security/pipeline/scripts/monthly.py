@@ -10,12 +10,11 @@ a summary of what was fixed, what is confirmed/in-progress, and what was
 accepted as risk during the past month.
 """
 
-import json
 import os
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 
-from statelib import load_json
+from statelib import load_json, save_json, RESOLVED_STATUSES
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
@@ -111,9 +110,15 @@ def main():
     # Separate human triage decisions from machine auto-dismissals: report.py writes
     # `decided_by: pipeline-auto` accepted-risk entries into the same file, and a
     # "Total triaged" figure the prose calls maintainer-reviewed must not silently
-    # grow with findings nobody looked at.
+    # grow with findings nobody looked at. Auto-suppressed counts only entries still
+    # in a suppressing (resolved) status: once report.py surfaces a machine entry for
+    # re-review its status leaves RESOLVED_STATUSES, so it is no longer suppressed and
+    # must not be counted under "auto-suppressed, pending review".
     total_triaged = sum(1 for v in triage.values() if v.get("decided_by") != "pipeline-auto")
-    total_auto_suppressed = sum(1 for v in triage.values() if v.get("decided_by") == "pipeline-auto")
+    total_auto_suppressed = sum(
+        1 for v in triage.values()
+        if v.get("decided_by") == "pipeline-auto" and v.get("status") in RESOLVED_STATUSES
+    )
 
     # Build report
     new_summary_parts = []
@@ -219,10 +224,13 @@ See [SECURITY.md](https://github.com/cozystack/cozystack/blob/main/SECURITY.md) 
         },
     }
 
+    # Atomic write: latest.json is the public website payload, and a run killed
+    # mid-dump must not leave a truncated file for the site to serve. save_json
+    # writes to a temp file and renames over the target, like every other state
+    # writer.
     json_path = os.path.join(REPORTS_DIR, "monthly", "latest.json")
-    with open(json_path, "w") as f:
-        json.dump(website_json, f, indent=2)
-    print(f"Saved: reports/monthly/latest.json")
+    save_json(json_path, website_json)
+    print("Saved: reports/monthly/latest.json")
 
     print(f"\nSummary for {month_label}:")
     print(f"  New: {len(new_this_month)}, Fixed: {len(fixed_this_month)}, In-progress: {len(in_progress)}")

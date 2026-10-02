@@ -14,7 +14,7 @@ import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 
-from statelib import load_json, save_json
+from statelib import load_json, save_json, parse_ts, now_ts
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 STATE_DIR = os.path.join(REPO_ROOT, "state")
@@ -32,7 +32,7 @@ LABEL_TO_STATUS = {
 
 
 def extract_cve_from_title(title):
-    """Extract CVE ID from issue title like 'security_critical: CVE-2025-15467 — ...'"""
+    """Extract CVE ID from issue title like 'security_critical: CVE-YYYY-NNNNN — ...'"""
     match = re.search(r"(CVE-\d{4}-\d+)", title)
     return match.group(1) if match else None
 
@@ -119,6 +119,37 @@ def main():
         if existing.get("status") == status:
             continue
 
+        # The staleness guard is only about a DIFFERENT, older issue reverting a newer
+        # decision. Re-labelling the SAME closed issue (same number) is the latest word
+        # on that very issue — the status differs (we passed the same-status check
+        # above), so it must always apply; that is the documented way to revisit a
+        # false-positive, and comparing its unchanged closed_at against itself would
+        # wrongly skip it. A re-review stamp (statelib.surface_due_override) moves the
+        # record to the new re-review issue, so the issue it re-opened counts as a
+        # different, older issue here and its unchanged label cannot revert it.
+        #
+        # For a different issue: newest close wins, independent of API order — any issue
+        # not strictly newer than what is on record is skipped, ties on close time break
+        # by issue number, and an undated issue is not evidence of a newer decision than
+        # a dated one on record. existing_ts falls back to decided_at because records
+        # written before closed_at existed carry only decided_at; without the fallback
+        # the guard would be dead for every such record and a stale issue would overwrite
+        # unconditionally.
+        existing_num = existing.get("issue_number")
+        if issue["number"] != existing_num:
+            issue_ts = parse_ts(issue.get("closedAt"))
+            existing_ts = parse_ts(existing.get("closed_at") or existing.get("decided_at"))
+            if existing_ts and not issue_ts:
+                print(f"  SKIP {cve_id}: issue #{issue['number']} has no close time; "
+                      f"keeping newer record (#{existing_num})")
+                continue
+            if issue_ts and existing_ts and (
+                (issue_ts, issue["number"]) <= (existing_ts, existing_num if existing_num is not None else -1)
+            ):
+                print(f"  SKIP {cve_id}: issue #{issue['number']} not newer than "
+                      f"recorded decision (#{existing_num})")
+                continue
+
         assignees = [a["login"] for a in issue.get("assignees", [])]
         decided_by = assignees[0] if assignees else "unknown"
 
@@ -126,18 +157,22 @@ def main():
             "status": status,
             "reason": f"Triaged via issue #{issue['number']}",
             "decided_by": decided_by,
-            "decided_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            # decided_at is the record time (when the pipeline learned of the decision)
+            # — what the monthly report buckets on, kept monotonic. closed_at is the
+            # decision's real event time, used only for the ordering/staleness compare
+            # above so a late-recorded fix is not mis-bucketed into a past month.
+            "decided_at": now_ts(),
+            "closed_at": issue.get("closedAt") or now_ts(),
             "issue_number": issue["number"],
             "issue_url": f"https://github.com/{ISSUES_REPO}/issues/{issue['number']}",
         }
-        # accepted-risk carries a 90-day re-review: without a review_after date the
+        # accepted-risk carries a 90-day re-review: without a review_after the
         # label-driven acceptance (the main triage channel) would be permanent, the
-        # same gap report.py's age filter now avoids. false-positive is terminal and
-        # gets none.
+        # same gap report.py's age filter avoids. false-positive is terminal.
         if status == "accepted-risk":
             entry["review_after"] = (
                 datetime.now(timezone.utc) + timedelta(days=90)
-            ).strftime("%Y-%m-%d")
+            ).date().isoformat()
         triage[cve_id] = entry
         updated += 1
         print(f"  {cve_id}: {status} (issue #{issue['number']}, by {decided_by})")

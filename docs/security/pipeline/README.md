@@ -7,8 +7,8 @@ holds the per-finding reports and triage state that are **not** published here.
 
 These copies correspond to `cozystack/security-scanner` PR #1004, the revision that carries
 the state-integrity, HIGH-path, review_after and scan-failure hardening described below.
-They are kept byte-for-byte in step with its head; once #1004 merges they match
-`security-scanner` `main`, the revision that runs on schedule.
+Every copied file, documents included, is kept byte-for-byte in step with its head; once
+#1004 merges they match `security-scanner` `main`, the revision that runs on schedule.
 
 ## Contents
 
@@ -36,3 +36,5 @@ One exception, consistent with [`../reports/README.md`](../reports/README.md): a
 with **no upstream fix available** is named, with mitigation guidance. There is nothing to
 wait for, and silence serves nobody — an adopter needs to know when a mitigation is the only
 available control. Findings awaiting a released fix stay aggregate-only until it ships.
+This exception is applied by maintainers when they write the published report; the monthly
+generator in `scripts/monthly.py` never names an unfixed finding on its own.

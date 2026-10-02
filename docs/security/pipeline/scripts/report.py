@@ -10,7 +10,6 @@ report.py — Generate security reports as markdown files in reports/.
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -19,9 +18,11 @@ from statelib import (
     load_json,
     save_json,
     cve_age_days,
-    review_after_passed,
     override_review_due,
-    age_drops,
+    filter_decision,
+    AGE_DROPPED,
+    surface_due_override,
+    now_ts,
     RESOLVED_STATUSES,
     UNFIXED_AGE_THRESHOLD_DAYS,
 )
@@ -153,67 +154,44 @@ def classify_filter(vuln, triage_overrides):
 
     skip=True means the CVE should not appear in critical/weekly reports.
     reason is a human-readable explanation for logging.
+
+    The decision itself is statelib.filter_decision, shared with backfill_issues.py so
+    the two cannot drift. This wrapper only supplies dev_only and adds report.py's one
+    side effect, persisting an age-drop.
+
+    A resolved override whose review_after has passed surfaces (skip=False) but is NOT
+    stamped here: classify_filter only decides. Stamping before the issue exists would
+    lose a CRITICAL for good if `gh issue create` fails — the entry would leave the
+    resolved set, override_review_due would go false, and the already-reported guard
+    would skip it on every later run. The caller stamps the transition only after the
+    issue is created and the CVE recorded (process_critical / send_weekly_report).
     """
     cve_id = vuln["cve_id"]
+    skip, reason = filter_decision(cve_id, vuln, triage_overrides, is_dev_only(vuln))
+    if reason != AGE_DROPPED:
+        return skip, reason
+
+    # Unfixed upstream older than the threshold (age_drops carries the CRITICAL/HIGH
+    # carve-out). PERSIST the auto-dismissal as accepted-risk with a review_after date.
+    # Returning skip alone records nothing, so the finding is re-filtered on every run
+    # forever and never reaches the 90-day re-review the status model requires.
+    # Writing it makes the drop auditable and time-boxed — and once the date passes
+    # filter_decision surfaces it again. filter_decision only age-drops an untracked
+    # finding, so this never overwrites an existing entry.
     severity = vuln.get("severity", "")
-
-    # UNKNOWN severity — not in any known vulnerability DB
-    if severity == "UNKNOWN":
-        return True, "unknown severity"
-
-    # A resolved override suppresses the finding, but only until its review_after
-    # date passes: an expired suppression has done its job, and surfacing the
-    # finding again for re-review is exactly what review_after exists for. This
-    # also covers the pipeline-auto accepted-risk entries written below — once
-    # their date passes they surface here rather than being re-dropped by the age
-    # branch, which is what made the check unreachable before.
-    entry = triage_overrides.get(cve_id)
-    if entry and entry.get("status") in RESOLVED_STATUSES:
-        if not review_after_passed(entry):
-            return True, f"triaged as {entry['status']}"
-        # Due for re-review. Stamp the entry in this same run so the condition does
-        # not stay true forever: move it to the non-resolved `needs-review` status
-        # and clear the date. Without this the finding re-files an issue and a draft
-        # advisory on every six-hourly tick, because nothing else writes the date
-        # back (sync_issues.py only rewrites on a status change). It surfaces ONCE
-        # for a maintainer; next run its status is no longer resolved, so the
-        # already-reported guard skips it until the re-triage lands.
-        entry["status"] = "needs-review"
-        entry["review_after"] = None
-        entry["decided_by"] = "pipeline-auto"
-        # A due override still must not resurrect a dev/build-only finding.
-        if is_dev_only(vuln):
-            return True, "dev/build dependency only"
-        return False, None
-
-    # Dev/build-only image or test component
-    if is_dev_only(vuln):
-        return True, "dev/build dependency only"
-
-    # Unfixed upstream older than the threshold. age_drops() carries the
-    # CRITICAL/HIGH carve-out so it stays in one place (statelib), shared with
-    # backfill_issues.py.
-    if age_drops(vuln, cve_id):
-        # PERSIST the auto-dismissal as accepted-risk with a review_after date.
-        # Returning skip alone records nothing, so the finding is re-filtered on
-        # every run forever and never reaches the 90-day re-review the status model
-        # requires. Writing it makes the drop auditable and time-boxed — and once
-        # the date passes the block above surfaces it again.
-        if cve_id not in triage_overrides:
-            now = datetime.now(timezone.utc)
-            age = cve_age_days(cve_id)
-            triage_overrides[cve_id] = {
-                "status": "accepted-risk",
-                "decided_by": "pipeline-auto",
-                "decided_at": now.date().isoformat(),
-                "review_after": (now + timedelta(days=90)).date().isoformat(),
-                "reason": (f"[{vuln.get('package', '')}] Auto-demoted: {severity} finding with no "
-                           f"upstream fix, CVE approximately {age} days old (older than the "
-                           f"{UNFIXED_AGE_THRESHOLD_DAYS}-day threshold). Re-review on the date above."),
-            }
-        return True, f"unfixed upstream ({cve_age_days(cve_id)} days old, {severity or 'no severity'})"
-
-    return False, None
+    now = datetime.now(timezone.utc)
+    age = cve_age_days(cve_id)
+    triage_overrides[cve_id] = {
+        "status": "accepted-risk",
+        "decided_by": "pipeline-auto",
+        "decided_at": now_ts(),
+        "closed_at": now_ts(),
+        "review_after": (now + timedelta(days=90)).date().isoformat(),
+        "reason": (f"[{vuln.get('package', '')}] Auto-demoted: {severity} finding with no "
+                   f"upstream fix, CVE approximately {age} days old (older than the "
+                   f"{UNFIXED_AGE_THRESHOLD_DAYS}-day threshold). Re-review on the date above."),
+    }
+    return True, f"unfixed upstream ({age} days old, {severity or 'no severity'})"
 
 
 def save_report(subdir, filename, content):
@@ -386,7 +364,6 @@ def build_critical_report(vuln, today):
     fixed = vuln.get("fixed_version", "")
     fix_line = f"`{fixed}`" if fixed else "No fix available yet"
     cve_id = vuln["cve_id"]
-    title = vuln.get("title", "No title")
 
     return f"""# security_critical: {cve_id}
 
@@ -513,17 +490,20 @@ def process_critical(scan_results, reported, triage_overrides):
         issue_url = create_issue(vuln, report_path)
         ghsa_url = create_ghsa_draft(vuln)
 
-        # If EITHER the issue or the advisory failed to create, do NOT record the
-        # CVE as reported. A partial success (issue OK, advisory None, or the
-        # reverse) is recorded with an empty URL and the skip check then passes over
-        # it forever, so the missing half is never created and the CRITICAL has no
-        # venue to be triaged in. Leave it out so the next run retries the missing
-        # half.
-        if not issue_url or not ghsa_url:
-            print(f"  WARN: {cve_id} — issue/advisory creation incomplete "
-                  f"(issue={'ok' if issue_url else 'FAILED'}, advisory={'ok' if ghsa_url else 'FAILED'}); "
-                  f"not recording as reported so the next run retries the missing half")
+        # The issue is the mandatory triage venue: without it the CRITICAL has
+        # nowhere to be triaged, so a failed issue is the only thing that must block
+        # recording and force a retry. The GHSA draft advisory is best-effort — its
+        # creation targets a different repository and permission scope and can fail
+        # systemically, so gating the record on BOTH (issue AND advisory) recorded
+        # nothing at all and re-filed every CRITICAL on every run forever. Record on
+        # the issue; carry the advisory URL when present, warn when it is missing.
+        if not issue_url:
+            print(f"  WARN: {cve_id} — issue creation FAILED; not recording as "
+                  f"reported so the next run retries it")
             continue
+        if not ghsa_url:
+            print(f"  WARN: {cve_id} — GHSA advisory draft not created; the issue is "
+                  f"recorded and the advisory is best-effort")
 
         affected = vuln.get("affected_repos", [])
         target_repos = sorted(set(r.split(":")[0] for r in affected))
@@ -538,6 +518,16 @@ def process_critical(scan_results, reported, triage_overrides):
             "package": vuln.get("package", ""),
             "fixed_version": vuln.get("fixed_version", ""),
         }
+
+        # Now that the issue exists and the CVE is recorded, spend the re-review stamp
+        # for a due override: it leaves the resolved set so it is not re-suppressed, and
+        # the already-reported guard skips it next run (a fresh issue already carries the
+        # re-review). If the issue had failed we `continue`d above and never got here, so
+        # the entry stays resolved-and-due and the next run retries it. Passing the new
+        # issue hands the record off to it, so the old issue's label cannot revert the
+        # re-review on the next sync (see surface_due_override).
+        if override_review_due(cve_id, triage_overrides):
+            surface_due_override(triage_overrides[cve_id], issue_url)
 
     # Send Slack alert for all new CRITICAL CVEs in one message
     notify_slack(new_critical)
@@ -576,7 +566,7 @@ def process_weekly(scan_results, reported, pending, triage_overrides):
     return pending
 
 
-def send_weekly_report(reported, pending):
+def send_weekly_report(reported, pending, triage_overrides):
     """Save weekly summary report and create issues for each CVE."""
     if not pending:
         print("No pending CVEs for weekly report.")
@@ -615,6 +605,10 @@ def send_weekly_report(reported, pending):
             "package": vuln.get("package", ""),
             "fixed_version": vuln.get("fixed_version", ""),
         }
+        # Spend the re-review stamp only now that the HIGH's issue exists and it is
+        # recorded — same contract as the CRITICAL path.
+        if override_review_due(vuln["cve_id"], triage_overrides):
+            surface_due_override(triage_overrides[vuln["cve_id"]], issue_url)
 
     # MEDIUM/LOW — report only, no individual Issues
     for vuln in other_vulns:
@@ -626,6 +620,10 @@ def send_weekly_report(reported, pending):
             "package": vuln.get("package", ""),
             "fixed_version": vuln.get("fixed_version", ""),
         }
+        # MEDIUM/LOW surface with no issue of their own; still stamp a due override so
+        # it is not re-added to pending and re-recorded on every subsequent run.
+        if override_review_due(vuln["cve_id"], triage_overrides):
+            surface_due_override(triage_overrides[vuln["cve_id"]])
 
     return reported, []
 
@@ -664,7 +662,7 @@ def main():
 
     if args.weekly:
         print()
-        reported, pending = send_weekly_report(reported, pending)
+        reported, pending = send_weekly_report(reported, pending, triage_overrides)
 
     save_json(REPORTED_FILE, reported)
     save_json(PENDING_FILE, pending)
@@ -675,7 +673,9 @@ def main():
           f"Triage overrides: {len(triage_overrides)}")
 
     # Now that the reports and state are written, fail the run if the scan was
-    # incomplete, so it goes red without having suppressed what was collected.
+    # incomplete, so it goes red without having suppressed what was collected. The
+    # workflow commits state in an `if: always()` step, so this non-zero exit marks
+    # the run red without discarding the state written just above.
     if scan_errors:
         print(f"\nFAILING: {scan_errors} scan target(s) could not be scanned — this "
               f"run's aggregate is incomplete.")
