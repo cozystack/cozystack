@@ -5,4 +5,4 @@ metallb-iad:
   metallbNamespace: cozy-metallb
   # Same digest pin as packages/system/address-controller; bump in lockstep
   # with METALLB_IAD_REF in the Makefile.
-  image: ghcr.io/lllamnyp/metallb-iad:main@sha256:c7b96e6540676e7ba0b2ba68b4709c679c4c95cf5f0a3c1d7f1006457517366e
+  image: ghcr.io/lllamnyp/metallb-iad:0.1.0@sha256:b8ca2b53b9d30004e2460b26b9f300e899dce20ac14b3afccef9151b70b83ff7

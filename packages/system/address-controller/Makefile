@@ -3,12 +3,12 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
-# Upstream publishes no chart artifact and cuts no tags yet, so the chart is
-# taken from the repository at a pinned commit. Replace ADDRESS_CONTROLLER_REF
-# with the tag once upstream starts releasing; the partial clone is what lets a
-# bare commit be checked out without fetching the whole history.
+# Upstream publishes no chart artifact, so the chart is taken from the
+# repository at a release tag. Bump together with the image tag+digest in
+# values.yaml: upstream's release job tags the image without the leading `v`
+# (git tag v0.1.0 -> image 0.1.0), and `crane digest` resolves the digest.
 ADDRESS_CONTROLLER_REPO ?= https://github.com/lllamnyp/address-controller.git
-ADDRESS_CONTROLLER_REF ?= 8a89641b82c62aded86d2b19c2f286c59e019ef4
+ADDRESS_CONTROLLER_REF ?= v0.1.0
 
 test:
 	helm unittest .

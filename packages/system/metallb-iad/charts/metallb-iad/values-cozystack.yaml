@@ -1,4 +1,0 @@
-# Overlay for running under Cozystack (selected via the PackageSource's
-# valuesFiles): Cozystack installs MetalLB in cozy-metallb, not the upstream
-# default metallb-system.
-metallbNamespace: cozy-metallb
