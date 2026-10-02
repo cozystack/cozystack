@@ -244,6 +244,11 @@ src_to_suites() {
     # ingress-only package change can omit the suite that exercises it.
     ingress-application|ingress-nginx) echo gateway ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
+    # apps/kubernetes-nodes also belongs to computeplane-application, which has
+    # a suite; without this entry an edit there selects computeplane alone,
+    # whose pools go through the module allowlist, and drops the suites that
+    # create KubernetesNodes natively.
+    kubernetes-nodes-application) echo "kubernetes-latest kubernetes-previous computeplane" ;;
     securitygroup-controller) echo securitygroup ;;
     # The kafka app source covers both the app suite and the metadata-backup
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which

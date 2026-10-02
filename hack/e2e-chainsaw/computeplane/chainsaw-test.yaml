@@ -1,0 +1,508 @@
+# The ComputePlane tenant module, run on a cluster.
+#
+# packages/extra/computeplane/tests pins what the module renders. What only a
+# cluster shows is whether that rendering turns into a working cluster: the
+# tenant toggle installs the module, the module installs a Kamaji control plane
+# and a worker pool, Kamaji writes the admin kubeconfig the tenant must not
+# see, the pinned cert-manager and ingress-nginx addons come up inside the
+# cluster, and turning the toggle off takes all of it down again.
+#
+# The module runs in its own tenant, tenant-cplane, so turning it on and off
+# never touches the tenant-test that the other suites share. It is a child of
+# tenant-root rather than of tenant-test because a tenant two levels down cannot
+# reach the etcd it inherits from tenant-root (#4726).
+#
+# The suite supplies its own worker pool. The default md0 the module renders
+# for an empty nodeGroups puts its disk on the `replicated` StorageClass, which
+# the container lane does not have, so that path is left to the render tests.
+# The pool shape copies the kubernetes suites' worker sizing (see
+# run_kubernetes_test in _lib/run-kubernetes.sh for why each field is there),
+# at one worker rather than two.
+#
+# Budget: the try ops' ceilings add up to 142m, this suite's own catch to 12m
+# (the events and describe collectors take timeouts.exec, 5m each, and the
+# script 2m) and the teardown to 58m plus 2m for the hold release, before
+# the global error.catch in .chainsaw.yaml.
+# The try figure is reached only if every op passes just under its own
+# ceiling; a red run ends at the first op that expires, then pays the catches
+# and the teardown. This is the third suite in a full run that brings up a
+# tenant cluster, next to kubernetes-latest and kubernetes-previous. A failure
+# that stalls worker join everywhere reddens all three, and their red paths
+# together can exceed the E2E job's 215-minute cap, which cancels the job and
+# loses its log and report. The cap is sized for the red path of the
+# kubernetes pair only; this suite is not counted in it, and that is an
+# accepted risk.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: computeplane
+spec:
+  steps:
+  - name: computeplane-lifecycle
+    try:
+    # Taken before anything of the suite's exists, so the teardown compares
+    # against a sandbox this suite has not touched yet.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          COZY_LINSTOR_POOL_BASELINE_FILE=_out/e2e-computeplane-linstor-pool-baseline \
+            cozy_capture_linstor_pool_baseline
+        check:
+          ($error == null): true
+
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: cplane
+            namespace: tenant-root
+          spec:
+            computeplane: true
+
+    # tenant-rd sets helm-install-timeout 15m on the generated release.
+    - assert:
+        timeout: 17m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-cplane
+            namespace: tenant-root
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane
+            namespace: tenant-cplane
+            labels:
+              internal.cozystack.io/tenantmodule: "true"
+              apps.cozystack.io/application.kind: ComputePlane
+
+    # The ComputePlane object exists only once the tenant chart has rendered
+    # its HelmRelease, so the pool is set right after the assert above. The
+    # first install renders the default md0 at minReplicas 0, which creates no
+    # VM; the upgrade below replaces its values before anything scales it.
+    #
+    # nameOverride is outside the module's per-pool allowlist. The ComputePlane
+    # schema accepts it, so it reaches the module and the pool check below can
+    # see whether the module dropped it.
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          sc=$(cozy_e2e_storage_class)
+          kubectl -n tenant-cplane patch computeplanes.apps.cozystack.io computeplane \
+            --type merge --patch-file /dev/stdin <<EOF
+          spec:
+            nodeGroups:
+              md0:
+                diskSize: 20Gi
+                instanceType: u1.medium
+                logSerialConsole: true
+                minReplicas: 1
+                maxReplicas: 1
+                podCpuLimit: 2
+                podCpuRequest: 100m
+                resources:
+                  cpu: 1
+                  memory: 4Gi
+                nameOverride: e2e-must-not-pass
+                roles:
+                - ingress-nginx
+                storageClass: "${sc}"
+          EOF
+          kept=$(kubectl -n tenant-cplane get computeplanes.apps.cozystack.io computeplane -o jsonpath='{.spec.nodeGroups.md0.nameOverride}')
+          if [ "$kept" != e2e-must-not-pass ]; then
+            echo "the ComputePlane API did not keep nameOverride (got '${kept}'); the allowlist check below would prove nothing" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+
+    # The module release sets timeout 10m and waits on what it renders.
+    # Matching generations keep a Ready left over from the install before the
+    # pool patch from passing this.
+    - assert:
+        timeout: 12m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane
+            namespace: tenant-cplane
+          (status.observedGeneration == metadata.generation): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+    - assert:
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane-cluster
+            namespace: tenant-cplane
+            labels:
+              internal.cozystack.io/computeplane: "true"
+          spec:
+            chartRef:
+              kind: ExternalArtifact
+              name: cozystack-computeplane-application-kubevirt-kubernetes
+            values:
+              addons:
+                certManager:
+                  enabled: true
+                ingressNginx:
+                  enabled: true
+                  exposeMethod: Proxied
+
+    # The pool takes the patched shape, and the nameOverride the patch sent
+    # does not reach it, nor does any other key outside the allowlist.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          sc=$(cozy_e2e_storage_class)
+          values=$(kubectl -n tenant-cplane get helmrelease kubernetes-nodes-computeplane-cluster-md0 -o json | jq -c '.spec.values')
+          echo "pool values: $values"
+          echo "$values" | jq -e --arg sc "$sc" '.storageClass == $sc and .minReplicas == 1 and .cluster == "computeplane-cluster" and .clusterReleaseName == "computeplane-cluster"'
+          extra=$(echo "$values" | jq -r 'keys - ["cluster","clusterReleaseName","minReplicas","maxReplicas","instanceType","diskSize","storageClass","roles","resources","gpus","kubelet","logSerialConsole","maxUnhealthy","nodeStartupTimeout","readyUnknownTimeout","readyFalseTimeout","podCpuLimit","podCpuRequest","maxNodeProvisionTime"] | .[]')
+          if [ -n "$extra" ]; then
+            echo "pool HelmRelease carries keys outside the module allowlist: $extra" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+
+    # Kamaji writes it once the control plane is up; the kubernetes suites
+    # give that bringup 2m + 10m.
+    - assert:
+        timeout: 13m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: computeplane-cluster-admin-kubeconfig
+            namespace: tenant-cplane
+          (contains(keys(data), 'super-admin.svc')): true
+
+    # Withheld from the tenant: computeplane-rd allowlists no secrets, so the
+    # Secret is not labelled tenantresource=true (the lineage webhook writes
+    # "false" on everything it withholds), the tenantsecrets API does not
+    # list it to the tenant's own super-admin group, and that group cannot
+    # read it directly either. The last one is the check that matters: the
+    # wrapped kubernetes chart's dashboard Role granted tenant groups get on
+    # this Secret until #4722.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ns=tenant-cplane
+          secret=computeplane-cluster-admin-kubeconfig
+          as="--as=e2e-computeplane-probe --as-group=system:authenticated --as-group=${ns}-super-admin"
+          label=$(kubectl -n "$ns" get secret "$secret" -o jsonpath='{.metadata.labels.internal\.cozystack\.io/tenantresource}')
+          if [ "$label" = true ]; then
+            echo "$secret is labelled tenantresource=$label" >&2
+            exit 1
+          fi
+          # The list must succeed, so an empty answer is the API's and not a
+          # refused request.
+          listed=$(kubectl -n "$ns" get tenantsecrets.core.cozystack.io $as -o name)
+          echo "tenantsecrets visible to ${ns}-super-admin:"
+          printf '%s\n' "${listed:-<none>}"
+          if printf '%s\n' "$listed" | grep -Fqx "tenantsecret.core.cozystack.io/$secret"; then
+            echo "$secret is visible through tenantsecrets" >&2
+            exit 1
+          fi
+          # can-i exits 1 when it answers no, so the answer is read from its
+          # output; anything but a plain "no" fails, an error included.
+          answer=$(kubectl -n "$ns" auth can-i get "secret/$secret" $as 2>&1) || true
+          echo "can-i get secret/$secret as ${ns}-super-admin: $answer"
+          if [ "$answer" != no ]; then
+            echo "the tenant super-admin group can read $secret, or can-i did not answer: $answer" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+
+    # ingress-nginx needs a joined worker, so it is waited for first: 29m for
+    # the worker, the kubernetes suites' node-join deadline, plus room for the
+    # install that follows it. cert-manager installs alongside and has had that
+    # time already; its own budget clears its 10m install timeout.
+    - assert:
+        timeout: 35m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane-cluster-ingress-nginx
+            namespace: tenant-cplane
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 12m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane-cluster-cert-manager
+            namespace: tenant-cplane
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+    # The Proxied Service selects the virt-launcher pod of a worker carrying
+    # the ingress-nginx role, so a ready endpoint says such a worker is running
+    # behind it. That the controller itself is up is the addon assert above.
+    # A script rather than an assert: matching "at least one ready endpoint"
+    # needs a JMESPath length or numeric literal, which v0.2.15 mis-evaluates.
+    - script:
+        timeout: 4m
+        content: |
+          set -eu
+          ns=tenant-cplane
+          kubectl -n "$ns" get service computeplane-cluster-ingress-nginx
+          deadline=$(( $(date +%s) + 180 ))
+          until [ -n "$(kubectl -n "$ns" get endpointslices -l kubernetes.io/service-name=computeplane-cluster-ingress-nginx -o jsonpath='{.items[*].endpoints[?(@.conditions.ready==true)].addresses[0]}')" ]; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "computeplane-cluster-ingress-nginx has no ready endpoint" >&2
+              kubectl -n "$ns" get endpointslices -l kubernetes.io/service-name=computeplane-cluster-ingress-nginx -o yaml >&2
+              exit 1
+            fi
+            sleep 5
+          done
+        check:
+          ($error == null): true
+
+    # The cluster release sets timeout 30m, which is the floor here. On a
+    # passing run it is Ready long before this point.
+    - assert:
+        timeout: 32m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: computeplane-cluster
+            namespace: tenant-cplane
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/remediation-guard.sh
+          for hr in computeplane computeplane-cluster; do
+            statuses=$(kubectl -n tenant-cplane get helmrelease "$hr" -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")
+            echo "$hr history statuses:"
+            printf '%s\n' "${statuses:-<empty>}"
+            if [ -z "$statuses" ]; then
+              echo "empty .status.history on a Ready HelmRelease $hr" >&2
+              exit 1
+            fi
+            if helmrelease_has_remediation_cycle "$statuses"; then
+              echo "$hr remediated during install" >&2
+              exit 1
+            fi
+          done
+        check:
+          ($error == null): true
+
+    catch:
+    - events:
+        namespace: tenant-cplane
+    - describe:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        namespace: tenant-cplane
+    - script:
+        timeout: 2m
+        content: |
+          set -u
+          ns=tenant-cplane
+          echo "If this failure is the worker join or an addon HelmRelease timing out:"
+          echo "the computeplane pool allowlist drops talos, so the worker cannot use the"
+          echo "in-sandbox Talos image cache and imports its disk from the public Image"
+          echo "Factory (cozystack/cozystack#4700). Worker image source:"
+          timeout 30 kubectl -n "$ns" get kubevirtmachinetemplates,datavolumes.cdi.kubevirt.io \
+            -o jsonpath='{range .items[*]}{.kind}/{.metadata.name}: {..http.url}{"\n"}{end}' 2>&1
+          timeout 30 kubectl -n "$ns" get datavolumes.cdi.kubevirt.io,machines.cluster.x-k8s.io,virtualmachineinstances.kubevirt.io -o wide 2>&1
+          timeout 30 kubectl -n "$ns" get helmrelease kubernetes-nodes-computeplane-cluster-md0 -o jsonpath='{.spec.values}{"\n"}' 2>&1
+          exit 0
+
+    # Turning the module off is the teardown under test: the module release
+    # goes, and its uninstall removes the cluster and pool releases together.
+    # The cluster's pre-delete hook deletes the in-cluster addon releases
+    # (step 2 of packages/apps/kubernetes/templates/delete.yaml) before it
+    # deletes the KamajiControlPlane (step 3), and that order is checked: no
+    # addon release may remain once the KamajiControlPlane is being deleted.
+    # Nothing in Kamaji or CAPI puts a finalizer on that object, so it is gone
+    # in the same call that deletes it and no poll could see the moment. The
+    # suite holds it with a finalizer of its own while the module goes, reads
+    # the addons once it is marked for deletion, and lets it go.
+    # The pool's workers go at the same time as the hook runs, so no order is
+    # checked for them, only that nothing is left. Chainsaw then deletes the
+    # Tenant.
+    finally:
+    - script:
+        # Inner bounds, in order: Tenant read 1m, hold 1m, patch 1m, order loop
+        # 12m plus up to 1m for the read in flight at its deadline, release 1m,
+        # module 10m, cluster 5m, pool 2m, addon list 30s, addons 2m, control
+        # plane 2m, Secret 1m, drain 5m plus 1m, LINSTOR about 8m (a 5m deadline
+        # for starting a probe, and up to five reads of 35s each in the probe in
+        # flight), and the release again on exit 1m = about 54m30s.
+        timeout: 58m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          ns=tenant-cplane
+          failed=0
+          if ! tenant=$(timeout 60 kubectl -n tenant-root get tenants.apps.cozystack.io cplane --ignore-not-found -o name); then
+            echo "» ERROR: could not read Tenant cplane" >&2
+            exit 1
+          fi
+          if [ -z "$tenant" ]; then
+            echo "» Tenant cplane was never created; nothing to tear down"
+            exit 0
+          fi
+          . hack/e2e-chainsaw/computeplane/kcp-hold.sh
+          hold=$kcp_hold_finalizer
+          # A held KamajiControlPlane would wedge the rest of the teardown. The
+          # trap releases it on every exit this shell sees; the operation after
+          # this one releases it when the shell was killed instead.
+          trap 'kcp_release || echo "» ERROR: could not release the $hold finalizer on $kcp_ref" >&2' EXIT
+          held=0
+          if kcp_hold; then
+            held=1
+          else
+            case $? in
+              2) echo "» no KamajiControlPlane when teardown started; teardown order not observed" ;;
+              *) echo "» ERROR: could not hold the KamajiControlPlane; teardown order unchecked" >&2
+                 failed=1 ;;
+            esac
+          fi
+          if ! timeout 60 kubectl -n tenant-root patch tenants.apps.cozystack.io cplane \
+              --type merge --patch '{"spec":{"computeplane":false}}'; then
+            echo "» ERROR: could not turn the computeplane module off" >&2
+            exit 1
+          fi
+          gone() { # <timeout> <args...>
+            _t=$1; shift
+            if ! kubectl -n "$ns" wait --for=delete "$@" --timeout="$_t"; then
+              echo "» ERROR: $* still present after $_t" >&2
+              failed=1
+            fi
+          }
+          addons_listed() {
+            timeout 30 kubectl -n "$ns" get helmrelease -l cozystack.io/target-cluster-name=computeplane-cluster -o name
+          }
+          if [ "$held" = 1 ]; then
+            deadline=$(( $(date +%s) + 720 ))
+            while :; do
+              if ! deleting=$(timeout 30 kubectl -n "$ns" get "$kcp_ref" -o jsonpath='{.metadata.deletionTimestamp}'); then
+                echo "» ERROR: could not read the held KamajiControlPlane; teardown order unchecked" >&2
+                failed=1
+                break
+              fi
+              if [ -n "$deleting" ]; then
+                # Marked for deletion: the hook is past step 2.
+                if ! left=$(addons_listed); then
+                  echo "» ERROR: could not list the in-cluster addon releases; teardown order unchecked" >&2
+                  failed=1
+                elif [ -n "$left" ]; then
+                  echo "» ERROR: the KamajiControlPlane is being deleted while in-cluster addon releases remain:" >&2
+                  printf '%s\n' "$left" >&2
+                  failed=1
+                else
+                  echo "» in-cluster addon releases were gone before the KamajiControlPlane was deleted"
+                fi
+                break
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "» ERROR: the KamajiControlPlane was not deleted within 720s of turning the module off" >&2
+                failed=1
+                break
+              fi
+              sleep 2
+            done
+            if ! kcp_release; then
+              echo "» ERROR: could not release the $hold finalizer on $kcp_ref" >&2
+              failed=1
+            fi
+          fi
+          gone 10m helmrelease/computeplane
+          gone 5m helmrelease/computeplane-cluster
+          gone 2m helmrelease/kubernetes-nodes-computeplane-cluster-md0
+          if addons=$(addons_listed); then
+            if [ -n "$addons" ]; then gone 2m $addons; fi
+          else
+            echo "» ERROR: could not list the in-cluster addon releases" >&2
+            failed=1
+          fi
+          gone 2m kamajicontrolplanes.controlplane.cluster.x-k8s.io/computeplane-cluster
+          # Owned by the TenantControlPlane, so a control plane stuck on its
+          # finalizer (#4489) keeps it too. An admin kubeconfig that outlives
+          # teardown is a leak in its own right, so this stays red then.
+          gone 1m secret/computeplane-cluster-admin-kubeconfig
+          deadline=$(( $(date +%s) + 300 ))
+          while :; do
+            left=$( {
+              timeout 30 kubectl -n "$ns" get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io \
+                -l cluster.x-k8s.io/cluster-name=computeplane-cluster -o name ||
+                echo "could not list the worker VMs and VMIs"
+              if pvcs=$(timeout 30 kubectl -n "$ns" get pvc -o name); then
+                printf '%s\n' "$pvcs" | grep -F computeplane-cluster-md0 || true
+              else
+                echo "could not list the PVCs"
+              fi
+            } 2>&1 )
+            [ -z "$left" ] && break
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "» ERROR: worker compute or storage did not drain within 300s:" >&2
+              printf '%s\n' "$left" >&2
+              failed=1
+              break
+            fi
+            sleep 5
+          done
+          # The baseline is the first op of try, and the Tenant is applied
+          # only after it, so a run that reaches this point has one.
+          if ! COZY_LINSTOR_POOL_BASELINE_FILE=_out/e2e-computeplane-linstor-pool-baseline \
+              cozy_wait_linstor_pool_baseline 300; then
+            failed=1
+          fi
+          exit "$failed"
+    # The op above can be SIGKILLed at its ceiling (chainsaw cancels a script
+    # with Process.Kill, so its EXIT trap never runs) while it still holds
+    # the KamajiControlPlane. Releasing it here, in an operation of its own,
+    # keeps that from leaving the object and the tenant namespace stuck.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/computeplane/kcp-hold.sh
+          if kcp_release; then
+            echo "» $kcp_hold_finalizer is not on $kcp_ref"
+          else
+            echo "» ERROR: could not release the $kcp_hold_finalizer finalizer on $kcp_ref" >&2
+            exit 1
+          fi
