@@ -93,6 +93,7 @@ Actors are decomposed by **trust boundary**: two components are distinct actors 
 - **Upstream-only vulnerabilities** not introduced or worsened by Cozystack packaging or defaults.
 - **Ingress-side isolation of tenant pods.** Tenant-pod ingress is open to `world` and `cluster`, so a tenant pod is reachable by any in-cluster peer whose own egress permits it (platform components) or by a workload not governed by Cozystack's tenant egress policies. Cross-tenant isolation is enforced on the *egress* side, not tenant-pod ingress.
 - **Blocking cross-tenant reachability through externally-exposed services.** If a tenant publishes a LoadBalancer external IP, another tenant can reach it via `world` egress.
+- **Network isolation between tenants on a hosted cluster without Cilium.** On the `isp-hosted` and `isp-hosted-slim` variants the CNI belongs to the host, and tenant Cilium policies are created only if the host serves the Cilium policy API. Without it, tenants get no network isolation from Cozystack, and isolating them is up to the host.
 - **Noisy-neighbour / side-channel** guarantees for co-located tenant pods beyond namespace scoping (and, for tenant Kubernetes/VMs, virtualization).
 - Acting as an **egress firewall**: tenant workloads may egress to `world` by default.
 - Supporting **pre-release builds and end-of-life versions**.
