@@ -1,0 +1,142 @@
+suite: shared_buffers default follows the memory limit
+
+# PostgreSQL's built-in shared_buffers default is 128MB regardless of the
+# container. Below a 512Mi memory limit the chart defaults it to a quarter of
+# the limit, at least 16MB. From 512Mi up nothing is rendered, so those
+# instances keep the PostgreSQL default exactly as before.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: "the default preset (t1.micro, 256Mi) gets 64MB"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "64MB"
+
+  - it: "t1.nano (128Mi) gets 32MB"
+    set:
+      resourcesPreset: t1.nano
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "32MB"
+
+  - it: "a resources override that sets only cpu keeps the preset memory limit and its 32MB"
+    set:
+      resourcesPreset: t1.nano
+      resources:
+        cpu: 500m
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "32MB"
+
+  - it: "explicit resources with 500Mi memory, just under the threshold, get 125MB"
+    set:
+      resources:
+        cpu: 500m
+        memory: 500Mi
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "125MB"
+
+  - it: "a 32Mi limit is floored at 16MB"
+    set:
+      resources:
+        cpu: 250m
+        memory: 32Mi
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "16MB"
+
+  - it: "t1.small (512Mi) renders no shared_buffers, as before"
+    set:
+      resourcesPreset: t1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.postgresql.parameters.shared_buffers
+
+  - it: "t1.large (2Gi) renders no shared_buffers, as before"
+    set:
+      resourcesPreset: t1.large
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.postgresql.parameters.shared_buffers
+
+  - it: "an explicit shared_buffers wins over the default on a small preset"
+    set:
+      resourcesPreset: t1.nano
+      postgresql:
+        parameters:
+          shared_buffers: "24MB"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "24MB"
+
+  - it: "an explicit shared_buffers is still rendered on a large preset"
+    set:
+      resourcesPreset: t1.large
+      postgresql:
+        parameters:
+          shared_buffers: "1GB"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "1GB"
+
+  - it: "other default parameters are still rendered"
+    set:
+      resourcesPreset: t1.nano
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.max_connections
+          value: "100"
+      - equal:
+          path: spec.postgresql.parameters.max_wal_senders
+          value: "30"
