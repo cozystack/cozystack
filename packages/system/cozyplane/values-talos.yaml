@@ -1,0 +1,27 @@
+# Talos overlay for the cozyplane networking variant (cozyplane + cozyplane-kpr,
+# no Cilium, no kube-proxy).
+#
+# Applied as the SECOND valuesFile of the `cozyplane` component
+# (packages/packagesources/networking.yaml): the Cozystack operator applies the
+# first file with strategy Overwrite and every later one with Merge, so this
+# file must stay separate from values.yaml — folding it in would make these
+# settings the chart's defaults, and they are wrong off Talos.
+
+# cozyplane is the sole CNI; its conflist sorts first (00-) so kubelet uses it as
+# the primary CNI over any co-installed one.
+cniConfName: "00-cozyplane.conflist"
+
+# Talos runs KubePrism (a node-local apiserver load balancer) on localhost:7445 —
+# the real endpoint `kubeApiServer` asks for; see values.yaml.
+kubeApiServer:
+  host: "localhost"
+  port: "7445"
+
+# The aggregated API server is NOT part of this package: cozyplane installs
+# FIRST (it is the CNI), before cert-manager, and the apiserver needs
+# cert-manager Certificates. It ships as the separate cozyplane-apiserver
+# package (packages/packagesources/apiserver.yaml, dependsOn cert-manager +
+# etcd-operator + the storage layer). This chart ships only the LOCAL group's
+# CRDs (local.sdn.cozystack.io — FabricIP); the tenant group sdn.cozystack.io
+# has no CRDs at all and is unserved until the apiserver lands, by design
+# (docs/api-groups.md).
