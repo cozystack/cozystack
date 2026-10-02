@@ -786,12 +786,23 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// time. Without this, restore-time rendering with parameters=nil
 	// silently produced `<no value>` and patched the target Postgres app
 	// with broken Secret references.
-	sourceDatabases, sourceUsers, sourceParameters, err := unmarshalCNPGBackupSnapshot(backup)
+	snapshot, err := unmarshalCNPGBackupSnapshot(backup)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 			"Backup %s/%s carries no usable source-spec snapshot in status.underlyingResources: %v "+
 				"(re-take the backup with a controller version that persists source spec)",
 			backup.Namespace, backup.Name, err))
+	}
+	sourceDatabases, sourceUsers, sourceParameters := snapshot.Databases, snapshot.Users, snapshot.Parameters
+
+	// Checked before the destructive purge below, which would otherwise wipe
+	// the target only for the recovery to come up on the wrong image family.
+	if src, dst := cnpgFlavor(snapshot.Flavor), cnpgFlavor(targetApp.Spec.Flavor); src != dst {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+			"Backup %s/%s was taken from a %s cluster and cannot be restored into %s/%s, which runs the %s flavor: "+
+				"a physical restore must keep the image family. Restore into a Postgres app with flavor %s, "+
+				"or move the data with a logical dump (pg_dump / pg_restore)",
+			backup.Namespace, backup.Name, src, target.Namespace, target.AppName, dst, src))
 	}
 
 	rendered, err := renderCNPGTemplate(strategy.Spec.Template, targetApp, sourceParameters)
@@ -1374,12 +1385,18 @@ func buildPostgresAppRestorePatch(
 // names, prefixes, secret references), never cleartext credentials -
 // credentials are always referenced through `secretRef`, not inlined, and
 // the Secret content stays in etcd's encryption-at-rest store.
+//
+// Flavor records the source's image family. A physical backup only restores
+// safely onto the same family: the two ship different glibc versions, which
+// invalidates collatable indexes, and postgis objects need the postgis
+// libraries.
 type cnpgBackupSnapshot struct {
 	Kind       string                          `json:"kind"`
 	APIVersion string                          `json:"apiVersion"`
 	Databases  map[string]postgresapp.Database `json:"databases,omitempty"`
 	Users      map[string]postgresapp.User     `json:"users,omitempty"`
 	Parameters map[string]string               `json:"parameters,omitempty"`
+	Flavor     string                          `json:"flavor,omitempty"`
 }
 
 const cnpgBackupSnapshotKind = "CNPGBackupSnapshot"
@@ -1402,6 +1419,7 @@ func marshalCNPGBackupSnapshot(app *postgresapp.Postgres, parameters map[string]
 		Databases:  app.Spec.Databases,
 		Users:      app.Spec.Users,
 		Parameters: parameters,
+		Flavor:     app.Spec.Flavor,
 	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
@@ -1420,19 +1438,29 @@ func marshalCNPGBackupSnapshot(app *postgresapp.Postgres, parameters map[string]
 // `{{ .Parameters.foo }}` references stores nil here, and a Backup taken
 // by a controller version that pre-dates parameter persistence has no
 // parameters block at all). The caller must treat a nil/empty map the
-// same as "no parameter overrides" rather than failing.
-func unmarshalCNPGBackupSnapshot(backup *backupsv1alpha1.Backup) (map[string]postgresapp.Database, map[string]postgresapp.User, map[string]string, error) {
+// same as "no parameter overrides" rather than failing. Flavor is empty on
+// a Backup taken before flavors existed, when every cluster ran postgresql;
+// compare it through cnpgFlavor.
+func unmarshalCNPGBackupSnapshot(backup *backupsv1alpha1.Backup) (*cnpgBackupSnapshot, error) {
 	if backup == nil || backup.Status.UnderlyingResources == nil || len(backup.Status.UnderlyingResources.Raw) == 0 {
-		return nil, nil, nil, fmt.Errorf("status.underlyingResources is empty")
+		return nil, fmt.Errorf("status.underlyingResources is empty")
 	}
 	var snap cnpgBackupSnapshot
 	if err := json.Unmarshal(backup.Status.UnderlyingResources.Raw, &snap); err != nil {
-		return nil, nil, nil, fmt.Errorf("decode snapshot: %w", err)
+		return nil, fmt.Errorf("decode snapshot: %w", err)
 	}
 	if snap.Kind != cnpgBackupSnapshotKind {
-		return nil, nil, nil, fmt.Errorf("unexpected snapshot kind %q (want %q)", snap.Kind, cnpgBackupSnapshotKind)
+		return nil, fmt.Errorf("unexpected snapshot kind %q (want %q)", snap.Kind, cnpgBackupSnapshotKind)
 	}
-	return snap.Databases, snap.Users, snap.Parameters, nil
+	return &snap, nil
+}
+
+// cnpgFlavor resolves an unset flavor to the chart default.
+func cnpgFlavor(flavor string) string {
+	if flavor == "" {
+		return "postgresql"
+	}
+	return flavor
 }
 
 // purgeExistingCluster deletes the live cnpg.io Cluster and its PVCs so the

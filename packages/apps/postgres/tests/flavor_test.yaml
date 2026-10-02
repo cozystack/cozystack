@@ -1,0 +1,252 @@
+suite: postgres image flavor
+# The Cluster and the init Job must resolve the same image, and a live
+# cluster must never be moved to the other flavor: the two image families
+# ship different glibc versions, so CNPG would roll an image swap that
+# corrupts collatable indexes. Tags are matched by pattern so that
+# hack/update-versions.sh can bump minors without touching this suite.
+release:
+  name: pg-test
+  namespace: tenant-test
+set:
+  _cluster:
+    scheduling: {}
+tests:
+  - it: defaults to the CloudNativePG PostgreSQL image
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: ^ghcr\.io/cloudnative-pg/postgresql:18\.[0-9]+$
+
+  - it: postgis flavor switches the Cluster to the standard-trixie PostGIS image
+    set:
+      flavor: postgis
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: ^ghcr\.io/cloudnative-pg/postgis:18\.[0-9]+-[0-9.]+-standard-trixie$
+
+  - it: postgis flavor runs the init Job from the same image as the Cluster
+    set:
+      flavor: postgis
+      version: v16
+    templates:
+      - templates/init-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/cloudnative-pg/postgis:16\.[0-9]+-[0-9.]+-standard-trixie$
+
+  - it: refuses to move a live postgresql cluster to postgis
+    set:
+      flavor: postgis
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-test
+            namespace: tenant-test
+          spec:
+            imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    templates:
+      - templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "flavor cannot change on an existing cluster \\(running postgresql, requested postgis\\)"
+
+  - it: refuses to move a live postgis cluster back to postgresql
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-test
+            namespace: tenant-test
+          spec:
+            imageName: ghcr.io/cloudnative-pg/postgis:18.1-3.6.1-standard-trixie
+    templates:
+      - templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "flavor cannot change on an existing cluster \\(running postgis, requested postgresql\\)"
+
+  - it: lets a live postgis cluster take a new minor from a mirrored, digest-pinned image
+    set:
+      flavor: postgis
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-test
+            namespace: tenant-test
+          spec:
+            imageName: registry.example:5000/cloudnative-pg/postgis:18.0-3.6.0-standard-trixie@sha256:5a6b6d9016f6de30cd389c8a921b8acb64de0421f125a0ed3e95ce1b978bf169
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - matchRegex:
+          path: spec.imageName
+          pattern: ^ghcr\.io/cloudnative-pg/postgis:18\.
+
+
+  - it: points a flavor change to a logical dump, not to a backup restore
+    set:
+      flavor: postgis
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-test
+            namespace: tenant-test
+          spec:
+            imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    templates:
+      - templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "move the data with a logical dump \\(pg_dump / pg_restore\\); restoring a backup keeps the flavor it was taken from"
+
+  - it: refuses to recover a postgis source into the postgresql flavor
+    set:
+      bootstrap:
+        enabled: true
+        oldName: pg-source
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-source
+            namespace: tenant-test
+          spec:
+            imageName: ghcr.io/cloudnative-pg/postgis:18.1-3.6.1-standard-trixie
+    templates:
+      - templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot recover a postgis backup of pg-source into the postgresql flavor"
+
+  - it: refuses to recover a postgresql source into the postgis flavor
+    set:
+      flavor: postgis
+      bootstrap:
+        enabled: true
+        oldName: pg-source
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-source
+            namespace: tenant-test
+          spec:
+            imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+    templates:
+      - templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot recover a postgresql backup of pg-source into the postgis flavor"
+
+  - it: recovers a postgis source into the postgis flavor
+    set:
+      flavor: postgis
+      bootstrap:
+        enabled: true
+        oldName: pg-source
+      backup:
+        s3AccessKey: access
+        s3SecretKey: secret
+    kubernetesProvider:
+      scheme:
+        "postgresql.cnpg.io/v1/Cluster":
+          gvr:
+            group: postgresql.cnpg.io
+            version: v1
+            resource: clusters
+          namespaced: true
+      objects:
+        - apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: pg-source
+            namespace: tenant-test
+          spec:
+            imageName: registry.example:5000/cloudnative-pg/postgis:18.0-3.6.0-standard-trixie
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.bootstrap.recovery.source
+          value: pg-source
+      - matchRegex:
+          path: spec.imageName
+          pattern: ^ghcr\.io/cloudnative-pg/postgis:18\.

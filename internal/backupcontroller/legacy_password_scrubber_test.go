@@ -93,7 +93,7 @@ func TestLegacyPasswordScrubber_RemovesPasswordsAndKeepsTheRest(t *testing.T) {
 	// The restore path must still accept the scrubbed snapshot.
 	var b backupsv1alpha1.Backup
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-a", Name: "legacy"}, &b)
-	if _, _, _, err := unmarshalCNPGBackupSnapshot(&b); err != nil {
+	if _, err := unmarshalCNPGBackupSnapshot(&b); err != nil {
 		t.Errorf("scrubbed snapshot no longer decodes for restore: %v", err)
 	}
 }
