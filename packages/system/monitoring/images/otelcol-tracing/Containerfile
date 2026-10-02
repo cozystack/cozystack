@@ -1,0 +1,22 @@
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+
+ARG VERSION=0.136.0
+ARG TARGETOS
+ARG TARGETARCH
+
+# The builder runs on the build platform; only the collector it compiles
+# targets the image platform.
+RUN go install go.opentelemetry.io/collector/cmd/builder@v${VERSION}
+
+WORKDIR /build
+COPY builder-config.yaml .
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 builder --config builder-config.yaml
+
+FROM scratch
+
+COPY --from=builder /build/dist/otelcol-tracing /otelcol-tracing
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+# The collector Deployment runs as 10001, the user of the upstream image.
+USER 10001:10001
+ENTRYPOINT ["/otelcol-tracing"]
