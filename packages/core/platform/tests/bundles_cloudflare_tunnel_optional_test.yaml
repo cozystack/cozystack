@@ -134,3 +134,62 @@ tests:
           name: cozystack.cloudflare-tunnel-gateway-controller
           any: true
         not: true
+
+  # helm.sh/resource-policy: keep leaves the Package, its HelmRelease and the
+  # controller's cluster-wide RBAC in place once the platform stops rendering
+  # it, so a cluster whose values read "disabled" would keep running the
+  # controller. The render refuses that state instead of producing it.
+  - it: fails the render when the Package is live but no longer in enabledPackages
+    kubernetesProvider: &cfTunnelLivePackage
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: "cozystack.io"
+            version: "v1alpha1"
+            resource: "packages"
+          namespaced: false
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: cozystack.cloudflare-tunnel-gateway-controller
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.cloudflare-tunnel-gateway-controller is no longer rendered.*still exists on the cluster.*kubectl delete package.cozystack.io cozystack.cloudflare-tunnel-gateway-controller"
+
+  - it: fails the render when the live Package is vetoed through disabledPackages
+    kubernetesProvider: *cfTunnelLivePackage
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+        disabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.cloudflare-tunnel-gateway-controller is no longer rendered"
+
+  - it: renders the Package as usual when it is live and still enabled
+    kubernetesProvider: *cfTunnelLivePackage
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.cloudflare-tunnel-gateway-controller
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cloudflare-tunnel-gateway-controller
+    asserts:
+      - equal:
+          path: kind
+          value: Package
