@@ -1,0 +1,74 @@
+suite: tenant tiers grant the sdn kinds
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# Tenants reach sdn.cozystack.io only through the cozy:tenant* tiers: the
+# cozyplane chart's own tenant roles aggregate into the built-in
+# admin/edit/view ClusterRoles, which no Cozystack tenant is bound to. Without
+# these rules VPC self-service is Forbidden for every tenant on the cozyplane
+# variant. On the default variant the extra kinds are inert — the group serves
+# only securitygroups there.
+tests:
+  - it: the tenant base role writes the sdn kinds the vpc app renders
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources:
+              - securitygroups
+              - vpcs
+              - vpcbindings
+              - vpcgateways
+              - vpcpeerings
+              - floatingips
+            verbs: ['*']
+
+  - it: the view tier reads the sdn kinds
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - sdn.cozystack.io
+            resources:
+              - securitygroups
+              - vpcs
+              - vpcbindings
+              - vpcgateways
+              - vpcpeerings
+              - floatingips
+            verbs:
+              - get
+              - list
+              - watch
+
+  # export gates creating a VPCBinding to a VPC, peer a peering half; both are
+  # checked against the VPC itself, so a namespace RoleBinding only ever
+  # authorizes them on the tenant's own VPCs. Without export a tenant cannot
+  # attach a pod even to its own VPC.
+  - it: the admin tier carries the export and peer verbs on vpcs
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources:
+              - vpcs
+            verbs:
+              - export
+              - peer
