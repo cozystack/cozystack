@@ -3409,3 +3409,210 @@ func TestReconcileCNPGRestore_PinsTheRequestedBackup(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateCNPGBackupArtifact_RecordsMajorVersion(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	for _, tc := range []struct {
+		major int
+		want  string
+	}{{major: 18, want: "18"}, {major: 0, want: ""}} {
+		t.Run(fmt.Sprintf("majorVersion=%d", tc.major), func(t *testing.T) {
+			r := &BackupJobReconciler{Client: newCNPGStrategyTestClient(t)}
+			j := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+				},
+			}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "strat"},
+			}
+			cnpgBk := &cnpgtypes.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"},
+				Status:     cnpgtypes.BackupStatus{MajorVersion: tc.major},
+			}
+			rendered := &strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"},
+			}
+			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", rendered, newPostgresApp("pg", "tenant"))
+			if err != nil {
+				t.Fatalf("createCNPGBackupArtifact: %v", err)
+			}
+			if v, ok := got.Spec.DriverMetadata[cnpgMajorVersionKey]; v != tc.want || ok != (tc.want != "") {
+				t.Errorf("driverMetadata[%s]: got %q (present=%v), want %q", cnpgMajorVersionKey, v, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileCNPGRestore_RefusesCrossMajorRestore drives the restore up to
+// the purge with the backup and the target on different PostgreSQL majors.
+// The purge used to run regardless, and the recovery could then never start:
+// the target was left empty.
+func TestReconcileCNPGRestore_RefusesCrossMajorRestore(t *testing.T) {
+	const (
+		ns         = "tenant"
+		sourceApp  = "app"
+		copyApp    = "copy"
+		cnpgBkName = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now())
+
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{
+			Template: strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+			},
+		},
+	}
+
+	for _, tc := range []struct {
+		name string
+		// recorded is the major the artifact's driverMetadata carries, "" for
+		// an artifact taken before the driver recorded it.
+		recorded string
+		// cnpgMajor is the cnpg.io/Backup's status.majorVersion; -1 for a
+		// cnpg.io/Backup that retention has removed.
+		cnpgMajor     int
+		targetVersion string
+		toCopy        bool
+		wantRefused   bool
+	}{
+		{name: "v18 backup into a v16 copy", recorded: "18", cnpgMajor: 18, targetVersion: "v16", toCopy: true, wantRefused: true},
+		{name: "in place into an app upgraded since its v16 backup", recorded: "16", cnpgMajor: 16, targetVersion: "v18", wantRefused: true},
+		{name: "artifact without the record falls back to the cnpg.io/Backup", cnpgMajor: 18, targetVersion: "v16", toCopy: true, wantRefused: true},
+		{name: "same major restores", recorded: "16", cnpgMajor: 16, targetVersion: "v16", toCopy: true},
+		{name: "unknown backup major restores", cnpgMajor: -1, targetVersion: "v16", toCopy: true},
+		{name: "cnpg.io/Backup without majorVersion restores", cnpgMajor: 0, targetVersion: "v16"},
+		{name: "unknown target version restores", recorded: "18", cnpgMajor: 18, targetVersion: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targetApp := sourceApp
+			if tc.toCopy {
+				targetApp = copyApp
+			}
+			targetCluster := cnpgClusterNameForApp(targetApp)
+
+			snap, err := marshalCNPGBackupSnapshot(newPostgresApp(sourceApp, ns), nil)
+			if err != nil {
+				t.Fatalf("marshal snapshot: %v", err)
+			}
+			driverMD := map[string]string{
+				cnpgServerNameKey:      sourceApp,
+				cnpgDestinationPathKey: "s3://bucket/" + sourceApp + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			}
+			if tc.recorded != "" {
+				driverMD[cnpgMajorVersionKey] = tc.recorded
+			}
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: sourceApp},
+					StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+					DriverMetadata: driverMD,
+				},
+				Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+			}
+			rj := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+				Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+			}
+			if tc.toCopy {
+				rj.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: copyApp}
+			}
+			app := newPostgresApp(targetApp, ns)
+			app.Spec.Version = tc.targetVersion
+			objs := []client.Object{backup, rj, strategy, app,
+				&cnpgtypes.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: targetCluster}},
+				&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+					Namespace: ns, Name: targetCluster + "-1", Labels: map[string]string{cnpgClusterLabel: targetCluster},
+				}},
+			}
+			if tc.cnpgMajor >= 0 {
+				objs = append(objs, &cnpgtypes.Backup{
+					ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: cnpgBkName},
+					Spec:       cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: cnpgClusterNameForApp(sourceApp)}},
+					Status: cnpgtypes.BackupStatus{
+						Phase: cnpgBackupPhaseComplete, EndWal: "000000010000000000000003", MajorVersion: tc.cnpgMajor,
+					},
+				})
+			}
+
+			s := runtime.NewScheme()
+			_ = scheme.AddToScheme(s)
+			_ = backupsv1alpha1.AddToScheme(s)
+			_ = strategyv1alpha1.AddToScheme(s)
+			_ = cnpgtypes.AddToScheme(s)
+			_ = postgresapp.AddToScheme(s)
+			var deleted []string
+			c := clientfake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(objs...).
+				WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+						deleted = append(deleted, fmt.Sprintf("%T %s", obj, obj.GetName()))
+						return cl.Delete(ctx, obj, opts...)
+					},
+				}).
+				Build()
+			r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+
+			live := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, live); err != nil {
+				t.Fatalf("get seeded RestoreJob: %v", err)
+			}
+			if _, err := r.reconcileCNPGRestore(ctx, live, backup); err != nil {
+				t.Fatalf("reconcileCNPGRestore: %v", err)
+			}
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+				t.Fatalf("get RestoreJob after reconcile: %v", err)
+			}
+			patched := &postgresapp.Postgres{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: targetApp}, patched); err != nil {
+				t.Fatalf("get target Postgres app: %v", err)
+			}
+
+			if !tc.wantRefused {
+				if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+					t.Fatalf("restore failed: %s", got.Status.Message)
+				}
+				if len(deleted) == 0 || !patched.Spec.Bootstrap.Enabled {
+					t.Fatalf("restore did not reach the purge: deleted=%v bootstrap.enabled=%v", deleted, patched.Spec.Bootstrap.Enabled)
+				}
+				return
+			}
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Errorf("expected phase Failed, got %q", got.Status.Phase)
+			}
+			if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != "MajorVersionMismatch" {
+				t.Errorf("expected Ready=False reason MajorVersionMismatch, got %+v", cond)
+			}
+			for _, major := range []string{"PostgreSQL 16", "PostgreSQL 18"} {
+				if !strings.Contains(got.Status.Message, major) {
+					t.Errorf("message must name both majors, %q missing from %q", major, got.Status.Message)
+				}
+			}
+			if len(deleted) != 0 {
+				t.Errorf("a refused restore must delete nothing, deleted %v", deleted)
+			}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: targetCluster}, &cnpgtypes.Cluster{}); err != nil {
+				t.Errorf("target Cluster must survive: %v", err)
+			}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: targetCluster + "-1"}, &corev1.PersistentVolumeClaim{}); err != nil {
+				t.Errorf("target PVC must survive: %v", err)
+			}
+			if patched.Spec.Bootstrap.Enabled {
+				t.Errorf("a refused restore must not patch the target app")
+			}
+		})
+	}
+}

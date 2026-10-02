@@ -247,4 +247,7 @@ type BackupStatus struct {
 	// microsecond.
 	BackupID  string       `json:"backupId,omitempty"`
 	StoppedAt *metav1.Time `json:"stoppedAt,omitempty"`
+	// MajorVersion is the PostgreSQL major the backup was taken on. Zero on
+	// a Backup written by a CNPG release that predates the field.
+	MajorVersion int `json:"majorVersion,omitempty"`
 }

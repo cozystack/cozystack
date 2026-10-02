@@ -64,6 +64,9 @@ type PostgresList struct {
 // genuinely needs them; everything else stays on the server, untouched by
 // the controller's patches.
 type PostgresSpec struct {
+	// Version is the PostgreSQL major the chart renders the Cluster with,
+	// in the chart's "v16" form.
+	Version   string              `json:"version,omitempty"`
 	Bootstrap Bootstrap           `json:"bootstrap,omitempty"`
 	Backup    Backup              `json:"backup,omitempty"`
 	Databases map[string]Database `json:"databases,omitempty"`

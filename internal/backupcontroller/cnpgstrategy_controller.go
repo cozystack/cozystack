@@ -10,6 +10,7 @@ import (
 	"io"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,7 @@ const (
 	cnpgEndpointURLKey     = "cnpg.io/endpoint-url"
 	cnpgClusterNameKey     = "cnpg.io/cluster-name"
 	cnpgS3SecretRefKey     = "cnpg.io/s3-secret-ref"
+	cnpgMajorVersionKey    = "cnpg.io/major-version"
 
 	// Polling cadence for the CNPG backup/restore lifecycle. Mirrors the
 	// Velero strategy's defaults so behaviour is uniform across drivers.
@@ -639,6 +641,11 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	if rendered.BarmanObjectStore.S3Credentials != nil {
 		driverMD[cnpgS3SecretRefKey] = rendered.BarmanObjectStore.S3Credentials.SecretRef.Name
 	}
+	// Copied rather than read back at restore time: barman retention deletes
+	// the cnpg.io/Backup while the artifact can still be restored from.
+	if cnpgBackup.Status.MajorVersion > 0 {
+		driverMD[cnpgMajorVersionKey] = strconv.Itoa(cnpgBackup.Status.MajorVersion)
+	}
 
 	underlyingResources, err := marshalCNPGBackupSnapshot(sourceApp, resolved.Parameters)
 	if err != nil {
@@ -833,6 +840,29 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// no-ops.
 	freshlyRecovered := cnpgClusterFreshlyRecovered(hasRecovery, clusterCreatedAt, restoreJob.Status.StartedAt)
 	if cnpgPurgeNeeded(purgedCondition, freshlyRecovered) {
+		// A physical restore only opens on the major version that wrote the
+		// data files. Across majors the recovery pods loop on "database files
+		// are incompatible with server" until the deadline, with the target
+		// already purged. spec.version is what the chart renders the
+		// recovered Cluster from, so it is compared rather than the live
+		// Cluster's image. An unknown side keeps the restore going: refusing
+		// would break every backup taken before the version was recorded.
+		backupMajor, err := r.cnpgBackupMajorVersion(ctx, backup)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		targetMajor := postgresAppMajorVersion(targetApp.Spec.Version)
+		switch {
+		case backupMajor == 0 || targetMajor == 0:
+			logger.Info("PostgreSQL major version unknown; restoring without the version check",
+				"backup", backup.Name, "backupMajorVersion", backupMajor, "targetVersion", targetApp.Spec.Version)
+		case backupMajor != targetMajor:
+			return r.markRestoreJobFailedReason(ctx, restoreJob, "MajorVersionMismatch", fmt.Sprintf(
+				"Backup %s/%s was taken on PostgreSQL %d and cannot be restored into %s/%s, which runs PostgreSQL %d (spec.version=%q): "+
+					"a physical restore needs the same major version; the target was left untouched",
+				backup.Namespace, backup.Name, backupMajor, target.Namespace, target.AppName, targetMajor, targetApp.Spec.Version))
+		}
+
 		// Gate the destructive flow on the source cluster having shipped
 		// the backup's required WALs to object storage. archive_command runs
 		// on the source primary; once we delete the Cluster + PVCs, any
@@ -1589,6 +1619,31 @@ func (r *RestoreJobReconciler) cnpgSourceBackup(ctx context.Context, backup *bac
 		return nil, err
 	}
 	return cnpgBackup, nil
+}
+
+// cnpgBackupMajorVersion returns the PostgreSQL major a Backup artifact was
+// taken on, or 0 when it is unknown. An artifact created before the driver
+// recorded it falls back to the cnpg.io/Backup, as long as retention has not
+// removed it.
+func (r *RestoreJobReconciler) cnpgBackupMajorVersion(ctx context.Context, backup *backupsv1alpha1.Backup) (int, error) {
+	if v, err := strconv.Atoi(backup.Spec.DriverMetadata[cnpgMajorVersionKey]); err == nil && v > 0 {
+		return v, nil
+	}
+	source, err := r.cnpgSourceBackup(ctx, backup)
+	if err != nil || source == nil {
+		return 0, err
+	}
+	return source.Status.MajorVersion, nil
+}
+
+// postgresAppMajorVersion parses a Postgres app's spec.version ("v16"), or
+// returns 0 when it is empty or not in that form.
+func postgresAppMajorVersion(version string) int {
+	v, err := strconv.Atoi(strings.TrimPrefix(version, "v"))
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return v
 }
 
 // cnpgRestoreBackupID decides whether a restore pins the base backup it
