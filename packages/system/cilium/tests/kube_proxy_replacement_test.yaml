@@ -1,7 +1,6 @@
 suite: cilium owns service load-balancing
 
-# This pins one value, and it is pinned because two other packages depend on it
-# in a way that fails OPEN if it is lost. Read this before changing
+# This pins a required service-routing value. Read this before changing
 # kubeProxyReplacement in values.yaml or in any variant values file.
 #
 # packages/system/ingress-nginx and packages/system/kubeovn-webhook each ship a
@@ -21,23 +20,21 @@ suite: cilium owns service load-balancing
 # the backend pod on 8443, which is what the rules match.
 #
 # That ordering exists only while Cilium is the thing doing the DNAT, and the
-# only reason it is today is the value asserted below: kubeProxyReplacement,
-# "true" here against an upstream chart default of "false". Set it false and the
-# ClusterIP DNAT moves downstream of Cilium's egress hook (kube-proxy in the
-# host netns, or kube-ovn's OVN load balancer). The packet then reaches
-# policy_can_egress4 with dst = ClusterIP, which resolves to no endpoint
-# identity and cannot match toEndpoints; both policies run with
-# enableDefaultDeny: false, so falling out of the deny IS the access decision
-# and the packet is allowed. Every pod regains <webhook>.<ns>.svc:443 while the
-# backend-port deny keeps working and nothing reports a change.
+# value asserted below is what makes it so: kubeProxyReplacement, true here
+# against an upstream chart default of "false". Cozystack supplies no supported
+# alternative service load balancer for false; on the kube-ovn management
+# topology kube-proxy is absent and ENABLE_LB is also false. Turning this value
+# off therefore leaves ClusterIP routing without a supported owner and can break
+# Service connectivity. It does not by itself make either webhook reachable.
 #
 # Both policies also carry a target-side ingressDeny on their own webhook pods
 # for the same port, and that half does NOT depend on this value: it is
 # evaluated on the destination's ingress path, after whatever DNAT already
-# happened, so it enforces whoever performs the translation. Losing
-# kubeProxyReplacement therefore degrades the source-side rules and leaves the
-# target-side ones standing. That is defence in depth, not a reason to relax
-# this pin: the source-side form is what still denies while the webhook
+# happened, so it enforces whoever performs the translation. If a second
+# unsupported configuration change supplied a different translator,
+# kubeProxyReplacement=false would remove the source-side match before DNAT but
+# leave the target-side rules standing. That is defence in depth, not a reason
+# to relax this pin: the source-side form is what still denies while the webhook
 # endpoint's own policy is being recomputed or has overflowed its map, and the
 # target-side form is what survives a different service-LB implementation.
 # Neither subsumes the other, each carries its own cost, and both are argued in
@@ -139,10 +136,9 @@ tests:
   # The beacon is the only half of this guard that can fire in the field. The
   # pin above catches a cozystack commit changing the default; nothing in this
   # repo observes a live cluster's values, so an operator override reaches a
-  # running cluster unobserved. A ConfigMap rather than fail(), because whether
-  # Cilium without kube-proxy replacement is supported at all is a platform
-  # decision, and refusing to render the CNI over a weakened defence-in-depth
-  # control is not this chart's call to make.
+  # running cluster unobserved. The ConfigMap keeps that unsupported state
+  # visible without making each reconciliation fail to render; it is not an
+  # alternative supported mode.
   - it: emits no beacon while Cilium owns service load-balancing
     template: templates/kube-proxy-replacement-beacon.yaml
     asserts:
@@ -166,7 +162,7 @@ tests:
           value: "false"
       - matchRegex:
           path: data.message
-          pattern: "cover traffic addressed to the webhook Service ClusterIP"
+          pattern: "supports this chart only when"
 
   # The string form is what the upstream chart's own default uses, and the
   # subchart's value coalesces into the parent, so this is also the shape a

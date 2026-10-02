@@ -235,6 +235,13 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: fails closed when the effective subchart values have no webhook port
+    set:
+      ingress-nginx.controller.admissionWebhooks.port: null
+    asserts:
+      - failedTemplate:
+          errorMessage: ingress-nginx.controller.admissionWebhooks.port must be set while admissionWebhookPolicy is enabled
+
   - it: defaults to enabled when a backport has no policy values
     set:
       admissionWebhookPolicy: null

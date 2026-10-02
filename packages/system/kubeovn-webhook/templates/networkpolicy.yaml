@@ -28,8 +28,8 @@ back. Shipping both does not eliminate the namespace-churn map writes here; it
 makes them non-load-bearing, because whichever end is degraded the other still
 denies, and the writes are writes rather than an outage (see the cost paragraph
 on the second spec). The alternative -- dropping the target-side rule -- buys
-the coupling back at the price of a silent fail-open wherever Cilium does not
-own the DNAT.
+the coupling back at the price of a silent fail-open if another component
+performs DNAT only after Cilium's egress hook.
 
 That coupling was not reproduced in isolation as the trigger of #3983, and the
 errno the issue reports cannot come from a policy denial; see the PR
@@ -51,17 +51,20 @@ denies EVERY destination on that port for every selected endpoint -- a
 cluster-wide egress outage rather than a tighter deny.
 
 That ordering is Cilium's own and it is conditional: it holds while Cilium owns
-service load-balancing, which on every cozystack variant it does because
-packages/system/cilium/values.yaml sets kubeProxyReplacement: true against an
-upstream chart default of "false". Set that false and the ClusterIP DNAT moves
-downstream of Cilium's egress hook, the packet reaches policy_can_egress4 with
-dst = ClusterIP, matches no endpoint identity, and -- default-deny being off --
-is allowed, restoring pod access to /mutate-pods with nothing to look at.
-packages/system/cilium/tests/kube_proxy_replacement_test.yaml pins that value
-and packages/system/cilium/templates/kube-proxy-replacement-beacon.yaml renders
-a status ConfigMap whenever it is not true, which is the only signal an operator
-override in the field can produce. The second spec below then keeps enforcing
-whoever performs the DNAT.
+service load-balancing. This kube-ovn topology sets ENABLE_LB: false in
+packages/system/kubeovn/values.yaml, does not run kube-proxy, and supports
+ClusterIP routing only with packages/system/cilium/values.yaml
+kubeProxyReplacement set to true. Turning it false leaves no supported service
+translator, so Service traffic fails as a routing error rather than bypassing
+this policy.
+
+If a second unsupported change enabled another translator, the source-side
+rule would see dst = ClusterIP before DNAT and no longer match an endpoint
+identity. The second spec below is evaluated on the destination after whatever
+translation occurred and still denies pod traffic. The Cilium package pins the
+supported value in tests/kube_proxy_replacement_test.yaml and renders
+templates/kube-proxy-replacement-beacon.yaml for a live override that repository
+tests cannot observe.
 
 The API server and host-network workloads are not selected: a rule carrying an
 endpointSelector can never match the host endpoint, because Cilium routes host
@@ -73,10 +76,11 @@ The second spec is target-side, on the webhook endpoint, and carries two denies
 kept for different reasons.
 
 Its pod deny is deliberate belt and braces. Being on the destination's ingress
-path it is evaluated after whatever DNAT has already happened, so it holds even
-where Cilium is not the service load balancer -- exactly the exposure the
-paragraph above describes. It cannot catch the API server: for a clusterwide
-policy Cilium rewrites every fromEndpoints selector to also require
+path it is evaluated after whatever DNAT has already happened, so it still
+holds if another component translates the Service after source-side egress
+policy -- exactly the exposure the paragraph above describes. It cannot catch
+the API server: for a clusterwide policy Cilium rewrites every fromEndpoints
+selector to also require
 k8s:io.kubernetes.pod.namespace to Exist, plus the cluster label (Cilium
 v1.19.5, pkg/k8s/apis/cilium.io/utils/utils.go:120-154 getEndpointSelector,
 whose own comment at :141 says that even a wildcard must not become a truly
