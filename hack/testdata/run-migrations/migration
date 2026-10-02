@@ -1,0 +1,10 @@
+#!/bin/sh
+# Stand-in for a platform migration, copied to /migrations/<n> by
+# hack/run-migrations.bats: it records that it ran and stamps n+1 through the
+# real helper, or fails before stamping when FAKE_FAIL_AT names it.
+set -eu
+. "$(dirname "$0")/lib/cozystack-version.sh"
+n=$(basename "$0")
+echo "$n" >> /work/ran
+[ "${FAKE_FAIL_AT:-}" != "$n" ] || exit 1
+stamp_cozystack_version $((n + 1))

@@ -8,8 +8,6 @@ NAMESPACE="${NAMESPACE:-cozy-system}"
 CURRENT_VERSION="${CURRENT_VERSION:-0}"
 TARGET_VERSION="${TARGET_VERSION:-0}"
 
-echo "Starting migrations from version $CURRENT_VERSION to $TARGET_VERSION"
-
 # Check if ConfigMap exists
 if ! kubectl get configmap --namespace "$NAMESPACE" cozystack-version >/dev/null 2>&1; then
   echo "ConfigMap cozystack-version does not exist, creating it with version $TARGET_VERSION"
@@ -21,6 +19,32 @@ if ! kubectl get configmap --namespace "$NAMESPACE" cozystack-version >/dev/null
   echo "ConfigMap created with version $TARGET_VERSION"
   exit 0
 fi
+
+# CURRENT_VERSION is rendered once per upgrade, and the Job retries a failed
+# pod with that same environment, while every migration that finished has
+# stamped the ConfigMap since. Start from the stamp, or a retry re-runs
+# migrations that already completed. A failed read aborts: the Job retries
+# it, whereas falling back would reopen the re-run. Only a ConfigMap that
+# holds no integer version keeps the rendered value, which the chart derived
+# from that same field.
+STAMPED_VERSION=$(kubectl get configmap --namespace "$NAMESPACE" cozystack-version --output jsonpath='{.data.version}')
+case "$STAMPED_VERSION" in
+  ''|*[!0-9]*)
+    echo "ConfigMap cozystack-version holds no integer version ('$STAMPED_VERSION'), keeping the rendered $CURRENT_VERSION"
+    ;;
+  *)
+    # A stamp past the shell's integer range would fail the -ge test below
+    # inside an if, where set -e does not stop it, and end in a green Job that
+    # ran nothing. Falling back is no answer: the chart renders it as 0.
+    if ! [ "$STAMPED_VERSION" -ge 0 ] 2>/dev/null; then
+      echo "ConfigMap cozystack-version holds version $STAMPED_VERSION, outside the supported integer range" >&2
+      exit 1
+    fi
+    CURRENT_VERSION="$STAMPED_VERSION"
+    ;;
+esac
+
+echo "Starting migrations from version $CURRENT_VERSION to $TARGET_VERSION"
 
 # If current version is already at target, nothing to do
 if [ "$CURRENT_VERSION" -ge "$TARGET_VERSION" ]; then
