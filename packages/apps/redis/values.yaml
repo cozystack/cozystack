@@ -72,7 +72,7 @@ size: 1Gi
 ## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
-## @param {bool} external - Enable external access from outside the cluster.
+## @param {bool} external - Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.
 external: false
 
 ## @enum {string} Version

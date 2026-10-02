@@ -33,7 +33,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Enable external access from outside the cluster.
+	// Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
 	// Redis major version to deploy

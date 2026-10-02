@@ -123,7 +123,7 @@
       }
     },
     "external": {
-      "description": "Enable external access from outside the cluster.",
+      "description": "Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.",
       "type": "boolean",
       "default": false
     },
