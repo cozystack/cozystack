@@ -1,0 +1,72 @@
+suite: cozyplane-apiserver etcd wiring
+# Cozystack-side suite over the vendored chart. The contract that matters to
+# the platform: the operator-managed etcd is a valid v1alpha2 EtcdCluster,
+# PVC-backed by default on the replicated class, and the apiserver dials the
+# operator's Service — never per-pod endpoints, which the operator names
+# randomly (getting that wrong looks exactly like a dead etcd).
+templates:
+  - templates/etcd-cluster.yaml
+  - templates/apiserver.yaml
+release:
+  name: cozyplane-apiserver
+  namespace: cozy-cozyplane
+tests:
+  - it: renders a PVC-backed v1alpha2 EtcdCluster by default
+    templates: [templates/etcd-cluster.yaml]
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: apiVersion
+          value: etcd-operator.cozystack.io/v1alpha2
+      - equal:
+          path: spec.storage.medium
+          value: ""
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+      # certManager-mode TLS: exactly one of certManager/secretRef per surface
+      # (a CRD CEL rule); the platform supplies the issuers.
+      - exists:
+          path: spec.tls.client.certManager.serverIssuerRef
+      - notExists:
+          path: spec.tls.client.serverSecretRef
+      - exists:
+          path: spec.tls.peer.certManager.issuerRef
+
+  # tmpfs is the no-storage-layer escape hatch; spec.storage.medium is
+  # immutable post-create, so this must come out right the first time.
+  - it: renders a memory-backed member when persistence is off
+    templates: [templates/etcd-cluster.yaml]
+    set:
+      etcd:
+        operator:
+          persistent: false
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.storage.medium
+          value: Memory
+
+  - it: dials the operator's etcd Service, not per-pod endpoints
+    templates: [templates/apiserver.yaml]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --etcd-servers=https://cozyplane-etcd.cozy-cozyplane.svc:2379
+
+  - it: falls back to the built-in single-pod etcd when the operator is off
+    set:
+      etcd:
+        operator:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/etcd-cluster.yaml
