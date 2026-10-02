@@ -1,0 +1,131 @@
+suite: NATS generated account JetStream configuration
+
+release:
+  name: my-nats
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+  users:
+    app:
+      password: secret
+
+templates:
+  - templates/nats.yaml
+
+tests:
+  - it: enables JetStream for generated users when persistent messaging is enabled
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A
+          value:
+            jetstream: true
+            users:
+              - user: app
+                password: secret
+      - equal:
+          path: spec.values.nats.config.jetstream.fileStore.enabled
+          value: true
+
+  - it: does not enable account JetStream when persistent messaging is disabled
+    set:
+      jetstream.enabled: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - notExists:
+          path: spec.values.nats.config.merge.accounts.A.jetstream
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.users
+          value:
+            - user: app
+              password: secret
+      - equal:
+          path: spec.values.nats.config.jetstream.fileStore.enabled
+          value: false
+
+  - it: generates a usable account when the accounts override is null
+    set:
+      config.merge.accounts: null
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A
+          value:
+            jetstream: true
+            users:
+              - user: app
+                password: secret
+
+  - it: preserves explicitly configured account JetStream limits
+    set:
+      config.merge.accounts.A.jetstream:
+        max_memory: 0
+        max_file: 1073741824
+        max_streams: 5
+        max_consumers: 10
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A
+          value:
+            jetstream:
+              max_memory: 0
+              max_file: 1073741824
+              max_streams: 5
+              max_consumers: 10
+            users:
+              - user: app
+                password: secret
+
+  - it: preserves an explicitly disabled account
+    set:
+      config.merge.accounts.A.jetstream: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.jetstream
+          value: false
+
+  - it: preserves an explicitly empty account JetStream configuration
+    set:
+      config.merge.accounts.A.jetstream: {}
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.jetstream
+          value: {}
+
+  - it: leaves manually configured accounts unchanged without generated users
+    set:
+      users: null
+      config.merge.accounts.B:
+        jetstream: true
+        users:
+          - user: manual
+            password: manual-secret
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts
+          value:
+            B:
+              jetstream: true
+              users:
+                - user: manual
+                  password: manual-secret
