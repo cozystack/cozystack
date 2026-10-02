@@ -109,7 +109,7 @@ spec:
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
             {{- end }}
           {{- end }}
-          {{- if or .Values.cloudInit .Values.sshKeys }}
+          {{- if or .Values.cloudInit .Values.sshKeys .Values.netplanDhcp }}
           - name: cloudinitdisk
             disk: {}
           {{- end }}
@@ -142,11 +142,17 @@ spec:
         dataVolume:
           name: vm-disk-{{ .name }}
       {{- end }}
-      {{- if or .Values.cloudInit .Values.sshKeys }}
+      {{- if or .Values.cloudInit .Values.sshKeys .Values.netplanDhcp }}
       - name: cloudinitdisk
         cloudInitNoCloud:
+          {{- if or .Values.cloudInit .Values.sshKeys }}
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
+          {{- end }}
+          {{- if .Values.netplanDhcp }}
+          networkDataSecretRef:
+            name: {{ include "virtual-machine.fullname" . }}-network-config
+          {{- end }}
       {{- end }}
       networks:
       - name: default
