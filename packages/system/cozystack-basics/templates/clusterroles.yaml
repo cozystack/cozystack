@@ -34,7 +34,13 @@ rules:
   resources: ['*']
   verbs: ['*']
 - apiGroups: ["sdn.cozystack.io"]
-  resources: ["securitygroups"]
+  resources:
+  - securitygroups
+  - vpcs
+  - vpcbindings
+  - vpcgateways
+  - vpcpeerings
+  - floatingips
   verbs: ['*']
 - apiGroups:
   - cozystack.io
@@ -93,10 +99,25 @@ rules:
   - sdn.cozystack.io
   resources:
   - securitygroups
+  - vpcs
+  - vpcbindings
+  - vpcgateways
+  - vpcpeerings
+  - floatingips
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - sdn.cozystack.io
+  resources:
+  - securitygroups/status
+  - vpcs/status
+  - vpcgateways/status
+  - vpcpeerings/status
+  - floatingips/status
+  verbs:
+  - get
 - apiGroups:
   - ""
   resources:
@@ -285,11 +306,25 @@ rules:
 - apiGroups: ["sdn.cozystack.io"]
   resources:
   - securitygroups
+  - vpcs
+  - vpcbindings
+  - vpcgateways
+  - vpcpeerings
+  - floatingips
   verbs:
   - create
   - update
   - patch
   - delete
+# The virtual verbs on a tenant's own VPCs: export gates creating a VPCBinding
+# to a VPC, peer gates a peering half. Checked against the VPC, so a namespace
+# RoleBinding only ever authorizes them on VPCs in that namespace.
+- apiGroups: ["sdn.cozystack.io"]
+  resources:
+  - vpcs
+  verbs:
+  - export
+  - peer
 ---
 # == super admin cluster role ==
 # Aggregates admin + all roles labeled for super-admin access
