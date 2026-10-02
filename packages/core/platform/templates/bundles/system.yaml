@@ -340,6 +340,7 @@ variants and opt-in on the slim ones. */}}
 
 # Optional System Packages (controlled via bundles.enabledPackages)
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.local-storage" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
