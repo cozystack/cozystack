@@ -3,11 +3,13 @@
 # helper the kafka-3-metadata-roundtrip suite seeds and verifies topics through.
 #
 # kubectl and the Kafka CLI are stub executables on PATH. The kubectl stub
-# answers the calls kafka_run makes -- get the CLI Pod's phase and owner label,
-# create it when absent, wait for it, and `exec` into it -- and runs the exec'd
-# snippet locally against the kafka-topics.sh stub. STUB_PHASE / STUB_OWNER drive
-# the reuse guard, and STUB_EXEC_ERROR makes the exec fail so the "a failed read
-# says why" claim is pinned rather than asserted in prose.
+# answers the calls kafka_run makes -- get the CLI Pod's phase, owner label and
+# runAsNonRoot, create it when absent or started without the restricted profile
+# (recording the overrides it is given), wait for it, and `exec` into it -- and
+# runs the exec'd snippet locally against the kafka-topics.sh stub. STUB_PHASE /
+# STUB_OWNER / STUB_NONROOT drive the reuse guard, and STUB_EXEC_ERROR makes the
+# exec fail so the "a failed read says why" claim is pinned rather than asserted
+# in prose.
 #
 # cozytest.sh's awk runner recognizes only @test blocks and a bare `}`; there is
 # no bats `run` or `$status`, and no setup/teardown, so each case calls
@@ -26,13 +28,21 @@ case "$1 $2 $3" in
     case "$*" in
     *"jsonpath={.status.phase}"*)          printf '%s' "${STUB_PHASE-Running}" ;;
     *"jsonpath={.metadata.labels"*)         printf '%s' "${STUB_OWNER-kafka-metadata}" ;;
+    *"jsonpath={.spec.securityContext.runAsNonRoot}"*) printf '%s' "${STUB_NONROOT-true}" ;;
     esac
     exit 0 ;;
 "-n tenant-root delete")
     exit 0 ;;
 "-n tenant-root run")
-    # Reachable only when the Pod is absent; a reuse that starts a Pod is a bug.
-    [ -z "${STUB_PHASE-Running}" ] && exit 0
+    for a in "$@"; do
+        case "$a" in
+        --overrides=*)     printf '%s' "${a#--overrides=}" > "$STUB_DIR/overrides.json" ;;
+        --override-type=*) printf '%s' "${a#--override-type=}" > "$STUB_DIR/override-type" ;;
+        esac
+    done
+    # Reachable only when the Pod is absent or predates the restricted
+    # profile; a reuse that starts a Pod is a bug.
+    { [ -z "${STUB_PHASE-Running}" ] || [ -z "${STUB_NONROOT-true}" ]; } && exit 0
     echo "kafka_run started a Pod though a Ready one it owns exists" >&2; exit 95 ;;
 "-n tenant-root wait")
     exit 0 ;;
@@ -59,7 +69,7 @@ EOF
     }
 
 run_topic_meta() {
-    STUB_DIR=$stub STUB_PHASE="${STUB_PHASE-Running}" STUB_OWNER="${STUB_OWNER-kafka-metadata}" \
+    STUB_DIR=$stub STUB_PHASE="${STUB_PHASE-Running}" STUB_OWNER="${STUB_OWNER-kafka-metadata}" STUB_NONROOT="${STUB_NONROOT-true}" \
         STUB_EXEC_ERROR="${STUB_EXEC_ERROR:-}" STUB_GET_ERROR="${STUB_GET_ERROR:-}" PATH="$stub:$PATH" NAMESPACE=tenant-root \
         KAFKA_BIN=$stub TOPIC=orders bash -c '
         set -euo pipefail
@@ -86,6 +96,33 @@ run_topic_meta() {
     grep -q 'run kafka-cli --image=' "$stub/kubectl.argv"
     grep -q 'labels=cozystack.io/backup-demo=kafka-metadata' "$stub/kubectl.argv"
     grep -q 'exec -i kafka-cli -- bash -c' "$stub/kubectl.argv"
+}
+
+@test "kafka_run starts the CLI Pod under the restricted Pod Security profile" {
+    make_stubs
+    export STUB_PHASE=
+    run_topic_meta >/dev/null
+    # The overrides are a JSON patch, which kubectl applies only with
+    # --override-type=json; under the default merge type the array is rejected.
+    [ "$(cat "$stub/override-type")" = "json" ]
+    jq --exit-status '
+        (map(select(.op == "add" and .path == "/spec/securityContext")) | .[0].value) as $pod
+        | (map(select(.op == "add" and .path == "/spec/containers/0/securityContext")) | .[0].value) as $ctr
+        | $pod.runAsNonRoot == true
+          and $pod.seccompProfile.type == "RuntimeDefault"
+          and $ctr.allowPrivilegeEscalation == false
+          and $ctr.capabilities.drop == ["ALL"]
+    ' "$stub/overrides.json"
+}
+
+@test "kafka_run replaces a Pod it owns that predates the restricted profile" {
+    make_stubs
+    export STUB_NONROOT=
+    out=$(run_topic_meta)
+    [ "$out" = "3 123456" ]
+    grep -q 'delete pod kafka-cli' "$stub/kubectl.argv"
+    grep -q 'run kafka-cli --image=' "$stub/kubectl.argv"
+    [ "$(cat "$stub/override-type")" = "json" ]
 }
 
 @test "kafka_run refuses a same-named Pod the demo does not own" {

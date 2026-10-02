@@ -36,15 +36,15 @@ For a faithful, offset-preserving Kafka backup, prefer a volume-snapshot strateg
 | `00-helpers.sh` | Shared bash helpers, env defaults, and the kafka-CLI / S3-secret helpers; sourced by every step. | n/a |
 | `01-create-strategy.sh` | Creates the cluster-scoped `Job` strategy (the Kafka backup/restore `PodTemplateSpec`). | admin |
 | `02-create-backupclass.sh` | Maps `apps.cozystack.io/Kafka` to that strategy, with the `topics` parameter (and the optional `replicationFactor` override). | admin |
-| `03-create-bucket.sh` | Provisions a `Bucket` and caches its S3 coordinates plus the endpoint's CA into `.bucket-info.env` (chmod 600; raw access keys). `cleanup.sh` removes this file. | tenant, **plus admin** for the CA copy: it reads a Secret in `tenant-root`, which a tenant persona is not granted (see the TLS bullet above) |
-| `04-create-kafka.sh` | Provisions a two-broker `Kafka`, creates the `<app>-backup-s3` Secret, seeds a topic (replication factor 2) with sentinel messages. | tenant |
+| `03-create-bucket.sh` | Provisions a `Bucket` and caches its S3 coordinates plus the endpoint's CA into `.bucket-info.env` (chmod 600; raw access keys). `cleanup.sh` removes this file. | **admin**. A tenant admin can create the `Bucket` itself, but the script also waits on its `HelmRelease` and COSI objects, reads the `bucket-<name>-backup` Secret, and copies the CA from a Secret in `tenant-root` (see the TLS bullet above); no tenant role grants access to `helmreleases` or `objectstorage.k8s.io`, or `get` on those Secrets |
+| `04-create-kafka.sh` | Provisions a two-broker `Kafka`, creates the `<app>-backup-s3` Secret, seeds a topic (replication factor 2) with sentinel messages. | **admin**. A tenant admin can create the `Kafka` itself, but the script also waits on its `HelmRelease` and Strimzi `Kafka`, creates the Secret, and seeds the topic through a CLI Pod it execs into; no tenant role grants access to `helmreleases` or `kafkas.kafka.strimzi.io`, `create` on `secrets` or `pods`, or `pods/exec` |
 | `05-create-backupjob.sh` | Submits a `BackupJob`, waits for Succeeded and caches the resolved `Backup` name into `.backup-name.env`. | tenant |
-| `06-restore-in-place.sh` | Deletes the topic and restores it into the same instance via `RestoreJob`, then submits a second `RestoreJob` that must be refused because the topic is no longer empty. | tenant |
-| `07-restore-to-copy.sh` | Provisions a second two-broker `Kafka` and restores into it via `RestoreJob.spec.targetApplicationRef`. | tenant |
-| `cleanup.sh` | Removes everything created by the demo. | admin or tenant |
+| `06-restore-in-place.sh` | Deletes the topic and restores it into the same instance via `RestoreJob`, then submits a second `RestoreJob` that must be refused because the topic is no longer empty. | **admin**. A tenant admin can submit the two `RestoreJob`s, but the script deletes and checks the topic through the CLI Pod and reads the refusal from the restore Pod's log; no tenant role grants `create` on `pods` or `pods/exec`, or `get` on `pods/log` |
+| `07-restore-to-copy.sh` | Provisions a second two-broker `Kafka` and restores into it via `RestoreJob.spec.targetApplicationRef`. | **admin**, for the same reasons as step 04. The tenant admin's part is the second `Kafka` and the `RestoreJob` |
+| `cleanup.sh` | Removes everything created by the demo. | **admin**: it deletes Secrets, the `Backup`, and the cluster-scoped `BackupClass` and strategy, and no tenant role grants `delete` on any of them |
 | `run-all.sh` | Convenience runner that executes 01..07 in order. | demo |
 
-The scenario walk-throughs `90-scenario-admin-prepare.md`, `91-scenario-user-backup.md` and `92-scenario-user-restore.md` describe the same steps from the admin's and the tenant's side.
+The scenario walk-throughs `90-scenario-admin-prepare.md`, `91-scenario-user-backup.md` and `92-scenario-user-restore.md` describe the same steps from the admin's and the tenant's side, and say which parts of the tenant's side need admin access.
 
 ## Running
 

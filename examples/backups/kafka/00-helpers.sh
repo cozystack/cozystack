@@ -309,7 +309,7 @@ topic_replication_factor() {
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the
 # bucket coordinates cached by 03-create-bucket.sh. The generic Job strategy -
 # unlike the app-specific drivers - has no chart support to emit this Secret,
-# so the tenant provides it. Called for the source app (step 04) and the
+# so the demo provides it. Called for the source app (step 04) and the
 # restore target (step 07). The S3 endpoint's CA, when 03-create-bucket.sh
 # cached one, rides along as ca.crt: the strategy Pod mounts that key and
 # verifies the endpoint against it instead of disabling verification.

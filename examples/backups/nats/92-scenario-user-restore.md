@@ -2,6 +2,8 @@
 
 Two restore variants are supported.
 
+The user's own action in both variants, at the tenant admin level, is the `RestoreJob`, plus the second `NATS` in variant B. The scripts as written need admin access: variant A deletes and checks the stream through a CLI Pod, and variant B checks the stream the same way, creates the target's Secret and waits on its `HelmRelease` and `StatefulSet`, none of which a tenant role allows. The README's step table has the details.
+
 ## A. In-place restore
 
 Restore back into the same NATS application.

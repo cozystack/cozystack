@@ -82,7 +82,7 @@ spec:
               value: "{{ .Release.Namespace }}"
             - name: MODE
               value: "{{ .Mode }}"
-            # S3 coordinates from the tenant-provided <release>-backup-s3 Secret
+            # S3 coordinates from the demo-provided <release>-backup-s3 Secret
             # (created by create_s3_secret in 00-helpers.sh from the Bucket).
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
@@ -169,7 +169,7 @@ spec:
 
               # curl --aws-sigv4 signs the request (SigV4) so no separate S3
               # client image is needed. The certificate is verified: against the
-              # CA projected from the Secret when the tenant supplied one, else
+              # CA projected from the Secret when it carries one, else
               # against the image's trust store. \${CA_OPT} and \${CONNECT_TO}
               # are deliberately unquoted so an empty value expands to no
               # argument.

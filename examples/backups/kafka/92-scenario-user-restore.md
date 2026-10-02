@@ -4,6 +4,8 @@ Two restore variants are supported. Both append: the strategy recreates a
 topic only if it is absent and then replays every record, so it refuses a
 target topic that already holds data.
 
+The user's own action in both variants, at the tenant admin level, is the `RestoreJob`, plus the second `Kafka` in variant B. The scripts as written need admin access: variant A deletes and checks the topic through a CLI Pod and reads the refused restore's Pod log, and variant B checks the topic the same way, creates the target's Secret and waits on its `HelmRelease` and Strimzi `Kafka`, none of which a tenant role allows. The README's step table has the details.
+
 ## A. In-place restore
 
 Restore back into the same Kafka application.

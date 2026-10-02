@@ -150,23 +150,35 @@ kafka_wait_ready() {
 # Ensure the long-lived kafka-cli Pod exists and is Ready, so kafka_run can exec
 # into it. Idempotent: a Ready Pod this demo owns is reused across calls and
 # across the numbered demo scripts; a leftover in a terminal phase (Succeeded /
-# Failed) is replaced rather than waited on; and a same-named Pod this demo does
-# not own is refused rather than hijacked or deleted. cleanup.sh removes it.
+# Failed) is replaced rather than waited on, and so is one started before the
+# Pod ran under the restricted profile, since a Pod's securityContext cannot be
+# changed in place; and a same-named Pod this demo does not own is refused
+# rather than hijacked or deleted. cleanup.sh removes it.
 # Every step returns on failure explicitly: this runs as the left side of
 # `|| return 1`, and some callers also wrap it in $(...), so errexit never
 # applies inside it and a bare failure would carry on to the next step.
 kafka_cli_pod() {
-    local phase owner
+    local phase owner nonroot overrides
     phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.status.phase}') || return 1
     owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}') || return 1
     if [ -n "$phase" ] && [ "$owner" != "kafka-metadata" ]; then
         log_error "Pod $NAMESPACE/$KAFKA_CLI_POD exists but this demo does not own it; refusing to use or delete it"
         return 1
     fi
-    if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
+    # Only this helper creates the Pod, and it sets every restricted field at
+    # once, so one of them tells a current Pod from an older one.
+    nonroot=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.spec.securityContext.runAsNonRoot}') || return 1
+    if { [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; } || [ "$nonroot" != "true" ]; then
+        # The Strimzi image runs as non-root UID 1001, so runAsNonRoot and
+        # seccomp at the Pod level plus allowPrivilegeEscalation=false and
+        # drop-ALL on the container satisfy PSA "restricted" without pinning a
+        # runAsUser specific to this image tag. The add-only JSON patch leaves
+        # the run-generated Pod's image, command and args untouched.
+        overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
         kubectl -n "$NAMESPACE" delete pod "$KAFKA_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null || return 1
         kubectl -n "$NAMESPACE" run "$KAFKA_CLI_POD" --image="$KAFKA_IMAGE" \
             --labels=cozystack.io/backup-demo=kafka-metadata \
+            --override-type=json --overrides="$overrides" \
             --restart=Never --command -- sleep infinity >/dev/null || return 1
     fi
     kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$KAFKA_CLI_POD" \

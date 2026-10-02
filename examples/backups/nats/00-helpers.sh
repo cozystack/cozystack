@@ -131,7 +131,7 @@ stream_message_count() {
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the
 # bucket coordinates cached by 03-create-bucket.sh. The generic Job strategy -
 # unlike the app-specific drivers - has no chart support to emit this Secret,
-# so the tenant provides it. Called for the source app (step 04) and the
+# so the demo provides it. Called for the source app (step 04) and the
 # restore target (step 07).
 create_s3_secret() {
     local app="$1"

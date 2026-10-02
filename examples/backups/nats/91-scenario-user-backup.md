@@ -2,13 +2,12 @@
 
 This scenario assumes the admin steps (`01-...`, `02-...`) have already run.
 
+The user's own action here, at the tenant admin level, is the `BackupJob` in step 05, plus creating the `Bucket` and the `NATS`. Steps 03 and 04 as scripted need admin access: they read and create Secrets, wait on HelmReleases and the `StatefulSet`, and seed the stream through a CLI Pod, which no tenant role allows. The README's step table has the details.
+
 ## Prerequisites
 
 - Tenant namespace (default: `tenant-test`).
-- A Cozystack `Bucket` (step 03) and the `<app>-backup-s3` Secret derived from
-  it (step 04). The generic `Job` strategy has no chart support to emit this
-  Secret, so the tenant creates it from the bucket's `BucketInfo` (see
-  `create_s3_secret` in `00-helpers.sh`).
+- A Cozystack `Bucket` (step 03) and the `<app>-backup-s3` Secret derived from it (step 04). The generic `Job` strategy has no chart support to emit this Secret, so step 04 creates it from the bucket's `BucketInfo` (see `create_s3_secret` in `00-helpers.sh`). Creating it needs admin access.
 - A `NATS` application with JetStream enabled and a stream holding data.
 
 ## Steps

@@ -2,14 +2,13 @@
 
 This scenario assumes the admin steps (`01-...`, `02-...`) have already run.
 
+The user's own action here, at the tenant admin level, is the `BackupJob` in step 05, plus creating the `Bucket` and the `Kafka`. Steps 03 and 04 as scripted need admin access: they read and create Secrets, wait on HelmReleases and operator resources, and seed the topic through a CLI Pod, which no tenant role allows. The README's step table has the details.
+
 ## Prerequisites
 
 - Tenant namespace (default: `tenant-root`, the tenant whose Pods can reach
   the in-cluster seaweedfs; see the README).
-- A Cozystack `Bucket` (step 03) and the `<app>-backup-s3` Secret derived from
-  it (step 04). The generic `Job` strategy has no chart support to emit this
-  Secret, so the tenant creates it from the bucket's `BucketInfo` plus the S3
-  endpoint's CA (see `create_s3_secret` in `00-helpers.sh`).
+- A Cozystack `Bucket` (step 03) and the `<app>-backup-s3` Secret derived from it (step 04). The generic `Job` strategy has no chart support to emit this Secret, so step 04 creates it from the bucket's `BucketInfo` plus the S3 endpoint's CA (see `create_s3_secret` in `00-helpers.sh`). Creating it needs admin access.
 - A `Kafka` application with at least one plain (neither compacted nor
   transactional) topic holding data.
 

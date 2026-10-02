@@ -30,12 +30,12 @@ driver, with tools you already have.
 | `00-helpers.sh` | Shared bash helpers, env defaults, and the `nats`/S3-secret helpers; sourced by every step. | n/a |
 | `01-create-strategy.sh` | Creates the cluster-scoped `Job` strategy (the nats-box `PodTemplateSpec`). | admin |
 | `02-create-backupclass.sh` | Maps `apps.cozystack.io/NATS` to that strategy, with `stream`/`natsUser` parameters. | admin |
-| `03-create-bucket.sh` | Provisions a `Bucket` and caches its S3 coordinates into `.bucket-info.env` (chmod 600; raw access keys). `cleanup.sh` removes this file. | tenant |
-| `04-create-nats.sh` | Provisions a `NATS` instance, creates the `<app>-backup-s3` Secret, seeds a JetStream stream with sentinel messages. | tenant |
+| `03-create-bucket.sh` | Provisions a `Bucket` and caches its S3 coordinates into `.bucket-info.env` (chmod 600; raw access keys). `cleanup.sh` removes this file. | **admin**. A tenant admin can create the `Bucket` itself, but the script also waits on its `HelmRelease` and COSI objects and reads the `bucket-<name>-backup` Secret; no tenant role grants access to `helmreleases` or `objectstorage.k8s.io`, or `get` on that Secret |
+| `04-create-nats.sh` | Provisions a `NATS` instance, creates the `<app>-backup-s3` Secret, seeds a JetStream stream with sentinel messages. | **admin**. A tenant admin can create the `NATS` itself, but the script also waits on its `HelmRelease` and `StatefulSet`, creates the Secret, and seeds the stream through a CLI Pod it execs into; no tenant role grants access to `helmreleases` or `statefulsets`, `create` on `secrets` or `pods`, or `pods/exec` |
 | `05-create-backupjob.sh` | Submits a `BackupJob` and waits for Succeeded. | tenant |
-| `06-restore-in-place.sh` | Deletes the stream and restores it into the same instance via `RestoreJob`. | tenant |
-| `07-restore-to-copy.sh` | Provisions a second `NATS` and restores into it via `RestoreJob.spec.targetApplicationRef`. | tenant |
-| `cleanup.sh` | Removes everything created by the demo. | admin or tenant |
+| `06-restore-in-place.sh` | Deletes the stream and restores it into the same instance via `RestoreJob`. | **admin**. A tenant admin can submit the `RestoreJob`, but the script deletes and checks the stream through the CLI Pod; no tenant role grants `create` on `pods` or `pods/exec` |
+| `07-restore-to-copy.sh` | Provisions a second `NATS` and restores into it via `RestoreJob.spec.targetApplicationRef`. | **admin**, for the same reasons as step 04. The tenant admin's part is the second `NATS` and the `RestoreJob` |
+| `cleanup.sh` | Removes everything created by the demo. | **admin**: it deletes Secrets, the `Backup`, and the cluster-scoped `BackupClass` and strategy, and no tenant role grants `delete` on any of them |
 | `run-all.sh` | Convenience runner that executes 01..07 in order. | demo |
 | `90-scenario-admin-prepare.md` | Narrative for the admin preparation steps. | docs |
 | `91-scenario-user-backup.md` | Narrative for the user backup flow. | docs |

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Step 03: Provision an in-cluster Bucket and cache its S3 coordinates. The
 # generic Job strategy has no chart support to emit a backup Secret, so the
-# tenant materialises the "<app>-backup-s3" Secret itself. This step only
+# demo materialises the "<app>-backup-s3" Secret itself. This step only
 # caches the coordinates; create_s3_secret (00-helpers.sh) turns them into
 # per-app Secrets in steps 04 and 07.
 set -euo pipefail
