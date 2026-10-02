@@ -96,7 +96,7 @@ CR:
    `user.Groups` slice empty regardless of what the userinfo endpoint
    returns, and the gate rejects every login with "user not a member
    of one of the required groups" — even when the token carries the
-   correct claim (verified end-to-end on dev3 with Grafana v11.6.15).
+   correct claim (verified end-to-end on a test cluster with Grafana v11.6.15).
    The JMESPath expression `groups` reads the top-level `groups`
    array from userinfo, matching the shape Keycloak's
    `oidc-group-membership-mapper` emits.

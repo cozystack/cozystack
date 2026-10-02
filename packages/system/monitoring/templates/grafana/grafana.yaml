@@ -140,7 +140,7 @@ spec:
       userinfo endpoint returns, and the `allowed_groups` gate rejects
       every login with "user not a member of one of the required
       groups" — even when the token carries the correct claim. Verified
-      end-to-end on dev3 with Grafana v11.6.15: id_token AND userinfo
+      end-to-end on a test cluster with Grafana v11.6.15: id_token AND userinfo
       both contained `groups: [<ns>-super-admin, ...]`, `allowed_groups`
       listed `<ns>-super-admin`, but login failed until
       `groups_attribute_path=groups` was added. JMESPath expression

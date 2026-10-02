@@ -714,7 +714,7 @@ func TestReconcile_DeletionTimestamp_EarlyReturn(t *testing.T) {
 }
 
 // TestUpdateStatus_UnknownWithinGrace_SchedulesFollowUp locks in the fix for
-// the dormancy bug caught on dev3: when Ready=Unknown but grace hasn't elapsed
+// the dormancy bug caught on a test cluster: when Ready=Unknown but grace hasn't elapsed
 // yet, artifactGeneratorStuck returns false, we fall through to the copy path
 // and — without an explicit RequeueAfter — the reconciler would sleep until
 // the AG's next status change (which may never come if it's exactly the
