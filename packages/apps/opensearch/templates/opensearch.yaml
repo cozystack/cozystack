@@ -75,6 +75,34 @@ spec:
         name: {{ .Release.Name }}-security-config
       adminCredentialsSecret:
         name: {{ .Release.Name }}-admin-credentials
+      {{- /*
+      securityadmin.sh runs java with no -Xmx of its own, so the JVM sizes its
+      heap from whatever the container is allowed. With nothing set here the
+      tenant LimitRange supplies the namespace default instead, and the operator
+      builds this Job with backoffLimit 0, so the single OOM kill that follows is
+      final: the security index is never written and every node sits behind
+      "Not yet initialized (you may need to run securityadmin)" until the release
+      is deleted.
+
+      Measured against opensearchproject/opensearch:2.11.1 on linux/amd64,
+      applying a security config to a fresh single-node cluster: OOMKilled
+      mid-apply at 128Mi and at 192Mi, completes from 256Mi up. Having no -Xmx it
+      grows into what it is given, peaking at 208Mi under a 256Mi limit and at
+      253Mi under the 512Mi one below, so the headroom here is the point rather
+      than the peak.
+
+      Constants rather than the preset: the tool configures the cluster once and
+      exits, so what it needs does not grow with the nodes it configures, and the
+      smallest preset would hand it back the 128Mi it dies at.
+      */}}
+      updateJob:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
   {{- if .Values.dashboards.enabled }}
   dashboards:
     enable: true

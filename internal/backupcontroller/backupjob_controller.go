@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -124,15 +125,26 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// leak cozy-backups-creds into the tenant namespace and then
 	// silently no-op in the dispatch switch below — leaving the
 	// BackupJob in a phaseless state forever.
-	supported := false
-	for _, k := range supportedBackupStrategyKinds() {
-		if strategyRef.Kind == k {
-			supported = true
-			break
-		}
-	}
+	supported := slices.Contains(supportedBackupStrategyKinds(), strategyRef.Kind)
 	if !supported {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("strategy Kind %q is not supported by this controller (supported: %s)", strategyRef.Kind, strings.Join(supportedBackupStrategyKinds(), ", ")))
+	}
+
+	// Hold a run that has not started while a restore writes into its
+	// application. Only before StartedAt: every driver stamps it on its
+	// first pass, and a run already moving data is not interrupted here.
+	if j.Status.StartedAt == nil {
+		restore, err := activeRestoreTargeting(ctx, r.Client, j.Namespace, normalizedAppRef)
+		if err != nil {
+			logger.Error(err, "failed to check for a restore in progress")
+			return ctrl.Result{}, err
+		}
+		if restore != "" {
+			return r.holdForRestore(ctx, j, restore)
+		}
+		if err := r.releaseRestoreHold(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Now project the platform-managed S3 credentials into the tenant
@@ -174,6 +186,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRabbitmq(ctx, j, resolved)
 	case strategyv1alpha1.RedisStrategyKind:
 		return r.reconcileRedis(ctx, j, resolved)
+	case strategyv1alpha1.KafkaStrategyKind:
+		return r.reconcileKafka(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -199,6 +213,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.EtcdStrategyKind,
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
+		strategyv1alpha1.KafkaStrategyKind,
 	}
 }
 

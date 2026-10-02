@@ -48,6 +48,9 @@
 
 /packages/system/keycloak*/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
 
+/packages/system/capi-providers-infraprovider-proxmox/ @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri @themoriarti
+/packages/system/proxmox-*/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri @themoriarti
+
 /cmd/flux-*/                         @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
 /internal/flux*/                     @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
 /packages/core/flux-aio/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb

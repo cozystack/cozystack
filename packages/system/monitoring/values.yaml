@@ -50,6 +50,22 @@ logsStorages:
   retentionPeriod: "1"
   storage: 10Gi
   storageClassName: ""
+
+tracingStorages: []
+
+tracingCollector:
+  enabled: true
+  replicas: 1
+  samplingPercentage: 10
+  image: docker.io/otel/opentelemetry-collector-contrib:0.136.0@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
+  redactAttributes: []
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -70,6 +86,14 @@ alerta:
       disabledSeverity: []
       dashboardUrl: ""
       summaryFmt: ""
+    email:
+      to: ""
+      from: ""
+      smarthost: ""
+      authUsername: ""
+      repeatInterval: ""
+      alertnames: []
+      severities: []
 grafana:
   # Upstream Grafana image, pinned by digest and routed through
   # cozy-lib.image (so mirrored-registry installs work). Plugins (VictoriaLogs
@@ -104,7 +128,7 @@ vmagent:
 ## Identity mode picks the auth source for `[auth.generic_oauth]`:
 ##   None         no OIDC; login form + admin_user/admin_password Secret
 ##                stay the only auth path (default).
-##   System       trust the platform `cozy` Keycloak realm via a
+##   System       trust the platform Keycloak realm (`cozy` by default) via a
 ##                per-instance confidential client and audience binding.
 ##                Requires the platform-level authentication.oidc.enabled
 ##                flag; the chart hard-fails the render otherwise.

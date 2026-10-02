@@ -1,8 +1,10 @@
 {{/*
   Skip the post-install/post-upgrade init Job entirely while the chart
-  renders bootstrap.recovery. Helm waits up to 5m for hooks to succeed,
-  but the Job's pg_isready loop can't drain that budget while CNPG is
-  still streaming the restore from S3 - the hook then times out and
+  renders bootstrap.recovery. The platform gives hooks the HelmRelease
+  upgrade timeout (10m by default, the cozystack-api
+  --helmrelease-upgrade-timeout flag, overridable per-Application), but the
+  Job's pg_isready loop can't drain that budget while CNPG is still
+  streaming the restore from S3 - the hook then times out and
   Helm rolls the upgrade back to the previous bootstrap.initdb spec,
   which makes every subsequent recovery pod panic in CNPG's
   InitInfo.loadBackup (Recovery == nil after the rollback).
@@ -20,6 +22,30 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  {{- /*
+    This Job is a post-install,post-upgrade Helm hook Helm blocks on. Bound it under
+    the 10m hook budget so its own DeadlineExceeded - or the readiness loop's
+    diagnostic exit - surfaces first, instead of Helm's generic 10m timeout that
+    says nothing about why. Both contexts get a value well below 600s but with real
+    headroom for the work the Job does after the pod is running: the "grant
+    privileges" step below runs a per-schema DO block (GRANT ALL + ALTER DEFAULT
+    PRIVILEGES over every schema of every managed database), so a large existing
+    database needs room, not just the seconds pg_isready takes. On UPGRADE the
+    Cluster is already up (the loop answers in seconds) and the hazard is a
+    concurrent restore purging the target and its <release>-superuser Secret, whose
+    pod then FailedMounts forever; 540s bounds that while leaving the grant loop
+    ~9m. On INSTALL nothing is running yet - the same release is provisioning the
+    Cluster (PVC, image pull, initdb), Helm's wait does not cover a CR, and there is
+    no purge hazard (a restore-to-copy installs with bootstrap.enabled=true, which
+    skips this Job) - so the cold start gets 570s rather than a tight deadline that
+    would fail a slow-but-healthy first boot. A database with a pathological number
+    of schemas can still outrun even this; that is the documented ceiling, the same
+    one Helm's own hook budget imposes. Do not retry the pod either way: the script
+    is idempotent and the purged pod stays Pending on the missing mount, so a retry
+    buys nothing.
+  */}}
+  activeDeadlineSeconds: {{ if .Release.IsInstall }}570{{ else }}540{{ end }}
+  backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   template:
     metadata:
@@ -64,6 +90,16 @@ spec:
           name: secret
         - mountPath: /scripts
           name: scripts
+        {{- if .Values.users }}
+        # The init script reads each user's password from this mount at run time
+        # so the credential is never rendered into the init-script Secret. Gated
+        # on .Values.users to match the <release>-credentials Secret, which is
+        # only rendered when there are users: mounting it unconditionally would
+        # FailedMount a userless release and hang the post-upgrade hook.
+        - mountPath: /credentials
+          name: credentials
+          readOnly: true
+        {{- end }}
         {{- include "postgresjobs.resources" . | nindent 8 }}
       securityContext:
         fsGroup: 26
@@ -79,4 +115,9 @@ spec:
       - name: scripts
         secret:
           secretName: {{ .Release.Name }}-init-script
+      {{- if .Values.users }}
+      - name: credentials
+        secret:
+          secretName: {{ .Release.Name }}-credentials
+      {{- end }}
 {{- end }}

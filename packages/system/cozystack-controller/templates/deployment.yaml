@@ -5,7 +5,7 @@ metadata:
   labels:
     app: cozystack-controller
 spec:
-  replicas: 1
+  replicas: {{ .Values.cozystackController.replicas }}
   selector:
     matchLabels:
       app: cozystack-controller
@@ -19,6 +19,7 @@ spec:
       - name: cozystack-controller
         image: "{{ .Values.cozystackController.image }}"
         args:
+        - --leader-elect
         {{- if .Values.cozystackController.debug }}
         - --zap-log-level=debug
         {{- else }}
@@ -29,4 +30,8 @@ spec:
         {{- end }}
         {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
         - --seaweedfs-metrics-endpoint={{ . }}
+        {{- end }}
+        {{- with .Values.cozystackController.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
         {{- end }}

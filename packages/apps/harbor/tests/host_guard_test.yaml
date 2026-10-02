@@ -1,0 +1,55 @@
+suite: harbor fails to render its ingress when the tenant apex is empty
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+# harbor composes its public hostname as <release>.<_namespace.host>. When the
+# tenant apex is empty and no per-app host override is set, that used to emit a
+# malformed "harbor." host silently. cozy-lib.ns-host-required now fails the
+# render instead. Rendering with a valid apex must still succeed.
+
+tests:
+  - it: fails when _namespace.host is empty and no host override is set
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders when a host override is set even though the apex is empty
+    set:
+      host: harbor.custom.example
+      _namespace:
+        host: ""
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: harbor.custom.example
+
+  - it: renders normally when the apex is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: harbor.example.org

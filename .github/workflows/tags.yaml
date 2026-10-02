@@ -18,12 +18,134 @@ permissions:
   contents: read
 
 jobs:
-  prepare-release:
-    name: Prepare Release
+  # The pre-release's images built natively for arm64 and pushed as
+  # <tag>-arm64, beside build-amd64, for prepare-release to stitch the two. A
+  # stable tag is never built (promotion copies the rc's indexes), so it skips
+  # this job. The packages artifact and the installer chart carry no
+  # architecture, so this job builds neither; build-amd64 pushes them pinned
+  # on amd64 digests and prepare-release republishes them repinned. The talos
+  # installer and matchbox are built for both arches in build-amd64, and the
+  # e2e sandbox is amd64 only, so none of them has an arm64 half here.
+  build-arm64:
+    name: Build arm64 images
+    if: contains(github.ref_name, '-')
+    runs-on: oracle-vm-24cpu-96gb-arm64
+    # Starts from build-amd64's budget; re-measure after the first runs.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # The same no-op build-amd64 makes on a re-run of an rc whose release
+      # already exists, so the re-run does not rebuild arm64 for nothing. This
+      # token cannot see a draft, but an rc's release is published by the time
+      # it has been prepared; a draft left by a run that failed before that is
+      # rebuilt, which is the safe direction.
+      - name: Check if release already exists
+        id: check_release
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              per_page: 100
+            });
+            const exists = releases.some(r => r.tag_name === tag);
+            core.setOutput('release_exists', exists);
+            console.log(exists ? `Release ${tag} already exists, nothing to build` : `No release ${tag} yet`);
+
+      - name: Checkout code
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        if: steps.check_release.outputs.release_exists == 'false'
+        run: |
+          command -V docker jq yq
+          yq --version | grep -q mikefarah
+
+      - name: Login to GHCR
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Login to OCIR (build cache)
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # docker.io pulls go through the mirror in hack/buildkitd.toml, as the
+      # PR builds' do: anonymous Docker Hub pulls from these runners are rate
+      # limited.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        if: steps.check_release.outputs.release_exists == 'false'
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build arm64 images
+        if: steps.check_release.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          # Assigned and checked before the loop: a build-matrix.sh failure
+          # inside `for unit in $(...)` would run no iteration and leave a
+          # green job that built nothing.
+          units="$(MATRIX_ARCH=arm64 hack/build-matrix.sh | jq -r '.[]')"
+          [ -n "$units" ]
+          for unit in $units; do
+            make -C "$unit" image
+          done
+          make -C packages/core/installer image-operator
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/arm64
+          CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # Read the arm64 cache build-arm64-nightly.yaml keeps warm; a release
+          # build never writes one.
+          CACHE_TAG: buildcache-arm64
+          WRITE_CACHE: '0'
+          IMAGE_TAG: ${{ github.ref_name }}-arm64
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+
+  # The amd64 half of a pre-release build, run beside build-arm64 rather than
+  # after it: the images, the stamped tree and the release assets. Its make
+  # build also pushes the packages artifact and the installer chart pinned on
+  # amd64 digests. The stitch, the gate, the republish of both and the release
+  # itself happen in prepare-release once both halves are built, so the tree,
+  # the log of pushed tags and the assets travel there as artifacts.
+  # It runs for every tag, since the release-exists no-op and the rejection of
+  # a hand-pushed stable tag live here.
+  build-amd64:
+    name: Build amd64 images and assets
     # Ephemeral pool, not the dedicated self-hosted runner (#2937 decommission).
     # Serial `make build` + `make assets` is CPU-bound, so use the large shape —
     # same as the main cache warmer (build-main.yaml).
     runs-on: oracle-vm-24cpu-96gb-x86-64
+    # The budget prepare-release had while it also built; the stitch and the
+    # uploads it no longer runs moved to prepare-release with their own.
     timeout-minutes: 120
     outputs:
       # A release (draft or published) already exists for this tag, so the
@@ -31,21 +153,14 @@ jobs:
       # to run on an existing release (changelog, website docs) must NOT gate on
       # this — it means "skip the rebuild", not "skip everything".
       release_exists: ${{ steps.check_release.outputs.release_exists }}
+      tag: ${{ steps.tag.outputs.tag }}
+      is_rc: ${{ steps.tag.outputs.is_rc }}
     permissions:
+      # contents: write only so the release listing includes drafts.
       contents: write
       packages: write
-      pull-requests: write
-      actions: write
 
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-
       # Skip the build when a release (draft OR published) already exists for
       # this tag:
       #   - re-runs of the same rc/nightly tag become idempotent no-ops;
@@ -132,21 +247,27 @@ jobs:
             }
             core.setOutput('branch', branch);
 
-      # Checkout & login once
       - name: Checkout code
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags:  true
+          persist-credentials: false
 
       # Ephemeral runners lack the flux CLI the installer's image-packages step
-      # shells out to; install if absent (idempotent).
+      # shells out to; install the pinned version when it is not already present.
       - name: Set up build toolchain
         if: steps.check_release.outputs.release_exists == 'false'
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
 
       - name: Login to GHCR
         if: steps.check_release.outputs.release_exists == 'false'
@@ -172,16 +293,43 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
+      # Only for the matchbox rebuild below: the default docker driver cannot
+      # build an index, and `use: false` keeps make build on that driver.
+      - name: Set up Buildx for matchbox (docker-container driver)
+        if: steps.check_release.outputs.release_exists == 'false'
+        id: matchbox_buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+          use: false
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
       # Build project artifacts
       - name: Build
         if: steps.check_release.outputs.release_exists == 'false'
-        run: make build
+        run: |
+          mkdir -p "${PUSHED_TAGS_LOG%/*}"
+          make build
+          # The arm64 assets published below install this image, and building
+          # its arm64 half needs no QEMU, so it is pushed again as both arches.
+          make -C packages/core/talos image-talos PLATFORM=linux/amd64,linux/arm64
+          # The arm64 leg skips the talos package, so matchbox gets no arm64
+          # half to stitch. Its Dockerfile only copies files, so both arches
+          # build here without QEMU and the stamped ref pins the index.
+          make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64 BUILDER="$MATCHBOX_BUILDER"
         env:
+          MATCHBOX_BUILDER: ${{ steps.matchbox_buildx.outputs.name }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           # Cache manifests are registry-portable (oci-mediatypes=true) — read
           # them from OCIR while pushing images to GHCR. A missing :buildcache
           # ref 404s harmlessly into a cold build.
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # amd64 here; build-arm64 builds arm64 natively. This job also
+          # builds on the default docker driver, which handles a
+          # multi-platform image only on the containerd image store.
+          PLATFORM: linux/amd64
           # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
           # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
           # job only ever runs for a prerelease (a stable tag is rejected or
@@ -190,10 +338,155 @@ jobs:
           # promotion, which moves it only for the newest stable (finalize).
           IMAGE_TAG: ${{ github.ref_name }}
           PUBLISH_VERSIONED: '1'
+          # Every tag the build pushes, for the stitch to move onto the
+          # multi-arch indexes.
+          PUSHED_TAGS_LOG: ${{ runner.temp }}/release-tree/pushed-tags
+
+      # Built here rather than in prepare-release: the Talos assets reuse the
+      # kernel, initramfs and installer make build already produced for the
+      # images, and they build while the arm64 half is still running.
+      - name: Build assets
+        if: steps.check_release.outputs.release_exists == 'false'
+        run: make assets
+
+      # --cached after adding everything, so a file the build created travels
+      # too, not only the ones it changed.
+      - name: Capture the stamped tree
+        if: steps.check_release.outputs.release_exists == 'false'
+        run: |
+          git add --all
+          git diff --cached --binary HEAD >"${{ runner.temp }}/release-tree/stamped-tree.patch"
+
+      - name: Upload the stamped tree and the pushed tags
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-tree
+          path: ${{ runner.temp }}/release-tree/
+          if-no-files-found: error
+          # The same window as release-assets: a re-run of prepare-release
+          # needs both.
+          retention-days: 7
+
+      # The installer tarballs, one per arch, are what the build pushed as the
+      # talos image and are not release assets.
+      - name: Upload the assets
+        if: steps.check_release.outputs.release_exists == 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: |
+            _out/assets/
+            !_out/assets/installer-*.tar
+          if-no-files-found: error
+          # Long enough to re-run failed jobs; the assets are several GB.
+          retention-days: 7
+
+  prepare-release:
+    name: Prepare Release
+    needs: [build-amd64, build-arm64]
+    # build-arm64 is skipped only for a stable tag, which never builds. On a
+    # pre-release, either half failing or being cancelled leaves this job
+    # skipped and the run red: an rc ships multi-arch or not at all.
+    if: ${{ !cancelled() && needs.build-amd64.result == 'success' && (needs.build-arm64.result == 'success' || needs.build-arm64.result == 'skipped') }}
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    # The stitch reads and writes every first-party image once, then the
+    # packages artifact, the chart and the assets are pushed; start there and
+    # re-measure after the first runs.
+    timeout-minutes: 60
+    outputs:
+      release_exists: ${{ needs.build-amd64.outputs.release_exists }}
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+      actions: write
+
+    steps:
+      - name: Generate GitHub App token
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Checkout code
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags:  true
+
+      # The stitch and the multi-arch gate read the registry with skopeo and
+      # the tree with mikefarah yq; the republish needs flux and helm.
+      - name: Set up build toolchain
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        env:
+          FLUX_VERSION: "2.8.6"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -V skopeo jq yq helm
+          yq --version | grep -q mikefarah
+
+      - name: Login to GHCR
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Download the amd64 build
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-tree
+          path: ${{ runner.temp }}/release-tree
+
+      - name: Download the assets
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: _out/assets
+
+      - name: Apply the stamped tree
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        run: git apply --binary "${{ runner.temp }}/release-tree/stamped-tree.patch"
+
+      # Join each image with its arm64 twin, moving every tag the amd64 build
+      # pushed for it, and gate on the result, then republish the packages
+      # artifact and the installer chart from the repinned tree: the amd64
+      # build pushed both pinned on amd64-only digests, and the chart's values
+      # pin the operator image and the artifact digest.
+      - name: Stitch multi-arch indexes and republish
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        run: |
+          set -eu
+          hack/stitch-multiarch.sh packages "$REGISTRY" "$IMAGE_TAG"
+          hack/verify-multiarch.sh packages
+          make -C packages/core/installer image-packages chart
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+          REGISTRY: ghcr.io/cozystack/cozystack
+          IMAGE_TAG: ${{ github.ref_name }}
+          PUSHED_TAGS_LOG: ${{ runner.temp }}/release-tree/pushed-tags
 
       # Commit built artifacts
       - name: Commit release artifacts
-        if: steps.check_release.outputs.release_exists == 'false'
+        if: needs.build-amd64.outputs.release_exists == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -213,13 +506,13 @@ jobs:
 
       # Create or reuse draft release
       - name: Create / reuse draft release
-        if: steps.check_release.outputs.release_exists == 'false'
+        if: needs.build-amd64.outputs.release_exists == 'false'
         id: release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            const tag      = '${{ steps.tag.outputs.tag }}';
-            const isRc     = ${{ steps.tag.outputs.is_rc }};
+            const tag      = '${{ needs.build-amd64.outputs.tag }}';
+            const isRc     = ${{ needs.build-amd64.outputs.is_rc }};
             // Paginate: the default page is 30, and promote-created stable drafts
             // plus accreting rc releases can push an in-flight draft off it.
             const releases = await github.paginate(github.rest.repos.listReleases, {
@@ -245,12 +538,11 @@ jobs:
 
             core.setOutput('upload_url', rel.upload_url);
 
-      # Build + upload assets (optional)
-      - name: Build & upload assets
-        if: steps.check_release.outputs.release_exists == 'false'
-        run: |
-          make assets
-          make upload_assets VERSION=${{ steps.tag.outputs.tag }}
+      # The assets were built by build-amd64; the operator manifests are
+      # rendered here, from the tree pinned on the index digests.
+      - name: Upload assets
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        run: make upload_assets VERSION=${{ needs.build-amd64.outputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -261,12 +553,12 @@ jobs:
       # validate it. rc tags are write-once, so there is nothing to protect with
       # draft status. prerelease:true keeps it off the "Latest release" pointer.
       - name: Publish rc release
-        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_rc == 'true'
+        if: needs.build-amd64.outputs.release_exists == 'false' && needs.build-amd64.outputs.is_rc == 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const tag = '${{ steps.tag.outputs.tag }}';
+            const tag = '${{ needs.build-amd64.outputs.tag }}';
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner, repo: context.repo.repo, per_page: 100
             });
@@ -287,7 +579,7 @@ jobs:
       # the push when nothing changed; force-update (and log it) only when the
       # branch genuinely moves. Unlike the tags above, force here is legitimate.
       - name: Create release branch
-        if: steps.check_release.outputs.release_exists == 'false'
+        if: needs.build-amd64.outputs.release_exists == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -322,7 +614,10 @@ jobs:
   rc-e2e:
     name: E2E Release Candidate
     needs: prepare-release
-    if: needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')
+    # !cancelled(): every job below build-arm64 carries a status function,
+    # since a stable tag skips build-arm64. This one only runs for an rc,
+    # where build-arm64 always runs, so here it just follows that rule.
+    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.') }}
     # A caller's permissions are the ceiling for every job in the called
     # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
     # run — before this job's `if:` is evaluated, let alone before a step runs.
@@ -377,7 +672,9 @@ jobs:
     # firing on every rc would open a changelog-vX.Y.Z-rc.N PR that never merges
     # (no docs/changelogs/v*-rc*.md is a real file). Cumulative rc notes are
     # finalized at the stable release, so the changelog is generated then.
-    if: needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
+    # !cancelled(): this job runs on stable tags only, which skip build-arm64,
+    # and a skipped ancestor makes the implicit success() false.
+    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
     # Non-blocking: this is a best-effort backfill of an already-published
     # release, never a gate on one.
     continue-on-error: true
@@ -428,7 +725,7 @@ jobs:
       # contents. The Create changelog branch step below resets the file
       # onto a fresh branch from origin/main for the PR.
       - name: Checkout release tag
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
@@ -664,7 +961,7 @@ jobs:
             core.setOutput('version', version);  // 0.22.0
 
       - name: Checkout website repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: cozystack/website
           token: ${{ steps.app-token.outputs.token }}

@@ -23,6 +23,7 @@ spec:
   # timeout instead of the hook's own error. Load-bearing only since the script
   # gained a non-zero exit; before that the script could not report one.
   backoffLimit: 1
+  activeDeadlineSeconds: 270
   template:
     metadata:
       labels:
@@ -31,6 +32,7 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
+      terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -104,7 +106,7 @@ spec:
               # this selector matches only those two kept PVCs.
               echo "Deleting orphaned PVCs for {{ .Release.Name }}-system..."
               kubectl delete pvc -n {{ .Release.Namespace }} \
-                -l release={{ .Release.Name }}-system --ignore-not-found \
+                -l release={{ .Release.Name }}-system --ignore-not-found --wait=true --timeout=120s \
                 || fail "failed to delete PVCs matching release={{ .Release.Name }}-system in {{ .Release.Namespace }}; orphaned PVCs may remain"
 
               # Remove the cert-manager Certificate owned by this release's
@@ -201,21 +203,21 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # Only Challenges are touched directly (the host-scoped sweep lists and
   # deletes them); Orders are cascade-deleted by cert-manager itself when the
   # Certificate is removed, so the hook needs no RBAC for them.
   - apiGroups: ["acme.cert-manager.io"]
     resources: ["challenges"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
   # We list ACME http01 solver Ingresses (filtered by this release's host)
   # and delete the orphaned ones by name.
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

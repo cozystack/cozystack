@@ -1,0 +1,40 @@
+suite: lineage-controller-webhook resources knob
+templates:
+  - templates/workload.yaml
+
+release:
+  name: lineage-controller-webhook
+  namespace: cozy-system
+
+# Two replicas serve this webhook with no leader election, which is fine because
+# its controller only refreshes an in-process cache and writes nothing. The
+# resources knob follows the same contract as the other two engine charts: `{}`
+# renders no key, a set value lands on the container.
+
+tests:
+  - it: the shipped default renders no resources key
+    asserts:
+      - isKind:
+          of: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].resources
+
+  - it: a set value renders on the container, not the pod
+    set:
+      lineageControllerWebhook.resources:
+        requests:
+          cpu: 1m
+          memory: 48Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 1m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

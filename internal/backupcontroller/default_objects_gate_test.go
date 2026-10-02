@@ -77,8 +77,6 @@ func gateRESTMapper() meta.RESTMapper {
 	return m
 }
 
-func apiGroup(s string) *string { return &s }
-
 // cozyDefaultBackupClass mirrors the routes the chart's
 // backupclass-default.yaml renders unconditionally: it is the manifest of
 // what must exist, which is exactly why the gate reads it instead of
@@ -87,11 +85,11 @@ func cozyDefaultBackupClass() *backupsv1alpha1.BackupClass {
 	ref := func(kind, name string) backupsv1alpha1.BackupClassStrategy {
 		return backupsv1alpha1.BackupClassStrategy{
 			Application: backupsv1alpha1.ApplicationSelector{
-				APIGroup: apiGroup("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     kind + "App",
 			},
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: apiGroup(strategyAPIGroup),
+				APIGroup: new(strategyAPIGroup),
 				Kind:     kind,
 				Name:     name,
 			},
@@ -536,7 +534,7 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 	bc.Spec.Strategies = append(bc.Spec.Strategies, backupsv1alpha1.BackupClassStrategy{
 		Application: backupsv1alpha1.ApplicationSelector{Kind: "Nonexistent"},
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: apiGroup(strategyAPIGroup),
+			APIGroup: new(strategyAPIGroup),
 			Kind:     "NotInstalled",
 			Name:     "cozy-default-notinstalled",
 		},

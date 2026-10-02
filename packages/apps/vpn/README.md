@@ -44,7 +44,7 @@ Furthermore, Shadowbox is compatible with standard Shadowsocks clients, providin
 ### resources and resourcesPreset
 
 `resources` sets explicit CPU and memory configurations for each replica.
-When left empty, the preset defined in `resourcesPreset` is applied.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
 
 ```yaml
 resources:
@@ -55,7 +55,7 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 

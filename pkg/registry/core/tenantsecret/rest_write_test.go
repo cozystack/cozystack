@@ -444,3 +444,26 @@ func TestGet_KeepsPlatformLabelsVisible(t *testing.T) {
 		t.Fatalf("tenant-ca label hidden from the tenant: got %v", ts.Labels)
 	}
 }
+
+// The apiserver's patch handler builds the patched object from the old object
+// handed to UpdatedObject and answers 404 when it is nil, so Update has to pass
+// the stored TenantSecret rather than nil.
+func TestUpdate_PassesStoredObjectToUpdatedObjectInfo(t *testing.T) {
+	r := newTestREST(t, makeTenantSecret("creds", nil))
+
+	patch := func(_ context.Context, newObj, oldObj runtime.Object) (runtime.Object, error) {
+		if oldObj == nil {
+			return nil, errors.New("UpdatedObject received a nil old object")
+		}
+		out := oldObj.DeepCopyObject().(*corev1alpha1.TenantSecret)
+		out.Labels = map[string]string{"probe": "x"}
+		return out, nil
+	}
+
+	if _, _, err := r.Update(testCtx(), "creds", rest.DefaultUpdatedObjectInfo(nil, patch), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if got := backingSecret(t, r, "creds").Labels["probe"]; got != "x" {
+		t.Fatalf("patched label not stored: got %q", got)
+	}
+}

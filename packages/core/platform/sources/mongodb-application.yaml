@@ -15,6 +15,15 @@ spec:
         - cozystack.networking
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
+        # The mongodb chart renders kind: PerconaServerMongoDB from
+        # psmdb.percona.com/v1, so the operator that serves that CRD is a
+        # prerequisite of offering the app at all. Without this edge the
+        # mongodb-rd HelmRelease registers the ApplicationDefinition as soon as
+        # the engine is up, a tenant can create a MongoDB before the operator
+        # exists, and its HelmRelease fails with `no matches for kind
+        # "PerconaServerMongoDB"`. Same shape as every other operator-backed app
+        # here (postgres, mariadb, kafka, redis, etcd).
+        - cozystack.mongodb-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

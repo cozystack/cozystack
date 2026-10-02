@@ -264,7 +264,17 @@ spec:
           metadata:
             name: redis-secure.ca-cert
           (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
-    # Deterministic once the asserts above have passed, so no retry.
+    # No retry around this script. The replica link it reads is settled by
+    # none of the asserts above and carries its own bounded wait below. The
+    # whole step measured 3.0s on run 34711755303, so link_wait is wide
+    # against what it costs today. That wait draws link_wait plus one poll
+    # interval plus a read pair at the k() cap worst case, since the deadline
+    # is tested before the sleep and never after, and the op ceiling covers
+    # that on top of reads ahead of it at the cost that measurement shows,
+    # not at their caps, whose sum exceeds any ceiling this step could carry.
+    # Sized generously on purpose: unused margin costs a passing run nothing,
+    # while a ceiling that expires first kills the shell and takes the wait's
+    # own failure message with it.
     #
     # Every redis-cli below runs under the container's own `timeout`. That
     # inner cap, not the op timeout, is what keeps a dial that never answers
@@ -276,7 +286,7 @@ spec:
     # on the sentinel's busybox and 124 on the data pods' coreutils, and
     # neither is zero, which is all these checks read.
     - script:
-        timeout: 3m
+        timeout: 5m
         content: |
           set -eu
 
@@ -425,37 +435,51 @@ spec:
               exit 1 ;;
           esac
 
-          # readyReplicas above witnesses the bootstrap and stops there. A pod
-          # still replicating from the 127.0.0.1 the operator's initial config
-          # names never goes ready, so two ready replicas mean the operator
-          # promoted a master and linked the other over its own TLS dials --
-          # but the readiness script exits 0 for anything reporting
-          # role:master, so a link that breaks afterwards is invisible to it.
-          # Assert the topology directly, and assert the sentinels moved off
-          # the bootstrap address, which nothing above covers at all.
-          masters=0
-          linked=0
-          for i in 0 1; do
-            if ! info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
-              sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication'); then
-              echo "rfr-redis-secure-$i did not answer INFO replication within the 15s cap" >&2
+          # readyReplicas above witnesses nothing about the link. Redis reports
+          # master_link_status:up only in REPL_STATE_CONNECTED, while the
+          # operator's readiness script passes a replica on two other
+          # predicates -- master_host off 127.0.0.1, and sync not in the
+          # transfer phase -- so the whole handshake between them is ready and
+          # unlinked, and a dropped link re-enters it. The topology is thus in
+          # motion here and one sampling would decide on it. Wait for it to
+          # settle, then assert the sentinels moved off the bootstrap address,
+          # which nothing above covers at all.
+          link_wait=60
+          started=$(date +%s)
+          deadline=$(( started + link_wait ))
+          while :; do
+            masters=0
+            linked=0
+            seen=
+            for i in 0 1; do
+              if ! info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
+                sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication'); then
+                echo "rfr-redis-secure-$i did not answer INFO replication within the 15s cap" >&2
+                exit 1
+              fi
+              case "$info" in
+                *role:master*) masters=$((masters + 1)); state=master ;;
+                *role:slave*)
+                  case "$info" in
+                    *master_link_status:up*) linked=$((linked + 1)); state=linked ;;
+                    *) state=replicating-no-link ;;
+                  esac
+                  ;;
+                *) state=no-replication-role ;;
+              esac
+              seen="$seen rfr-redis-secure-$i=$state"
+            done
+            if [ "$masters" = "1" ] && [ "$linked" = "1" ]; then break; fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "replication did not settle on one master and one linked replica after $(( $(date +%s) - started ))s:$seen" >&2
               exit 1
             fi
-            case "$info" in
-              *role:master*) masters=$((masters + 1)) ;;
-              *role:slave*)
-                case "$info" in
-                  *master_link_status:up*) linked=$((linked + 1)) ;;
-                  *) echo "rfr-redis-secure-$i replicates with no link up" >&2; exit 1 ;;
-                esac
-                ;;
-              *) echo "rfr-redis-secure-$i reports no replication role" >&2; exit 1 ;;
-            esac
+            # TODO(e2e-replace-fixed-timeouts): nothing models the link -- the
+            # readiness probe does not read master_link_status, and the
+            # RedisFailover CRD defines no status at all, so there is no
+            # condition to assert on instead of this poll.
+            sleep 5
           done
-          if [ "$masters" != "1" ] || [ "$linked" != "1" ]; then
-            echo "expected one master and one linked replica, got $masters and $linked" >&2
-            exit 1
-          fi
 
           sentinel=$(k -n "$NAMESPACE" get pod \
             -l app.kubernetes.io/component=sentinel,app.kubernetes.io/name=redis-secure \

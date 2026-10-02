@@ -9698,6 +9698,12 @@ rules:
 - apiGroups:
   - kubevirt.io
   resources:
+  - virtualmachineinstancemigrations
+  verbs:
+  - create
+- apiGroups:
+  - kubevirt.io
+  resources:
   - virtualmachineinstances
   verbs:
   - delete

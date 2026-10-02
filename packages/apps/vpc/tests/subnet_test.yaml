@@ -1,0 +1,87 @@
+suite: kube-ovn Subnet rendering
+
+templates:
+  - templates/vpc.yaml
+
+release:
+  name: virtualprivatecloud-myvpc
+  namespace: tenant-test
+
+tests:
+  - it: renders no allowSubnets on a subnet that declares none
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+    asserts:
+      - notExists:
+          path: spec.allowSubnets
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.0.0/24"
+      - equal:
+          path: spec.private
+          value: true
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.0.0/24"
+
+  - it: admits the declared CIDRs into the subnet while keeping it private
+    set:
+      subnets:
+        - name: gateway
+          cidr: "172.16.1.0/24"
+          allowSubnets:
+            - "192.168.1.0/24"
+            - "10.20.0.0/16"
+    asserts:
+      - equal:
+          path: spec.allowSubnets
+          value:
+            - "192.168.1.0/24"
+            - "10.20.0.0/16"
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.1.0/24"
+      - equal:
+          path: spec.private
+          value: true
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.1.0/24"
+
+  - it: scopes allowSubnets to the subnet that declares it
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+        - name: gateway
+          cidr: "172.16.1.0/24"
+          allowSubnets:
+            - "192.168.1.0/24"
+    asserts:
+      - notExists:
+          path: spec.allowSubnets
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.0.0/24"
+      - equal:
+          path: spec.allowSubnets
+          value:
+            - "192.168.1.0/24"
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.1.0/24"
+
+  - it: treats an empty allowSubnets list as unset
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+          allowSubnets: []
+    asserts:
+      - notExists:
+          path: spec.allowSubnets
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.0.0/24"

@@ -2,6 +2,7 @@ package ovnstatus
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -143,13 +144,7 @@ func AnalyzeConsensus(views []MemberView) ConsensusResult {
 			cr.MajorityMembers = append(cr.MajorityMembers, v.FromSID)
 		}
 		for _, v := range views {
-			found := false
-			for _, m := range cr.MajorityMembers {
-				if m == v.FromSID {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(cr.MajorityMembers, v.FromSID)
 			if !found {
 				cr.MinorityMembers = append(cr.MinorityMembers, v.FromSID)
 			}
@@ -508,13 +503,6 @@ func AnalyzeConsensusWithIPHints(views []MemberView, hints *Hints) ExtendedConse
 		SIDAddressDisagreements: sidAddrDisagree,
 		SuspectStaleSIDs:        suspectList,
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // PrettyString renders a human-friendly multi-line summary of ExtendedConsensusResult.

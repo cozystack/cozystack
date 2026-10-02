@@ -130,6 +130,113 @@
     fi
     grep -q 'granted but did not pass S3 PUT/GET/DELETE within 0s' "$out"
     grep -q 's3-preflight: AccessDenied' "$out"
+    grep -q 's3-preflight: attempt 1 failed at PUT' "$out"
+}
+
+@test "preflight timeout reports the port-forward and how every attempt ended" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    now=$(mktemp)
+    pf_ready=$(mktemp)
+    attempts=$(mktemp)
+    uploaded_source=$(mktemp)
+    printf '100\n' > "$now"
+    printf '0\n' > "$attempts"
+
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                echo 'Forwarding from 127.0.0.1:18333 -> 8333'
+                printf 'ready\n' > "$pf_ready"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    # A stubbed clock keeps the retry budget independent of how fast the
+    # stubs run: only a completed PUT advances it, so the loop ends after a
+    # known number of attempts.
+    date() {
+        if [ "${1:-}" = +%s ]; then sed -n '1p' "$now"; else command date "$@"; fi
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_ready" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        "$@"
+    }
+    sleep() { :; }
+    # The first three attempts break at a later stage than the one before, so
+    # the stages that follow a completed upload are told apart rather than
+    # merged.
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            cp)
+                case "$3" in
+                    backup-preflight/*)
+                        case "$(sed -n '1p' "$attempts")" in
+                            1)
+                                echo 'mc: <ERROR> Unable to download: connection reset by peer' >&2
+                                return 1
+                                ;;
+                            2) printf 'truncated\n' > "$4" ;;
+                            *) command cp "$(sed -n '1p' "$uploaded_source")" "$4" ;;
+                        esac
+                        ;;
+                    *)
+                        printf '%s\n' "$3" > "$uploaded_source"
+                        count=$(sed -n '1p' "$attempts")
+                        printf '%s\n' "$(( count + 1 ))" > "$attempts"
+                        stamp=$(sed -n '1p' "$now")
+                        printf '%s\n' "$(( stamp + 10 ))" > "$now"
+                        # Do not tidy this arm away into a clean ascending
+                        # ladder. A ladder where every attempt fails later than
+                        # the last can never catch a missing per-iteration
+                        # stage reset, because the stale value is overwritten
+                        # before anything reads it.
+                        if [ "$count" -eq 3 ]; then
+                            echo 'mc: <ERROR> Unable to upload: connection reset by peer' >&2
+                            return 1
+                        fi
+                        echo 'source -> backup-preflight/bucket-real/object'
+                        ;;
+                esac
+                ;;
+            rm) return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 35 >"$out" 2>&1; then
+        echo "an S3 round trip that never completed passed the preflight" >&2
+        exit 1
+    fi
+    grep -q 'port-forward: Forwarding from 127.0.0.1:18333' "$out" || {
+        echo "timeout path dropped the port-forward log" >&2
+        cat "$out" >&2
+        exit 1
+    }
+    for expected in \
+        'attempt 1 failed at GET' \
+        'attempt 2 failed at compare' \
+        'attempt 3 failed at DELETE' \
+        'attempt 4 failed at PUT'; do
+        grep -q "s3-preflight: $expected" "$out" || {
+            echo "timeout path lost '$expected'" >&2
+            cat "$out" >&2
+            exit 1
+        }
+    done
 }
 
 @test "all active database backup flows gate immediately after accessGranted" {
@@ -137,7 +244,8 @@
         examples/backups/postgres/run-all.sh \
         examples/backups/mariadb/run-all.sh \
         examples/backups/mongodb/run-all.sh \
-        examples/backups/clickhouse/03-create-bucket.sh; do
+        examples/backups/clickhouse/03-create-bucket.sh \
+        examples/backups/kafka/03-create-bucket.sh; do
         granted=$(grep -n 'accessGranted' "$file" | head -n 1 | cut -d: -f1)
         preflight=$(grep -n 'cozy_backup_access_preflight' "$file" | head -n 1 | cut -d: -f1)
         coordinates=$(grep -n 'Reading bucket coordinates' "$file" | head -n 1 | cut -d: -f1)
@@ -149,15 +257,272 @@
     done
 }
 
-@test "all four Chainsaw backup roundtrips enable the E2E preflight" {
+@test "the five preflight-wired Chainsaw backup roundtrips enable the E2E preflight" {
     for file in \
         hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
         hack/e2e-chainsaw/mariadb/chainsaw-test.yaml \
         hack/e2e-chainsaw/mongodb/chainsaw-test.yaml \
-        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml; do
+        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml \
+        hack/e2e-chainsaw/kafka/chainsaw-test.yaml; do
         grep -q 'COZY_E2E_BACKUP_PREFLIGHT=1' "$file" || {
             echo "$file does not enable the backup access preflight" >&2
             exit 1
         }
     done
+}
+
+@test "preflight reports the port-forward log when the S3 client cannot be configured" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    pf_ready=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                echo 'Forwarding from 127.0.0.1:18333 -> 8333'
+                printf 'ready\n' > "$pf_ready"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_ready" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) echo 'mc: <ERROR> Unable to initialize new alias: not an S3 endpoint' >&2; return 1 ;;
+            *) echo "preflight continued after the S3 client failed: mc $*" >&2; return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a failed S3 client setup passed the preflight" >&2
+        exit 1
+    fi
+    grep -q 'failed to configure S3 client for BucketAccess tenant-test/bucket-demo-backup' "$out"
+    grep -q 'port-forward: Forwarding from 127.0.0.1:18333' "$out" || {
+        echo "the S3 client failure dropped the port-forward log" >&2
+        cat "$out" >&2
+        exit 1
+    }
+}
+
+@test "preflight cleanup deletes a failed round trip's object through a live tunnel" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    pf_state=$(mktemp)
+    calls=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                # The PID of this background subshell, which is what the
+                # helper kills; the delete below probes it.
+                sh -c 'echo $PPID' > "$pf_state"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_state" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            cp)
+                case "$3" in
+                    backup-preflight/*) echo 'mc: <ERROR> Unable to download: connection reset by peer' >&2; return 1 ;;
+                    *) return 0 ;;
+                esac
+                ;;
+            rm)
+                if kill -0 "$(cat "$pf_state")" 2>/dev/null; then
+                    printf 'rm with tunnel alive\n' >> "$calls"
+                else
+                    printf 'rm with tunnel gone\n' >> "$calls"
+                    echo 'mc: <ERROR> dial tcp 127.0.0.1:18333: connect: connection refused' >&2
+                    return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a failed download passed the preflight" >&2
+        exit 1
+    fi
+    [ "$(cat "$calls")" = "rm with tunnel alive" ] || {
+        echo "cleanup did not delete the uploaded object while the port-forward was still up:" >&2
+        cat "$calls" "$out" >&2
+        exit 1
+    }
+    if grep -q 'could not remove' "$out"; then
+        echo "cleanup warned about a delete that succeeded" >&2
+        cat "$out" >&2
+        exit 1
+    fi
+}
+
+@test "preflight cleanup tries the delete when the upload timed out after landing" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    pf_state=$(mktemp)
+    calls=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*)
+                printf alive > "$pf_state"
+                while :; do command sleep 1; done
+                ;;
+            *) return 1 ;;
+        esac
+    }
+    # The PUT reaches the server and then outlives its bound, so timeout
+    # reports 124 while the object is already in the bucket.
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then
+            waited=0
+            while [ ! -s "$pf_state" ] && [ "$waited" -lt 100 ]; do
+                waited=$(( waited + 1 ))
+                command sleep 0.1
+            done
+            return 0
+        fi
+        case "$1 $2 ${5:-}" in
+            "mc cp backup-preflight/"*)
+                printf 'put\n' >> "$calls"
+                return 124
+                ;;
+        esac
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            rm) printf 'rm\n' >> "$calls" ;;
+            *) return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a timed-out upload passed the preflight" >&2
+        exit 1
+    fi
+    grep -qx put "$calls"
+    grep -qx rm "$calls" || {
+        echo "cleanup skipped the delete of an upload that may have landed:" >&2
+        cat "$calls" "$out" >&2
+        exit 1
+    }
+}
+
+@test "preflight cleanup neither deletes nor warns when every PUT was refused" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    calls=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*) while :; do command sleep 1; done ;;
+            *) return 1 ;;
+        esac
+    }
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then return 0; fi
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            cp) echo 'AccessDenied' >&2; return 1 ;;
+            rm) printf 'rm\n' >> "$calls"; echo 'AccessDenied' >&2; return 1 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a refused PUT passed the preflight" >&2
+        exit 1
+    fi
+    if [ -s "$calls" ] || grep -q 'could not remove' "$out"; then
+        echo "cleanup tried to delete an object no PUT created:" >&2
+        cat "$calls" "$out" >&2
+        exit 1
+    fi
+}
+
+@test "preflight cleanup names the timeout when the delete itself times out" {
+    . hack/e2e-chainsaw/_lib/backup-access-preflight.sh
+    out=$(mktemp)
+    kubectl() {
+        case "$*" in
+            *" get secret bucket-demo-backup "*)
+                printf '%s' '{"spec":{"secretS3":{"accessKeyID":"access","accessSecretKey":"secret"},"bucketName":"bucket-real"}}' | base64 | tr -d '\n'
+                ;;
+            *" port-forward "*) while :; do command sleep 1; done ;;
+            *) return 1 ;;
+        esac
+    }
+    # The delete hangs until its bound kills it: exit 124, nothing written.
+    timeout() {
+        shift
+        if [ "$1" = sh ]; then return 0; fi
+        if [ "$1 $2" = "mc rm" ]; then return 124; fi
+        "$@"
+    }
+    mc() {
+        case "$1" in
+            alias) return 0 ;;
+            cp)
+                case "$3" in
+                    backup-preflight/*) echo 'mc: <ERROR> Unable to download: connection reset by peer' >&2; return 1 ;;
+                    *) return 0 ;;
+                esac
+                ;;
+            *) return 1 ;;
+        esac
+    }
+
+    if cozy_backup_access_preflight tenant-test bucket-demo-backup 0 >"$out" 2>&1; then
+        echo "a failed download passed the preflight" >&2
+        exit 1
+    fi
+    grep -q 'could not remove failed S3 preflight object' "$out"
+    grep -q 's3-cleanup: mc rm timed out after 15s' "$out" || {
+        echo "a delete that timed out left the warning without a reason:" >&2
+        cat "$out" >&2
+        exit 1
+    }
 }

@@ -1,0 +1,474 @@
+suite: extraArgs entries the tenant control plane drops
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+templates:
+  - templates/cluster.yaml
+
+tests:
+  - it: refuses --advertise-address=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --advertise-address=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--advertise-address=x" — the tenant control plane sets --advertise-address itself '
+
+  - it: refuses --client-ca-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --client-ca-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--client-ca-file=x" — the tenant control plane sets --client-ca-file itself '
+
+  - it: refuses --service-cluster-ip-range=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --service-cluster-ip-range=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--service-cluster-ip-range=x" — the tenant control plane sets --service-cluster-ip-range itself '
+
+  - it: refuses --kubelet-client-certificate=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --kubelet-client-certificate=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--kubelet-client-certificate=x" — the tenant control plane sets --kubelet-client-certificate itself '
+
+  - it: refuses --kubelet-client-key=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --kubelet-client-key=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--kubelet-client-key=x" — the tenant control plane sets --kubelet-client-key itself '
+
+  - it: refuses --proxy-client-cert-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --proxy-client-cert-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--proxy-client-cert-file=x" — the tenant control plane sets --proxy-client-cert-file itself '
+
+  - it: refuses --proxy-client-key-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --proxy-client-key-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--proxy-client-key-file=x" — the tenant control plane sets --proxy-client-key-file itself '
+
+  - it: refuses --requestheader-allowed-names=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --requestheader-allowed-names=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--requestheader-allowed-names=x" — the tenant control plane sets --requestheader-allowed-names itself '
+
+  - it: refuses --requestheader-client-ca-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --requestheader-client-ca-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--requestheader-client-ca-file=x" — the tenant control plane sets --requestheader-client-ca-file itself '
+
+  - it: refuses --secure-port=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --secure-port=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--secure-port=x" — the tenant control plane sets --secure-port itself '
+
+  - it: refuses --service-account-key-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --service-account-key-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--service-account-key-file=x" — the tenant control plane sets --service-account-key-file itself '
+
+  - it: refuses --service-account-signing-key-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --service-account-signing-key-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--service-account-signing-key-file=x" — the tenant control plane sets --service-account-signing-key-file itself '
+
+  - it: refuses --tls-cert-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --tls-cert-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--tls-cert-file=x" — the tenant control plane sets --tls-cert-file itself '
+
+  - it: refuses --tls-private-key-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --tls-private-key-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--tls-private-key-file=x" — the tenant control plane sets --tls-private-key-file itself '
+
+  - it: refuses --etcd-servers=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-servers=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-servers=x" — the tenant control plane sets --etcd-servers itself '
+
+  - it: refuses --etcd-cafile=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-cafile=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-cafile=x" — the tenant control plane sets --etcd-cafile itself '
+
+  - it: refuses --etcd-certfile=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-certfile=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-certfile=x" — the tenant control plane sets --etcd-certfile itself '
+
+  - it: refuses --etcd-keyfile=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-keyfile=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-keyfile=x" — the tenant control plane sets --etcd-keyfile itself '
+
+  - it: refuses --etcd-prefix=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-prefix=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-prefix=x" — the tenant control plane sets --etcd-prefix itself '
+
+  - it: refuses --etcd-compaction-interval=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --etcd-compaction-interval=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--etcd-compaction-interval=x" — the tenant control plane sets --etcd-compaction-interval itself '
+
+  - it: refuses --egress-selector-config-file=value
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --egress-selector-config-file=x
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*extraArgs contains "--egress-selector-config-file=x" — the tenant control plane sets --egress-selector-config-file itself '
+
+  - it: renders a flag the control plane only defaults, since the entry replaces the default
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --requestheader-group-headers=X-Group
+        - --authorization-mode=Node,RBAC,Webhook
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - --requestheader-group-headers=X-Group
+            - --authorization-mode=Node,RBAC,Webhook
+        documentIndex: 1
+
+  - it: renders --etcd-servers-overrides, which the control plane owns only when dataStoreOverrides is set and this chart never sets it
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --etcd-servers-overrides=/events#https://etcd-events:2379
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - --etcd-servers-overrides=/events#https://etcd-events:2379
+        documentIndex: 1
+
+  - it: does not match a flag whose name only starts with a managed one
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --etcd-servers-overrides-extra=x
+        - --secure-port-x=1
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: points every other managed flag at the generic message, not at admissionControllers
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --secure-port=6444
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--secure-port=6444" — the tenant control plane sets --secure-port itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns.'
+
+  - it: leaves spec.admissionControllers out by default, so the control plane keeps its own default set
+    asserts:
+      - notExists:
+          path: spec.admissionControllers
+        documentIndex: 1
+
+  - it: leaves spec.admissionControllers out for an explicitly empty list
+    set:
+      controlPlane.apiServer.admissionControllers: []
+    asserts:
+      - notExists:
+          path: spec.admissionControllers
+        documentIndex: 1
+
+  - it: renders controlPlane.apiServer.admissionControllers into spec.admissionControllers verbatim
+    set:
+      controlPlane.apiServer.admissionControllers:
+        - NodeRestriction
+        - AlwaysPullImages
+    asserts:
+      - equal:
+          path: spec.admissionControllers
+          value:
+            - NodeRestriction
+            - AlwaysPullImages
+        documentIndex: 1
+
+  - it: renders the kubelet preferred address types the chart has always rendered by default
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1
+
+  - it: renders controlPlane.kubelet.preferredAddressTypes into spec.kubelet.preferredAddressTypes verbatim
+    set:
+      controlPlane.kubelet.preferredAddressTypes:
+        - Hostname
+        - InternalIP
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - Hostname
+            - InternalIP
+        documentIndex: 1
+
+  - it: refuses a managed flag with spec.oidc.mode System as well
+    values:
+      - values/common.yaml
+      - values/oidc-system.yaml
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --secure-port=6444
+    asserts:
+      - failedTemplate:
+          errorPattern: 'extraArgs contains "--secure-port=6444" — the tenant control plane sets --secure-port itself '
+
+  - it: moves an --enable-admission-plugins entry into spec.admissionControllers and out of extraArgs
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --enable-admission-plugins=NodeRestriction
+    asserts:
+      - equal:
+          path: spec.admissionControllers
+          value:
+            - NodeRestriction
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - --profiling=false
+        documentIndex: 1
+
+  - it: moves a --kubelet-preferred-address-types entry into spec.kubelet.preferredAddressTypes and out of extraArgs
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --kubelet-preferred-address-types=Hostname,InternalIP
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - Hostname
+            - InternalIP
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraArgs
+          value: []
+        documentIndex: 1
+
+  - it: takes the last of two --enable-admission-plugins entries, as the control plane did before it owned the flag
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --enable-admission-plugins=AlwaysPullImages
+        - --enable-admission-plugins=NodeRestriction,PodNodeSelector
+    asserts:
+      - equal:
+          path: spec.admissionControllers
+          value:
+            - NodeRestriction
+            - PodNodeSelector
+        documentIndex: 1
+
+  - it: moves the entry with spec.oidc.mode System too, rendering the chart's own flags after the entries that remain
+    values:
+      - values/common.yaml
+      - values/oidc-system.yaml
+    set:
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --enable-admission-plugins=NodeRestriction
+    asserts:
+      - equal:
+          path: spec.admissionControllers
+          value:
+            - NodeRestriction
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - --profiling=false
+            - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+            - --requestheader-uid-headers=X-Remote-Uid
+        documentIndex: 1
+
+  - it: refuses a bare OIDC flag that ends the list once a moved entry after it is gone
+    # The control plane never sees the moved entry, so the bare flag before it
+    # would take the chart's --authentication-config as its value.
+    values:
+      - values/common.yaml
+      - values/oidc-system.yaml
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --requestheader-uid-headers
+        - --enable-admission-plugins=NodeRestriction
+    asserts:
+      - failedTemplate:
+          errorPattern: '^controlPlane.apiServer.extraArgs ends with "--requestheader-uid-headers" while spec.oidc.mode is "System"'
+
+  - it: refuses an --enable-admission-plugins entry while admissionControllers is also set, naming both
+    set:
+      controlPlane.apiServer.admissionControllers:
+        - AlwaysPullImages
+      controlPlane.apiServer.extraArgs:
+        - --enable-admission-plugins=NodeRestriction
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--enable-admission-plugins=NodeRestriction" while controlPlane.apiServer.admissionControllers is also set — the tenant control plane takes --enable-admission-plugins only from controlPlane.apiServer.admissionControllers, so the entry cannot apply. Remove the entry, or empty controlPlane.apiServer.admissionControllers to have the chart take the list from it.'
+
+  - it: refuses a --kubelet-preferred-address-types entry while preferredAddressTypes is also set, naming both
+    set:
+      controlPlane.kubelet.preferredAddressTypes:
+        - InternalIP
+      controlPlane.apiServer.extraArgs:
+        - --kubelet-preferred-address-types=Hostname
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--kubelet-preferred-address-types=Hostname" while controlPlane.kubelet.preferredAddressTypes is also set — the tenant control plane takes --kubelet-preferred-address-types only from controlPlane.kubelet.preferredAddressTypes, so the entry cannot apply. Remove the entry, or empty controlPlane.kubelet.preferredAddressTypes to have the chart take the list from it.'
+
+  - it: refuses the bare two-entry spelling of a flag the chart would move, since its value sits in an entry the chart does not read
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --enable-admission-plugins
+        - NodeRestriction,AlwaysPullImages
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--enable-admission-plugins" with its value in a separate entry — the tenant control plane sets --enable-admission-plugins itself, from controlPlane.apiServer.admissionControllers, and drops the entry naming it, which leaves the value behind as an argument the apiserver refuses. Write it as --enable-admission-plugins=value so the chart moves it into controlPlane.apiServer.admissionControllers, or set that field instead.'
+
+  - it: refuses the bare spelling of --kubelet-preferred-address-types as well
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --kubelet-preferred-address-types
+        - Hostname
+    asserts:
+      - failedTemplate:
+          errorPattern: '^controlPlane.apiServer.extraArgs contains "--kubelet-preferred-address-types" with its value in a separate entry — .* into controlPlane.kubelet.preferredAddressTypes, or set that field instead\.$'
+
+  - it: refuses an --enable-admission-plugins entry that names nothing
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --enable-admission-plugins=
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--enable-admission-plugins=", which names nothing — the chart moves this flag into controlPlane.apiServer.admissionControllers and has no list to move. Remove the entry.'
+
+  - it: renders the chart's address types for an empty preferredAddressTypes
+    set:
+      controlPlane.kubelet.preferredAddressTypes: []
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1
+
+  - it: renders the chart's address types for a null kubelet object
+    set:
+      controlPlane.kubelet: null
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - ExternalIP
+        documentIndex: 1
+
+  - it: drops a repeated address type from a moved entry, keeping the first place it appears
+    # The KamajiControlPlane field is a set and refuses a repeat the flag used
+    # to accept; the order decides which type the apiserver tries first.
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --kubelet-preferred-address-types=InternalIP,Hostname,InternalIP
+    asserts:
+      - equal:
+          path: spec.kubelet.preferredAddressTypes
+          value:
+            - InternalIP
+            - Hostname
+        documentIndex: 1
+
+  - it: refuses a quoted value on a flag the chart would move, since the chart does not unquote it the way the apiserver does
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --enable-admission-plugins="NodeRestriction,PodSecurity"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--enable-admission-plugins=\"NodeRestriction,PodSecurity\"", whose value is quoted — the apiserver strips the quotes when it reads the list and the chart does not, so it cannot move the names into controlPlane.apiServer.admissionControllers as written. Write the value without quotes.'

@@ -23,6 +23,7 @@ rules:
   - ingresses
   resourceNames:
   - {{ .Release.Name }}-ingress
+  - {{ .Release.Name }}-registry-ingress
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io

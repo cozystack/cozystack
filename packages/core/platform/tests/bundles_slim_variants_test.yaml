@@ -1,0 +1,1286 @@
+suite: slim variants emit only the base platform
+templates:
+  - templates/bundles/system.yaml
+  - templates/bundles/paas.yaml
+  - templates/bundles/naas.yaml
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: ships the isp-slim preset with the base platform only
+    values:
+      - ../values-isp-slim.yaml
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-plunger
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-shard-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tenant-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ingress-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.info-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-basics
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-webhook
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-plunger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.reloader
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.snapshot-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor-scheduler
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-scheduler
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.securitygroup-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozy-proxy
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.seaweedfs-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backupstrategy-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.bucket-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.objectstorage-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.goldpinger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.mariadb-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.valkey-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tcp-balancer-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true
+        not: true
+  - it: ships the isp-slim-generic preset with the base platform only
+    values:
+      - ../values-isp-slim-generic.yaml
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-plunger
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-shard-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tenant-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ingress-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.info-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-basics
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-webhook
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-plunger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.reloader
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.snapshot-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor-scheduler
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-scheduler
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.securitygroup-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozy-proxy
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.seaweedfs-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backupstrategy-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.bucket-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.objectstorage-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.goldpinger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.mariadb-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.valkey-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tcp-balancer-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true
+        not: true
+  - it: ships the isp-hosted-slim preset with the base platform only
+    values:
+      - ../values-isp-hosted-slim.yaml
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-plunger
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.flux-shard-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tenant-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ingress-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.info-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-basics
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-scheduler
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozy-proxy
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.seaweedfs-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backupstrategy-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backup-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.bucket-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.objectstorage-controller
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.goldpinger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-operator
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.mariadb-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-operator
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.valkey-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tcp-balancer-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-webhook
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-plunger
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.reloader
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.snapshot-controller
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor-scheduler
+          any: true
+        not: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.securitygroup-controller
+          any: true
+        not: true
+
+  # tenant-application's default variant waits on monitoring, etcd and seaweedfs
+  # applications, none of which a slim variant emits; the slim variant of that
+  # PackageSource is what lets cozystack-basics (and so tenant-root) go Ready.
+  - it: selects the slim tenant-application variant on a slim preset
+    values:
+      - ../values-isp-slim.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.tenant-application
+    asserts:
+      - equal:
+          path: spec.variant
+          value: slim
+
+  - it: keeps the default tenant-application variant on isp-full
+    values:
+      - ../values-isp-full.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.tenant-application
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: emits an opt-in package once it is listed in bundles.enabledPackages
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      bundles:
+        enabledPackages:
+          - cozystack.monitoring-application
+          - cozystack.multus
+          - cozystack.postgres-application
+          - cozystack.vpn-application
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-application
+          any: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.etcd-application
+          any: true
+        not: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-application
+          any: true
+        not: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.tcp-balancer-application
+          any: true
+        not: true
+
+  - it: keeps multus stageCniPlugins when multus is opted in on isp-slim-generic
+    values:
+      - ../values-isp-slim-generic.yaml
+    set:
+      bundles:
+        enabledPackages:
+          - cozystack.multus
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  # keycloak depends on postgres-operator, so OIDC must pull it in even though
+  # postgres-operator is opt-in on slim.
+  - it: emits keycloak and its postgres-operator dependency when OIDC is on
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      authentication:
+        oidc:
+          enabled: true
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+
+  - it: uses the Talos networking values on isp-slim
+    values:
+      - ../values-isp-slim.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: cilium
+      - equal:
+          path: spec.components.cilium.values.cilium.k8sServicePort
+          value: "7445"
+      - equal:
+          path: spec.components.cilium.values.cilium.l2announcements.enabled
+          value: true
+      - notExists:
+          path: spec.components.kubeovn
+
+  - it: uses the generic networking values on isp-slim-generic
+    values:
+      - ../values-isp-slim-generic.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: cilium-generic
+      - equal:
+          path: spec.components.cilium.values.cilium.cgroup.autoMount.enabled
+          value: true
+      - equal:
+          path: spec.components.cilium.values.cilium.l2announcements.enabled
+          value: true
+      - notExists:
+          path: spec.components.kubeovn
+
+  - it: pins cozystack-api to generic control-plane nodes on isp-slim-generic
+    values:
+      - ../values-isp-slim-generic.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-api.values.cozystackAPI.nodeSelector
+          value:
+            node-role.kubernetes.io/control-plane: "true"
+
+  - it: uses noop networking on isp-hosted-slim
+    values:
+      - ../values-isp-hosted-slim.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: noop
+
+  # KubeOVN IPsec is what networking.encryption drives on the full variants; the
+  # Cilium-only slim datapath has nothing to switch on, so a silent no-op is refused.
+  - it: refuses networking.encryption on a slim variant
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      networking:
+        encryption:
+          enabled: true
+    template: templates/bundles/system.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "not supported on the slim variants"
+
+  - it: emits metallb once it is opted in on a slim variant
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      bundles:
+        enabledPackages:
+          - cozystack.metallb
+    template: templates/bundles/system.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.kubeovn-webhook
+          any: true
+        not: true
+
+  - it: refuses the iaas bundle on a slim variant
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      bundles:
+        iaas:
+          enabled: true
+    template: templates/bundles/iaas.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "isp-full"
+
+  - it: keeps KubeOVN networking on isp-full
+    values:
+      - ../values-isp-full.yaml
+    template: templates/bundles/system.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - exists:
+          path: spec.components.kubeovn
+      - notExists:
+          path: spec.components.cilium.values.cilium.l2announcements
+
+  - it: still emits the full set on isp-full
+    values:
+      - ../values-isp-full.yaml
+    asserts:
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozy-proxy
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+          any: true
+      - template: templates/bundles/system.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - template: templates/bundles/paas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.redis-application
+          any: true
+      - template: templates/bundles/naas.yaml
+        containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true

@@ -43,7 +43,8 @@ rules:
   resources: ["persistentvolumeclaims"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # Storage classes are read to reject a binding mode that would deadlock an
-# import before anything is created.
+# import before anything is created, and to give each imported volume its
+# class's reclaim policy back once the handoff is over.
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["get", "list", "watch"]

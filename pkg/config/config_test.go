@@ -319,3 +319,23 @@ func TestParseHelmServerSideApplyAnnotation(t *testing.T) {
 		})
 	}
 }
+
+// TestReleaseAnnotationsShareThePrefix pins that every annotation cozystack-api
+// reads off an ApplicationDefinition lives under ReleaseAnnotationPrefix.
+// cozystack-operator selects them by that prefix when it hashes the definitions
+// to decide whether to roll the api Deployment, so an annotation introduced
+// outside the prefix would be read at start-up but never trigger the restart
+// that delivers it.
+func TestReleaseAnnotationsShareThePrefix(t *testing.T) {
+	for _, annotation := range []string{
+		HelmInstallTimeoutAnnotation,
+		HelmUpgradeTimeoutAnnotation,
+		HelmInstallDisableWaitAnnotation,
+		HelmServerSideApplyAnnotation,
+	} {
+		if !strings.HasPrefix(annotation, ReleaseAnnotationPrefix) {
+			t.Errorf("annotation %q is outside %q, so a change to it never rolls cozystack-api",
+				annotation, ReleaseAnnotationPrefix)
+		}
+	}
+}

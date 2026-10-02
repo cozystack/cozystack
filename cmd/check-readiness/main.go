@@ -350,11 +350,11 @@ func (cfg *config) kindExists(kind string) bool {
 	}
 	name := kind
 	group := ""
-	if idx := strings.IndexByte(kind, '.'); idx >= 0 {
-		name = kind[:idx]
-		group = kind[idx+1:]
+	if before, after, ok := strings.Cut(kind, "."); ok {
+		name = before
+		group = after
 	}
-	for _, line := range strings.Split(cfg.apiCache, "\n") {
+	for line := range strings.SplitSeq(cfg.apiCache, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			continue
@@ -447,7 +447,7 @@ func (cfg *config) processRows(e entry, rows string, b *strings.Builder) {
 	notReady := 0
 	total := 0
 
-	for _, line := range strings.Split(rows, "\n") {
+	for line := range strings.SplitSeq(rows, "\n") {
 		if line == "" {
 			continue
 		}

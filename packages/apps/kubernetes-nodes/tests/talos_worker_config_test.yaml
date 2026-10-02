@@ -73,3 +73,32 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubeReserved:\s*\n\s+cpu: "100m"\s*\n\s+memory: "512Mi"'
+
+  # On proxmox the worker kubelet runs with an external cloud provider: the
+  # node is tainted uninitialized until the cloud-controller-manager clears it
+  # and applies the topology labels the CSI node plugin needs. On kubevirt no
+  # controller would ever clear that taint, so the flag must not be there.
+  - it: runs the kubelet with an external cloud provider on proxmox
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["8.8.8.8"]
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'extraArgs:\s*\n\s+cloud-provider: external'
+
+  - it: leaves the kubevirt kubelet without a cloud provider, so no node is tainted for nothing
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'cloud-provider: external'

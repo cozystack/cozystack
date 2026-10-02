@@ -1,0 +1,19 @@
+apiVersion: v2
+appVersion: v0.20.0
+description: Container Storage Interface plugin for Proxmox
+home: https://github.com/sergelogvinov/proxmox-csi-plugin
+icon: https://raw.githubusercontent.com/sergelogvinov/proxmox-csi-plugin/main/charts/proxmox-csi-plugin/icon.png
+keywords:
+- csi
+- storage
+- block-storage
+- volume
+- proxmox
+maintainers:
+- name: sergelogvinov
+  url: https://github.com/sergelogvinov
+name: proxmox-csi-plugin
+sources:
+- https://github.com/sergelogvinov/proxmox-csi-plugin
+type: application
+version: 0.5.12

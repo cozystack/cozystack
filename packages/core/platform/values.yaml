@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 57
+  targetVersion: 59
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -37,7 +37,7 @@ migrations:
 bundles:
   system:
     enabled: false
-    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
+    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "isp-slim", "isp-slim-generic", "isp-hosted-slim"
   iaas:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
@@ -63,6 +63,23 @@ bundles:
   naas:
     enabled: false
   disabledPackages: []
+  # Packages the platform ships but does not deploy unless named here. Two of
+  # them belong to the Proxmox substrate, where worker VMs run on an external
+  # hypervisor instead of on KubeVirt in this cluster:
+  #
+  #   cozystack.capi-provider-infra-proxmox
+  #     capmox, the Cluster API infrastructure provider for Proxmox VE. Needs a
+  #     capmox-config Secret with a Proxmox API token before it can do anything;
+  #     enabling it pulls in the IPAM provider below automatically.
+  #   cozystack.capi-provider-ipam-in-cluster
+  #     Cluster API in-cluster IPAM. Required by capmox, which assigns static
+  #     addresses and has no DHCP mode. Listed separately because it is a
+  #     generic addon, not a Proxmox one.
+  #
+  # Both are emitted by the iaas bundle. disabledPackages still wins over this
+  # list, except that disabling IPAM while capmox is enabled stops the render:
+  # the cluster would only park capmox at Ready=False with DependenciesNotReady,
+  # and nothing there would name the two list entries that conflict.
   enabledPackages: []
 # Network configuration
 networking:
@@ -90,16 +107,15 @@ networking:
   #
   # The mechanism is datapath-specific (selected by bundles.system.variant):
   #
-  #   * kubeovn-cilium (isp-full, the default) and kubeovn-cilium-generic
+  #   * kubeovn-cilium (isp-full) and kubeovn-cilium-generic
   #     (isp-full-generic): KubeOVN owns the datapath; its Geneve overlay is
   #     encrypted with IPsec (kube-ovn ENABLE_OVN_IPSEC). KubeOVN's own
   #     controller provisions the IPsec CA and per-node certificates through
   #     the Kubernetes CSR API — no cert-manager wiring is required. This is
   #     the path this toggle drives today.
-  #   * cilium / cilium-generic (Cilium owns the datapath): Cilium-native
-  #     WireGuard/IPsec is the right mechanism there, but the platform system
-  #     bundle does not select those variants, so this toggle does not reach
-  #     them yet.
+  #   * cilium / cilium-generic (Cilium owns the datapath; isp-slim,
+  #     isp-slim-generic): Cilium-native WireGuard/IPsec is the right mechanism
+  #     there, but it is not wired yet, so the slim variants refuse this toggle.
   #   * cilium-kilo: Kilo already establishes a WireGuard mesh, but only at
   #     meshGranularity=location — it encrypts CROSS-LOCATION traffic and
   #     leaves intra-location pod-to-pod in cleartext by design. This toggle
@@ -112,7 +128,7 @@ networking:
   # inter-node overlay tunnels — same-node pod-to-pod traffic never leaves the
   # host and is not tunneled or encrypted. Flipping this on an existing
   # cluster triggers a rollout of the CNI components. On variants without a
-  # cozystack-managed encryptable datapath (e.g. isp-hosted / noop) the toggle
+  # cozystack-managed encryptable datapath (isp-hosted, isp-hosted-slim / noop) the toggle
   # has no effect.
   encryption:
     enabled: false
@@ -176,6 +192,20 @@ publishing:
   # value requires recreating that Service once (the chart fails early with the
   # exact command).
   loadBalancerClass: ""
+  # DNS suffix the dashboard appends to the name of a LoadBalancer Service on
+  # the application Services tab, shown under the external IP as
+  # `<service-name>.<serviceDomain>` (e.g. demo-external-write.svc.example.org
+  # for a postgres release named demo). Display-only: nothing in the platform
+  # creates DNS records for it. Set it only when your DNS already resolves
+  # exactly that name to the Service's LoadBalancer IP, e.g. external-dns with
+  # a matching fqdn template. A CoreDNS k8s_external zone does not fit: it
+  # answers <service>.<namespace>.<zone>, which this suffix cannot express.
+  # This is not the `<release>.<tenant host>` name the app charts put into
+  # their certificates, so a TLS client may see a SAN mismatch unless DNS and
+  # certificates are aligned by the operator. The suffix is cluster-wide, so
+  # two tenants with a release of the same name get the same hostname.
+  # Empty (the default) shows no hostname.
+  serviceDomain: ""
   # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
   # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
   # problem (intra-cluster traffic to the cluster's own public hostnames
@@ -456,6 +486,24 @@ authentication:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
+    # Technical name of the Keycloak realm that owns the cozystack clients and
+    # the cozystack-cluster-admin roles. keycloak-configure creates the realm
+    # under this name, and every SSO consumer (dashboard, linstor-gui, the
+    # generated kubeconfig, and the derived keycloakInternalUrl below) points at
+    # /realms/<realmName>. The apiserver OIDC issuer is set out-of-band via talm
+    # oidcIssuerUrl and must carry the same realm, or the tokens minted here are
+    # rejected. Rename it in one place; keep it in step with talm.
+    #
+    # Set this at install time. Changing it on a running cluster does not rename
+    # the realm: the keycloak-operator provisions a fresh, empty realm under the
+    # new name and abandons the old one, so every account, session and client
+    # living in the previous realm is orphaned. Treat a rename on a live cluster
+    # as a from-scratch re-provision of identities, not an in-place migration.
+    #
+    # "master" is refused: that realm holds the Keycloak super-admin, so naming
+    # it here would put the platform clients, the cluster-admin roles and every
+    # end user inside it.
+    realmName: "cozy"
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.
@@ -470,7 +518,13 @@ authentication:
     #
     # Override only for a KeyCloak that does not live at the standard in-cluster address. Setting it
     # to an empty string restores full OIDC discovery against the external issuer.
-    keycloakInternalUrl: "http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"
+    #
+    # Left unset (null), it is derived from realmName as
+    # http://keycloak-http.cozy-keycloak.svc:8080/realms/<realmName>, so a realm rename reaches these
+    # backend calls automatically. The tri-state is: null -> derive from realmName; "" -> external
+    # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
+    # custom realm paired with an explicit URL must name the same realm.
+    keycloakInternalUrl: null
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
@@ -555,8 +609,8 @@ gateway:
   # Cluster-wide: maps to Cilium's enable-gateway-api-alpn agent config, so
   # it covers the root and every tenant Gateway at once — there is no
   # per-Gateway granularity in the dataplane. Only effective on bundles
-  # where cozystack manages Cilium (isp-full, isp-full-generic); on
-  # isp-hosted the hosting-side CNI owns this setting. Flipping it re-rolls
+  # where cozystack manages Cilium (isp-full*, isp-slim*); on
+  # isp-hosted* the hosting-side CNI owns this setting. Flipping it re-rolls
   # the cilium DaemonSet on the next platform upgrade (rollOutCiliumPods),
   # the same disruption profile as any cilium config change.
   http2: true
@@ -630,6 +684,24 @@ backupStorage: {}
 # via spec.components.platform.values.backupStrategyController.redisBackupResources
 # on the cozystack.cozystack-platform Package. Empty forwards nothing.
 backupStrategyController: {}
+# Overrides for the optional cozystack.kubernetes-worker-image package (the
+# golden Talos worker OS images tenant Kubernetes node pools clone instead of
+# each worker importing the raw image over HTTP). Everything set here is
+# forwarded verbatim into the emitted Package CR as
+# components.kubernetes-worker-image.values, so it lands on that chart's
+# HelmRelease and deep-merges over its defaults
+# (packages/system/kubernetes-worker-image/values.yaml documents every knob:
+# imageFactoryURL, storageClass, storage, images). Admins set this via
+# spec.components.platform.values.kubernetesWorkerImage on the
+# cozystack.cozystack-platform Package, alongside adding
+# cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
+# opt-in and this key alone does not enable it. The two knobs that decide
+# whether the feature is usable at all are imageFactoryURL (an air-gapped or
+# rate-limited cluster must repoint the single import) and storageClass (CDI
+# cannot clone across StorageClasses, so a cluster whose worker pools are not on
+# `replicated` must move the golden onto their class). Empty (the default)
+# forwards nothing and keeps the child chart defaults.
+kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
@@ -713,6 +785,9 @@ kubevirt:
   # render and names the gate rather than ship a CR the cluster would reject
   # on update and misread on install.
   disabledFeatureGates: []
+  # Passed to spec.configuration.migrations on the KubeVirt CR.
+  # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
+  migrations: {}
 # GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
 # CR's permittedHostDevices when bundles.enabledPackages contains
 # cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two

@@ -1,0 +1,11 @@
+# A creator whose `kind` line ends in a space. YAML ignores it and the document
+# is exactly the one next to it; an anchor assuming nothing follows the value
+# does not see this file at all, and the sweep then reports one creator fewer
+# while saying nothing. The space is deliberate -- a case below fails if an
+# editor strips it, so the pin cannot be lost silently.
+# `git diff --check` flags the trailing space on that line, deliberately:
+# the space is the subject here, not an accident, and a case reds if it is
+# stripped. Nothing suppresses the warning -- a suppression would cover the
+# next file written here too, where a stray space would be an accident.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kubernetes 

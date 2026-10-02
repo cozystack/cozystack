@@ -41,7 +41,7 @@ type loggerWithDebug struct {
 }
 
 // Debug logs at debug level (equivalent to V(1).Info())
-func (l loggerWithDebug) Debug(msg string, keysAndValues ...interface{}) {
+func (l loggerWithDebug) Debug(msg string, keysAndValues ...any) {
 	l.Logger.V(1).Info(msg, keysAndValues...)
 }
 
@@ -70,15 +70,6 @@ const (
 	ovnMACAnnotation      = "ovn.kubernetes.io/mac_address"
 	cdiAllowClaimAdoption = "cdi.kubevirt.io/allowClaimAdoption"
 )
-
-func stringPtr(s string) *string {
-	return &s
-}
-
-// boolPtr returns a pointer to a bool value.
-func boolPtr(b bool) *bool {
-	return &b
-}
 
 // boolDefault returns the value of a *bool pointer, or the given default if nil.
 func boolDefault(p *bool, def bool) bool {
@@ -179,13 +170,13 @@ func resolveRestoreTarget(restoreJob *backupsv1alpha1.RestoreJob, backup *backup
 // vmInstanceResources contains VM-specific underlying resources discovered during backup.
 type vmInstanceResources struct {
 	DataVolumes []backupsv1alpha1.DataVolumeResource `json:"dataVolumes,omitempty"`
-	IP          string                                `json:"ip,omitempty"`
-	MAC         string                                `json:"mac,omitempty"`
+	IP          string                               `json:"ip,omitempty"`
+	MAC         string                               `json:"mac,omitempty"`
 }
 
 // marshalUnderlyingResources serializes application-specific data into a
 // runtime.RawExtension suitable for Backup.Status.UnderlyingResources.
-func marshalUnderlyingResources(data interface{}) (*runtime.RawExtension, error) {
+func marshalUnderlyingResources(data any) (*runtime.RawExtension, error) {
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -376,7 +367,7 @@ func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, ap
 	var dataVolumes []backupsv1alpha1.DataVolumeResource
 	if found {
 		for _, d := range disks {
-			disk, ok := d.(map[string]interface{})
+			disk, ok := d.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -448,7 +439,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// Non-fatal: proceed with backup even if collection fails
 	}
 
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": app.Object,
 		"Parameters":  resolved.Parameters,
 	}
@@ -604,6 +595,27 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 			"restoring to the same namespace with a different application name is not supported "+
 				"due to Velero DataUpload limitations: data is always uploaded to PVCs with the original name. "+
 				"Use options.targetNamespace to restore into a different namespace")
+	}
+
+	// Validate: rename is only implemented for VMInstance. Failing here beats a
+	// Succeeded RestoreJob whose application silently keeps the source name.
+	if target.IsRenamed && !veleroRenameSupported(backup.Spec.ApplicationRef.Kind) {
+		msg := fmt.Sprintf(
+			"restoring %s %q under a different name (%q) is not supported by the Velero strategy: "+
+				"Velero DataUpload always restores volumes under their original names and only a VMInstance "+
+				"can adopt them. Omit targetApplicationRef.name to keep the source name",
+			backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name, target.AppName)
+		if backup.Spec.ApplicationRef.Kind != vmDiskAppKind {
+			msg += ", or use the application's engine-native strategy to restore into a new application"
+		}
+		if restoreJob.Status.StartedAt != nil {
+			// The job predates this check: its Velero Restore may already have
+			// restored the application under the source name.
+			r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
+			msg += fmt.Sprintf(". This RestoreJob was already running, so %q may have been restored into namespace %q under its source name",
+				backup.Spec.ApplicationRef.Name, target.Namespace)
+		}
+		return r.markRestoreJobFailed(ctx, restoreJob, msg)
 	}
 
 	// Step 1: On first reconcile, set startedAt and phase = Running
@@ -782,7 +794,7 @@ type jsonPatch struct {
 
 // marshalPatchData marshals an arbitrary object to YAML for use as
 // mergePatch.PatchData in Velero resource modifiers.
-func marshalPatchData(v interface{}) (string, error) {
+func marshalPatchData(v any) (string, error) {
 	b, err := yaml.Marshal(v)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal patch data: %w", err)
@@ -803,8 +815,8 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 	var rules []resourceModifierRule
 
 	// PVC adoption: allow CDI to adopt restored PVCs when the HelmRelease recreates a DV.
-	pvcPatch, err := marshalPatchData(map[string]interface{}{
-		"metadata": map[string]interface{}{
+	pvcPatch, err := marshalPatchData(map[string]any{
+		"metadata": map[string]any{
 			"annotations": map[string]string{
 				cdiAllowClaimAdoption: "true",
 			},
@@ -829,8 +841,8 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 	// Uses merge patch (null values) instead of JSON Patch remove to avoid RFC 6902
 	// failures when the fields don't exist on the PVC (e.g. statically provisioned PVCs).
 	if target.IsCopy {
-		pvcStripPatch, err := marshalPatchData(map[string]interface{}{
-			"spec": map[string]interface{}{
+		pvcStripPatch, err := marshalPatchData(map[string]any{
+			"spec": map[string]any{
 				"selector":   nil,
 				"volumeName": nil,
 			},
@@ -860,10 +872,10 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 			if vmRes.MAC != "" {
 				ovnAnnotations[ovnMACAnnotation] = vmRes.MAC
 			}
-			vmPatch, err := marshalPatchData(map[string]interface{}{
-				"spec": map[string]interface{}{
-					"template": map[string]interface{}{
-						"metadata": map[string]interface{}{
+			vmPatch, err := marshalPatchData(map[string]any{
+				"spec": map[string]any{
+					"template": map[string]any{
+						"metadata": map[string]any{
 							"annotations": ovnAnnotations,
 						},
 					},
@@ -957,6 +969,16 @@ var (
 	vmiGVR            = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachineinstances"}
 	dataVolumeGVR     = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 )
+
+// veleroRenameSupported reports whether postRestoreRename can restore the
+// given application kind under a new name. Velero DataUpload writes volumes
+// under their original names, and only a VMInstance re-attaches them after its
+// HelmRelease is renamed: its disks keep their names and CDI adopts the restored
+// PVCs. Every other kind (a standalone VMDisk, a database operator's Cluster)
+// renders fresh volumes for the new name and comes up empty.
+func veleroRenameSupported(appKind string) bool {
+	return appKind == vmInstanceKind
+}
 
 // helmReleaseNameForApp returns the HelmRelease name for the given application
 // kind and name. Returns empty string for unsupported kinds.
@@ -1330,9 +1352,9 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	// and labeled with the source app name.
 	// Velero's namespaceMapping handles redirecting to the target namespace;
 	// resource modifiers handle renaming when the target app name differs.
-	templateContext := map[string]interface{}{
-		"Application": map[string]interface{}{
-			"metadata": map[string]interface{}{
+	templateContext := map[string]any{
+		"Application": map[string]any{
+			"metadata": map[string]any{
 				"name":      backup.Spec.ApplicationRef.Name,
 				"namespace": backup.Namespace,
 			},
@@ -1389,7 +1411,7 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	}
 	if resourceModifierCM != nil {
 		veleroRestoreSpec.ResourceModifier = &corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(""),
+			APIGroup: new(""),
 			Kind:     "ConfigMap",
 			Name:     resourceModifierCM.Name,
 		}

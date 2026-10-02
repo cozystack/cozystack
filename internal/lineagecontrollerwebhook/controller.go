@@ -4,6 +4,7 @@ import (
 	"context"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -26,18 +27,22 @@ func (c *LineageControllerWebhook) Reconcile(ctx context.Context, req ctrl.Reque
 	cfg := &runtimeConfig{
 		appCRDMap: make(map[appRef]*cozyv1alpha1.ApplicationDefinition),
 	}
+	owners := appdefowner.Owners(crds.Items)
 	for _, crd := range crds.Items {
 		appRef := appRef{
 			"apps.cozystack.io",
 			crd.Spec.Application.Kind,
 		}
 
-		newRef := crd
-		if _, exists := cfg.appCRDMap[appRef]; exists {
-			l.Info("duplicate app mapping detected; ignoring subsequent entry", "key", appRef)
-		} else {
-			cfg.appCRDMap[appRef] = &newRef
+		if crd.Spec.Application.Kind == "" {
+			continue
 		}
+		if owners[crd.Spec.Application.Kind] != crd.Name {
+			l.Info("duplicate app mapping detected; the kind is owned by another definition", "key", appRef, "ignored", crd.Name, "owner", owners[crd.Spec.Application.Kind])
+			continue
+		}
+		newRef := crd
+		cfg.appCRDMap[appRef] = &newRef
 	}
 	c.config.Store(cfg)
 	return ctrl.Result{}, nil

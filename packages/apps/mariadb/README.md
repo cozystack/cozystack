@@ -203,15 +203,14 @@ Uninstalling the instance does this for you; only the turn-it-off-and-keep-runni
 
 ### Application-specific parameters
 
-| Name                             | Description                              | Type                | Value |
-| -------------------------------- | ---------------------------------------- | ------------------- | ----- |
-| `users`                          | Users configuration map.                 | `map[string]object` | `{}`  |
-| `users[name].password`           | Password for the user.                   | `string`            | `""`  |
-| `users[name].maxUserConnections` | Maximum number of connections.           | `int`               | `0`   |
-| `databases`                      | Databases configuration map.             | `map[string]object` | `{}`  |
-| `databases[name].roles`          | Roles assigned to users.                 | `object`            | `{}`  |
-| `databases[name].roles.admin`    | List of users with admin privileges.     | `[]string`          | `[]`  |
-| `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
+| Name                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Type                | Value |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `users`                          | Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret. | `map[string]object` | `{}`  |
+| `users[name].maxUserConnections` | Maximum number of connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `int`               | `0`   |
+| `databases`                      | Databases configuration map.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `map[string]object` | `{}`  |
+| `databases[name].roles`          | Roles assigned to users.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `object`            | `{}`  |
+| `databases[name].roles.admin`    | List of users with admin privileges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `[]string`          | `[]`  |
+| `databases[name].roles.readonly` | List of users with read-only privileges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `[]string`          | `[]`  |
 
 
 ### Backup parameters (DEPRECATED)
@@ -234,7 +233,7 @@ Uninstalling the instance does this for you; only the turn-it-off-and-keep-runni
 ### resources and resourcesPreset
 
 `resources` sets explicit CPU and memory configurations for each replica.
-When left empty, the preset defined in `resourcesPreset` is applied.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
 
 ```yaml
 resources:
@@ -245,7 +244,7 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
@@ -255,11 +254,11 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 users:
   user1:
     maxUserConnections: 1000
-    password: hackme
   user2:
     maxUserConnections: 1000
-    password: hackme
 ```
+
+Passwords cannot be set here — they (and the `root` account) are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o json | jq -r '.data["user1"]' | base64 -d` (a username may contain a `.`, which `jsonpath` would treat as a path step and return nothing).
 
 
 ### databases

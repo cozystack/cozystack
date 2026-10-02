@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.capi-provider-infra-proxmox
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # The kubevirt infra provider depends on cozystack.kubevirt because its VMs run
+  # inside this cluster. The proxmox one has no such edge: the hypervisor is
+  # external, reached over the Proxmox API with the credentials in the package's
+  # credentialsSecretName. What it does need is the IPAM provider — capmox
+  # allocates static addresses from an InClusterIPPool rather than using DHCP,
+  # so without it ProxmoxCluster never reaches Ready.
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    - cozystack.capi-provider-ipam-in-cluster
+    components:
+    - name: capi-providers-infraprovider-proxmox
+      path: system/capi-providers-infraprovider-proxmox
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-infraprovider-proxmox

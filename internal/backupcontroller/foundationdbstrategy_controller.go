@@ -374,7 +374,7 @@ func (r *BackupJobReconciler) requeueWithReason(ctx context.Context, j *backupsv
 		Message: message,
 	}
 	apimeta.SetStatusCondition(&j.Status.Conditions, cond)
-	for attempt := 0; attempt < foundationdbStopConflictRetries; attempt++ {
+	for attempt := range foundationdbStopConflictRetries {
 		err := r.Status().Update(ctx, j)
 		if err == nil {
 			return ctrl.Result{RequeueAfter: foundationdbPollInterval}, nil
@@ -554,7 +554,7 @@ const foundationdbStopConflictRetries = 5
 // reached). The function mutates *b to the final observed state on
 // success.
 func (r *BackupJobReconciler) patchStopWithRetry(ctx context.Context, b *foundationdbtypes.FoundationDBBackup) error {
-	for attempt := 0; attempt < foundationdbStopConflictRetries; attempt++ {
+	for attempt := range foundationdbStopConflictRetries {
 		base := b.DeepCopy()
 		b.Spec.BackupState = foundationdbtypes.BackupStateStopped
 		err := r.Patch(ctx, b, client.MergeFrom(base))
@@ -1108,12 +1108,12 @@ func (r *RestoreJobReconciler) resolveFoundationDBRestoreTarget(restoreJob *back
 // future RestoreJob can reproduce them exactly when the operator-side
 // FoundationDBBackup CR has been pruned.
 type foundationdbBackupSnapshot struct {
-	Kind              string                                       `json:"kind"`
-	APIVersion        string                                       `json:"apiVersion"`
+	Kind              string                                         `json:"kind"`
+	APIVersion        string                                         `json:"apiVersion"`
 	Storage           strategyv1alpha1.FoundationDBBlobStoreTemplate `json:"storage"`
-	CustomParameters  []string                                     `json:"customParameters,omitempty"`
-	EncryptionKeyPath string                                       `json:"encryptionKeyPath,omitempty"`
-	Parameters        map[string]string                            `json:"parameters,omitempty"`
+	CustomParameters  []string                                       `json:"customParameters,omitempty"`
+	EncryptionKeyPath string                                         `json:"encryptionKeyPath,omitempty"`
+	Parameters        map[string]string                              `json:"parameters,omitempty"`
 }
 
 func marshalFoundationDBBackupSnapshot(
@@ -1191,7 +1191,7 @@ func renderFoundationDBTemplate(t strategyv1alpha1.FoundationDBTemplate, app *fo
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -1201,12 +1201,12 @@ func renderFoundationDBTemplate(t strategyv1alpha1.FoundationDBTemplate, app *fo
 // toJSONMapFoundationDB converts a typed object to a generic map via JSON
 // tags so user-authored go-templates address fields by their JSON names
 // (e.g. .Application.metadata.name).
-func toJSONMapFoundationDB(obj interface{}) (map[string]interface{}, error) {
+func toJSONMapFoundationDB(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

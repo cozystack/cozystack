@@ -104,6 +104,7 @@ import (
 
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 )
 
@@ -708,13 +709,15 @@ func sortedKeys(m map[string][]byte) []string {
 // applicationDefinition returns the ApplicationDefinition for an application
 // kind, or nil when none is registered.
 //
-// The list is walked in the API server's unspecified order, so the match is
-// gated on the group as well as the kind: every ApplicationDefinition describes a
-// kind in appsGroup, and the release's own group label must be that group, so
-// requiring it keeps a release stamped with an unexpected group from resolving a
-// same-kind definition by accident. ApplicationDefinition carries no group field
-// of its own — the group is invariant across all of them — so the check is
-// against the constant.
+// The match is gated on the group as well as the kind: every
+// ApplicationDefinition describes a kind in appsGroup, and the release's own
+// group label must be that group, so requiring it keeps a release stamped with an
+// unexpected group from resolving a same-kind definition by accident.
+// ApplicationDefinition carries no group field of its own — the group is
+// invariant across all of them — so the check is against the constant. When more
+// than one definition declares the kind, the one that owns it under
+// appdefowner is returned, the same definition the chartRef reconciler and
+// cozystack-api act on, so a later definition's selectors are never read.
 func (r *Reconciler) applicationDefinition(ctx context.Context, app application) (*cozyv1alpha1.ApplicationDefinition, error) {
 	if app.Group != appsGroup {
 		return nil, nil
@@ -723,8 +726,9 @@ func (r *Reconciler) applicationDefinition(ctx context.Context, app application)
 	if err := r.List(ctx, list); err != nil {
 		return nil, fmt.Errorf("list ApplicationDefinitions: %w", err)
 	}
+	owner := appdefowner.Owners(list.Items)[app.Kind]
 	for i := range list.Items {
-		if list.Items[i].Spec.Application.Kind == app.Kind {
+		if list.Items[i].Name == owner {
 			return &list.Items[i], nil
 		}
 	}
@@ -1390,9 +1394,10 @@ func (r *Reconciler) projectionsForApplicationDefinition(ctx context.Context, _ 
 // not the load — each such reconcile still issues several uncached reads.
 //
 // Create, delete and generic events keep the default pass-through: a definition
-// appearing or disappearing can change a verdict. An UPDATE is delivered only when
-// spec.secrets changed — the exact field selectorsDigest digests, so a change that
-// cannot move the digest cannot pass this gate, and the two cannot drift apart.
+// appearing or disappearing can change a verdict. An UPDATE is delivered when
+// spec.secrets changed, the exact field selectorsDigest digests, or when
+// spec.application.kind changed, since that can hand a kind to another definition
+// whose spec.secrets then decide the digest.
 var applicationDefinitionPredicate = predicate.Funcs{
 	UpdateFunc: applicationDefinitionSecretsChanged,
 }
@@ -1409,5 +1414,6 @@ func applicationDefinitionSecretsChanged(e event.UpdateEvent) bool {
 	if !ok {
 		return true
 	}
-	return !reflect.DeepEqual(oldDef.Spec.Secrets, newDef.Spec.Secrets)
+	return !reflect.DeepEqual(oldDef.Spec.Secrets, newDef.Spec.Secrets) ||
+		oldDef.Spec.Application.Kind != newDef.Spec.Application.Kind
 }

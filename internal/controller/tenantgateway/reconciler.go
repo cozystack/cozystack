@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -1287,12 +1288,8 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 // preserving foreign keys.
 func mergeLabels(existing, desired map[string]string) map[string]string {
 	out := make(map[string]string, len(existing)+len(desired))
-	for k, v := range existing {
-		out[k] = v
-	}
-	for k, v := range desired {
-		out[k] = v
-	}
+	maps.Copy(out, existing)
+	maps.Copy(out, desired)
 	return out
 }
 
@@ -1587,7 +1584,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Protocol: gatewayv1.HTTPSProtocolType,
 				Hostname: &wildcardHost,
 				TLS: &gatewayv1.ListenerTLSConfig{
-					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					Mode: new(gatewayv1.TLSModeTerminate),
 					CertificateRefs: []gatewayv1.SecretObjectReference{
 						{Name: gatewayv1.ObjectName(certName)},
 					},
@@ -1600,7 +1597,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Protocol: gatewayv1.HTTPSProtocolType,
 				Hostname: &apexHost,
 				TLS: &gatewayv1.ListenerTLSConfig{
-					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					Mode: new(gatewayv1.TLSModeTerminate),
 					CertificateRefs: []gatewayv1.SecretObjectReference{
 						{Name: gatewayv1.ObjectName(certName)},
 					},
@@ -1628,7 +1625,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Protocol: gatewayv1.HTTPSProtocolType,
 				Hostname: &childWildcard,
 				TLS: &gatewayv1.ListenerTLSConfig{
-					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					Mode: new(gatewayv1.TLSModeTerminate),
 					CertificateRefs: []gatewayv1.SecretObjectReference{
 						{Name: gatewayv1.ObjectName(certName)},
 					},
@@ -1650,7 +1647,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Protocol: gatewayv1.HTTPSProtocolType,
 				Hostname: &hostnameVal,
 				TLS: &gatewayv1.ListenerTLSConfig{
-					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					Mode: new(gatewayv1.TLSModeTerminate),
 					CertificateRefs: []gatewayv1.SecretObjectReference{
 						{Name: gatewayv1.ObjectName(certName)},
 					},
@@ -1690,7 +1687,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			Protocol: gatewayv1.TLSProtocolType,
 			Hostname: &host,
 			TLS: &gatewayv1.ListenerTLSConfig{
-				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
+				Mode: new(gatewayv1.TLSModePassthrough),
 			},
 			AllowedRoutes: passthroughAllowed,
 		})
@@ -1750,7 +1747,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			Protocol: gatewayv1.TLSProtocolType,
 			Hostname: &host,
 			TLS: &gatewayv1.ListenerTLSConfig{
-				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
+				Mode: new(gatewayv1.TLSModePassthrough),
 			},
 			AllowedRoutes: passthroughAllowed,
 		})
@@ -1792,10 +1789,6 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		return nil, err
 	}
 	return gw, nil
-}
-
-func ptrTLSMode(m gatewayv1.TLSModeType) *gatewayv1.TLSModeType {
-	return &m
 }
 
 // SetupWithManager wires the Reconciler into the controller manager

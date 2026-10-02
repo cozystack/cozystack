@@ -16,6 +16,8 @@ EXPECTED=(
 )
 
 fail=0
+jq_err=$(mktemp)
+trap 'rm -f "$jq_err"' EXIT
 for f in packages/system/*-rd/cozyrds/*.yaml; do
   schema=$(yq -r '.spec.application.openAPISchema // ""' "$f")
   if [ -z "$schema" ]; then
@@ -24,12 +26,17 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   # Pull every resourcesPreset enum out of the schema. Key on the JSON
   # path ending in "resourcesPreset" rather than a description heuristic,
   # so an unrelated field with "preset" in its description does not match.
-  enums=$(printf '%s' "$schema" | jq -r '
+  # A failed read can leave empty or partial output; neither is an enum to check.
+  if ! enums=$(jq -r '
     [paths(type == "object" and has("enum")) as $p
      | select($p[-1] == "resourcesPreset")
      | getpath($p).enum[]]
     | .[]
-  ' 2>/dev/null || true)
+  ' <<<"$schema" 2>"$jq_err"); then
+    echo "FAIL: $f openAPISchema could not be read: $(tr '\n' ' ' <"$jq_err")" >&2
+    fail=1
+    continue
+  fi
   if [ -z "$enums" ]; then
     continue
   fi
@@ -39,7 +46,7 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
     # here-string, not a pipe: a `printf ... | grep -q` pipeline SIGPIPEs the
     # printf when grep matches early and exits, and under `set -o pipefail` that
     # 141 makes the whole pipeline read as failure — a false "missing" for a
-    # preset that is present (hit on the larger enums, e.g. http-cache-rd).
+    # preset that is present (hit on the larger enums, e.g. kubernetes-rd).
     if ! grep -Fqx -- "$want" <<<"$enums"; then
       missing+=("$want")
     fi
@@ -51,8 +58,8 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
 done
 
 if [ "$fail" -ne 0 ]; then
-  echo "Some RD schemas are out of sync with the canonical preset set." >&2
-  echo "Run 'make generate' inside the affected chart directory." >&2
+  echo "Some RD schemas failed the preset check; see the errors above." >&2
+  echo "For missing presets, run 'make generate' inside the affected chart directory." >&2
   exit 1
 fi
 echo "All RD schemas carry the full 47-preset enum."

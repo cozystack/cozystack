@@ -13,6 +13,10 @@
 #                              cozy-lib / the build macros / go.mod / the build
 #                              workflows can affect any image, so rebuild all).
 #
+# MATRIX_ARCH=arm64 also drops packages/core/testing, which pins linux/amd64
+# (an x86 KVM sandbox): an arm64 leg building it would push a second amd64
+# image under its -arm64 tag.
+#
 # Output: a JSON array of package dirs on stdout, e.g.
 #   ["packages/apps/mariadb","packages/system/dashboard"]
 # An empty selection prints `[]` -> the matrix produces zero build jobs.
@@ -29,9 +33,10 @@ full_rebuild_pattern='^(packages/library/|api/|cmd/|internal/|pkg/|hack/common-e
 #
 # packages/core/talos and packages/core/installer are deliberately excluded from
 # the parallel matrix and handled by dedicated jobs instead:
-#   - talos:     the nocloud disk image and the installer tarball are heavy and
-#                shared through _out/assets; built once in an always-on leg
-#                (e2e needs the disk on every non-docs PR regardless of scoping).
+#   - talos:     the installer tarball and Talos image are heavy; the dedicated
+#                leg runs when its direct or shared build inputs changed (and
+#                remains unconditional for forks). The container e2e lane does
+#                not consume a per-PR nocloud disk.
 #   - installer: its `flux push artifact --path=packages` bundles the ENTIRE,
 #                digest-patched packages tree into the OCI artifact the operator
 #                pulls, so it must run in the finalize step AFTER every other
@@ -40,7 +45,8 @@ all_units() {
   sed -n '/^build:/,/^[^[:space:]]/p' "$MAKEFILE" \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxE 'packages/core/(talos|installer)'
+    | grep -vxE 'packages/core/(talos|installer)' \
+    | if [ "${MATRIX_ARCH:-}" = arm64 ]; then grep -vxF packages/core/testing; else cat; fi
 }
 
 emit_json() {

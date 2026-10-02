@@ -25,6 +25,23 @@ tests:
           path: spec.waitStrategy.name
           value: poller
 
+  - it: passes tenant-set oidc values through to the inner chart
+    set:
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.values.oidc.mode
+          value: System
+      - equal:
+          path: spec.values.oidc.users[0].email
+          value: alice@example.com
+      - equal:
+          path: spec.values.oidc.users[0].role
+          value: Admin
+
   - it: gates readiness on the VLCluster status.updateStatus
     asserts:
       - equal:
@@ -41,4 +58,46 @@ tests:
           value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
       - equal:
           path: spec.healthCheckExprs[0].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The traces backend (VTCluster/VTSingle from tracingStorages) is gated the
+  # same way and by the same operator status contract. tracingStorages is empty
+  # by default, so these exprs are usually inert (no CR to match); when a backend
+  # is configured they gate readiness on it. Pin both entries so a
+  # dropped/reordered block or a typo'd CEL expression fails a test rather than
+  # silently regressing the gate.
+  - it: gates readiness on the VTCluster status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[1].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[1].kind
+          value: VTCluster
+      - equal:
+          path: spec.healthCheckExprs[1].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[1].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[1].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  - it: gates readiness on the VTSingle status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[2].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[2].kind
+          value: VTSingle
+      - equal:
+          path: spec.healthCheckExprs[2].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[2].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[2].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"

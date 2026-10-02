@@ -571,9 +571,9 @@ bnet_add_two_handlers_on_one_line() {
 }
 
 @test "a bats file in a subdirectory is audited too" {
-  # The ban is on every bats file under hack/, and hack/e2e-apps/ already holds
-  # two. A flat glob would leave the claim about "every file added later" false
-  # for anything a directory down.
+  # The ban covers every bats file under hack/. Two pre-Chainsaw suites once
+  # lived one directory down; this synthetic fixture pins recursion after their
+  # removal.
   tmp=$(mktemp -d)
   bnet_new_fixture "$tmp"
   bnet_add_nested_fixture "$tmp"

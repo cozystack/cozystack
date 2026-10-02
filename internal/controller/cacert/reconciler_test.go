@@ -1185,6 +1185,11 @@ func TestApplicationDefinitionPredicate_GatesOnSecrets(t *testing.T) {
 			want: true,
 		},
 		{
+			name:   "kind change is delivered, since it can move ownership of a kind",
+			mutate: func(d *cozyv1alpha1.ApplicationDefinition) { d.Spec.Application.Kind = "SomethingElse" },
+			want:   true,
+		},
+		{
 			name:   "identical definition is not delivered",
 			mutate: func(*cozyv1alpha1.ApplicationDefinition) {},
 			want:   false,
@@ -1524,5 +1529,28 @@ func TestProjectionNameCannotCollideWithADotFreeEngineSuffix(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestApplicationDefinition_ResolvesKindOwner pins that the definition whose
+// spec.secrets decide a release's projection is the one that owns the kind: a
+// later definition declaring the same kind, even one that sorts first by name,
+// must not be the one whose selectors are read.
+func TestApplicationDefinition_ResolvesKindOwner(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	owner := appDef()
+	owner.CreationTimestamp = metav1.NewTime(base)
+	shadow := appDef()
+	shadow.Name = "a-postgres-shadow"
+	shadow.CreationTimestamp = metav1.NewTime(base.Add(time.Hour))
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(shadow, owner).Build()
+	r := newReconciler(c, record.NewFakeRecorder(1))
+
+	got, err := r.applicationDefinition(context.TODO(), application{Group: appsGroup, Kind: testAppKind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Name != "postgres" {
+		t.Fatalf("resolved %+v, want the owner postgres", got)
 	}
 }

@@ -144,7 +144,7 @@ jobs:
       # The resolved ref is the digest-pinned staging branch for a prerelease,
       # or the stable tag's pinned merge tree.
       - name: Checkout resolved release tree
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.resolve.outputs.tree_ref }}
           fetch-depth: 1
@@ -221,7 +221,7 @@ jobs:
         run: |
           cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"
@@ -307,12 +307,56 @@ jobs:
           cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
 
+      # Every image the nodes pulled, read from their image stores rather than
+      # from the pods still running, since the tests delete what they create.
+      # That covers chart defaults and operator-launched images the static gate
+      # in tags.yaml never sees, because the tree does not pin them by digest.
+      # A pre-release fails on a single-arch image, on a ref that cannot be
+      # read or is still rate-limited after the retries, or on a list the
+      # collection could not produce; a stable tag only warns, since it ships
+      # its rc's images unchanged. Before teardown, which runs whatever this
+      # step does.
+      - name: Audit pulled images are multi-arch
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -o pipefail
+          cd "/tmp/$SANDBOX_NAME"
+          # A tag cut before the audit existed has neither the script nor the
+          # image list, and its e2e must still be re-runnable from main.
+          if [ ! -f hack/verify-multiarch.sh ]; then
+            echo "::warning title=multi-arch audit::the tree under test predates the multi-arch audit; skipped"
+            exit 0
+          fi
+          mkdir -p _out
+          { command -v skopeo && command -v jq; } >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo jq; }
+          status=0
+          hack/verify-multiarch.sh --refs-file _out/image-refs.txt 2>&1 | tee _out/multiarch-audit.txt \
+            || status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            case "$TAG" in
+              *-*) exit 1 ;;
+            esac
+            # 1: the audit ran and flagged refs (single-arch, unreadable or
+            # rate-limited); anything else: it did not run.
+            if [ "$status" -eq 1 ]; then
+              echo "::warning title=multi-arch audit::some images pulled by e2e are not amd64+arm64 indexes or could not be checked; see multiarch-audit.txt"
+            else
+              echo "::warning title=multi-arch audit::the multi-arch audit did not run; see multiarch-audit.txt"
+            fi
+          fi
+
       - name: Upload image list
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-list-${{ inputs.tag }}
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+          path: |
+            /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/image-refs.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/multiarch-audit.txt
 
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
       #   inspect Talos/Cozystack state and resume with `breakpoint resume`.

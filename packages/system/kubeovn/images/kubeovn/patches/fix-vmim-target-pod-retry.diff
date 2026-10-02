@@ -1,0 +1,19 @@
+Additional retry for the target Pod creation race, separate from Kube-OVN #6834.
+Keep until an equivalent guard is verified in the selected upstream version.
+
+diff --git a/pkg/controller/kubevirt.go b/pkg/controller/kubevirt.go
+--- a/pkg/controller/kubevirt.go
++++ b/pkg/controller/kubevirt.go
+@@ -210,9 +210,10 @@
+ 				klog.Infof("successfully set migrate options for lsp %s from %s to %s", portName, sourceNode, targetPod.Spec.NodeName)
+ 			}
+ 		} else {
+-			klog.Warningf("target pod not yet created for migration job UID %s in phase %s, waiting for pod creation",
++			// Pod creation does not change the migration phase, so retry even when
++			// the target pod has not reached the informer cache yet.
++			return fmt.Errorf("target pod not yet created for migration job UID %s in phase %s, waiting for pod creation",
+ 				vmiMigration.UID, vmiMigration.Status.Phase)
+-			return nil
+ 		}
+ 	case kubevirtv1.MigrationSucceeded:
+ 		for _, portName := range portNames {

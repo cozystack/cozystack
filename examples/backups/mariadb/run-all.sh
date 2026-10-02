@@ -27,12 +27,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $MARIADB_PASSWORD is the app user's password.
+# Bucket below. The app user's password is chart-generated, not substituted.
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
-        -e "s|REPLACE_WITH_PASSWORD|${MARIADB_PASSWORD}|g" \
         "$SCRIPT_DIR/$1"
 }
 
@@ -136,7 +135,12 @@ materialise_backup_secrets "$MARIADB_SRC_NAME"
 
 print_header "Step 05b: Deploy source MariaDB '${MARIADB_SRC_NAME}' and wait for it to be healthy"
 subst 05-mariadb-src.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md. hack/mariadb-first-boot-waits.bats
+# derives the floor and holds the Chainsaw op in
+# hack/e2e-chainsaw/mariadb/chainsaw-test.yaml against this wait: raise one,
+# raise both.
+wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_SRC_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 wait_app_grant_ready "$MARIADB_SRC_CR"
@@ -147,6 +151,20 @@ mysql_exec "$MARIADB_SRC_CR" "
     CREATE TABLE IF NOT EXISTS demo.e2e_sentinel (id INT PRIMARY KEY, token VARCHAR(64));
     REPLACE INTO demo.e2e_sentinel (id, token) VALUES (1, '${SENTINEL_TOKEN}');"
 log_success "Sentinel token: ${SENTINEL_TOKEN}"
+
+print_header "Step 05d: Create an out-of-band account the chart does not declare"
+# Its GRANTs live only in mysql.global_priv, which the strategy excludes from the
+# backup (IgnoreGlobalPriv=true). A restore must therefore bring its DATA back but
+# NOT the account itself — the documented ignoreGlobalPriv limitation. Step 40
+# asserts both halves, so the unconditionally-set flag has a live test behind the
+# behaviour the docs describe, not only a unit assertion on the CR field.
+OOB_USER="oob_${SENTINEL_TOKEN//[^a-zA-Z0-9_]/_}"
+mysql_root_exec "$MARIADB_SRC_CR" "
+    CREATE USER IF NOT EXISTS '${OOB_USER}'@'%' IDENTIFIED BY 'oob-pw';
+    GRANT SELECT ON demo.* TO '${OOB_USER}'@'%';
+    CREATE TABLE IF NOT EXISTS demo.oob_marker (id INT PRIMARY KEY, who VARCHAR(128));
+    REPLACE INTO demo.oob_marker (id, who) VALUES (1, '${OOB_USER}');"
+log_success "Out-of-band account '${OOB_USER}' + demo.oob_marker created directly in SQL."
 
 print_header "Step 10/15: Create the MariaDB strategy + BackupClass"
 subst 10-mariadb-strategy.yaml | kubectl apply -f -
@@ -171,7 +189,8 @@ print_header "Step 30/40: Restore to a copy '${MARIADB_TARGET_NAME}' and wait fo
 # during a restore, so the target needs its own Secret pair (same S3 coords).
 materialise_backup_secrets "$MARIADB_TARGET_NAME"
 subst 30-mariadb-target.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 300
+# Same 660s as the source above, held against the same Chainsaw op.
+wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_TARGET_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/40-restorejob-to-copy.yaml"
@@ -190,6 +209,37 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
     exit 1
 fi
 log_success "Round-trip verified: '${MARIADB_TARGET_NAME}' restored sentinel '${GOT}' from S3."
+
+# The app-user read above already proves the restore did not overwrite the
+# target's grant table with the source's. root is the one the operator can never
+# repair after bootstrap, so assert it too: its login must still match the
+# chart-generated password in the target Secret.
+print_header "Step 40 verify: root still authenticates against the restored copy"
+if ! mysql_root_login "$MARIADB_TARGET_CR" >/dev/null; then
+    log_error "root cannot authenticate against '${MARIADB_TARGET_NAME}': the restore overwrote the grant table and the target Secret's root password no longer matches"
+    exit 1
+fi
+log_success "root login verified against '${MARIADB_TARGET_NAME}'."
+
+print_header "Step 40 verify: ignoreGlobalPriv dropped the out-of-band account but kept its data"
+# demo.oob_marker rode the logical dump, so it must be present in the copy; the
+# account lived only in the excluded grant table, so it must NOT. This is the DR
+# direction the docs describe and the strategy's unconditional IgnoreGlobalPriv=true
+# relies on.
+OOB_DATA=$(mysql_exec "$MARIADB_TARGET_CR" "SELECT who FROM demo.oob_marker WHERE id = 1;" \
+    | awk 'NR==2{print}' | tr -d '[:space:]')
+if [[ "$OOB_DATA" != "$OOB_USER" ]]; then
+    log_error "out-of-band data did not round-trip: target has '${OOB_DATA}', expected '${OOB_USER}'"
+    exit 1
+fi
+OOB_ACCT=$(mysql_root_exec "$MARIADB_TARGET_CR" \
+    "SELECT COUNT(*) FROM mysql.user WHERE User = '${OOB_USER}';" \
+    | awk 'NR==2{print}' | tr -d '[:space:]')
+if [[ "$OOB_ACCT" != "0" ]]; then
+    log_error "out-of-band account '${OOB_USER}' reappeared in the copy (count=${OOB_ACCT}): the grant table was NOT excluded from the backup"
+    exit 1
+fi
+log_success "ignoreGlobalPriv verified: data restored, out-of-band account absent (only chart-declared accounts are reconstructed)."
 
 # To-copy must not mutate the source. Regressing into a source-touching restore
 # would corrupt the running instance, so assert the source still reads back.

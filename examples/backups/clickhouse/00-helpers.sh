@@ -79,88 +79,10 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $title ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string.
-#
-# The optional 7th argument is a TERMINAL value to bail on: a BackupJob or
-# RestoreJob that reaches Failed will never reach Succeeded, so polling out the
-# remaining budget only delays the report and — when this runs under Chainsaw —
-# risks the step being SIGKILLed at its op timeout with nothing collected
-# instead of failing cleanly. Same contract as the postgres/mariadb helpers.
-wait_for_field() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local jsonpath="$3"
-    local desired="$4"
-    local namespace="${5:-}"
-    local timeout="${6:-300}"
-    local fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0
-    local ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" 2>/dev/null || true)
-        if [[ "$current" == "$desired" ]]; then
-            log_success "$resource_type/$resource_name reached '$desired'"
-            return 0
-        fi
-        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
-            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
-            return 1
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, failing fast on Stalled=True.
-#
-# `kubectl wait hr ... --for=condition=ready` cannot do either half of this: it
-# errors out if the HelmRelease does not exist yet (the app CR is reconciled
-# asynchronously, so the HR appears a moment after `kubectl apply` returns), and
-# it keeps waiting through a terminal Stalled — a chart that will never install
-# burns the whole timeout instead of reporting the reason. Same contract as the
-# postgres/mariadb helpers.
-wait_hr_ready() {
-    local name="$1"
-    local timeout="${2:-300}"
-    local elapsed=0
-
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-            if [[ "$ready" == "True" ]]; then
-                log_success "HelmRelease/$name is Ready"
-                return 0
-            fi
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
-            if [[ "$stalled" == "True" ]]; then
-                log_error "HelmRelease/$name is Stalled (terminal): $(kubectl -n "$NAMESPACE" get hr "$name" \
-                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
-                return 1
-            fi
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for HelmRelease/$name to become Ready:"
-            kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # Wait for a StatefulSet to report a ready replica, tolerating its asynchronous
 # creation (the ClickHouse operator creates it after the CHI is reconciled).
@@ -192,40 +114,6 @@ wait_sts_ready() {
             kubectl -n "$NAMESPACE" describe pod "${name}-0" >&2 || true
             return 1
         fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait until a namespaced resource is really gone.
-#
-# `kubectl wait --for=delete` is not used: it errors out when the resource is
-# already absent, which is the normal case on a clean namespace (cleanup.sh is
-# idempotent and runs as a pre-clean too), and swallowing that error would also
-# swallow a genuine failure. Polling `get --ignore-not-found` treats "already
-# gone" and "gone now" as the same success (empty output, exit 0) while a
-# retrieval failure — RBAC, API-server, transport — is a non-zero exit that
-# must NOT be read as deletion, or cleanup settles on a false success and leaves
-# half-uninstalled resources for the next run. Such an error just keeps us
-# polling until the resource is confirmed gone or the timeout fires.
-wait_deleted() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local timeout="${3:-300}"
-    local elapsed=0
-    local got
-
-    while true; do
-        if got=$(kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" --ignore-not-found 2>/dev/null) && [[ -z "$got" ]]; then
-            [[ $elapsed -gt 0 ]] && log_success "$resource_type/$resource_name is gone"
-            return 0
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name to be deleted; it is still present after ${timeout}s:"
-            kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" -o wide >&2 || true
-            return 1
-        fi
-        [[ $elapsed -eq 0 ]] && log_substep "Waiting for $resource_type/$resource_name to be deleted..."
         sleep 5
         elapsed=$((elapsed + 5))
     done

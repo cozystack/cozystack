@@ -10,24 +10,38 @@
 # parent kubernetes chart no longer renders a worker reconcile Job. These tests
 # therefore render packages/apps/kubernetes-nodes.
 #
-# The reconcile Job applies the TalosConfigTemplate via an UNQUOTED
-# `cat <<EOF | kubectl apply -f -` heredoc, so every line of its body is subject
-# to shell parameter expansion and command substitution at Job runtime. The
-# `talos.registryMirrors` knob and the Talos image coordinates render free-form
-# tenant-facing input into that heredoc. A helm-unittest string `matchRegex`
-# cannot catch a heredoc that the shell refuses to emit (e.g. an unbalanced
-# backtick from an un-escaped value): it never runs the shell. This test does.
+# The reconcile Job applies the TalosConfigTemplate via an UNQUOTED `cat <<EOF`
+# heredoc, captured into a variable and then applied, so every line of its body
+# is subject to shell parameter expansion and command substitution at Job
+# runtime. The `talos.registryMirrors` knob and the Talos image coordinates
+# render free-form tenant-facing input into that heredoc. A helm-unittest
+# string `matchRegex` cannot catch a heredoc that the shell refuses to emit
+# (e.g. an unbalanced backtick from an un-escaped value): it never runs the
+# shell. This test does.
 #
-# It renders the Job with HOSTILE values (`$(...)` + a backtick), extracts the
-# `cat <<EOF ... EOF` block, runs it through a real shell, and asserts the
-# heredoc still emits the TalosConfigTemplate (non-empty) and that the hostile
-# value rendered as a LITERAL (never command-substituted).
+# The chart's own invariant (see the INVARIANT note in
+# packages/apps/kubernetes-nodes/templates/talos-reconcile-job.yaml) gives a field
+# two ways to be safe here, and which one a field uses decides what to assert:
+#
+#   escaped     the value reaches the heredoc and is escaped for backslash,
+#               dollar and backtick. Assert it survives a real shell as a
+#               LITERAL. This covers talos.installerRepository and
+#               talos.registryMirrors, both genuinely free-form.
+#   validated   the value is refused at render before it can reach the heredoc.
+#               Assert the refusal. This covers talos.schematicID and
+#               talos.version, which also land in the worker DataVolume name and
+#               the image URL, where an unquoted YAML scalar makes escaping the
+#               wrong tool. templates/nodegroup.yaml pattern-checks them. It also
+#               covers kernelModules, whose names and parameters
+#               templates/_helpers.tpl checks before rebuilding the list.
+#
+# A field that is in neither arm is the regression this file exists to catch.
 #
 # Needs `helm` + `yq`; cozytest.sh runs from the repo root.
 # Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
 
-@test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps the Talos image coordinates literal" {
+@test "kubernetes-nodes refuses hostile Talos image coordinates at render" {
     work=$(mktemp -d)
     cat > "$work/vals.yaml" <<'VALS'
 cluster: myk8s
@@ -42,16 +56,48 @@ storageClass: replicated
 roles: [ingress-nginx]
 resources: {cpu: "2", memory: 4Gi}
 VALS
+    # schematicID and version are not escaped into safety, they are refused. They
+    # are also interpolated into the worker DataVolume name and its source URL,
+    # where the scalar is unquoted and escaping buys nothing, so the render is the
+    # only place that can stop them.
+    for f in 'talos.schematicID=sch$(id)`q`z' 'talos.version=v1.13.6$(id)`v`w'; do
+        if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes \
+            -n tenant-test -f "$work/vals.yaml" --set "$f" >/dev/null 2>"$work/err"; then
+            echo "render accepted a hostile ${f%%=*}, so the value reaches the DataVolume name and the heredoc" >&2
+            rm -rf "$work"; exit 1
+        fi
+        grep -qE 'is not a plain lowercase alphanumeric identifier|is not a vMAJOR\.MINOR\.PATCH release' "$work/err" \
+            || { echo "render failed on ${f%%=*} for some other reason:" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    done
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps a hostile installerRepository literal" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    # installerRepository is an OCI repository prefix and stays free-form: it is
+    # not part of the DataVolume name, so escaping is the right tool and this is
+    # the assertion that proves it still works.
     helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
         --set 'talos.installerRepository=reg$(id)`x`y/installer' \
-        --set 'talos.schematicID=sch$(id)`q`z' \
-        --set 'talos.version=v1.13.6$(id)`v`w' \
         --show-only templates/talos-reconcile-job.yaml \
         | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
@@ -59,8 +105,9 @@ VALS
     out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "kubernetes-nodes heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     [ -n "$out" ] || { echo "kubernetes-nodes heredoc emitted no output" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF 'reg$(id)`x`y/installer' || { echo "kubernetes-nodes installerRepository was not preserved literally" >&2; rm -rf "$work"; exit 1; }
-    printf '%s' "$out" | grep -qF 'sch$(id)`q`z' || { echo "kubernetes-nodes schematicID was not preserved literally" >&2; rm -rf "$work"; exit 1; }
-    [ "$(printf '%s' "$out" | grep -cF 'v1.13.6$(id)`v`w')" -eq 2 ] || { echo "kubernetes-nodes talos.version was not preserved literally at both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
+    # The default version still reaches both of its sites, so narrowing this test
+    # to installerRepository did not quietly drop the two-site assertion.
+    [ "$(printf '%s' "$out" | grep -cF 'v1.13.6')" -ge 2 ] || { echo "kubernetes-nodes talos.version did not reach both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
 
@@ -86,7 +133,7 @@ VALS
         > "$work/cmd.sh"
     [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
     awk '
-      /^cat <<EOF \| kubectl apply/ { print "cat <<EOF"; inblock=1; next }
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
       inblock && /^EOF$/            { print "EOF"; inblock=0; next }
       inblock                       { print }
     ' "$work/cmd.sh" > "$work/heredoc.sh"
@@ -95,5 +142,193 @@ VALS
     [ -n "$out" ] || { echo "kubernetes-nodes heredoc emitted no output" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -q 'kind: TalosConfigTemplate' || { echo "kubernetes-nodes heredoc output is not the TalosConfigTemplate" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF 'http://m$(id)`x`y' || { echo "kubernetes-nodes hostile endpoint not preserved literally" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# The proxmox substrate adds the only tenant-controlled value in this heredoc
+# that is not shell-escaped: proxmox.dnsServers. `quote` there is YAML quoting
+# and leaves $(...) and backticks for the Job's shell to run — rendered with a
+# substitution, the shell executed it and its output ended up in the worker's
+# resolver list. The fix is render-time validation rather than escaping, because
+# Talos takes addresses here and an address cannot carry a metacharacter, so
+# these two tests hold both halves: the render refuses what is not an address,
+# and what is an address survives the shell untouched.
+@test "kubernetes-nodes refuses a proxmox dnsServers entry that is not an address" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "$(id -u)"]
+VALS
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml > "$work/out.yaml" 2>"$work/err"; then
+        echo "render accepted a command substitution in proxmox.dnsServers" >&2
+        rm -rf "$work"; exit 1
+    fi
+    grep -qF 'proxmox.dnsServers[1]' "$work/err" || { echo "refusal does not name the offending entry" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# The validator has two branches and a value without a colon never reaches the
+# second one. This case does: `::1$(id -u)` looks enough like an IPv6 address to
+# take the IPv6 path, so it is what pins that path's character class. Widen the
+# class and this entry renders, with the substitution back in the heredoc, while
+# the case above still passes on its IPv4 branch.
+@test "kubernetes-nodes refuses an IPv6-shaped dnsServers entry carrying a substitution" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "::1$(id -u)"]
+VALS
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml > "$work/out.yaml" 2>"$work/err"; then
+        echo "render accepted a substitution inside an IPv6-shaped entry" >&2
+        rm -rf "$work"; exit 1
+    fi
+    grep -qF 'proxmox.dnsServers[1]' "$work/err" || { echo "refusal does not name the IPv6-shaped entry" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes proxmox heredoc emits the nameservers it was given" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+substrate: proxmox
+proxmox:
+  templateTags: [talos]
+  network: {bridge: vmbr0}
+  dnsServers: ["10.0.0.1", "2001:4860:4860::8888"]
+VALS
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml \
+        | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
+        > "$work/cmd.sh"
+    [ -s "$work/cmd.sh" ] || { echo "proxmox render produced no Job command" >&2; rm -rf "$work"; exit 1; }
+    awk '
+      # Matched on shape: `cat <<EOF` at the start of a line, or right after
+      # `=$(` / `="$(` when the heredoc is captured into a variable.
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
+      inblock && /^EOF$/            { print "EOF"; inblock=0; next }
+      inblock                       { print }
+    ' "$work/cmd.sh" > "$work/heredoc.sh"
+    grep -q '^cat <<EOF$' "$work/heredoc.sh" || { echo "could not extract the proxmox heredoc" >&2; rm -rf "$work"; exit 1; }
+    out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "proxmox heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- "10.0.0.1"' || { echo "IPv4 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- "2001:4860:4860::8888"' || { echo "IPv6 nameserver missing from the emitted config" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# kernelModules is in the validated arm: its names and parameters are refused at
+# render, and the list is rebuilt from those two fields so no other key reaches
+# the heredoc. The refusal and the one character class it deliberately lets
+# through are pinned separately, because a guard that grows to reject `;` breaks
+# NVIDIA's documented multi-value parameter while every refusal still passes.
+@test "kubernetes-nodes refuses a hostile kernelModules name or parameter at render" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    cat > "$work/name.yaml" <<'VALS'
+kernelModules:
+  - name: nvidia$(id)`q`z
+VALS
+    cat > "$work/param.yaml" <<'VALS'
+kernelModules:
+  - name: nvidia
+    parameters: ["opt=$(id)`q`z"]
+VALS
+    for f in name param; do
+        if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" -f "$work/$f.yaml" \
+            --show-only templates/talos-reconcile-job.yaml >/dev/null 2>"$work/err"; then
+            echo "render accepted a hostile kernelModules $f, so the value reaches the heredoc" >&2
+            rm -rf "$work"; exit 1
+        fi
+        grep -qF "invalid kernelModules $f" "$work/err" \
+            || { echo "render failed on kernelModules $f for some other reason:" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    done
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps a semicolon kernelModules parameter literal" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+kernelModules:
+  - name: nvidia
+    parameters: ["NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222"]
+VALS
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --show-only templates/talos-reconcile-job.yaml \
+        | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
+        > "$work/cmd.sh"
+    [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
+    awk '
+      # Matched on shape: `cat <<EOF` at the start of a line, or right after
+      # `=$(` / `="$(` when the heredoc is captured into a variable.
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
+      inblock && /^EOF$/            { print "EOF"; inblock=0; next }
+      inblock                       { print }
+    ' "$work/cmd.sh" > "$work/heredoc.sh"
+    grep -q '^cat <<EOF$' "$work/heredoc.sh" || { echo "could not extract the kubernetes-nodes heredoc" >&2; rm -rf "$work"; exit 1; }
+    out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "kubernetes-nodes heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF -e '- NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222' \
+        || { echo "kernelModules parameter was not preserved literally" >&2; printf '%s\n' "$out" | grep -A6 'kernel:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }

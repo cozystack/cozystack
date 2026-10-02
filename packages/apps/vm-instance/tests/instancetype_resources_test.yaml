@@ -156,11 +156,10 @@ tests:
           errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.memory, but not from resources.cpu, resources.sockets. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.memory and let the instance type size it.'
 
   # values.schema.json accepts the full Kubernetes quantity grammar for
-  # resources.cpu, but domainResources puts it through int64, which yields 0 for
-  # anything that is not a whole number. A cores of 0 sizes nothing while
-  # looking set, so it counts as unsized rather than dropping the matcher and
-  # letting KubeVirt boot the VM on its own default core count.
-  - it: refuses an instance type next to a cpu quantity that resolves to no cores
+  # resources.cpu, but only a whole number can become domain.cpu.cores. A
+  # millicore value is refused before it reaches the instance type decision,
+  # rather than counting as sizing and dropping the matcher.
+  - it: refuses an instance type next to a cpu quantity that is not a core count
     templates:
       - templates/vm.yaml
     set:
@@ -171,7 +170,7 @@ tests:
         memory: 8Gi
     asserts:
       - failedTemplate:
-          errorMessage: 'instanceType "u1.medium" cannot be combined with a resources block that sizes the VM only in part. Sizing came from resources.sockets, resources.memory, but not from resources.cpu. resources.cpu and resources.sockets size the VM only when both are set to whole numbers. KubeVirt rejects a VirtualMachine that carries an instancetype matcher together with explicit domain cpu or memory, so either give resources.cpu, resources.sockets and resources.memory values that all size the VM, or clear resources.sockets, resources.memory and let the instance type size it.'
+          errorPattern: '^resources\.cpu \(500m\) must be a positive whole number'
 
   # domainResources writes domain.cpu only when cpu and sockets arrive together,
   # so these two shapes emit no override at all and KubeVirt has nothing to
@@ -227,32 +226,6 @@ tests:
       - notExists:
           path: spec.template.spec.domain.resources
 
-  # KubeVirt's validateCPU guards on cores != 0 and sockets != 0, so a domain
-  # cpu where both truncate to zero is not a conflict and the matcher may stay.
-  # Failing here instead would stop a release that renders and is admitted
-  # today. The instance type ends up sizing the VM and the quantities are
-  # dropped, which is the pre-existing truncation, not something this decides.
-  - it: keeps the matcher when cpu and sockets both truncate to zero
-    templates:
-      - templates/vm.yaml
-    set:
-      instanceType: u1.medium
-      resources:
-        cpu: 500m
-        sockets: 500m
-    asserts:
-      - equal:
-          path: spec.instancetype.name
-          value: u1.medium
-      - equal:
-          path: spec.template.spec.domain.cpu.cores
-          value: 0
-      - equal:
-          path: spec.template.spec.domain.cpu.sockets
-          value: 0
-      - notExists:
-          path: spec.template.spec.domain.resources
-
   # cpuModel is the one domain field allowed to sit beside a matcher: KubeVirt
   # flags domain.cpu.model only when the instance type declares a model too.
   # No instance type shipped in packages/system/kubevirt-instancetypes declares
@@ -274,6 +247,23 @@ tests:
           path: spec.template.spec.domain.cpu.cores
       - notExists:
           path: spec.template.spec.domain.resources
+
+  # cpuModel opens domain.cpu on its own, which must not let a lone
+  # resources.cpu slip in as cores: that would be partial sizing again.
+  - it: keeps a lone resources.cpu out of the domain cpu that cpuModel opens
+    templates:
+      - templates/vm.yaml
+    set:
+      instanceType: u1.medium
+      cpuModel: host-passthrough
+      resources:
+        cpu: 4
+    asserts:
+      - equal:
+          path: spec.instancetype.name
+          value: u1.medium
+      - notExists:
+          path: spec.template.spec.domain.cpu.cores
 
   # The one shape where the emitted domain.cpu carries a key the sizing check
   # deliberately ignores. cpuModel must not count towards sizing, and must not
@@ -342,29 +332,20 @@ tests:
       - failedTemplate:
           errorMessage: 'Either instanceType or resources (cpu, sockets, memory) must be specified'
 
-  # The other way in: partial sizing takes the branch that returns the raw value,
-  # so this is the shape that surfaced the placeholder. It renders a cores of 0
-  # because there is no matcher to conflict with, which is the pre-existing
-  # int64 truncation on the empty-instanceType path, not something decided here.
-  - it: sizes a nulled instance type by resources without leaking a placeholder name
+  # The other way in: partial sizing takes the branch that returns the raw
+  # value too, and with no instance type to size the VM it has to end in the
+  # "Either" check rather than in a lookup of a placeholder name.
+  - it: refuses a nulled instance type beside partial resources without leaking a placeholder name
     templates:
       - templates/vm.yaml
     values:
       - ./nulled_instancetype_values.yaml
     set:
       resources:
-        cpu: 500m
-        sockets: 1
         memory: 8Gi
     asserts:
-      - notExists:
-          path: spec.instancetype
-      - equal:
-          path: spec.template.spec.domain.cpu.cores
-          value: 0
-      - equal:
-          path: spec.template.spec.domain.resources.requests.memory
-          value: 8Gi
+      - failedTemplate:
+          errorMessage: 'Either instanceType or resources (cpu, sockets, memory) must be specified'
 
   - it: still refuses a partial resources block with no instance type to fall back on
     templates:

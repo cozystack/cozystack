@@ -25,13 +25,13 @@ source "$SCRIPT_DIR/00-helpers.sh"
 RECOVERY_TIME="${RECOVERY_TIME:-}"
 
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $PG_PASSWORD is the app user's password; $RECOVERY_TIME is the
-# PITR target (empty for every manifest except 45-restorejob-pitr.yaml).
+# Bucket below; $RECOVERY_TIME is the PITR target (empty for every manifest
+# except 45-restorejob-pitr.yaml). The app user's password is chart-generated,
+# not substituted.
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
-        -e "s|REPLACE_WITH_PASSWORD|${PG_PASSWORD}|g" \
         -e "s|REPLACE_WITH_RECOVERY_TIME|${RECOVERY_TIME}|g" \
         "$SCRIPT_DIR/$1"
 }
@@ -184,6 +184,21 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
 fi
 log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}' from S3."
 
+# The passwords in <target>-credentials are chart-generated and do not match the
+# password hashes recovery brought back with the roles; the driver clears
+# bootstrap.enabled so the init-job reconciles them. Prove the app user can
+# actually log in against the restored copy - psql_exec above only ever used the
+# in-pod postgres superuser, so a broken credential would otherwise pass silently.
+print_header "Step 40 verify: the app user authenticates against the restored copy"
+wait_for_app_login "$PG_TARGET_CLUSTER" app demo 360
+APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" app demo \
+    "SELECT token FROM e2e_sentinel WHERE id = 1;" | tr -d '[:space:]')
+if [[ "$APP_GOT" != "$SENTINEL_TOKEN" ]]; then
+    log_error "app-user read mismatch: target has '${APP_GOT}', expected '${SENTINEL_TOKEN}'"
+    exit 1
+fi
+log_success "App-user login verified: 'app' authenticated and read sentinel '${APP_GOT}' from '${PG_TARGET_NAME}'."
+
 if [[ "${SKIP_PITR:-0}" == "1" ]]; then
     log_warning "SKIP_PITR=1: stopping after the latest-point restore."
     exit 0
@@ -268,15 +283,25 @@ if [[ "$AFTER_COUNT" != "0" ]]; then
 fi
 log_success "PITR verified: '${PG_TARGET_NAME}' recovered to ${RECOVERY_TIME} (pre-target row present, post-target row absent)."
 
-print_header "Step 46: a recoveryTime past the archive fails with a clear reason"
-# Negative case: a recoveryTime an hour ahead of the latest archived WAL can
-# never be reached, so recovery keeps replaying all available WAL, never hits
-# the target, and PostgreSQL gives up. The restore deadline is what fails such
-# a wedged restore (an unreachable target is indistinguishable from a merely
-# slow one until the window elapses), so this job sets a short
-# restoreTimeoutSeconds; at the deadline the driver classifies the failure from
-# the recovery pod's log and must report reason RecoveryTargetUnreachable (not
-# a generic RestoreFailed). Asserting the *reason* proves the classification.
+print_header "Step 46: a recoveryTime past the archive fails cleanly (no wedge)"
+# Negative case: a recoveryTime an hour ahead of now can never be reached. The
+# restore deadline is what fails such a restore, so this job sets a short
+# restoreTimeoutSeconds and must terminate Failed rather than hang or falsely
+# Succeed.
+#
+# What this asserts is the DETERMINISTIC contract, not the classification reason.
+# The driver reports reason RecoveryTargetUnreachable only when it catches
+# PostgreSQL's "recovery ended before configured recovery target was reached"
+# FATAL in the recovery pod's log within the window. Against a still-archiving
+# source that FATAL is timing-dependent: recovery keeps replaying newly-archived
+# WAL and may not have "given up" by the deadline, so the driver falls back to a
+# generic RestoreFailed. The controller's own comment says as much - the FATAL is
+# used only to EXPLAIN a failure the deadline has already declared - and the
+# log->reason mapping is covered deterministically by the controller unit tests
+# (logIndicatesRecoveryTargetUnreachable / recoveryTargetUnreachable). So assert
+# the two things that always hold: the restore terminates Failed, and the failure
+# message attributes it to the PITR target (both reason paths name the
+# "recoverable window").
 UNREACHABLE_TIME=$(psql_exec "$PG_SRC_CLUSTER" demo \
     "SELECT replace(to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), ' ', 'T') || 'Z';" \
     | tr -d '[:space:]')
@@ -296,22 +321,21 @@ spec:
     name: ${PG_TARGET_NAME}
   options:
     recoveryTime: "${UNREACHABLE_TIME}"
-    # Short deadline so the unreachable target is rejected in minutes; long
-    # enough for a couple of recovery attempts to log the FATAL the driver
-    # classifies on. A reachable target would converge well inside this.
+    # Short deadline so the unreachable target is rejected in minutes. A reachable
+    # target converges well inside this.
     restoreTimeoutSeconds: 300
 EOF
 # Expect a terminal Failed (fail fast on an unexpected Succeeded); the wait
 # comfortably exceeds the 300s restoreTimeoutSeconds set above.
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_UNREACHABLE_NAME" \
     '{.status.phase}' Failed "$NAMESPACE" 900 Succeeded
-REASON=$(kubectl -n "$NAMESPACE" get restorejob.backups.cozystack.io "$RESTOREJOB_UNREACHABLE_NAME" \
-    -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}')
-if [[ "$REASON" != "RecoveryTargetUnreachable" ]]; then
-    log_error "expected reason RecoveryTargetUnreachable, got '${REASON}' (a generic RestoreFailed means the driver did not classify the unreachable-target FATAL)"
-    exit 1
-fi
-log_success "Verified: recoveryTime ${UNREACHABLE_TIME} past the archive -> RestoreJob Failed with reason RecoveryTargetUnreachable."
+MSG=$(kubectl -n "$NAMESPACE" get restorejob.backups.cozystack.io "$RESTOREJOB_UNREACHABLE_NAME" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}')
+case "$MSG" in
+    *"recoverable window"*) : ;;
+    *) log_error "unreachable-target restore Failed but its message does not attribute it to the PITR target (expected a mention of the 'recoverable window'): ${MSG}"; exit 1 ;;
+esac
+log_success "Verified: unreachable recoveryTime ${UNREACHABLE_TIME} -> RestoreJob terminated Failed, attributed to the recovery target."
 
 # In-place restore last: it deletes pg-src and re-bootstraps from S3, so nothing
 # after it may depend on the source. Regression guard for the archive-vs-recovery

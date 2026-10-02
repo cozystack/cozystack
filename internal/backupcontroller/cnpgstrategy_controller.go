@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -15,9 +16,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -89,11 +92,33 @@ const (
 	// is failing before the full restore deadline elapses.
 	restoreCondRecoveryConverged = "RecoveryConverged"
 
+	// True while clearing spec.bootstrap.enabled keeps failing transiently, before
+	// the grace window is exhausted. Without it the RestoreJob sits non-terminal
+	// for up to the whole window with nothing on .status explaining the wait.
+	restoreCondBootstrapDisablePending = "BootstrapDisablePending"
+
 	// Default deadline on the time a RestoreJob can spend waiting for the
 	// target Cluster to reach a healthy state. Tenants override this via
 	// RestoreJob.spec.options.restoreTimeoutSeconds when the source DB is
 	// large enough that 30 minutes isn't enough.
 	cnpgDefaultRestoreDeadline = 30 * time.Minute
+
+	// Fixed grace window the post-convergence bootstrap-disable step keeps
+	// requeueing over a transient error before it terminates the restore Failed.
+	// It is deliberately NOT tied to restoreTimeoutSeconds: that knob bounds the
+	// *recovery* wait (a tenant sets it short to fail fast on a stuck PITR
+	// target), whereas this window absorbs a transient control-plane blip between
+	// convergence and clearing bootstrap.enabled - a blip whose duration has
+	// nothing to do with how long recovery is allowed to take or how big the
+	// database is. A fixed value rides out those blips without letting a short
+	// timeout shrink it or a large one inflate it. It is sized at 30m, near the old
+	// max(restoreDeadline, floor) it replaced, because the disable Patch travels
+	// through the aggregated cozystack-api apiserver and the expensive direction
+	// here is a FALSE Failed (a resubmit's purge-guard then deletes the healthy
+	// restored Cluster + PVCs, per the branch below) - and cozystack-api can itself
+	// be unavailable for several minutes during a platform upgrade, so a 5m window
+	// would fail restores that a slightly longer one rides out.
+	cnpgBootstrapDisableGrace = 30 * time.Minute
 
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
@@ -431,6 +456,14 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 	return clusterCreatedAt.After(restoreStartedAt.Time)
 }
 
+// cnpgClusterGVR addresses Clusters on the dynamic client, for reads that must
+// bypass the manager's cache.
+var cnpgClusterGVR = schema.GroupVersionResource{
+	Group:    cnpgtypes.GroupName,
+	Version:  cnpgtypes.Version,
+	Resource: "clusters",
+}
+
 // applyClusterPluginBackup wires the templated strategy onto the live CNPG
 // Cluster through the barman-cloud plugin: it SSA-applies an ObjectStore CR
 // carrying the S3/barman configuration and SSA-patches the Cluster's
@@ -454,9 +487,15 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // land under the old prefix while the base backup indexes under the new one,
 // and the eventual restore fails with "WAL not found".
 func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
+	// Live read: the cached Cluster can predate a restore re-render, and both
+	// the serverName and the UID below must come from the current object.
 	existing := &cnpgtypes.Cluster{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
+	live, err := r.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, clusterName, metav1.GetOptions{})
+	if err != nil {
 		return "", err
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(live.Object, existing); err != nil {
+		return "", fmt.Errorf("decode Cluster %s/%s: %w", namespace, clusterName, err)
 	}
 	if live := currentBarmanServerName(existing); live != "" {
 		serverName = live
@@ -863,6 +902,20 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		// reconciling, we patch + purge in peace, and only resume once
 		// the Cluster + PVCs are fully gone so the next render lands
 		// bootstrap.recovery on an empty namespace.
+		sourceCNPGBackup, err := r.cnpgSourceBackup(ctx, backup)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if sourceCNPGBackup == nil {
+			r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "BaseBackupGone",
+				"cnpg.io/Backup %s/%s no longer exists, so its base backup has likely been removed by retention; the barman-cloud plugin picks the base backup from the catalog",
+				backup.Namespace, backup.Spec.DriverMetadata[cnpgBackupNameKey])
+		}
+		backupID := cnpgRestoreBackupID(sourceCNPGBackup, options.RecoveryTime)
+		if backupID == "" {
+			logger.Info("restore does not pin its base backup; the barman-cloud plugin picks one from the catalog",
+				"backup", backup.Name, "recoveryTime", options.RecoveryTime)
+		}
 		hrName := postgresAppPrefix + target.AppName
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {
 			return ctrl.Result{}, err
@@ -876,7 +929,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restored WAL-archive serverName collided with the recovery source",
 				"cluster", clusterName, "serverName", newServerName)
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -935,11 +988,17 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		if herr != nil {
 			return ctrl.Result{}, herr
 		}
-		if healthy {
-			now := metav1.Now()
-			restoreJob.Status.CompletedAt = &now
-			restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
-			// RecoveryConverged=True for symmetry with the False the
+		if healthy && !apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondRecoveryConverged) {
+			// Latch convergence durably BEFORE the terminal step below disables
+			// bootstrap. Disabling bootstrap re-renders the Cluster without
+			// spec.bootstrap.recovery, so hasRecovery never reports true again;
+			// a crash between that flip and the terminal status write must not
+			// drop an already-converged restore into the deadline path and fail
+			// it. Persisting the condition here, on its own Status().Update,
+			// makes the success verdict survive independent of the live
+			// cluster's current bootstrap state.
+			//
+			// RecoveryConverged=True is also symmetric with the False the
 			// unreachable-target path records, so .status.conditions tells the
 			// whole story rather than only ever showing the condition on failure.
 			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
@@ -948,17 +1007,118 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 				Reason:  "RecoveryConverged",
 				Message: fmt.Sprintf("target cnpg.io Cluster %s/%s reached a healthy state", target.Namespace, clusterName),
 			})
-			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-				Type:    "Ready",
-				Status:  metav1.ConditionTrue,
-				Reason:  "RestoreCompleted",
-				Message: "target cnpg.io Cluster reached healthy state",
-			})
 			if err := r.Status().Update(ctx, restoreJob); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
+	}
+
+	// Terminal step, reachable regardless of the live cluster's current
+	// bootstrap state once convergence has latched above. Recovery restores the
+	// source's role catalog and password hashes, but the freshly reconciled
+	// <target>-credentials Secret advertises chart-generated passwords that do
+	// not match those hashes. While bootstrap.enabled stays true the chart skips
+	// the init-job that would reconcile them (see init-job.yaml), so every
+	// application-user login against the target keeps failing. Disable bootstrap
+	// so the post-upgrade init-job runs ALTER ROLE ... WITH PASSWORD for each
+	// spec.users entry, converging the recovered roles onto the generated
+	// Secret. Idempotent, so a crash before the Succeeded write below just
+	// re-runs it on the next reconcile.
+	if apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondRecoveryConverged) {
+		if err := r.disablePostgresAppBootstrap(ctx, target.Namespace, target.AppName); err != nil {
+			// Recovery already converged - the data is restored and reachable as
+			// the CNPG superuser; only clearing bootstrap.enabled (the trigger for
+			// the init-job that reconciles the generated passwords onto the
+			// recovered roles) is failing. Give this step its OWN grace window,
+			// measured from when recovery converged (RecoveryConverged's
+			// LastTransitionTime), NOT from the restore StartedAt: the health
+			// check wins BEFORE the restore deadline on purpose (a large-DB
+			// recovery legitimately outlives it - see the health-before-deadline
+			// ordering above), so a StartedAt-based bound is often already past
+			// the deadline the instant this step first runs and would fail it on
+			// the FIRST transient error (an apiserver restart, a webhook timeout).
+			// That is exactly the false Failed the ordering exists to prevent: a
+			// resubmit's purge-guard would then delete the healthy restored
+			// Cluster + PVCs. Only a failure that persists across the whole window
+			// AFTER convergence terminates as Failed; a transient one requeues.
+			// The window is a fixed cnpgBootstrapDisableGrace, independent of
+			// restoreTimeoutSeconds, sized for a control-plane blip.
+			grace := options.effectiveBootstrapDisableGrace()
+			if cond := apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondRecoveryConverged); cond != nil &&
+				time.Since(cond.LastTransitionTime.Time) > grace {
+				return r.markRestoreJobFailedReason(ctx, restoreJob, "BootstrapDisableFailed", fmt.Sprintf(
+					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s kept failing for %s after convergence, so the restored copy's application credentials will not converge on their own: %v. "+
+						"The data is restored and reachable as the CNPG superuser; clear bootstrap.enabled on the app - and stop any GitOps source from re-asserting it - so the init-job reconciles the passwords.",
+					target.Namespace, target.AppName, grace, err))
+			}
+			// Still inside the window. Record WHY the RestoreJob is non-terminal on
+			// .status so it does not sit silent for up to the whole grace window, and
+			// emit the Event once (on the transition into pending), not on every poll.
+			firstFailure := !apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondBootstrapDisablePending)
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:   restoreCondBootstrapDisablePending,
+				Status: metav1.ConditionTrue,
+				Reason: "Retrying",
+				Message: fmt.Sprintf(
+					"recovery converged; clearing spec.bootstrap.enabled on Postgres app %s/%s is retrying after a transient error and will fail the restore if it does not clear within %s of convergence: %v",
+					target.Namespace, target.AppName, grace, err),
+			})
+			if updErr := r.Status().Update(ctx, restoreJob); updErr != nil {
+				return ctrl.Result{}, updErr
+			}
+			if firstFailure {
+				r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "BootstrapDisablePending",
+					"recovery converged but clearing spec.bootstrap.enabled on Postgres app %s/%s failed; retrying up to %s after convergence: %v",
+					target.Namespace, target.AppName, grace, err)
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		}
+		now := metav1.Now()
+		restoreJob.Status.CompletedAt = &now
+		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+		// The DATA is restored and the Cluster is healthy - that is what this
+		// terminal Succeeded asserts. Clearing bootstrap only STARTS the credential
+		// convergence: the chart's post-upgrade init-job runs ALTER ROLE on the next
+		// HelmRelease reconcile, which this controller does not wait for. Carry that
+		// pending handoff as the REASON on Ready rather than as a standalone
+		// CredentialsConverged condition: this controller never observes the
+		// convergence, so such a condition would be structurally False on every
+		// success - indistinguishable from a standing failure to a generic
+		// conditions view - and answer nothing. A reason on Ready=True says the same
+		// thing without pretending to a lifecycle it cannot complete; the message
+		// and the Event below carry the how-to-confirm.
+		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "RestoreCompletedCredentialsPending",
+			Message: "target cnpg.io Cluster reached a healthy state and spec.bootstrap.enabled was cleared; the app's post-upgrade init-job reconciles the generated passwords onto the recovered roles on the next HelmRelease reconcile (this RestoreJob does not wait for it - confirm by logging in as an application user)",
+		})
+		// If the disable retried within the window, close out that pending condition.
+		if apimeta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondBootstrapDisablePending) != nil {
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:    restoreCondBootstrapDisablePending,
+				Status:  metav1.ConditionFalse,
+				Reason:  "Cleared",
+				Message: "spec.bootstrap.enabled was cleared",
+			})
+		}
+		// The status message above is honest that credential convergence is still
+		// pending; back it with an Event so the handoff is discoverable in
+		// `kubectl describe`/`get events`, not only by reading .status. This
+		// RestoreJob's contract is the DATA restore (healthy Cluster + bootstrap
+		// cleared); the ALTER ROLE convergence belongs to the chart's post-upgrade
+		// init-job, and gating this terminal write on that Helm-hook Job would couple
+		// two controllers and wedge the restore whenever a GitOps source re-asserts
+		// bootstrap.enabled. Announce the pending convergence instead of blocking on
+		// it.
+		r.Recorder.Eventf(restoreJob, corev1.EventTypeNormal, "CredentialsConvergencePending",
+			"Data restored and spec.bootstrap.enabled cleared on Postgres app %s/%s; application credentials converge when the chart's post-upgrade init-job runs ALTER ROLE on the next HelmRelease reconcile. This RestoreJob does not wait for it - verify with an application login.",
+			target.Namespace, target.AppName)
+		if err := r.Status().Update(ctx, restoreJob); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Not (yet) healthy. Now the restore deadline is the authority for "this
@@ -1075,13 +1235,39 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	ctx context.Context,
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID, credsRef, caRef, sourceDatabases, sourceUsers)
+	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
+}
+
+// disablePostgresAppBootstrap clears spec.bootstrap.enabled on the target
+// Postgres app once recovery has converged. patchPostgresAppForRestore set it
+// true to make the chart render bootstrap.recovery; nothing else ever turns it
+// back off, and while it stays true the chart skips its post-upgrade init-job
+// (see init-job.yaml). That init-job is the only actor that reconciles the
+// chart-generated <release>-credentials Secret onto the live roles via
+// ALTER ROLE ... WITH PASSWORD. The recovered roles carry the source's password
+// hashes, the freshly generated Secret does not match them, so until the flag
+// flips every application-user login against the restored target fails while
+// the Secret advertises a password that was never applied. Flipping it lets the
+// init-job re-converge the roles onto the Secret on the next HelmRelease
+// upgrade. Idempotent: a no-op once already disabled, and re-GETs the live app
+// so a concurrent tenant edit is merged rather than clobbered.
+func (r *RestoreJobReconciler) disablePostgresAppBootstrap(ctx context.Context, namespace, appName string) error {
+	app, err := r.getPostgresApp(ctx, namespace, appName)
+	if err != nil {
+		return err
+	}
+	if !app.Spec.Bootstrap.Enabled {
+		return nil
+	}
+	patched := app.DeepCopy()
+	patched.Spec.Bootstrap.Enabled = false
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -1111,7 +1297,7 @@ func restoredServerName(clusterName string, uid types.UID) string {
 // anything not in spec) must see the source's exact map.
 func buildPostgresAppRestorePatch(
 	app *postgresapp.Postgres,
-	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
+	sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, backupID string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
 	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
@@ -1125,6 +1311,7 @@ func buildPostgresAppRestorePatch(
 	// in-place restore fails barman-cloud-check-wal-archive ("Expected empty archive").
 	patched.Spec.Bootstrap.NewServerName = newServerName
 	patched.Spec.Bootstrap.RecoveryTime = recoveryTime
+	patched.Spec.Bootstrap.BackupID = backupID
 
 	patched.Spec.Backup.DestinationPath = sourceDestinationPath
 	patched.Spec.Backup.EndpointURL = sourceEndpointURL
@@ -1384,6 +1571,65 @@ func (r *RestoreJobReconciler) cnpgBackupWALArchived(ctx context.Context, backup
 	return true, fmt.Sprintf("cnpg.io/Backup %s/%s phase=completed, endWal=%q", backup.Namespace, backupName, cnpgBackup.Status.EndWal), nil
 }
 
+// cnpgSourceBackup returns the cnpg.io/Backup behind a Backup artifact, or
+// nil once it is gone. The driver deletes it only together with its
+// artifact, while plugin-barman-cloud's retention deletes it together with
+// the base backup it describes (deleteBackupsNotInCatalog), so an artifact
+// that outlives its cnpg.io/Backup names a base backup the catalog has lost.
+func (r *RestoreJobReconciler) cnpgSourceBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (*cnpgtypes.Backup, error) {
+	name := backup.Spec.DriverMetadata[cnpgBackupNameKey]
+	if name == "" {
+		return nil, nil
+	}
+	cnpgBackup := &cnpgtypes.Backup{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: name}, cnpgBackup); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return cnpgBackup, nil
+}
+
+// cnpgRestoreBackupID decides whether a restore pins the base backup it
+// starts from, and returns the backupID to set in
+// bootstrap.recovery.recoveryTarget, or "" to leave the choice to the
+// barman-cloud plugin.
+//
+// Left to itself the plugin starts from the newest backup in the catalog
+// when no recoveryTime is set, whichever backup the RestoreJob names, and
+// otherwise from the newest one ending at or before recoveryTime, on any
+// timeline (barman-cloud pkg/catalog FindBackupInfo). On a stream holding
+// several timelines either can start from another branch of the history
+// and bring back other data than the backup asked for.
+//
+// A source that is gone (nil) is not pinned: its base backup is no longer
+// in the catalog, and pinning it would fail the recovery after the target
+// has been purged.
+//
+// A backup cannot serve a recoveryTime before it ended: recovery would stop
+// before it is consistent. Such a request keeps the plugin's choice, which
+// can find an older backup. stoppedAt is truncated to the second while the
+// catalog compares barman's end time to the microsecond, so a backup is
+// pinned only once recoveryTime is a full second past stoppedAt.
+func cnpgRestoreBackupID(source *cnpgtypes.Backup, recoveryTime string) string {
+	if source == nil || source.Status.BackupID == "" {
+		return ""
+	}
+	if recoveryTime == "" {
+		return source.Status.BackupID
+	}
+	stoppedAt := source.Status.StoppedAt
+	if stoppedAt == nil || stoppedAt.IsZero() {
+		return ""
+	}
+	target, err := time.Parse(time.RFC3339Nano, recoveryTime)
+	if err != nil || target.Before(stoppedAt.Add(time.Second)) {
+		return ""
+	}
+	return source.Status.BackupID
+}
+
 // cnpgClusterHealthy returns true once the named cnpg.io Cluster reports its
 // healthy phase. Treats a missing Cluster as not-yet-healthy.
 func (r *RestoreJobReconciler) cnpgClusterHealthy(ctx context.Context, namespace, clusterName string) (bool, error) {
@@ -1411,12 +1657,7 @@ func logIndicatesRecoveryTargetUnreachable(recoveryLog string) bool {
 // already had the whole window to converge, and this only classifies *why* it
 // did not. Pure so the decision is unit-testable without a live cluster.
 func recoveryUnreachableFromLogs(logs []string) bool {
-	for _, l := range logs {
-		if logIndicatesRecoveryTargetUnreachable(l) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(logs, logIndicatesRecoveryTargetUnreachable)
 }
 
 // recoveryTargetUnreachable inspects the target Cluster's bootstrap-recovery
@@ -1581,7 +1822,7 @@ func renderCNPGTemplate(t strategyv1alpha1.CNPGTemplate, app *postgresapp.Postgr
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -1592,12 +1833,12 @@ func renderCNPGTemplate(t strategyv1alpha1.CNPGTemplate, app *postgresapp.Postgr
 // so user-authored go-templates continue to address fields by their JSON
 // names (e.g. .Application.metadata.name) without leaking the Go struct
 // hierarchy to user-facing strategy templates.
-func toJSONMap(obj interface{}) (map[string]interface{}, error) {
+func toJSONMap(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
@@ -1664,17 +1905,42 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 	}
 }
 
-// barmanSidecarConfiguration pins the barman-cloud sidecar's boto3 request
-// checksum policy to "when_required". Since botocore ~1.36 the default
-// (when_supported) attaches a flexible checksum to every PutObject, which
-// non-AWS S3-compatible backends (Ceph RGW, and the platform's own default
-// SeaweedFS system bucket) reject with "x-amz-content-sha256 must be
-// UNSIGNED-PAYLOAD, ...". Compute a checksum only when required; AWS S3
-// accepts that too, so it is a safe default everywhere. This mirrors the same
-// env set on the chart-rendered ObjectStores (packages/{apps/postgres,
-// system/keycloak}/templates/db.yaml) and the etcd-operator fix (#342).
+// barmanSidecarConfiguration carries the two settings the barman-cloud sidecar
+// cannot get right on its own.
+//
+// Resources: the plugin injects the sidecar with no resources. This ObjectStore
+// lands in the application's namespace, and a tenant with resourceQuotas set
+// carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults
+// every container to 128Mi; the sidecar is OOMKilled mid-backup under it,
+// leaving the ObjectStore healthy and the backup failed. Measured cgroup
+// high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
+// tenant that leaves resourceQuotas empty has no LimitRange, and there the
+// sidecar had no requests and no limit at all. 256Mi holds the measured working
+// set and 1Gi is four times the measurement. No CPU limit is set, matching the
+// entityOperator precedent in packages/apps/kafka: a throttled sidecar stalls
+// WAL archiving instead of failing it.
+//
+// Checksum: since botocore ~1.36 the default (when_supported) attaches a
+// flexible checksum to every PutObject, which non-AWS S3-compatible backends
+// (Ceph RGW, and the platform's own default SeaweedFS system bucket) reject
+// with "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, ...". Compute a checksum
+// only when required; AWS S3 accepts that too, so it is a safe default
+// everywhere.
+//
+// This mirrors the chart-rendered ObjectStores, which take both fields from
+// cozy-lib.barman.sidecarConfiguration (packages/{apps/postgres,
+// system/keycloak}/templates/db.yaml), and the etcd-operator fix (#342).
 func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
 	return &cnpgtypes.InstanceSidecarConfiguration{
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		},
 		Env: []cnpgtypes.EnvVar{{
 			Name:  "AWS_REQUEST_CHECKSUM_CALCULATION",
 			Value: "when_required",
@@ -1799,6 +2065,15 @@ func (o CNPGRestoreOptions) effectiveRestoreDeadline() time.Duration {
 		return time.Duration(o.RestoreTimeoutSeconds) * time.Second
 	}
 	return cnpgDefaultRestoreDeadline
+}
+
+// effectiveBootstrapDisableGrace returns the fixed window the post-convergence
+// bootstrap-disable step keeps requeueing over a transient error before it
+// terminates the restore Failed. It is independent of restoreTimeoutSeconds:
+// that knob bounds the recovery wait, which is unrelated to how long a
+// control-plane blip takes to clear (see cnpgBootstrapDisableGrace).
+func (o CNPGRestoreOptions) effectiveBootstrapDisableGrace() time.Duration {
+	return cnpgBootstrapDisableGrace
 }
 
 // effectiveWALArchiveDeadline returns the configured WAL-archive gate

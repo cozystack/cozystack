@@ -1,0 +1,14 @@
+# The same creator with the two keys in the other order, and with a field
+# between them. A YAML mapping is unordered, so both are valid manifests and
+# both create a cluster; a sweep keyed on adjacency sees neither.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+spec:
+  steps:
+  - try:
+    - apply:
+        resource:
+          kind: Kubernetes
+          metadata:
+            name: reversed
+          apiVersion: apps.cozystack.io/v1alpha1

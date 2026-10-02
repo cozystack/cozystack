@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.talos-log-collector
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: talos-log-collector
+      path: system/talos-log-collector
+      install:
+        namespace: cozy-talos-log-collector
+        releaseName: talos-log-collector
+        privileged: true

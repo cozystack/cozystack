@@ -22,6 +22,10 @@ This file provides structured guidance for AI coding assistants and agents worki
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)
   - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag, mirror and candidate-verify tooling — extend it there rather than teaching an individual script a new path. The one exception is `hack/overlay-main-images.sh`, which reads refs but walks the tree itself, so a newly declared file does not reach it; `hack/promote-packages-artifact.sh` sources nothing because it publishes the whole tree and consumes no refs at all — the doc carries both cases
 
+- **Retiring an application** (e.g., "remove the X app", "deprecate X", "drop X from the catalog", "what happens to instances people already created")
+  - Read: [`deprecating-applications.md`](./docs/deprecating-applications.md)
+  - Action: Read the entire file before touching the tree. Deleting a chart is not a deletion: pruning its PackageSource garbage-collects the ArtifactGenerator and both ExternalArtifacts, which are the `chartRef` targets of the rd release and of every tenant release, so surviving instances sit `Ready=False` for good and `HelmReleaseNotReady` fires on every cluster carrying the bundle. An application with a successor migrates onto it; one without is frozen, per cluster, on the artifact that cluster already renders from, with the digest read off the live OCIRepository at hook time rather than written into the migration. The tenant RBAC grant comes out of the chart and is re-applied by the migration on the clusters that froze
+
 - **Project structure, conventions, code layout** (e.g., "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
   - Action: Read relevant sections to understand project structure and conventions

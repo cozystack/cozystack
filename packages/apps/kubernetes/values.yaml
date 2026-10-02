@@ -1,3 +1,6 @@
+## @name {string} - Cluster name. Every worker pool is a separate KubernetesNodes release named `kubernetes-nodes-<name>-<pool>`, so the name must leave room for the default `md0` pool inside the 53-character Helm release name limit.
+## @maxLength 32
+
 ##
 ## @section Common Parameters
 ##
@@ -80,6 +83,56 @@ version: "v1.35"
 host: ""
 
 ##
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
+## @immutable
+substrate: kubevirt
+
+## @typedef {struct} ProxmoxIPv4 - Address range capmox allocates worker addresses from.
+## @field {[]string} addresses - Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
+## @field {string} gateway - Default gateway for the workers.
+## @field {int} prefix - Netmask prefix length.
+
+## @typedef {struct} ProxmoxStorageClass - A StorageClass backed by a Proxmox storage.
+## @field {string} name - StorageClass name inside the tenant cluster.
+## @field {string} storage - Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+## @field {string} [fstype] - Filesystem the driver formats volumes with: ext4 or xfs.
+## @field {bool} [ssd] - Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+## @field {string} [reclaimPolicy] - Delete or Retain.
+
+## @typedef {struct} ProxmoxCCM - Proxmox cloud-controller-manager. It runs in the management cluster, in this namespace, and writes on the tenant's Nodes over the tenant's admin kubeconfig, so the hypervisor token never enters the tenant. Not optional on this substrate: the worker kubelet runs with `--cloud-provider=external`, so every node carries the `uninitialized` taint until this controller clears it, and the CSI node plugin needs the topology labels it applies.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+
+## @typedef {struct} ProxmoxCSI - Proxmox CSI driver. The tenant gets the node plugin, the CSIDriver object and the storage classes; the controller, the only half that holds the hypervisor token, runs in the management cluster, in this namespace.
+## @field {bool} enabled - Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+## @field {string} credentialsSecretName - Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+## @field {[]ProxmoxStorageClass} storageClasses - StorageClasses to create in the tenant.
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
+## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
+## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+## @field {bool} [insecure] - Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
+## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+## @field {ProxmoxCCM} [ccm] - Proxmox cloud-controller-manager settings.
+## @field {ProxmoxCSI} [csi] - Proxmox CSI driver settings.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  allowedNodes: []
+  dnsServers: []
+  insecure: false
+  ccm:
+    credentialsSecretName: ""
+  csi:
+    enabled: true
+    credentialsSecretName: ""
+    storageClasses: []
+  ipv4Config:
+    addresses: []
+    gateway: ""
+    prefix: 24
+
 ## @section Cluster Addons
 ##
 
@@ -180,10 +233,60 @@ addons:
 ## @section Kubernetes Control Plane Configuration
 ##
 
+# The two enums below mirror the item enums of the KamajiControlPlane CRD at the
+# provider pin (packages/system/capi-providers-cpprovider/files/control-plane-components.yaml).
+# Re-derive them when that pin moves.
+## @enum {string} AdmissionController - Admission plugin name the KamajiControlPlane accepts.
+## @value AlwaysAdmit
+## @value AlwaysDeny
+## @value AlwaysPullImages
+## @value CertificateApproval
+## @value CertificateSigning
+## @value CertificateSubjectRestriction
+## @value DefaultIngressClass
+## @value DefaultStorageClass
+## @value DefaultTolerationSeconds
+## @value DenyEscalatingExec
+## @value DenyExecOnPrivileged
+## @value DenyServiceExternalIPs
+## @value EventRateLimit
+## @value ExtendedResourceToleration
+## @value ImagePolicyWebhook
+## @value LimitPodHardAntiAffinityTopology
+## @value LimitRanger
+## @value MutatingAdmissionWebhook
+## @value NamespaceAutoProvision
+## @value NamespaceExists
+## @value NamespaceLifecycle
+## @value NodeRestriction
+## @value OwnerReferencesPermissionEnforcement
+## @value PersistentVolumeClaimResize
+## @value PersistentVolumeLabel
+## @value PodNodeSelector
+## @value PodSecurity
+## @value PodSecurityPolicy
+## @value PodTolerationRestriction
+## @value Priority
+## @value ResourceQuota
+## @value RuntimeClass
+## @value SecurityContextDeny
+## @value ServiceAccount
+## @value StorageObjectInUseProtection
+## @value TaintNodesByCondition
+## @value ValidatingAdmissionWebhook
+
+## @enum {string} NodeAddressType - Node address type the KamajiControlPlane accepts.
+## @value Hostname
+## @value InternalIP
+## @value ExternalIP
+## @value InternalDNS
+## @value ExternalDNS
+
 ## @typedef {struct} APIServer - API Server configuration.
 ## @field {Resources} resources - CPU and memory resources for API Server.
 ## @field {ResourcesPreset} resourcesPreset="c1.medium" - Preset if `resources` omitted.
-## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. The tenant control plane sets each of the following flags itself and drops an entry naming one before the apiserver sees it. The chart moves an `--enable-admission-plugins=` entry into `controlPlane.apiServer.admissionControllers` and a `--kubelet-preferred-address-types=` entry into `controlPlane.kubelet.preferredAddressTypes` while that field is empty, and refuses any other entry naming one of them: `--advertise-address`, `--client-ca-file`, `--enable-admission-plugins`, `--service-cluster-ip-range`, `--kubelet-client-certificate`, `--kubelet-client-key`, `--kubelet-preferred-address-types`, `--proxy-client-cert-file`, `--proxy-client-key-file`, `--requestheader-allowed-names`, `--requestheader-client-ca-file`, `--secure-port`, `--service-account-key-file`, `--service-account-signing-key-file`, `--tls-cert-file`, `--tls-private-key-file`, `--etcd-servers`, `--etcd-cafile`, `--etcd-certfile`, `--etcd-keyfile`, `--etcd-prefix`, `--etcd-compaction-interval`, `--egress-selector-config-file`. When `spec.oidc.mode` is not `None` the chart also renders OIDC flags here, reads what you have written on them, and refuses some combinations outright; `docs/oidc-tenant.md` carries which flags, which combinations, and why. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+## @field {[]AdmissionController} admissionControllers - Admission plugins the tenant kube-apiserver enables, passed through to KamajiControlPlane `spec.admissionControllers`, which the control plane renders as `--enable-admission-plugins`. A non-empty list replaces the control plane's default set instead of adding to it. The kube-apiserver enables these plugins in addition to its own default ones, so leaving a plugin out does not turn it off; to turn one off, name it in `--disable-admission-plugins` in `controlPlane.apiServer.extraArgs` and keep it out of this list, since the apiserver refuses to start with a plugin in both, and the control plane's default set names several. Empty by default, which keeps that default set, taken from the TenantControlPlane CRD: CertificateApproval, CertificateSigning, CertificateSubjectRestriction, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, LimitRanger, MutatingAdmissionWebhook, NamespaceLifecycle, PersistentVolumeClaimResize, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionWebhook. `NodeRestriction` is not in it.
 ## @field {[]object} extraVolumes - Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
 ## @field {[]object} extraVolumeMounts - Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
 
@@ -202,12 +305,16 @@ addons:
 ## @typedef {struct} Konnectivity - Konnectivity configuration.
 ## @field {KonnectivityServer} server - Konnectivity Server configuration.
 
+## @typedef {struct} Kubelet - Kubelet connection settings of the tenant control plane.
+## @field {[]NodeAddressType} preferredAddressTypes - Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`, or the list of a `--kubelet-preferred-address-types=` entry in `controlPlane.apiServer.extraArgs` when there is one.
+
 ## @typedef {struct} ControlPlane - Kubernetes control plane configuration.
 ## @field {int} replicas=2 - Number of control-plane replicas.
 ## @field {APIServer} apiServer - API Server configuration.
 ## @field {ControllerManager} controllerManager - Controller Manager configuration.
 ## @field {Scheduler} scheduler - Scheduler configuration.
 ## @field {Konnectivity} konnectivity - Konnectivity configuration.
+## @field {Kubelet} [kubelet] - Kubelet connection settings.
 
 ## @param {ControlPlane} controlPlane - Kubernetes control-plane configuration.
 controlPlane:
@@ -216,6 +323,7 @@ controlPlane:
     resources: {}
     resourcesPreset: "c1.medium"
     extraArgs: []
+    admissionControllers: []
     extraVolumes: []
     extraVolumeMounts: []
   controllerManager:
@@ -228,6 +336,8 @@ controlPlane:
     server:
       resources: {}
       resourcesPreset: "t1.micro"
+  kubelet:
+    preferredAddressTypes: []
 
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
@@ -284,7 +394,7 @@ talos:
 ## @field {OIDCSecretRef} [secretRef] - Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.
 
 ## @typedef {struct} OIDC - OIDC selector for the tenant cluster (Phase 1 — per-cluster audience binding; no per-tenant Keycloak realm).
-## @field {OIDCMode} mode - Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+## @field {OIDCMode} mode - Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform Keycloak realm (`cozy` by default) via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
 ## @field {OIDCCustomConfig} [customConfig] - Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
 ## @field {[]OIDCUser} [users] - Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
 

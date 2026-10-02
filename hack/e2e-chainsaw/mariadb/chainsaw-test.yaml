@@ -22,8 +22,11 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # 11m, above the release's 600s install timeout; see "Sizing an HR-Ready
+    # budget" in docs/agents/e2e-testing.md. hack/mariadb-first-boot-waits.bats
+    # derives the floor.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -43,16 +46,10 @@ spec:
             name: mariadb-test
           spec:
             (ports[0].port): 3306
-    # The chart hands the operator a MariaDB CR and ships no built-in workload,
-    # so the HelmRelease above goes Ready as soon as helm applies the manifests
-    # -- it never waits for a pod. This assert is the first gate that does: an
-    # endpoint address appears only once a replica has passed its startup and
-    # then its readiness probe. The startup probe grants each replica 310s of
-    # first-boot budget (see packages/apps/mariadb/templates/mariadb.yaml for
-    # why), so a ceiling under that would fail runs the probe was still willing
-    # to wait for. One ready address satisfies this assert, so it has to clear
-    # one budget, not two, plus the operator reconcile, PVC bind and image pull
-    # that precede it. 10m leaves room for all of that.
+    # The HelmRelease can report Ready before the operator's first status write
+    # on the CR, which kstatus reads as current. An endpoint address needs a
+    # replica past its startup and readiness probes (310s of startup budget,
+    # see packages/apps/mariadb/templates/mariadb.yaml).
     - assert:
         timeout: 10m
         resource:
@@ -313,8 +310,9 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # Same 11m as the replicated suite above.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -334,10 +332,7 @@ spec:
             name: mariadb-single
           spec:
             (ports[0].port): 3306
-    # Same gate as the replicated case above -- the HelmRelease does not wait
-    # for a pod, so this is where first boot is actually covered. One replica
-    # means one 310s startup budget, plus the operator reconcile, PVC bind and
-    # image pull ahead of it.
+    # Same gate as the replicated case above.
     - assert:
         timeout: 10m
         resource:
@@ -459,15 +454,18 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mariadb/cleanup.sh
         check:
           ($error == null): true
-    # The 30m budget is the whole documented flow: bucket provisioning, a
-    # 2-replica source MariaDB (each replica's operator startup probe grants
-    # 310s of first-boot budget — see the mariadb app suite above), the logical
-    # dump to S3, an empty 2-replica target, and the to-copy restore + verify
-    # (convention 6: justified in-line). run-all.sh fails fast on terminal
-    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
-    # out the budget.
+    # 42m runs the whole documented flow: bucket provisioning, a 2-replica
+    # source MariaDB, the logical dump to S3, an empty 2-replica target, and
+    # the to-copy restore + verify (convention 6: justified in-line).
+    #
+    # Sized so a failed install at a 660s HelmRelease wait in run-all.sh is
+    # reported by the script rather than cut off here, which SIGKILLs the
+    # process group and loses the script's error. hack/mariadb-first-boot-waits.bats
+    # holds this op against those waits, so raising a wait in run-all.sh means
+    # raising this op too. A bound on the whole flow needs a phase budget
+    # (docs/agents/e2e-testing.md), not a larger literal.
     - script:
-        timeout: 30m
+        timeout: 42m
         content: |
           set -eu
           cd ../../..

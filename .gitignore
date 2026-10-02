@@ -123,6 +123,7 @@ packages/core/platform/.build-revision
 examples/backups/*/.bucket-info.env
 examples/backups/*/.sentinel.env
 examples/backups/*/.backup-name.env
+examples/backups/*/.source-dump.txt
 packages/core/platform/images/migrations/etcd-operator-crds/
 
 # CI scratch: promote-rc.yaml checks the dispatch ref here so release tooling

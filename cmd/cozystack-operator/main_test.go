@@ -77,7 +77,7 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 	}
 
 	// Verify variants
-	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic"}
+	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic", "isp-slim", "isp-slim-generic", "isp-hosted-slim"}
 	if len(ps.Spec.Variants) != len(expectedVariants) {
 		t.Fatalf("expected %d variants, got %d", len(expectedVariants), len(ps.Spec.Variants))
 	}
@@ -114,8 +114,8 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 	if ps.Spec.SourceRef.Name != "cozystack-platform" {
 		t.Errorf("expected sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
 	}
-	if len(ps.Spec.Variants) != 4 {
-		t.Errorf("expected 4 variants, got %d", len(ps.Spec.Variants))
+	if len(ps.Spec.Variants) != 7 {
+		t.Errorf("expected 7 variants, got %d", len(ps.Spec.Variants))
 	}
 }
 
@@ -259,6 +259,9 @@ func TestInstallPlatformPackageSource_VariantValuesFiles(t *testing.T) {
 		"isp-full":         {"values.yaml", "values-isp-full.yaml"},
 		"isp-hosted":       {"values.yaml", "values-isp-hosted.yaml"},
 		"isp-full-generic": {"values.yaml", "values-isp-full-generic.yaml"},
+		"isp-slim":         {"values.yaml", "values-isp-slim.yaml"},
+		"isp-slim-generic": {"values.yaml", "values-isp-slim-generic.yaml"},
+		"isp-hosted-slim":  {"values.yaml", "values-isp-hosted-slim.yaml"},
 	}
 
 	for _, v := range ps.Spec.Variants {

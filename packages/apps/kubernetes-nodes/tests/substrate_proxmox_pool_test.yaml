@@ -1,0 +1,46 @@
+suite: proxmox workers join the tenant's resource pool
+# A Proxmox ACL that follows every VM capmox creates — replacements included — is
+# one on a resource pool. `proxmox.pool` puts the workers into it; empty adds
+# them to none, which is what the chart did before the field existed.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: 4
+    memory: 8Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, talos]
+    network:
+      bridge: vmbr0
+    dnsServers: ["8.8.8.8"]
+tests:
+  - it: adds the workers to the pool the tenant's tokens are scoped to
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    set:
+      proxmox:
+        pool: tenant-a
+    asserts:
+      - equal:
+          path: spec.template.spec.pool
+          value: tenant-a
+
+  - it: adds them to no pool when none is named
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.pool

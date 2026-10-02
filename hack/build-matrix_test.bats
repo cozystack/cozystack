@@ -1,11 +1,13 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 14 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
 # relative `hack/build-matrix.sh` calls below resolve against that cwd. A bats
 # setup() hook would be dead here — cozytest never invokes it — so the
 # repo-root cwd is supplied by the runner rather than a setup() cd.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 
 @test "no argument emits the full matrix" {
   out=$(hack/build-matrix.sh)
@@ -24,18 +26,33 @@
   if echo "$out" | grep -q '"packages/core/installer"'; then echo "FAIL: packages/core/installer must be excluded from the parallel matrix"; false; fi
 }
 
+@test "the arm64 matrix drops the amd64-only e2e sandbox and nothing else" {
+  full=$(hack/build-matrix.sh)
+  arm=$(MATRIX_ARCH=arm64 hack/build-matrix.sh)
+  echo "$full" | grep -q '"packages/core/testing"'
+  if echo "$arm" | grep -q '"packages/core/testing"'; then echo "FAIL: the arm64 matrix builds the amd64-only sandbox"; false; fi
+  [ "$(echo "$full" | sed 's/,*"packages\/core\/testing"//')" = "$arm" ]
+  # A diff that touches only the sandbox gives the arm64 leg nothing to build.
+  tmp=$(mktemp)
+  echo "packages/core/testing/Makefile" > "$tmp"
+  [ "$(MATRIX_ARCH=arm64 hack/build-matrix.sh "$tmp")" = "[]" ]
+  rm -f "$tmp"
+}
+
 @test "talos-only diff selects nothing (handled by the dedicated leg)" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/core/talos/images/matchbox/Dockerfile" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "installer-only diff selects nothing (handled by finalize)" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/core/installer/images/cozystack-operator/Dockerfile" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "FULL sentinel emits the full matrix" {
@@ -44,91 +61,111 @@
 }
 
 @test "single-package diff selects only that unit" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/apps/mariadb/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/apps/mariadb"]' ]
+  rm -f "$tmp"
+}
+
+@test "kubeovn source patch selects the kubeovn image build" {
+  tmp=$(mktemp)
+  echo "packages/system/kubeovn/images/kubeovn/patches/fix-vmim-scheduling-retry.diff" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/system/kubeovn"]' ]
+  rm -f "$tmp"
 }
 
 @test "two-package diff selects both units" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   printf 'packages/apps/mariadb/values.yaml\npackages/system/dashboard/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   echo "$out" | grep -q '"packages/apps/mariadb"'
   echo "$out" | grep -q '"packages/system/dashboard"'
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -eq 2 ]
+  rm -f "$tmp"
 }
 
 @test "docs-only diff selects nothing" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "docs/agents/overview.md" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "a package with no image target selects nothing" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   # postgres ships no in-repo image build, so it is not a build unit.
   echo "packages/apps/postgres/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '[]' ]
+  rm -f "$tmp"
 }
 
 @test "seaweedfs change fans out to objectstorage-controller" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/system/seaweedfs/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  rm -f "$tmp"
 }
 
 @test "seaweedfs change does not duplicate an already-selected objectstorage-controller" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   printf 'packages/system/seaweedfs/values.yaml\npackages/system/objectstorage-controller/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  rm -f "$tmp"
 }
 
 @test "cozy-lib change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   echo "$out" | grep -q '"packages/core/platform"'
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "common-envs.mk change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "hack/common-envs.mk" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "go.mod change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "go.mod" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "build workflow change forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo ".github/workflows/pull-requests.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "root Go source change (api/) forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "api/apps/v1alpha1/kubernetes/types.go" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "root Go source change (pkg/) forces the full matrix" {
-  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  tmp=$(mktemp)
   echo "pkg/cluster/reconciler.go" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+  rm -f "$tmp"
 }
 
 @test "emitted JSON is parseable and matches make build's unit list" {
@@ -147,4 +184,27 @@
     | grep -vxcE 'packages/core/(talos|installer)')
   actual=$(echo "$out" | jq 'length')
   [ "$expected" -eq "$actual" ]
+}
+
+@test "every package that builds an image is in the build list" {
+  # The build list is maintained by hand, and a package missing from it is
+  # rebuilt by no CI path: its Dockerfile and patches keep changing while the
+  # pinned image stays whatever was last pushed by hand. Derive the set from
+  # the package Makefiles so a new image target cannot be forgotten.
+  listed=$(sed -n '/^build:/,/^[^[:space:]]/p' Makefile \
+    | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
+    | sed -E 's/^make -C (packages[^ ]+) image$/\1/')
+  missing=""
+  checked=0
+  for m in packages/*/*/Makefile; do
+    grep -q 'docker buildx build' "$m" || continue
+    checked=$((checked + 1))
+    d=${m%/Makefile}
+    printf '%s\n' "$listed" | grep -qx "$d" || missing="$missing $d"
+  done
+  [ "$checked" -gt 0 ]
+  if [ -n "$missing" ]; then
+    echo "image-building packages missing from the root Makefile build: list:$missing" >&2
+    false
+  fi
 }

@@ -258,9 +258,9 @@ func TestAdoptVolumeReplicatesVolumeModeAndAccessModes(t *testing.T) {
 			adopted.Annotations[populatedForAnnotation])
 	}
 
-	// Retain is not advice: it is the only thing standing between a routine
-	// DataVolume deletion and data loss, because CDI takes a controller owner
-	// reference on the claim it adopts.
+	// Retain is not advice during the swap: between deleting the transferred
+	// claim and re-pointing claimRef the volume is Released, and under Delete
+	// the provisioner would reclaim it. settleReclaimPolicy lifts it later.
 	gotPV := &corev1.PersistentVolume{}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "pv-1"}, gotPV); err != nil {
 		t.Fatalf("get pv: %v", err)
@@ -408,7 +408,7 @@ func TestAdoptVolumeIsIdempotent(t *testing.T) {
 // Forklift already built, which is why no inventory client is needed.
 func TestSourceVMResources(t *testing.T) {
 	vm := newObject(virtualMachineGVK)
-	if err := unstructured.SetNestedMap(vm.Object, map[string]interface{}{
+	if err := unstructured.SetNestedMap(vm.Object, map[string]any{
 		"cores":   int64(2),
 		"sockets": int64(2),
 	}, "spec", "template", "spec", "domain", "cpu"); err != nil {
@@ -455,17 +455,17 @@ func TestSourceVMResourcesDefaultsSingleSocket(t *testing.T) {
 // a four-step pipeline as 25% done before any data moved.
 func TestMigrationProgressReadsTheTransferStep(t *testing.T) {
 	m := newObject(migrationGVK)
-	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
-		map[string]interface{}{
+	if err := unstructured.SetNestedSlice(m.Object, []any{
+		map[string]any{
 			"id": "vm-1",
-			"pipeline": []interface{}{
-				map[string]interface{}{
+			"pipeline": []any{
+				map[string]any{
 					"name":     "Initialize",
-					"progress": map[string]interface{}{"completed": int64(1), "total": int64(1)},
+					"progress": map[string]any{"completed": int64(1), "total": int64(1)},
 				},
-				map[string]interface{}{
+				map[string]any{
 					"name":     "DiskTransfer",
-					"progress": map[string]interface{}{"completed": int64(3), "total": int64(10)},
+					"progress": map[string]any{"completed": int64(3), "total": int64(10)},
 				},
 			},
 		},
@@ -491,13 +491,13 @@ func TestMigrationProgressReadsTheTransferStep(t *testing.T) {
 // name-only match — so an unrecognised pipeline still has to report something.
 func TestMigrationProgressFallsBackWhenStepsAreUnnamed(t *testing.T) {
 	m := newObject(migrationGVK)
-	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
-		map[string]interface{}{
+	if err := unstructured.SetNestedSlice(m.Object, []any{
+		map[string]any{
 			"id": "vm-1",
-			"pipeline": []interface{}{
-				map[string]interface{}{
+			"pipeline": []any{
+				map[string]any{
 					"name":     "SomeFutureStepName",
-					"progress": map[string]interface{}{"completed": int64(4096), "total": int64(16384)},
+					"progress": map[string]any{"completed": int64(4096), "total": int64(16384)},
 				},
 			},
 		},
@@ -515,8 +515,8 @@ func TestMigrationProgressFallsBackWhenStepsAreUnnamed(t *testing.T) {
 // would leave a finished transfer stuck in Transferring.
 func TestMigrationProgressAcceptsCompletedPhase(t *testing.T) {
 	m := newObject(migrationGVK)
-	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
-		map[string]interface{}{"id": "vm-1", "phase": "Completed"},
+	if err := unstructured.SetNestedSlice(m.Object, []any{
+		map[string]any{"id": "vm-1", "phase": "Completed"},
 	}, "status", "vms"); err != nil {
 		t.Fatalf("set vms: %v", err)
 	}
@@ -591,7 +591,7 @@ func TestAdoptVolumeOrphansAClaimWithNoDataVolume(t *testing.T) {
 		t.Fatalf("get pv: %v", err)
 	}
 	if gotPV.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		t.Error("the volume was not retained")
+		t.Error("the volume was not retained for the swap")
 	}
 }
 
@@ -599,11 +599,11 @@ func TestAdoptVolumeOrphansAClaimWithNoDataVolume(t *testing.T) {
 // Forklift's own words rather than a paraphrase.
 func TestMigrationProgressSurfacesForkliftErrors(t *testing.T) {
 	m := newObject(migrationGVK)
-	if err := unstructured.SetNestedSlice(m.Object, []interface{}{
-		map[string]interface{}{
+	if err := unstructured.SetNestedSlice(m.Object, []any{
+		map[string]any{
 			"id": "vm-1",
-			"error": map[string]interface{}{
-				"reasons": []interface{}{"vddk: failed to open disk"},
+			"error": map[string]any{
+				"reasons": []any{"vddk: failed to open disk"},
 			},
 		},
 	}, "status", "vms"); err != nil {
@@ -632,13 +632,13 @@ func TestMigrationProgressSurfacesForkliftErrors(t *testing.T) {
 func TestInventoryVMYieldsNetworksAndDatastores(t *testing.T) {
 	const record = `{
 	  "id": "86",
-	  "name": "test-matthieu",
+	  "name": "sample-vm",
 	  "firmware": "efi",
 	  "powerState": "poweredOff",
-	  "networks": [{"kind": "Network", "id": "HaNetwork-Cluster Hidora tools"}],
+	  "networks": [{"kind": "Network", "id": "HaNetwork-Cluster Example"}],
 	  "disks": [
-	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}},
-	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-3448edf98902"}}
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-00005e005301"}},
+	    {"datastore": {"kind": "Datastore", "id": "61f94272-8f3a3584-b45f-00005e005301"}}
 	  ]
 	}`
 
@@ -649,11 +649,11 @@ func TestInventoryVMYieldsNetworksAndDatastores(t *testing.T) {
 	if vm.Firmware != "efi" || vm.PowerState != "poweredOff" {
 		t.Errorf("firmware/power = %q/%q", vm.Firmware, vm.PowerState)
 	}
-	if got := vm.networkIDs(); len(got) != 1 || got[0] != "HaNetwork-Cluster Hidora tools" {
+	if got := vm.networkIDs(); len(got) != 1 || got[0] != "HaNetwork-Cluster Example" {
 		t.Errorf("networkIDs = %v", got)
 	}
 	// Two disks on one datastore yield one map entry, not two.
-	if got := vm.datastoreIDs(); len(got) != 1 || got[0] != "61f94272-8f3a3584-b45f-3448edf98902" {
+	if got := vm.datastoreIDs(); len(got) != 1 || got[0] != "61f94272-8f3a3584-b45f-00005e005301" {
 		t.Errorf("datastoreIDs = %v", got)
 	}
 }
@@ -684,7 +684,7 @@ func TestPlanKeepsTheImportedVMPoweredOff(t *testing.T) {
 	if len(vms) != 1 {
 		t.Fatalf("spec.vms = %d entries, want 1", len(vms))
 	}
-	entry, _ := vms[0].(map[string]interface{})
+	entry, _ := vms[0].(map[string]any)
 	got, _, _ := unstructured.NestedString(entry, "targetPowerState")
 	if got != "off" {
 		t.Errorf("targetPowerState = %q, want \"off\" — Forklift would boot the migrated guest before the handoff", got)
@@ -699,20 +699,20 @@ func TestSourceFirmwareIsCarriedAcross(t *testing.T) {
 	cases := []struct {
 		name string
 		set  func(vm *unstructured.Unstructured)
-		want map[string]interface{}
+		want map[string]any
 	}{
 		{"efi", func(vm *unstructured.Unstructured) {
-			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
+			_ = unstructured.SetNestedMap(vm.Object, map[string]any{},
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi")
-		}, map[string]interface{}{"bootloader": "uefi"}},
+		}, map[string]any{"bootloader": "uefi"}},
 		{"efi with secureBoot", func(vm *unstructured.Unstructured) {
 			_ = unstructured.SetNestedField(vm.Object, true,
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "efi", "secureBoot")
-		}, map[string]interface{}{"bootloader": "uefi", "secureBoot": true}},
+		}, map[string]any{"bootloader": "uefi", "secureBoot": true}},
 		{"bios", func(vm *unstructured.Unstructured) {
-			_ = unstructured.SetNestedMap(vm.Object, map[string]interface{}{},
+			_ = unstructured.SetNestedMap(vm.Object, map[string]any{},
 				"spec", "template", "spec", "domain", "firmware", "bootloader", "bios")
-		}, map[string]interface{}{"bootloader": "bios"}},
+		}, map[string]any{"bootloader": "bios"}},
 		// Nothing on the source means nothing written: the instance profile's
 		// own default stands rather than being overridden with a guess.
 		{"no firmware at all", func(vm *unstructured.Unstructured) {}, nil},
@@ -733,7 +733,7 @@ func TestSourceFirmwareIsCarriedAcross(t *testing.T) {
 // that guest can already read, or the import "succeeds" into a VM that stalls
 // in its initramfs with no root device.
 func TestImportedDisksPreferTheInboxBus(t *testing.T) {
-	for i := 0; i < ahciPorts; i++ {
+	for i := range ahciPorts {
 		if got := importedDiskBus(i); got != "sata" {
 			t.Errorf("disk %d: bus = %q, want sata", i, got)
 		}

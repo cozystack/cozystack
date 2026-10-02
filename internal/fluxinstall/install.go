@@ -272,9 +272,9 @@ func injectKubernetesServiceEnv(objects []*unstructured.Unstructured) error {
 }
 
 // updateContainersEnv updates environment variables for a slice of containers.
-func updateContainersEnv(containers []interface{}, kubernetesHost, kubernetesPort string) []interface{} {
+func updateContainersEnv(containers []any, kubernetesHost, kubernetesPort string) []any {
 	for i, container := range containers {
-		containerMap, ok := container.(map[string]interface{})
+		containerMap, ok := container.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -285,7 +285,7 @@ func updateContainersEnv(containers []interface{}, kubernetesHost, kubernetesPor
 		}
 
 		if !found {
-			env = []interface{}{}
+			env = []any{}
 		}
 
 		// Update or add KUBERNETES_SERVICE_HOST
@@ -311,10 +311,10 @@ func updateContainersEnv(containers []interface{}, kubernetesHost, kubernetesPor
 }
 
 // setEnvVar updates or adds an environment variable in the env slice.
-func setEnvVar(env []interface{}, name, value string) []interface{} {
+func setEnvVar(env []any, name, value string) []any {
 	// Check if variable already exists
 	for i, envVar := range env {
-		envVarMap, ok := envVar.(map[string]interface{})
+		envVarMap, ok := envVar.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -328,7 +328,7 @@ func setEnvVar(env []interface{}, name, value string) []interface{} {
 	}
 
 	// Add new variable
-	env = append(env, map[string]interface{}{
+	env = append(env, map[string]any{
 		"name":  name,
 		"value": value,
 	})

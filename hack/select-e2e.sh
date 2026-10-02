@@ -18,7 +18,7 @@
 #                   the full-suite nor the inert list, OR a yq that failed to
 #                   build the dependency graph (conservative fallbacks)
 #   - nothing, and  the suite list itself is unavailable: find failed, or
-#     a non-zero    hack/e2e-chainsaw holds no chainsaw-test.yaml. Unlike the
+#     a non-zero    hack/e2e-chainsaw holds no suite file. Unlike the
 #     exit          yq case there is no fallback left to take — an empty list
 #                   silently corrupts both the escalations, which would print
 #                   it, and the backups rule, which membership-tests against
@@ -82,12 +82,12 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 #     The bats half is prefix-matched rather than taking every hack/*.bats,
 #     because the root Makefile splits those two sets by exactly that prefix —
 #     `BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))`
-#     — so the 60 files it keeps are the unit lane and the e2e sandbox runs none
-#     of them. The three it filters out are the ones packages/core/testing's
+#     — so the files it keeps are the unit lane and the e2e sandbox runs none
+#     of them. The ones it filters out are the ones packages/core/testing's
 #     recipes execute inside the sandbox, and they stay here. Narrowing this
 #     cannot leave a bats-only pull request untested: `make unit-tests` is gated
 #     on the `code` output, which pull-requests.yaml computes as "any path
-#     outside docs/" and never from this script, so those 60 files run on their
+#     outside docs/" and never from this script, so the unit files run on their
 #     own lane whatever the selection here is;
 #   - the workflows that RUN the suite — enumerated rather than matched by
 #     prefix, so an unrelated workflow does not burn a full run. Keep this list
@@ -114,8 +114,9 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 # the fall-through at the bottom of the loop can escalate safely: the cost of
 # forgetting an inert path is a wasted full run, the cost of forgetting a live
 # one used to be a green gate with nothing tested.
-#   - examples/       demo manifests; examples/backups/<app>/ is handled above
-#                     as a real test harness before this check is reached
+#   - examples/       demo manifests; examples/backups/<app>/ and
+#                     examples/backups/_lib/ are handled above as real test
+#                     harness before this check is reached
 #   - .github/        templates, CODEOWNERS, labels, renovate, linter config —
 #                     minus the e2e workflows escalated above
 #   - .claude/ .gemini/  agent config, never shipped
@@ -124,7 +125,7 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #   - hack/*.bats     the unit lane, minus the hack/e2e-*.bats escalated above.
 #                     The root Makefile draws the line at that prefix
 #                     (BATS_UNIT_FILES filters hack/e2e-%.bats out of
-#                     hack/*.bats), so these 60 files are never executed inside
+#                     hack/*.bats), so these files are never executed inside
 #                     the e2e sandbox and no Chainsaw suite can regress from one.
 #                     They are not untested by being inert here: `make
 #                     unit-tests` runs them, gated on pull-requests.yaml's `code`
@@ -162,24 +163,26 @@ inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testda
 
 # All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
 # chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
+# chainsaw-test.yml counts too, because Chainsaw loads it when the .yaml is
+# absent, and a suite that runs but is never listed is never selected.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
 # sort's success whatever find did — the same blindness handled for yq below,
 # and worse here, because this list is what every escalation prints. Errors go
 # to stderr rather than /dev/null for the same reason.
-if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml); then
+if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
   echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
   exit 1
 fi
 all_apps=$(printf '%s\n' "$chainsaw_tests" \
-  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort)
+  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' | sort -u)
 
 # An empty list here is a broken enumeration — a moved directory, a wrong
 # working directory — not a project without tests, and it silently corrupts
 # every answer the script can give:
 #
-#   - the three escalation branches print this list, so "run everything"
+#   - the escalation branches print this list, so "run everything"
 #     becomes a blank line, which both lanes read as "skip Chainsaw" before
 #     posting the required "E2E Tests" status green;
 #   - the examples/backups/<app>/ rule takes no escalation and still consults
@@ -195,12 +198,12 @@ all_apps=$(printf '%s\n' "$chainsaw_tests" \
 # Both lanes run this step under `bash -e`, so the non-zero exit fails the job
 # instead of falling through to the empty selection.
 if [ -z "$all_apps" ]; then
-  echo "select-e2e: found no chainsaw-test.yaml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
+  echo "select-e2e: found no chainsaw-test.yaml or chainsaw-test.yml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
   exit 1
 fi
 
-# Single exit point for the three escalating branches, so the invariant above
-# has one consumer to reason about rather than three copies.
+# Single exit point for every escalating branch, so the invariant above has
+# one consumer to reason about rather than one copy per branch.
 escalate_to_full_suite() {
   echo "$all_apps" | paste -sd ' ' -
   exit 0
@@ -242,6 +245,17 @@ src_to_suites() {
     ingress-application|ingress-nginx) echo gateway ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
     securitygroup-controller) echo securitygroup ;;
+    # The kafka app source covers both the app suite and the metadata-backup
+    # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which
+    # reaches this source) selects both.
+    kafka-application) echo "kafka kafka-metadata" ;;
+    # No seaweedfs suite exists. bucket drives the Bucket API against the
+    # tenant-root instance, the backup round-trips write to it through the
+    # in-cluster seaweedfs-s3 endpoint, most of them verifying its CA, and
+    # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
+    # serves. etcd's round-trip is left out because CI gates it off. A test
+    # derives this set from the suites.
+    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac
@@ -342,28 +356,35 @@ while IFS= read -r file || [ -n "$file" ]; do
       # A suite parked as chainsaw-test.yaml.disabled is registered nowhere and
       # executed by nothing, so an edit to it cannot regress a test. Matched
       # before the per-suite rule below, which reads the suite name off the
-      # directory and ignores the suffix: the name it derives matches no
-      # existing suite, the intersection at the bottom empties, and the
-      # safety net for a genuinely unclassified selection escalates to the
-      # full run — the most expensive outcome, bought by the one file class
-      # that provably cannot affect anything. Inert is the classification;
-      # the safety net keeps its job for paths no rule has looked at.
+      # directory and ignores the suffix: a parked suite's directory holds no
+      # live suite, so that rule would escalate to the full run — the most
+      # expensive outcome, bought by the one file class that provably cannot
+      # affect anything. Inert is the classification.
       continue ;;
     hack/e2e-chainsaw/*/*)
+      # Membership-tested here rather than left to the final intersection, for
+      # the reason given on the hack/e2e-apps/ arm below: a directory holding no
+      # suite (shared material beside _lib/, a suite nested deeper than the
+      # depth-2 scan) must escalate whatever else the diff selected.
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
-      selected_apps="$selected_apps $app"
-      trigger_any=1
+      if echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      else
+        echo "select-e2e: '$file' names no runnable suite ('$app') — escalating to the full suite" >&2
+        trigger_full=1
+      fi
       continue ;;
     hack/e2e-apps/*)
       # The pre-Chainsaw per-app BATS suites. One file per app, named after it,
       # so the suite name comes off the basename exactly as the rule above takes
       # it off the directory.
       #
-      # Deliberately NOT marked inert, even though what remains here is wired to
-      # nothing after the Chainsaw migration: inert would bake that orphan status
-      # into the rule and go quietly wrong the day a lane runs these again. The
-      # mapping is correct either way — a file named after an app selects that
-      # app's suite whether or not anything currently executes it.
+      # Deliberately NOT marked inert. The files formerly kept here were wired to
+      # nothing after the Chainsaw migration, but inert would bake that orphan
+      # status into the rule and go quietly wrong the day a lane runs this layout
+      # again. A file named after an app selects that app's suite whether or not
+      # anything currently executes it.
       #
       # The membership test is what makes this per-path, and it is not optional.
       # Adding an unmatched name to selected_apps and letting the final
@@ -394,10 +415,20 @@ while IFS= read -r file || [ -n "$file" ]; do
         trigger_full=1
       fi
       continue ;;
+    examples/backups/_lib/*)
+      # A helper here is shared by the backup walkthroughs, so it is material
+      # of the same kind as hack/e2e-chainsaw/_lib/. Matched before the per-app
+      # rule below, which would read _lib as an app, find no suite and select
+      # nothing. Escalated rather than mapped to the suites that run a
+      # walkthrough: that set is spread across the suites' own scripts, and a
+      # derivation that misses one fails open.
+      echo "select-e2e: '$file' is shared by every backup walkthrough — escalating to the full suite" >&2
+      trigger_full=1
+      continue ;;
     examples/backups/*/*)
-      # The etcd, postgres, mariadb and clickhouse backup round-trip tests
-      # execute the example scripts under examples/backups/<app>/ as their
-      # harness, so an edit there must run that app's suite. This mapping is
+      # A backup round-trip Test executes the example scripts under
+      # examples/backups/<app>/ as its harness, so an edit there must run that
+      # app's suite. This mapping is
       # also why a round-trip Test belongs in its app's own suite dir: put it
       # in a dir whose name does not match examples/backups/<app>/ and an edit
       # to the harness selects a suite that cannot exercise it. A dir with no
@@ -534,36 +565,14 @@ done
 final_apps=$(intersect_suites "$group_suites $selected_apps")
 
 # Backstop. Every graph path above either escalates or contributes a suite that
-# exists, and both rules that select a suite by name — the per-app BATS one and
-# the examples/backups/<app>/ one — membership-test it first, so what still
-# reaches this is a per-suite Chainsaw edit naming a directory that holds no
-# chainsaw-test.yaml: shared material beside _lib/, or a suite nested deeper than
-# the depth-2 scan looks. Selecting nothing for those would skip E2E outright, so
-# failing towards the full suite is the only safe way to be wrong here.
-#
-# group_suites is empty whenever this fires — every group either escalated above
-# or contributed a suite that exists — so the names worth naming are the
-# directly-selected ones, and printing them says which directory or file the
-# selector could not resolve.
-#
-# Deduplicated in the shell rather than through `tr | sort -u | grep -v | paste`,
-# which is the same blindness this file fixes twice above: a pipeline reports its
-# LAST command's status, so a failing tr or sort would be invisible under set -e
-# and the message would name a partial list or nothing at all. That is only a
-# cosmetic loss — the escalation itself is already decided — but the reason line
-# is a contract now, and a contract that degrades silently is the thing this
-# change set exists to remove. Unquoted expansion is the split, `case` is the
-# membership test, and neither can half-succeed; it is also the idiom
-# resolve_suites already uses.
+# exists, and every rule that selects a suite by name membership-tests it first,
+# so no classification this file makes reaches here today. It stays for the next
+# rule that forgets to: selecting nothing would skip E2E outright, so failing
+# towards the full suite is the only safe way to be wrong. It prints the
+# directly-selected names, since a rule that skipped its membership test is the
+# likely way to get here; no test asserts the line.
 if [ -z "$final_apps" ]; then
-  unmatched=''
-  for a in $selected_apps; do
-    case " $unmatched " in
-      *" $a "*) ;;
-      *) unmatched="${unmatched:+$unmatched }$a" ;;
-    esac
-  done
-  echo "select-e2e: no runnable suite is named by '$unmatched' — escalating to the full suite" >&2
+  echo "select-e2e: no runnable suite is named by '${selected_apps# }' — escalating to the full suite" >&2
   escalate_to_full_suite
 fi
 

@@ -105,6 +105,62 @@ fold_source() {
   esac
 }
 
+@test "the cdi module keeps the controller log and every CDI-labelled pod whatever its phase" {
+  # A DataVolume PVC stuck in Terminating can be held by an importer pod that
+  # CDI failed to delete after a successful import. That pod is Completed, so the
+  # broken-pod walk skips it, and the only record of why the delete did not land
+  # is the cdi-deployment log.
+  block=$(awk '/^# -- cdi module/,/^echo "Collecting services/' "$SCRIPT" | fold_source /dev/stdin)
+  [ -n "$block" ] || { echo "FAIL: no cdi module in $SCRIPT"; false; }
+  printf '%s\n' "$block" | grep -qE 'kubectl logs -n cozy-kubevirt-cdi deploy/cdi-deployment --tail=20000$' ||
+    { echo "FAIL: the cdi module does not read the current cdi-deployment log"; false; }
+  printf '%s\n' "$block" | grep -qE 'kubectl logs -n cozy-kubevirt-cdi deploy/cdi-deployment --tail=20000 --previous$' ||
+    { echo "FAIL: the cdi module does not read the previous cdi-deployment log"; false; }
+  printf '%s\n' "$block" | grep -qE 'kubectl get pod -A -l app=containerized-data-importer -o yaml$' ||
+    { echo "FAIL: the cdi module does not read CDI-labelled pods across namespaces as YAML"; false; }
+  case "$block" in
+    *cozyreport_pods_not_ready*) echo "FAIL: a phase filter would drop the Completed importer pod"; false ;;
+  esac
+}
+
+@test "the cdi pods are read even when the cdi-deployment probe fails" {
+  # The importer pod is owned by its PVC, not by cdi-deployment, so it outlives a
+  # Deployment that is gone or a probe that got no answer. That pod is the
+  # evidence this module exists for, so only the log reads may sit behind the probe.
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/bin"
+  cat > "$tmp/bin/kubectl" <<'STUB'
+#!/bin/sh
+echo "kubectl $*" >> "$KUBECTL_CALL_LOG"
+case "$*" in
+  "get deploy "*) exit 1 ;;
+  *"app=containerized-data-importer"*) printf 'items:\n- metadata:\n    name: importer-prime-stuck\n' ;;
+esac
+exit 0
+STUB
+  chmod +x "$tmp/bin/kubectl"
+
+  body=$(awk '/^# -- cdi module/,/^echo "Collecting services/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  [ -n "$body" ] || { echo "FAIL: could not locate the cdi module"; false; }
+
+  KUBECTL_CALL_LOG="$tmp/calls.txt"
+  : > "$KUBECTL_CALL_LOG"
+  REPORT_DIR="$tmp/report"
+  export KUBECTL_CALL_LOG REPORT_DIR
+  ( COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH" eval "$body" ) >/dev/null
+
+  grep -q 'importer-prime-stuck' "$REPORT_DIR/cdi/pods.yaml" 2>/dev/null || {
+    echo "FAIL: a failed cdi-deployment probe dropped the CDI-labelled pods"
+    cat "$KUBECTL_CALL_LOG"
+    false
+  }
+  if grep -q '^kubectl logs' "$KUBECTL_CALL_LOG"; then
+    echo "FAIL: the cdi-deployment log was read although the probe failed"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
 @test "CSR capture lists and reads every request on the host cluster and each tenant kubeconfig on disk" {
   host=$(fold_source "$SCRIPT" | awk '/^echo "Collecting CertificateSigningRequests/,/^echo "Collecting tenant kubernetes CertificateSigningRequests/')
   [ -n "$host" ] || { echo "FAIL: could not locate the host CSR walk"; false; }
@@ -202,7 +258,7 @@ STUB
     }
   ' "$SCRIPT" | grep -v '\$' | LC_ALL=C sort -u | tr '\n' ' ')
 
-  expected='cozy-cert-manager/cert-manager cozy-cert-manager/cert-manager-webhook cozy-kamaji/kamaji cozy-linstor/linstor-controller cozy-objectstorage-controller/container-object-storage-controller cozy-system/cozystack-operator '
+  expected='cozy-cert-manager/cert-manager cozy-cert-manager/cert-manager-webhook cozy-kamaji/kamaji cozy-kubevirt-cdi/cdi-deployment cozy-linstor/linstor-controller cozy-objectstorage-controller/container-object-storage-controller cozy-system/cozystack-operator '
 
   if [ "$found" != "$expected" ]; then
     echo "FAIL: the set of Deployments this script names changed."

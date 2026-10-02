@@ -1,0 +1,40 @@
+suite: ingress cloudflareProxy wiring
+templates:
+  - templates/nginx-ingress.yaml
+release:
+  name: ingress
+  namespace: tenant-foo
+set:
+  _cluster: {}
+  cloudflareProxy: true
+tests:
+  - it: trusts CF-Connecting-IP only from the Cloudflare ranges
+    asserts:
+      - matchRegex:
+          path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
+          pattern: ^[0-9a-f.:/]+(,[0-9a-f.:/]+)+$
+      - notMatchRegex:
+          path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr
+          pattern: (^|,)(0\.0\.0\.0/0|::/0)(,|$)
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.use-forwarded-headers
+          value: "true"
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.server-snippet
+          value: "real_ip_header CF-Connecting-IP;"
+
+  - it: does not use set_real_ip_from, which is not an ingress-nginx ConfigMap key
+    asserts:
+      - notExists:
+          path: spec.values.ingress-nginx.controller.config.set_real_ip_from
+
+  - it: keeps the whitelist next to the trusted ranges
+    set:
+      whitelist:
+        - 192.0.2.0/24
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.whitelist-source-range
+          value: 192.0.2.0/24
+      - exists:
+          path: spec.values.ingress-nginx.controller.config.proxy-real-ip-cidr

@@ -20,7 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +99,8 @@ type REST struct {
 	singularName  string
 	releaseConfig config.ReleaseConfig
 	specSchema    *structuralschema.Structural
+	nameSchema    *validation.NameSchema
+	nameSchemaErr error
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
@@ -134,6 +139,12 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		klog.Errorf("Failed to build spec schema: %v", err)
 	}
 
+	nameSchema, nameSchemaErr := resolveNameSchema(config)
+	if nameSchemaErr != nil {
+		klog.Errorf("ApplicationDefinition for %s declares an invalid %s, refusing to create %s objects until it is fixed: %v",
+			config.Application.Kind, appsv1alpha1.NameSchemaExtension, config.Application.Kind, nameSchemaErr)
+	}
+
 	return &REST{
 		c: c,
 		w: w,
@@ -150,6 +161,8 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
 		specSchema:    specSchema,
+		nameSchema:    nameSchema,
+		nameSchemaErr: nameSchemaErr,
 	}
 }
 
@@ -204,6 +217,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -242,10 +256,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
-	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
+	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
+		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -499,7 +513,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				klog.Errorf("Failed to get updated object: %v", err)
 				return nil, false, err
 			}
-			createdObj, err := r.Create(ctx, obj, createValidation, &metav1.CreateOptions{})
+			createdObj, err := r.Create(ctx, obj, createValidation, registry.CreateOptionsFromUpdate(options))
 			if err != nil {
 				klog.Errorf("Failed to create new Application: %v", err)
 				return nil, false, err
@@ -509,6 +523,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("Failed to get existing Application %s: %v", name, err)
 		return nil, false, err
 	}
+
+	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
 
 	// Update the Application object
 	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
@@ -552,6 +568,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
+	r.warnUpgradeIntroducedCollisions(ctx, oldObj, app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -560,38 +578,30 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Fetch the live HelmRelease: it backs the ResourceVersion when the
-	// converted object carries none, and runtime-managed labels are carried
-	// over from it below.
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
+
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
-		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
+	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
-	// Merge system labels (from config) directly
-	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
-	// Merge user labels with prefix
-	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
-	// Add application metadata labels
-	if helmRelease.Labels == nil {
-		helmRelease.Labels = make(map[string]string)
-	}
-	helmRelease.Labels[ApplicationKindLabel] = r.kindName
-	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
-	helmRelease.Labels[ApplicationNameLabel] = app.Name
-	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
-
-	// The flux-shard-operator assigns each tenant HelmRelease to a
-	// helm-controller shard by rewriting this label at runtime. Rebuilding
-	// the object from the Application reverts it to the ApplicationDefinition
-	// default, which would bounce the HelmRelease off its shard on every
-	// update, so the live value wins.
-	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
-		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
-	}
+	// Suspension is not part of the Application, so the rebuilt object always
+	// says suspend=false, and sending it as is resumes a release that an
+	// operator or a controller suspended. The CNPG restore driver relies on the
+	// suspension holding across its own patch of the Postgres app through this
+	// API: it purges the Cluster while the release is suspended and resumes it
+	// only once the purge is done, so the chart's next render lands
+	// bootstrap.recovery on an empty namespace. Resumed early, the release
+	// renders while the purge is still running, and the purge then deletes
+	// what it rendered.
+	helmRelease.Spec.Suspend = cur.Spec.Suspend
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
@@ -601,24 +611,35 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. The HelmRelease spec is fully derived from the Application
-	// the caller just applied, so a stale-resourceVersion conflict is never a
-	// real spec conflict here: refresh the resourceVersion from the live object
-	// and retry.
+	// 409 Conflict. Apart from suspend, the HelmRelease spec is derived from the
+	// Application the caller just applied, so a stale-resourceVersion conflict
+	// is never a real spec conflict here: refresh the resourceVersion from the
+	// live object and retry. Suspend is refreshed with it, because the write
+	// that caused the conflict may be the one that suspended the release.
+	//
+	// The carried-over metadata is not derived from the Application, though, and
+	// the writer that caused the conflict is usually the controller that owns it
+	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
+	// carry-over exists for. Keeping the copy read before the conflict would put
+	// the stale metadata back and undo that write, so rebuild from the
+	// conversion output against the object just read.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
 			cur := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
+			helmRelease = converted.DeepCopy()
+			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
 		return updateErr
 	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -688,10 +709,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
-	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
+	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
-		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
+		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
@@ -1162,23 +1183,17 @@ func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appN
 }
 
 // mergeMaps combines two maps of labels or annotations
+// mergeMaps merges b over a into a freshly allocated map. It never returns
+// either input: callers mutate the result in place, and a may be a long-lived
+// shared map (e.g. r.releaseConfig.Labels) that concurrent requests must not
+// write to.
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
 		return nil
 	}
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
-	}
 	merged := make(map[string]string, len(a)+len(b))
-	for k, v := range a {
-		merged[k] = v
-	}
-	for k, v := range b {
-		merged[k] = v
-	}
+	maps.Copy(merged, a)
+	maps.Copy(merged, b)
 	return merged
 }
 
@@ -1201,9 +1216,97 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	}
 	processed := make(map[string]string)
 	for k, v := range original {
-		if strings.HasPrefix(k, prefix) {
-			newKey := strings.TrimPrefix(k, prefix)
-			processed[newKey] = v
+		if key, ok := strings.CutPrefix(k, prefix); ok {
+			processed[key] = v
+		}
+	}
+	return processed
+}
+
+func garbageCollectionFinalizers(finalizers []string) []string {
+	var result []string
+	for _, finalizer := range finalizers {
+		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+func mergeGarbageCollectionFinalizers(current, previous, desired []string) []string {
+	result := slices.Clone(current)
+	for _, finalizer := range []string{metav1.FinalizerDeleteDependents, metav1.FinalizerOrphanDependents} {
+		before, after := slices.Contains(previous, finalizer), slices.Contains(desired, finalizer)
+		if before == after {
+			continue
+		}
+		if !after {
+			result = slices.DeleteFunc(result, func(f string) bool { return f == finalizer })
+		} else if !slices.Contains(result, finalizer) {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+// applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
+// Application, given the live object it is about to replace. The PUT is a full
+// replace, so anything not restated here is dropped:
+//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
+//     remove the HelmRelease instantly, orphaning every resource of the release.
+//   - ownerReferences: garbage collection and lineage.
+//   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
+//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     owned by this API and recomputed from the Application, so stale ones are
+//     dropped and a deletion on the Application propagates.
+//
+// hr must be a fresh conversion output: the function overlays the live metadata
+// and is not idempotent against its own result.
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application, previousFinalizers []string) {
+	hr.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
+	hr.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
+	hr.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
+	hr.OwnerReferences = cur.OwnerReferences
+	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
+	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
+
+	// Merge system labels (from config) directly
+	hr.Labels = mergeMaps(r.releaseConfig.Labels, hr.Labels)
+	// Merge user labels with prefix
+	hr.Labels = mergeMaps(hr.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if hr.Labels == nil {
+		hr.Labels = make(map[string]string)
+	}
+	hr.Labels[ApplicationKindLabel] = r.kindName
+	hr.Labels[ApplicationGroupLabel] = r.gvk.Group
+	hr.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		hr.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+}
+
+// omitPrefixedMap returns the entries of a map whose keys do NOT carry the
+// predefined prefix, keeping the keys as-is. It is the complement of
+// filterPrefixedMap: prefixed keys are owned by this API and recomputed from
+// the Application on every write, while the remaining keys belong to other
+// controllers and must be preserved.
+func omitPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if !strings.HasPrefix(k, prefix) {
+			processed[k] = v
 		}
 	}
 	return processed
@@ -1284,38 +1387,95 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 // chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
-// kubernetesKind is the Application.Kind of the parent Kubernetes cluster CR,
-// whose worker pools are separate KubernetesNodes releases.
-const kubernetesKind = "Kubernetes"
-
-// maxKubernetesClusterName caps a Kubernetes cluster name so its worker pools
-// can always render. Since Phase 2 worker pools are separate KubernetesNodes
-// releases named "<cluster>-<pool>" under the "kubernetes-nodes-" prefix (17
-// chars), the smallest such child release is "kubernetes-nodes-<cluster>-md0".
-// The parent's own "kubernetes-" prefix would let the cluster name reach 42,
-// but that leaves no room for even the default "md0" pool's child release
-// (17 + len(cluster) + len("-md0") <= 53 => len(cluster) <= 32). Capping the
-// parent name at admission surfaces the overflow on the Kubernetes CR the
-// operator is editing, instead of at render time on a child that can never be
-// created (the migration pins and skips such a pool, leaving no way to add
-// workers).
-const maxKubernetesClusterName = maxHelmReleaseName - len("kubernetes-nodes-") - len("-md0")
-
 // maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
 // The tenant Helm chart creates a Namespace whose name is the computed
 // workload namespace (parent namespace + "-" + tenant name), so the total
 // must fit inside a single 63-char DNS-1123 label.
 const maxNamespaceName = 63
 
-// validateNameFormat checks an Application name against DNS-1035 and any
-// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
-// validation.ValidateApplicationName for the reasoning).
-func (r *REST) validateNameFormat(name string) field.ErrorList {
-	return validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+// legacyNameCaps are the caps this server enforced in code before applications
+// declared their own. An upgrade brings cozystack-api up before the
+// application definitions it serves are re-rendered, so for that window a
+// definition can predate its chart's declaration, and without these a name
+// admitted then renders sub-resources that cannot exist. They apply only to a
+// definition that declares nothing, and go once no supported upgrade starts
+// from a definition without the declaration.
+var legacyNameCaps = map[string]validation.NameSchema{
+	"Kubernetes": {
+		MaxLength:   new(int64(32)),
+		Description: "worker pools are KubernetesNodes releases named `kubernetes-nodes-<name>-<pool>`, which must fit the 53-character Helm release name limit",
+	},
+	"Kafka": {
+		MaxLength:   new(int64(44)),
+		Description: "the KRaft controller pod hostname `kafka-<name>-c-<hash>-<id>` must fit the 63-character DNS-1123 label limit",
+	},
 }
 
-// validateNameLength checks that the application name won't exceed Kubernetes limits.
-// prefix + name must fit within the Helm release name limit (53 chars).
+// resolveNameSchema returns the name constraints for the kind cfg describes.
+// An error means the declaration exists but cannot be enforced as written;
+// the caller refuses creates for that kind rather than guess, since guessing
+// either admits names the chart cannot render or rejects names it can.
+func resolveNameSchema(cfg *config.Resource) (*validation.NameSchema, error) {
+	declared, err := validation.ParseNameSchema(cfg.Application.OpenAPISchema)
+	if err != nil {
+		return nil, err
+	}
+	if declared == nil {
+		if legacy, ok := legacyNameCaps[cfg.Application.Kind]; ok {
+			return &legacy, nil
+		}
+		return nil, nil
+	}
+	if budget := maxHelmReleaseName - len(cfg.Release.Prefix); declared.MinLength != nil && *declared.MinLength > int64(budget) {
+		return nil, fmt.Errorf("minLength %d exceeds the %d characters the release prefix %q leaves, so no name fits",
+			*declared.MinLength, budget, cfg.Release.Prefix)
+	}
+	return declared, nil
+}
+
+// validateNameFormat checks an Application name against DNS-1035, any
+// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
+// validation.ValidateApplicationName for the reasoning), and the format the
+// application declares for itself in its schema.
+func (r *REST) validateNameFormat(name string) field.ErrorList {
+	allErrs := validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+	return append(allErrs, r.validateNameAgainstSchema(name)...)
+}
+
+// validateNameAgainstSchema applies the minLength and pattern the application
+// declares for its name; maxLength is applied in validateNameLength, together
+// with the Helm budget it shares.
+func (r *REST) validateNameAgainstSchema(name string) field.ErrorList {
+	if r.nameSchema == nil {
+		return nil
+	}
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	if minLen := r.nameSchema.MinLength; minLen != nil && int64(len(name)) < *minLen {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be at least %d characters (%s)", *minLen, r.declaredReason())))
+	}
+	if !r.nameSchema.MatchesPattern(name) {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must match %q (%s)", r.nameSchema.Pattern, r.declaredReason())))
+	}
+	return allErrs
+}
+
+// declaredReason is what a name rejected by the application's own
+// declaration is told: the chart's explanation when it gives one.
+func (r *REST) declaredReason() string {
+	if r.nameSchema.Description != "" {
+		return r.nameSchema.Description
+	}
+	return fmt.Sprintf("limit declared by the %s application", r.kindName)
+}
+
+// validateNameLength checks that the application name fits both the Helm
+// release name limit (prefix + name <= 53) and any stricter budget the
+// application declares for itself. The tighter one wins and reports itself; a
+// declaration can never widen the Helm budget.
 func (r *REST) validateNameLength(name string) field.ErrorList {
 	fldPath := field.NewPath("metadata").Child("name")
 	allErrs := field.ErrorList{}
@@ -1327,23 +1487,21 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)))
 		return allErrs
 	}
-
-	// A Kubernetes cluster's worker pools are separate KubernetesNodes releases
-	// named "<cluster>-<pool>", so the parent name must leave room for at least
-	// the default "md0" pool's child release. This is stricter than the parent's
-	// own Helm-prefix budget and fails at admission on the parent rather than at
-	// render time on an un-creatable child (see maxKubernetesClusterName).
-	if r.kindName == kubernetesKind && maxLen > maxKubernetesClusterName {
-		if len(name) > maxKubernetesClusterName {
-			allErrs = append(allErrs, field.Invalid(fldPath, name,
-				fmt.Sprintf("must be no more than %d characters so its worker pools (KubernetesNodes releases named \"kubernetes-nodes-<cluster>-<pool>\") fit the %d-character Helm release name limit", maxKubernetesClusterName, maxHelmReleaseName)))
-		}
+	if r.nameSchemaErr != nil {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: the %s ApplicationDefinition declares an invalid %s: %v", r.kindName, appsv1alpha1.NameSchemaExtension, r.nameSchemaErr)))
 		return allErrs
+	}
+
+	reason := fmt.Sprintf("release prefix %q", r.releaseConfig.Prefix)
+	if declared := r.nameSchema; declared != nil && declared.MaxLength != nil && *declared.MaxLength < int64(maxLen) {
+		maxLen = int(*declared.MaxLength)
+		reason = r.declaredReason()
 	}
 
 	if len(name) > maxLen {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
-			fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)))
+			fmt.Sprintf("must be no more than %d characters (%s)", maxLen, reason)))
 	}
 	return allErrs
 }
@@ -1386,6 +1544,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			ResourceVersion:   hr.GetResourceVersion(),
 			CreationTimestamp: hr.CreationTimestamp,
 			DeletionTimestamp: hr.DeletionTimestamp,
+			Finalizers:        garbageCollectionFinalizers(hr.Finalizers),
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
@@ -1589,14 +1748,11 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
 	//     then overrides only Upgrade.Timeout, so a kind can carry an
 	//     asymmetric budget (short install, long upgrade or vice versa).
-	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
-	// resources whose admin-kubeconfig Secret is provisioned
-	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget, and the Tenant parent chart bootstraps the
-	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
-	// Any future kind with the same shape can opt in by setting the
-	// same annotation.
+	// Both annotations live on the kind's ApplicationDefinition (for a
+	// kind shipped in this repo, the cozyrds manifest of its -rd
+	// package), so a kind whose chart can legitimately outlast the
+	// global wait budget opts in there rather than raising the default
+	// for every kind.
 	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
 	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
 	if r.releaseConfig.HelmInstallTimeout > 0 {
@@ -1620,6 +1776,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Annotations:     addPrefixedMap(app.Annotations, AnnotationPrefix),
 			ResourceVersion: app.ResourceVersion,
 			UID:             app.UID,
+			Finalizers:      garbageCollectionFinalizers(app.Finalizers),
 		},
 		Spec: helmv2.HelmReleaseSpec{
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
@@ -1946,6 +2103,10 @@ func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
 	}
 }
 
+// kubernetesKind is the Application.Kind of the Kubernetes cluster CR whose
+// Phase 2-removed value keys the warning below reports on.
+const kubernetesKind = "Kubernetes"
+
 // removedKubernetesFields are Kubernetes CR value keys that Phase 2 moved to the
 // separate KubernetesNodes resource. They are still accepted and stored -- an
 // upgraded cluster keeps them in its values until re-edited, and the adoption
@@ -1972,6 +2133,198 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 				"spec.%s is ignored on the Kubernetes resource since Phase 2: worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart). The field is stored but has no effect.", key))
 		}
 	}
+}
+
+// removedUserPasswordKinds are the Application kinds whose per-user `password`
+// field was removed from the chart render -- passwords are chart-generated into
+// the <release>-credentials Secret. Like the Kubernetes fields above the key is
+// still accepted and stored (the user object's schema keeps additionalProperties
+// open, and the render preserves an existing password through lookup), so a value
+// left from before the upgrade stays the LIVE credential and there is no longer a
+// values knob to change it. Warn so an operator editing it is told it has no
+// effect instead of getting a silent 200.
+var removedUserPasswordKinds = map[string]bool{
+	postgresKind: true,
+	mariadbKind:  true,
+}
+
+const (
+	postgresKind = "Postgres"
+	mariadbKind  = "MariaDB"
+)
+
+// warnRemovedUserPasswords emits a client-facing admission warning for every
+// spec.users[<name>].password still present on a Postgres or MariaDB resource.
+func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
+	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return
+	}
+	// Decode the users map leniently, then each user on its own, so one malformed
+	// entry cannot suppress the warning for another: a single json.Unmarshal into a
+	// typed struct returns the first type error and discards every field it already
+	// decoded, so one user sent with a non-object value would mute the warning for a
+	// sibling user that does carry a removed password.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(app.Spec.Raw, &top); err != nil {
+		return
+	}
+	var users map[string]json.RawMessage
+	if raw, ok := top["users"]; ok {
+		// A malformed users shape (not a map) carries no per-user password we
+		// recognise; ignore it rather than fail the whole decode.
+		_ = json.Unmarshal(raw, &users)
+	}
+	for user, raw := range users {
+		// Each chart hard-manages one reserved superuser (MariaDB root, Postgres
+		// "postgres"); it is warned about as a whole below, so skip it here to avoid
+		// a second, partial "password is ignored" warning on the same key that reads
+		// as if the rest of the entry were fine.
+		if (r.kindName == mariadbKind && user == "root") || (r.kindName == postgresKind && user == "postgres") {
+			continue
+		}
+		var u map[string]json.RawMessage
+		// A non-object user value is not one this warning is about; skip it
+		// rather than letting one malformed entry mute the rest.
+		if json.Unmarshal(raw, &u) != nil {
+			continue
+		}
+		if _, present := u["password"]; present {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
+		}
+	}
+	// MariaDB force-generates root's password (root is chart-managed), silently
+	// discarding any value-supplied users.root. Postgres hard-rejects users.postgres
+	// at render, but MariaDB accepts-and-ignores it — a hard reject would wedge an
+	// existing release that already lists it on upgrade — so warn that it has no
+	// effect rather than reject.
+	if r.kindName == mariadbKind {
+		if _, ok := users["root"]; ok {
+			warning.AddWarning(ctx, "",
+				"spec.users.root is ignored: root is chart-managed and its password is always auto-generated. Editing it has no effect.")
+		}
+	}
+	// Postgres hard-rejects users.postgres at render (the chart fails the release),
+	// so warn about the KEY at admission rather than letting only the generic
+	// "password is ignored" warning fire, which reads as if the entry were otherwise
+	// accepted and hides that the whole release will not reconcile until it is removed.
+	if r.kindName == postgresKind {
+		if _, ok := users["postgres"]; ok {
+			warning.AddWarning(ctx, "",
+				"spec.users.postgres is not allowed: postgres is the CNPG-managed superuser and cannot be redefined as an app user; the release will fail to render until it is removed.")
+		}
+	}
+}
+
+func dnsName(s string) string { return strings.ReplaceAll(s, "_", "-") }
+
+// collisionSpec buckets the three "_"/"-" collision namespaces the mariadb chart
+// guards — usernames, database names, and (database,user) Grant pairs — as maps
+// from a rendered DNS name to the human-readable sources that produce it. A key
+// with >=2 sources is a collision. The chart renders each name as
+// <release>-<replace "_" "-">, so the constant release prefix is dropped here; it
+// does not change which names collide.
+type collisionSpec struct {
+	users     map[string][]string
+	databases map[string][]string
+	grants    map[string][]string
+}
+
+// parseCollisionSpec decodes an Application's raw spec leniently (a malformed
+// shape contributes nothing rather than erroring), mirroring the chart's Grant
+// derivation: admin members plus readonly members not already in admin.
+func parseCollisionSpec(raw []byte) collisionSpec {
+	cs := collisionSpec{users: map[string][]string{}, databases: map[string][]string{}, grants: map[string][]string{}}
+	if len(raw) == 0 {
+		return cs
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return cs
+	}
+	var users map[string]json.RawMessage
+	if u, ok := top["users"]; ok {
+		_ = json.Unmarshal(u, &users)
+	}
+	for name := range users {
+		d := dnsName(name)
+		cs.users[d] = append(cs.users[d], name)
+	}
+	var dbs map[string]json.RawMessage
+	if d, ok := top["databases"]; ok {
+		_ = json.Unmarshal(d, &dbs)
+	}
+	for db, rawDB := range dbs {
+		cs.databases[dnsName(db)] = append(cs.databases[dnsName(db)], db)
+		var body struct {
+			Roles struct {
+				Admin    []string `json:"admin"`
+				Readonly []string `json:"readonly"`
+			} `json:"roles"`
+		}
+		if json.Unmarshal(rawDB, &body) != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, u := range append(append([]string{}, body.Roles.Admin...), body.Roles.Readonly...) {
+			if seen[u] {
+				continue // a user in both roles renders one Grant (admin ALL wins)
+			}
+			seen[u] = true
+			g := dnsName(db) + "-" + dnsName(u)
+			cs.grants[g] = append(cs.grants[g], fmt.Sprintf("(database %q, user %q)", db, u))
+		}
+	}
+	return cs
+}
+
+// introducedCollisions returns, per DNS name, the sorted new sources that collide
+// on it — but only when the old spec did not already carry that collision (an
+// inherited one is left alone, exactly as the install-gated render guard does).
+func introducedCollisions(oldByDNS, newByDNS map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for dns, names := range newByDNS {
+		if len(names) < 2 || len(oldByDNS[dns]) >= 2 {
+			continue
+		}
+		s := append([]string(nil), names...)
+		sort.Strings(s)
+		out[dns] = s
+	}
+	return out
+}
+
+// warnUpgradeIntroducedCollisions warns when an UPDATE introduces a "_"/"-"
+// collision the old object did not carry, in any of the three namespaces MariaDB
+// renders as <release>-<replace "_" "-">: usernames (one User CR), database names
+// (one Database CR), and (database,user) Grant pairs (one Grant CR). In each the
+// colliding names produce one resource and one silently overwrites the other. The
+// chart's render guards for all three are gated to install — blocking on upgrade
+// would wedge a release that already inherited the pair — so an upgrade that
+// INTRODUCES one renders silently. The aggregated apiserver holds both specs here
+// and can tell an introduced collision from an inherited one, closing the gap for
+// all three without touching the inherited case. Warns rather than rejects,
+// matching the removed-password warning and keeping an already-broken release
+// editable. MariaDB-only; Postgres has no "_"→"-" resource mapping.
+func (r *REST) warnUpgradeIntroducedCollisions(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
+	if r.kindName != mariadbKind || newApp == nil || newApp.Spec == nil {
+		return
+	}
+	newCS := parseCollisionSpec(newApp.Spec.Raw)
+	oldCS := parseCollisionSpec(nil)
+	if oldApp, ok := oldObj.(*appsv1alpha1.Application); ok && oldApp.Spec != nil {
+		oldCS = parseCollisionSpec(oldApp.Spec.Raw)
+	}
+	warn := func(kind, resource string, oldG, newG map[string][]string) {
+		for dns, names := range introducedCollisions(oldG, newG) {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"%s %v map to the same mariadb-operator %s name %q (\"_\" renders as \"-\"); one silently overwrites the other. Rename one before applying.",
+				kind, names, resource, dns))
+		}
+	}
+	warn("spec.users", "User", oldCS.users, newCS.users)
+	warn("spec.databases", "Database", oldCS.databases, newCS.databases)
+	warn("Grant pairs", "Grant", oldCS.grants, newCS.grants)
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table

@@ -1,0 +1,35 @@
+## @section Proxmox CSI
+##
+## The upstream chart ships a values.talos.yaml preset that does not fit a
+## Cozystack tenant, and the two differences are not cosmetic:
+##
+##   - it selects the controller onto `node-role.kubernetes.io/control-plane`.
+##     A Kamaji tenant has no control-plane nodes at all — the control plane is
+##     a Deployment in the management cluster — so that selector leaves the
+##     controller Pending forever.
+##   - it selects the node plugin onto
+##     `node.cloudprovider.kubernetes.io/platform: nocloud`, a label a
+##     cloud-controller-manager running inside the cluster applies. The CCM for
+##     this substrate runs in the management cluster and applies no such label,
+##     so that DaemonSet would schedule nowhere.
+##
+## Both are dropped here. This release is the tenant-side half only: the node
+## plugin, the CSIDriver object and the storage classes. The controller — the
+## half that authenticates to the hypervisor — runs in the management cluster,
+## in templates/csi-proxmox/controller.yaml of the kubernetes chart, and that
+## chart sets replicaCount to 0 for the controller Deployment this one still
+## renders. `config.clusters` stays empty on purpose: the chart's Secret
+## template renders only for a non-empty list, and an empty one is what keeps
+## every credential out of the tenant.
+
+proxmox-csi-plugin:
+  createNamespace: false
+
+  config:
+    clusters: []
+
+  storageClass: []
+
+  node:
+    tolerations:
+      - operator: Exists

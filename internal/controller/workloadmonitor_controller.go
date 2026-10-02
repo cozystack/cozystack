@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
@@ -320,13 +322,19 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 			workload.Labels = make(map[string]string)
 		}
 		// Apply monitor-level labels first so source-object labels can override on conflict
-		for k, v := range monitorLabels {
-			workload.Labels[k] = v
-		}
-		for k, v := range bc.Labels {
-			workload.Labels[k] = v
-		}
+		maps.Copy(workload.Labels, monitorLabels)
+		maps.Copy(workload.Labels, bc.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
+
+		delete(workload.Labels, "workloads.cozystack.io/bucket-class")
+		if bc.Spec.BucketClassName != "" {
+			if errs := validation.IsValidLabelValue(bc.Spec.BucketClassName); len(errs) == 0 {
+				workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
+			} else {
+				logger.Info("Skipping bucket-class label: not a valid label value",
+					"bucketClaim", bc.Name, "bucketClassName", bc.Spec.BucketClassName, "errors", errs)
+			}
+		}
 
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
@@ -411,12 +419,8 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 		if workload.Labels == nil {
 			workload.Labels = make(map[string]string)
 		}
-		for k, v := range monitorLabels {
-			workload.Labels[k] = v
-		}
-		for k, v := range svc.Labels {
-			workload.Labels[k] = v
-		}
+		maps.Copy(workload.Labels, monitorLabels)
+		maps.Copy(workload.Labels, svc.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Fill Workload status fields:
@@ -470,12 +474,8 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		if workload.Labels == nil {
 			workload.Labels = make(map[string]string)
 		}
-		for k, v := range monitorLabels {
-			workload.Labels[k] = v
-		}
-		for k, v := range pvc.Labels {
-			workload.Labels[k] = v
-		}
+		maps.Copy(workload.Labels, monitorLabels)
+		maps.Copy(workload.Labels, pvc.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Fill Workload status fields:
@@ -552,18 +552,12 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		if workload.Labels == nil {
 			workload.Labels = make(map[string]string)
 		}
-		for k, v := range monitorLabels {
-			workload.Labels[k] = v
-		}
-		for k, v := range pod.Labels {
-			workload.Labels[k] = v
-		}
+		maps.Copy(workload.Labels, monitorLabels)
+		maps.Copy(workload.Labels, pod.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Add workload meta to labels
-		for k, v := range metaLabels {
-			workload.Labels[k] = v
-		}
+		maps.Copy(workload.Labels, metaLabels)
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -819,7 +813,7 @@ func (r *WorkloadMonitorReconciler) getWorkloadMetadata(obj client.Object) map[s
 	if instanceType, ok := annotations["kubevirt.io/cluster-instancetype-name"]; ok {
 		labels["workloads.cozystack.io/kubevirt-vmi-instance-type"] = instanceType
 	}
-	if instanceProfile, ok := annotations["kubevirt.io/cluster-instanceprofile-name"]; ok {
+	if instanceProfile, ok := annotations["kubevirt.io/cluster-preference-name"]; ok {
 		labels["workloads.cozystack.io/kubevirt-vmi-instance-profile"] = instanceProfile
 	}
 	return labels

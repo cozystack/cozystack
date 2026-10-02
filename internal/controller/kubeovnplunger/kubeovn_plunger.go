@@ -64,7 +64,7 @@ func (r *KubeOVNPlunger) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if env.Name != "NODE_IPS" {
 			continue
 		}
-		for _, ip := range strings.Split(env.Value, ",") {
+		for ip := range strings.SplitSeq(env.Value, ",") {
 			iphints[ip] = ""
 		}
 		break

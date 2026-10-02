@@ -19,6 +19,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -180,6 +181,24 @@ func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, sourceName, sour
 	}
 }
 
+// clearMaterializedRevision removes the operator's materialized-revision
+// annotation from the tap's OCIRepository, so the next reconcile does not
+// short-circuit on the unchanged artifact revision and re-materializes (which
+// re-creates a registration removed out-of-band). A no-op when the source or the
+// annotation is absent.
+func clearMaterializedRevision(ctx context.Context, k8sClient client.Client, srcName string) error {
+	reg := &sourcev1.OCIRepository{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, reg); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if _, ok := reg.Annotations[tapconst.MaterializedRevisionAnnotation]; !ok {
+		return nil
+	}
+	base := reg.DeepCopy()
+	delete(reg.Annotations, tapconst.MaterializedRevisionAnnotation)
+	return k8sClient.Patch(ctx, reg, client.MergeFrom(base))
+}
+
 func tapScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -209,8 +228,11 @@ var tapCmd = &cobra.Command{
 creates a Flux OCIRepository pointing at the artifact and the PackageSource(s)
 the artifact carries, under the names the repository declares. A name that
 clashes with a core component (or another tap) is rejected, so an external
-package can never silently shadow an official one. Nothing is installed until
-'cozypkg add'. Tapping is idempotent. Creating cluster-scoped resources
+package can never silently shadow an official one. The repository's applications
+register in the catalog automatically, unless the repository declares no default
+variant (then nothing is registered). A privileged install component of a
+registered app is not installed until the operator confirms it with 'cozypkg add
+--allow-privileged'. Tapping is idempotent. Creating cluster-scoped resources
 requires cluster-admin.
 
 With --secret the OCIRepository is given a pull-credential secretRef (the
@@ -323,11 +345,25 @@ charts in your management cluster: tap only sources you trust.`,
 			}
 		}
 
+		// Force a fresh materialization on this tap: clear the materialized-revision
+		// annotation so the operator does not short-circuit on the unchanged
+		// artifact revision. This makes a re-tap the supported recovery for a
+		// registration Package (or PackageSource) removed out-of-band since the last
+		// materialization -- e.g. garbage-collected when its PackageSource was
+		// deleted. Note this re-registers ANY currently-absent app the artifact
+		// declares, so a re-tap also undoes a `cozypkg del` of a tap-registered app;
+		// the two are indistinguishable (both leave the registration absent), and
+		// there is no per-app opt-out. A first tap has no such annotation, so this is
+		// a no-op then.
+		if err := clearMaterializedRevision(ctx, k8sClient, srcName); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
+		}
+
 		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s (%s:%s)\n", fullRef, srcName, ref.URL, ref.Tag)
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Install with: cozypkg add %s\n", names[0])
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "The repository's applications register in the dashboard catalog automatically. A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'. Check the source's events if an app does not appear.\n")
 		return nil
 	},
 }
@@ -335,60 +371,97 @@ charts in your management cluster: tap only sources you trust.`,
 var untapCmd = &cobra.Command{
 	Use:   "untap <packagesource-name>",
 	Short: "Remove a tapped repository",
-	Long: `Untap removes a tapped PackageSource and its Flux source.
-Already-installed Packages are left untouched (delete them explicitly with
-cozypkg del). Only tapped sources (marked with the marketplace-tap label) can
-be untapped; official sources are refused.`,
+	Long: `Untap removes a tapped PackageSource, its Flux source, and the
+tap-managed registration Package that de-registers the repository's apps from
+the catalog. Running application instances are left in place but become
+unmanaged until the repository is tapped again. Only tapped sources (marked
+with the marketplace-tap label) can be untapped; official sources are refused.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
-		name := args[0]
-
 		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
 		if err != nil {
 			return err
 		}
+		return runUntap(context.Background(), k8sClient, args[0], untapConfirmFlag, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
 
-		ps := &cozyv1alpha1.PackageSource{}
-		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, ps); err != nil {
-			return fmt.Errorf("failed to get PackageSource %s: %w", name, err)
-		}
-		// A tap is identified by its marker label, not by a name prefix.
-		if ps.GetLabels()[tapconst.Label] != "true" {
-			return fmt.Errorf("refusing to untap %q: not a tapped repository (missing the %s label); official sources cannot be untapped", name, tapconst.Label)
-		}
+// runUntap removes a tapped PackageSource, its tap-managed registration Package,
+// and its Flux source. It is the testable body of untapCmd; see that command's
+// Long for the behaviour and the guard.
+func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYes bool, out, errOut io.Writer) error {
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, ps); err != nil {
+		return fmt.Errorf("failed to get PackageSource %s: %w", name, err)
+	}
+	// A tap is identified by its marker label, not by a name prefix.
+	if ps.GetLabels()[tapconst.Label] != "true" {
+		return fmt.Errorf("refusing to untap %q: not a tapped repository (missing the %s label); official sources cannot be untapped", name, tapconst.Label)
+	}
 
-		// Warn if a Package by this name is installed (add.go names the Package
-		// after its PackageSource).
+	srcName := ""
+	if ps.Spec.SourceRef != nil {
+		srcName = ps.Spec.SourceRef.Name
+	}
+
+	// The registration Package (auto-created on connect, tap-managed)
+	// de-registers the repository's apps and is removed with the untap. Deleting
+	// it garbage-collects its registration HelmReleases and the
+	// ApplicationDefinitions they render. It is removed only when it belongs to
+	// THIS source (label AND source annotation); a Package a later tap created
+	// under a reused name, or a foreign Package, is left in place and blocks the
+	// untap without --yes.
+	//
+	// The Package is handled BEFORE the PackageSource: a transient error here must
+	// abort the untap, not fall through to delete the PackageSource and OCIRepository
+	// and strand the Package where no later cleanup can find it.
+	// Re-read and re-classify on a conflict rather than assume the Package was
+	// pinned: its resourceVersion also moves on a status write. The UID +
+	// ResourceVersion precondition deletes only the exact object classified.
+	for attempt := 0; ; attempt++ {
 		pkg := &cozyv1alpha1.Package{}
-		if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg); err == nil && !untapConfirmFlag {
-			return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+		err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg)
+		if apierrors.IsNotFound(err) {
+			break // no registration Package; nothing to de-register
 		}
-
-		srcName := ""
-		if ps.Spec.SourceRef != nil {
-			srcName = ps.Spec.SourceRef.Name
+		if err != nil {
+			return fmt.Errorf("failed to check registration Package %s: %w", name, err)
 		}
-
-		if err := k8sClient.Delete(ctx, ps); err != nil {
-			return fmt.Errorf("failed to delete PackageSource %s: %w", name, err)
+		if !collision.ManagedRegistration(pkg, srcName, pkg.Spec.Variant) {
+			if !allowYes {
+				return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+			}
+			break
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Removed PackageSource/%s\n", name)
+		delErr := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID, ResourceVersion: &pkg.ResourceVersion})
+		if delErr == nil || apierrors.IsNotFound(delErr) {
+			_, _ = fmt.Fprintf(out, "Removed Package/%s\n", name)
+			break
+		}
+		if apierrors.IsConflict(delErr) && attempt < 4 {
+			continue
+		}
+		return fmt.Errorf("failed to delete registration Package %s: %w", name, delErr)
+	}
 
-		// Delete the Flux source only if it is a tap we own (marker label) and
-		// no other PackageSource still references it.
-		if srcName != "" && !sourceStillReferenced(ctx, k8sClient, srcName, name) {
-			oci := &sourcev1.OCIRepository{}
-			if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, oci); err == nil && oci.GetLabels()[tapconst.Label] == "true" {
-				if err := k8sClient.Delete(ctx, oci); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not delete OCIRepository/%s: %v\n", srcName, err)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "Removed OCIRepository/%s\n", srcName)
-				}
+	if err := k8sClient.Delete(ctx, ps); err != nil {
+		return fmt.Errorf("failed to delete PackageSource %s: %w", name, err)
+	}
+	_, _ = fmt.Fprintf(out, "Removed PackageSource/%s\n", name)
+
+	// Delete the Flux source only if it is a tap we own (marker label) and no
+	// other PackageSource still references it.
+	if srcName != "" && !sourceStillReferenced(ctx, k8sClient, srcName, name) {
+		oci := &sourcev1.OCIRepository{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, oci); err == nil && oci.GetLabels()[tapconst.Label] == "true" {
+			if err := k8sClient.Delete(ctx, oci); err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: could not delete OCIRepository/%s: %v\n", srcName, err)
+			} else {
+				_, _ = fmt.Fprintf(out, "Removed OCIRepository/%s\n", srcName)
 			}
 		}
-		return nil
-	},
+	}
+	return nil
 }
 
 // objectExists reports whether obj already exists on the cluster, so an

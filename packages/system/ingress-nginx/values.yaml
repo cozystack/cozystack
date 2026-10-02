@@ -5,8 +5,8 @@ ingress-nginx:
     image:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
-      tag: v1.11.5
-      digest: sha256:f51c7ee0968ad542d4b77854fc57f68e17b2f6e498bcd168cd5f42b409bf54e6
+      tag: v1.11.6
+      digest: sha256:a8ddcee59b63f6cbf93f4d3c9ffa1d1dda3c1d39497748d4484655356c68b3f6
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
@@ -16,7 +16,7 @@ ingress-nginx:
       enabled: true
     extraContainers:
     - name: protobuf-exporter
-      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.5@sha256:0f981014415e00cfee3bf38f7ca084e6774150d6a57774e73da04acd8b346335
+      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.6@sha256:9b4789965f0efa11eb6345745708480be47ce3a4c751223d07a9d5a19e91174f
       args:
       - --server.telemetry-address=0.0.0.0:9090
       - --server.exporter-address=0.0.0.0:9091
@@ -94,6 +94,13 @@ ingress-nginx:
 
   defaultBackend:
     enabled: true
+    # The chart default, defaultbackend-amd64, has no arm64 build. This image
+    # is the upstream multi-arch replacement: 404 on :8080, /healthz for probes.
+    image:
+      registry: registry.k8s.io
+      image: ingress-nginx/custom-error-pages
+      tag: v1.2.9
+      digest: sha256:203d3020005dbdd735c1ad51f238d8663b9851399b52cc0c9c9e3f7273b6b299
     resources:
       limits:
         cpu: 10m

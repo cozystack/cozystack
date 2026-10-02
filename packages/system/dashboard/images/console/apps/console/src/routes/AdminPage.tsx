@@ -14,6 +14,7 @@ import { InfoRedirect } from "./InfoRedirect.tsx"
 import { ModulesPage } from "./ModulesPage.tsx"
 import { ExternalIpsPage } from "./ExternalIpsPage.tsx"
 import { TenantsPage } from "./TenantsPage.tsx"
+import { TapsPage } from "./TapsPage.tsx"
 import { ApplicationOrderPage } from "./ApplicationOrderPage.tsx"
 import { ApplicationEditRoute } from "./detail/ApplicationEditRoute.tsx"
 import { ApplicationDetailPage } from "./detail/ApplicationDetailPage.tsx"
@@ -21,7 +22,7 @@ import { ApplicationListPage } from "./ApplicationListPage.tsx"
 
 /**
  * Admin portal at /admin/*. Administration (Info, Modules, External IPs,
- * Tenants) is always accessible, so the portal itself carries no gate. The two
+ * Repositories, Tenants) is always accessible, so the portal itself carries no gate. The two
  * cluster-wide operator areas keep their own independent permissions: Capacity
  * (nodes/list) and Backup Classes (backupclasses/update). Each is wrapped in a
  * layout guard that closes the direct-URL hole the sidebar already hides, so a
@@ -47,6 +48,7 @@ export function AdminPage() {
       <Route path="info" element={<InfoRedirect />} />
       <Route path="modules" element={<ModulesPage />} />
       <Route path="external-ips" element={<ExternalIpsPage />} />
+      <Route path="taps" element={<TapsPage />} />
       <Route path="tenants" element={<TenantsPage />} />
       <Route path="new/:appName" element={<ApplicationOrderPage />} />
       <Route path=":plural/:name/edit" element={<ApplicationEditRoute />} />

@@ -20,14 +20,14 @@
 ## @x-cozystack-options {source: gpu}
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
-## @field {quantity} [cpu] - Number of CPU cores allocated.
-## @field {quantity} [memory] - Amount of memory allocated.
-## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology).
+## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
+## @field {quantity} [memory] - Amount of memory allocated, as a positive quantity such as `8Gi`.
+## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.
 
 ## @typedef {struct} Firmware - Firmware and boot configuration. When left empty, the boot mode is inherited from the instanceProfile.
 ## @field {string} [bootloader] - Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
 ## @field {bool} [secureBoot] - Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
-## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi".
 
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
@@ -95,7 +95,7 @@ firmware: {}
 ##   secureBoot: true
 ##   efiPersistent: true
 
-## @param {Resources} [resources] - Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; cpu or sockets on its own sizes nothing and is ignored.
+## @param {Resources} [resources] - Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; a whole-number cpu or sockets on its own sizes nothing and is ignored.
 resources: {}
 
 ## @param {[]string} sshKeys - List of SSH public keys for authentication.

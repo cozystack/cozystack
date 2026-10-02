@@ -54,7 +54,9 @@ spec:
 EOF
 
 log_substep "Waiting for ClickHouse HelmRelease..."
-wait_hr_ready "clickhouse-${CLICKHOUSE_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "clickhouse-${CLICKHOUSE_NAME}" 660
 
 log_substep "Waiting for first ClickHouse pod..."
 wait_sts_ready "chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0" 300

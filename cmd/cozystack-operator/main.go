@@ -484,8 +484,8 @@ func parseRefSpec(refSpec string) (map[string]string, error) {
 		return result, nil
 	}
 
-	pairs := strings.Split(refSpec, ",")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(refSpec, ",")
+	for pair := range pairs {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
@@ -694,6 +694,9 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 		{"isp-full", []string{"values.yaml", "values-isp-full.yaml"}},
 		{"isp-hosted", []string{"values.yaml", "values-isp-hosted.yaml"}},
 		{"isp-full-generic", []string{"values.yaml", "values-isp-full-generic.yaml"}},
+		{"isp-slim", []string{"values.yaml", "values-isp-slim.yaml"}},
+		{"isp-slim-generic", []string{"values.yaml", "values-isp-slim-generic.yaml"}},
+		{"isp-hosted-slim", []string{"values.yaml", "values-isp-hosted-slim.yaml"}},
 	}
 
 	variants := make([]cozyv1alpha1.Variant, len(variantData))

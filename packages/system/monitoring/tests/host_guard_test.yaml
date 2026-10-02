@@ -1,0 +1,41 @@
+suite: grafana root_url fails on an empty injected apex
+
+templates:
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# monitoring declares _namespace: {} and renders standalone with an empty map
+# (the guard stays silent there). A NON-empty _namespace with an empty host is
+# the injected-misconfig case the guard catches; grafana.yaml composes
+# grafana.<apex> in root_url on every render.
+
+tests:
+  - it: fails when _namespace is injected with an empty host and no host override
+    set:
+      _namespace:
+        ingress: tenant-root
+        host: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the Grafana CR when the apex is set
+    set:
+      _namespace:
+        ingress: tenant-root
+        host: example.org
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+    asserts:
+      - equal:
+          path: kind
+          value: Grafana

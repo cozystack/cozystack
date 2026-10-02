@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -113,12 +114,12 @@ func rabbitmqBackupParameters(b *backupsv1alpha1.Backup) map[string]string {
 // run mode, the resolved parameters, and (restore only) the source Backup. The
 // pod template and the artifact URI render against this one context.
 func rabbitmqRenderContext(
-	app map[string]interface{},
+	app map[string]any,
 	releaseName, releaseNamespace, mode, backupName, artifactURI string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) map[string]any {
-	ctxMap := map[string]interface{}{
+	ctxMap := map[string]any{
 		"Application": app,
 		"Release": map[string]string{
 			"Name":      releaseName,
@@ -146,7 +147,7 @@ func rabbitmqRenderContext(
 		if backup.Spec.ApplicationRef.APIGroup != nil {
 			sourceAPIGroup = *backup.Spec.ApplicationRef.APIGroup
 		}
-		ctxMap["Backup"] = map[string]interface{}{
+		ctxMap["Backup"] = map[string]any{
 			"Name":      backup.Name,
 			"Namespace": backup.Namespace,
 			"ApplicationRef": map[string]string{
@@ -380,9 +381,7 @@ func (r *BackupJobReconciler) ensureRabbitmqJob(
 	}
 
 	labels := map[string]string{rabbitmqLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildRabbitmqBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
@@ -418,9 +417,7 @@ func (r *RestoreJobReconciler) ensureRabbitmqRestoreJob(
 	}
 
 	labels := map[string]string{rabbitmqLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildRabbitmqBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
@@ -449,9 +446,7 @@ func buildRabbitmqBatchJob(namespace, name string, labels map[string]string, ren
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}
-	for k, v := range labels {
-		pod.Labels[k] = v
-	}
+	maps.Copy(pod.Labels, labels)
 	backoffLimit := int32(2)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -575,7 +570,7 @@ func (r *RestoreJobReconciler) reconcileRabbitmqRestore(ctx context.Context, res
 		}
 	}
 	targetRef := corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(targetAPIGroup),
+		APIGroup: new(targetAPIGroup),
 		Kind:     targetAppKind,
 		Name:     targetAppName,
 	}

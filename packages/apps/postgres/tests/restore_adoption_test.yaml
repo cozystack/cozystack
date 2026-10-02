@@ -1,0 +1,100 @@
+suite: init-script keeps databases a restore brought back
+
+# A restore replaces spec.databases with the Backup's snapshot, but recovery
+# replays WAL past it, so a database created after the Backup comes back still
+# commented 'database managed by helm'. Dropping every managed database the spec
+# does not declare would delete it on the first init-job run after the restore.
+# That run is told apart by bootstrap.newServerName, which the restore driver
+# sets to a value unique to each RestoreJob: until the cluster records it as
+# adopted, undeclared managed databases and their roles are released from
+# management instead of dropped. The behaviour is proven against a live
+# PostgreSQL; these tests pin the render.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+  upgrade: true
+
+set:
+  _cluster:
+    scheduling: {}
+  databases:
+    orders: {}
+
+tests:
+  - it: releases undeclared databases instead of dropping them until the restore is adopted
+    set:
+      bootstrap:
+        newServerName: pg-test-restore-0123456789abcdef
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'if \[ -n "\$RESTORE_MARK" \] && \[ "\$ADOPTED_MARK" != "\$RESTORE_MARK" \]; then'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "ADOPTED_MARK=\\$\\(psql -v ON_ERROR_STOP=1 -t -A --dbname postgres -c \"SELECT current_setting\\('cozystack.adopted_restore', true\\)\"\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'COMMENT ON DATABASE :"db" IS NULL;'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "unnest\\(ARRAY\\[:'db' \\|\\| '_admin', :'db' \\|\\| '_readonly'\\]\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DROP DATABASE IF EXISTS \\"\$db\\" WITH \(FORCE\);'
+
+  # The mark is written only after every pass has run, so a run that fails part
+  # way leaves the restore unadopted and the next run releases again rather than
+  # dropping what the failed run had not yet released.
+  - it: records the adopted restore after the last pass
+    set:
+      bootstrap:
+        newServerName: pg-test-restore-0123456789abcdef
+      databases:
+        orders:
+          extensions: [hstore]
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)== create extensions.*ALTER DATABASE postgres SET cozystack.adopted_restore = :'mark';\\s*EOT\\s*$"
+
+  # newServerName is free text in values, so it reaches the script base64-encoded
+  # and SQL only through psql variables.
+  - it: never renders the restore mark into the script verbatim
+    set:
+      bootstrap:
+        newServerName: "x'; DROP DATABASE orders; --"
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DROP DATABASE orders'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'RESTORE_MARK=\$\(echo eCc7IERST1AgREFUQUJBU0Ugb3JkZXJzOyAtLQ== \| base64 -d\)'
+
+  - it: keeps the plain drop and records nothing when no restore is in play
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'RESTORE_MARK=\n'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: "cozystack.adopted_restore = "
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DROP DATABASE IF EXISTS \\"\$db\\" WITH \(FORCE\);'

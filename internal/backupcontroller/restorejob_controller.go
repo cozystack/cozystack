@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,8 +36,8 @@ type RestoreJobReconciler struct {
 	client.Client
 	dynamic.Interface
 	meta.RESTMapper
-	Scheme    *runtime.Scheme
-	Recorder  record.EventRecorder
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 	// Clientset reads Pod logs (the controller-runtime cache client cannot);
 	// the CNPG restore driver uses it to read a bootstrap-recovery pod's log
 	// and tell an unreachable point-in-time target apart from a transient
@@ -126,13 +127,7 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// namespace and then fall through to markRestoreJobFailed with the
 	// Secret already in place.
 	{
-		supported := false
-		for _, k := range supportedBackupStrategyKinds() {
-			if backup.Spec.StrategyRef.Kind == k {
-				supported = true
-				break
-			}
-		}
+		supported := slices.Contains(supportedBackupStrategyKinds(), backup.Spec.StrategyRef.Kind)
 		if !supported {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 		}
@@ -170,6 +165,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileRabbitmqRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.RedisStrategyKind:
 		return r.reconcileRedisRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.KafkaStrategyKind:
+		return r.reconcileKafkaRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -333,12 +330,14 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.RedisStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.RedisStrategyKind, strategyv1alpha1.KafkaStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
 		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
 		// EtcdCluster is owned by the source HelmRelease, and the
 		// EtcdClusterSpecCaptured / TargetPurged conditions live on the
-		// RestoreJob itself - all gone with the parent.)
+		// RestoreJob itself - all gone with the parent. Kafka: the metadata
+		// restore runs a one-shot Job owned by the RestoreJob and writes only
+		// to the Kafka cluster via the Admin API.)
 	default:
 		// Readable Backup, but an unrecognised strategy kind — not Velero
 		// as far as we can tell. Speculatively reap a stray labelled Velero

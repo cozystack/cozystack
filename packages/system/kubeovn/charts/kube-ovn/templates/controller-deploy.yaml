@@ -1,3 +1,4 @@
+{{- if include "kubeovn.renderDataPlane" . }}
 kind: Deployment
 apiVersion: apps/v1
 metadata:
@@ -7,7 +8,7 @@ metadata:
     kubernetes.io/description: |
       kube-ovn controller
 spec:
-  replicas: {{ include "kubeovn.nodeCount" . }}
+  replicas: {{ include "kubeovn.controllerReplicas" . }}
   selector:
     matchLabels:
       app: kube-ovn-controller
@@ -75,6 +76,15 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
           - /kube-ovn/start-controller.sh
+          {{- if (index .Values "kube-ovn-controller" "leaderElection" "leaseDuration") }}
+          - --leader-elect-lease-duration={{ index .Values "kube-ovn-controller" "leaderElection" "leaseDuration" }}
+          {{- end }}
+          {{- if (index .Values "kube-ovn-controller" "leaderElection" "renewDeadline") }}
+          - --leader-elect-renew-deadline={{ index .Values "kube-ovn-controller" "leaderElection" "renewDeadline" }}
+          {{- end }}
+          {{- if (index .Values "kube-ovn-controller" "leaderElection" "retryPeriod") }}
+          - --leader-elect-retry-period={{ index .Values "kube-ovn-controller" "leaderElection" "retryPeriod" }}
+          {{- end }}
           - --default-ls={{ .Values.networking.DEFAULT_SUBNET }}
           - --default-cidr=
           {{- if eq .Values.networking.NET_STACK "dual_stack" -}}
@@ -127,6 +137,12 @@ spec:
           - --enable-np={{- .Values.func.ENABLE_NP }}
           - --np-enforcement={{- .Values.func.NP_ENFORCEMENT }}
           - --enable-eip-snat={{- .Values.networking.ENABLE_EIP_SNAT }}
+          {{- if .Values.networking.EXTERNAL_GATEWAY_CONFIG_NS }}
+          - --external-gateway-config-ns={{- .Values.networking.EXTERNAL_GATEWAY_CONFIG_NS }}
+          {{- end }}
+          {{- if .Values.networking.EXTERNAL_GATEWAY_SWITCH }}
+          - --external-gateway-switch={{- .Values.networking.EXTERNAL_GATEWAY_SWITCH }}
+          {{- end }}
           - --enable-external-vpc={{- .Values.func.ENABLE_EXTERNAL_VPC }}
           - --enable-ecmp={{- .Values.networking.ENABLE_ECMP }}
           - --logtostderr=false
@@ -140,6 +156,9 @@ spec:
           - --enable-metrics={{- .Values.networking.ENABLE_METRICS }}
           - --node-local-dns-ip={{- .Values.networking.NODE_LOCAL_DNS_IP }}
           - --secure-serving={{- .Values.func.SECURE_SERVING }}
+          {{- if or .Values.networking.TLS_MIN_VERSION .Values.networking.TLS_MAX_VERSION .Values.networking.TLS_CIPHER_SUITES }}
+          {{- include "kubeovn.componentTLSArgs" . | nindent 10 }}
+          {{- end }}
           - --enable-ovn-ipsec={{- .Values.func.ENABLE_OVN_IPSEC }}
           - --enable-anp={{- .Values.func.ENABLE_ANP }}
           - --enable-dns-name-resolver={{- .Values.func.ENABLE_DNS_NAME_RESOLVER }}
@@ -160,6 +179,8 @@ spec:
           env:
             - name: ENABLE_SSL
               value: "{{ .Values.networking.ENABLE_SSL }}"
+            - name: KUBE_OVN_TLS_ROTATION_INTERVAL
+              value: "{{ include "kubeovn.kubeOVNTLSRotationInterval" . }}"
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -172,8 +193,24 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if index .Values "ovn-central" "hcp" "enabled" }}
+            - name: OVN_NB_ADDR
+              value: "{{ include "kubeovn.ovnNbAddress" . }}"
+            - name: OVN_SB_ADDR
+              value: "{{ include "kubeovn.ovnSbAddress" . }}"
+            {{- else if eq .Values.installMode "dataPlaneOnly" }}
+            - name: OVN_NB_ADDR
+              value: "{{ include "kubeovn.externalOvnNbAddress" . }}"
+            - name: OVN_SB_ADDR
+              value: "{{ include "kubeovn.externalOvnSbAddress" . }}"
+            {{- else }}
             - name: OVN_DB_IPS
-              value: "{{ .Values.MASTER_NODES | default (include "kubeovn.nodeIPs" .) }}"
+              value: "{{ include "kubeovn.ovnCentralNodeIPs" . }}"
+            - name: KUBE_OVN_NB_PORT
+              value: "{{ include "kubeovn.ovnNbPort" . }}"
+            - name: KUBE_OVN_SB_PORT
+              value: "{{ include "kubeovn.ovnSbPort" . }}"
+            {{- end }}
             - name: POD_IP
               valueFrom:
                 fieldRef:
@@ -235,3 +272,5 @@ spec:
           secret:
             optional: true
             secretName: kube-ovn-tls
+
+{{- end }}

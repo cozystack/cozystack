@@ -1,3 +1,12 @@
+{{- $issuerRef := (.Values.certManager | default dict).issuerRef | default dict }}
+{{- $issuerName := "kamaji-selfsigned-issuer" }}
+{{- $issuerKind := "Issuer" }}
+{{- $issuerGroup := "cert-manager.io" }}
+{{- if $issuerRef.name }}
+{{- $issuerName = $issuerRef.name }}
+{{- $issuerKind = $issuerRef.kind | default $issuerKind }}
+{{- $issuerGroup = $issuerRef.group | default $issuerGroup }}
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -11,6 +20,7 @@ spec:
     - {{ include "kamaji.webhookServiceName" . }}.{{ .Release.Namespace }}.svc
     - {{ include "kamaji.webhookServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local
   issuerRef:
-    kind: Issuer
-    name: kamaji-selfsigned-issuer
+    kind: {{ $issuerKind | quote }}
+    name: {{ $issuerName | quote }}
+    group: {{ $issuerGroup | quote }}
   secretName: {{ include "kamaji.webhookSecretName" . }}

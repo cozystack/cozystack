@@ -39,7 +39,7 @@ func newRabbitmqApp(name, namespace string) *unstructured.Unstructured {
 
 func newRabbitmqRef(name string) corev1.TypedLocalObjectReference {
 	return corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+		APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 		Kind:     rabbitmqAppKind,
 		Name:     name,
 	}
@@ -93,7 +93,7 @@ func newRabbitmqStrategy(name string) *strategyv1alpha1.Rabbitmq {
 func newRabbitmqResolved(strategyName string, params map[string]string) *ResolvedBackupConfig {
 	return &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.RabbitmqStrategyKind,
 			Name:     strategyName,
 		},
@@ -136,18 +136,18 @@ func newRabbitmqTestEnv(t *testing.T, app *unstructured.Unstructured, builder *c
 		Build()
 
 	return &BackupJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}, &RestoreJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}, &RestoreJobReconciler{
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}
 }
 
 func TestValidateRabbitmqApplicationRef(t *testing.T) {
@@ -334,7 +334,7 @@ func TestReconcileRabbitmq_RejectsWrongKind(t *testing.T) {
 	backupJob := &backupsv1alpha1.BackupJob{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
 		Spec: backupsv1alpha1.BackupJobSpec{
-			ApplicationRef:  corev1.TypedLocalObjectReference{APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Postgres", Name: "rmq-test"},
+			ApplicationRef:  corev1.TypedLocalObjectReference{APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup), Kind: "Postgres", Name: "rmq-test"},
 			BackupClassName: "cozy-default",
 		},
 	}
@@ -361,7 +361,7 @@ func rabbitmqBackup(sourceApp string) *backupsv1alpha1.Backup {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newRabbitmqRef(sourceApp),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.RabbitmqStrategyKind,
 				Name:     "cozy-default-rabbitmq",
 			},
@@ -386,7 +386,7 @@ func rabbitmqRunningRestoreJob(name, targetApp string) *backupsv1alpha1.RestoreJ
 	}
 	if targetApp != "" {
 		rj.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+			APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 			Kind:     rabbitmqAppKind,
 			Name:     targetApp,
 		}

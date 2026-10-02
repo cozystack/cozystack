@@ -7,7 +7,7 @@ test:
 	helm unittest .
 
 # Pinned ref of github.com/cozystack/etcd-operator to vendor CRDs from.
-ETCD_OPERATOR_REF ?= v0.5.5
+ETCD_OPERATOR_REF ?= v0.5.6
 
 # controller-gen writes the CRDs to charts/etcd-operator/crd-bases/ upstream (there
 # is no config/crd kustomization). Vendor each verbatim and stamp

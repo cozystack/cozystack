@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -76,12 +77,12 @@ func jobStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 // renderFoundationDBTemplate convention).
 func renderJobTemplate(
 	tmpl corev1.PodTemplateSpec,
-	app map[string]interface{},
+	app map[string]any,
 	releaseName, releaseNamespace, mode string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) (*corev1.PodTemplateSpec, error) {
-	ctxMap := map[string]interface{}{
+	ctxMap := map[string]any{
 		"Application": app,
 		"Release": map[string]string{
 			"Name":      releaseName,
@@ -99,7 +100,7 @@ func renderJobTemplate(
 		if backup.Spec.ApplicationRef.APIGroup != nil {
 			sourceAPIGroup = *backup.Spec.ApplicationRef.APIGroup
 		}
-		ctxMap["Backup"] = map[string]interface{}{
+		ctxMap["Backup"] = map[string]any{
 			"Name":      backup.Name,
 			"Namespace": backup.Namespace,
 			"ApplicationRef": map[string]string{
@@ -274,9 +275,7 @@ func (r *BackupJobReconciler) ensureJobStrategyJob(
 	}
 
 	labels := map[string]string{jobStrategyLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
@@ -306,9 +305,7 @@ func buildJobStrategyBatchJob(namespace, name string, labels map[string]string, 
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}
-	for k, v := range labels {
-		pod.Labels[k] = v
-	}
+	maps.Copy(pod.Labels, labels)
 	// backoffLimit is fixed at 2 (inherited from the Altinity driver). For an
 	// app-agnostic driver this is a footgun - an S3-heavy dump may want 0
 	// retries while a sidecar wants more - so making it operator-configurable
@@ -419,7 +416,7 @@ func (r *RestoreJobReconciler) reconcileJobRestore(ctx context.Context, restoreJ
 		}
 	}
 	targetRef := corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(targetAPIGroup),
+		APIGroup: new(targetAPIGroup),
 		Kind:     targetAppKind,
 		Name:     targetAppName,
 	}
@@ -544,9 +541,7 @@ func (r *RestoreJobReconciler) ensureJobStrategyRestoreJob(
 	}
 
 	labels := map[string]string{jobStrategyLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildJobStrategyBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {

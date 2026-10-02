@@ -142,6 +142,10 @@ machine:
     - name: drbd
       parameters:
         - usermode_helper=disabled
+    # Talos v1.14 kernels have an empty modprobe path
+    # (siderolabs/pkgs#1565), so DRBD's request_module() for its transport
+    # on the first new-peer no longer loads anything.
+    - name: drbd_transport_tcp
     - name: zfs
     - name: spl
   registries:

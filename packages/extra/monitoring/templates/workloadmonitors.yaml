@@ -178,3 +178,22 @@ spec:
     app.kubernetes.io/instance: alertmanager
     app.kubernetes.io/name: vmalertmanager
   version: {{ $.Chart.Version }}
+{{- /* The OTLP trace collector renders under the same gate as the collector
+       itself (tracingCollector.enabled AND a configured tracingStorages backend),
+       so tenant workload accounting covers it like every other monitoring
+       component. expectedReplicas tracks the configured replica count. */}}
+{{- if and .Values.tracingCollector.enabled (not (empty .Values.tracingStorages)) }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: otel-traces
+spec:
+  replicas: {{ .Values.tracingCollector.replicas }}
+  minReplicas: 1
+  kind: monitoring
+  type: otel-collector
+  selector:
+    app.kubernetes.io/name: otel-traces
+  version: {{ $.Chart.Version }}
+{{- end }}

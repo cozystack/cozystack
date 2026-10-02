@@ -7,6 +7,7 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- $adminHost := .Values.ingress.adminHost }}
+{{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
 {{- /* Wildcard mode applies to the admin Ingress only when it shares the
        public ingressClass: the operator's default SSL cert covers it too, so
        skip per-host ACME like the login Ingress. When admin is moved onto a
@@ -46,13 +47,13 @@ spec:
     http:
       paths:
       {{- if $adminHost }}
-      # adminHost is set: expose only the OIDC/login paths here. The admin
-      # console and Administration REST API live on the admin Ingress below,
-      # so /admin is not reachable on the login hostname. See the Keycloak
-      # reverse proxy guide, "Exposed path recommendations".
-      {{- range $path := list "/realms" "/resources" "/.well-known" }}
-      - path: {{ $path }}
-        pathType: Prefix
+      # adminHost is set: expose only the login paths of the published realms
+      # here. The admin console and Administration REST API live on the admin
+      # Ingress below, so /admin is not reachable on the login hostname. See
+      # the Keycloak reverse proxy guide, "Exposed path recommendations".
+      {{- range $p := $loginPaths }}
+      - path: {{ $p.value | quote }}
+        pathType: {{ if $p.exact }}Exact{{ else }}Prefix{{ end }}
         backend:
           service:
             name: keycloak-http

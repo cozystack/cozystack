@@ -48,7 +48,7 @@ func newRedisApp(name, namespace string) *unstructured.Unstructured {
 
 func newRedisAppRef(name string) corev1.TypedLocalObjectReference {
 	return corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+		APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 		Kind:     redisAppKind,
 		Name:     name,
 	}
@@ -86,18 +86,18 @@ func newRedisTestEnv(t *testing.T, app *unstructured.Unstructured, builder *clie
 		Build()
 
 	return &BackupJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}, &RestoreJobReconciler{
-			Client:     c,
-			Interface:  dynamicClient,
-			RESTMapper: restMapper,
-			Scheme:     testScheme,
-			Recorder:   record.NewFakeRecorder(10),
-		}
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}, &RestoreJobReconciler{
+		Client:     c,
+		Interface:  dynamicClient,
+		RESTMapper: restMapper,
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(10),
+	}
 }
 
 // newRedisStrategy returns a Redis strategy whose template exercises every key
@@ -131,7 +131,7 @@ func newRedisStrategy(name string) *strategyv1alpha1.Redis {
 func newRedisResolved(strategyName string, params map[string]string) *ResolvedBackupConfig {
 	return &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 			Kind:     strategyv1alpha1.RedisStrategyKind,
 			Name:     strategyName,
 		},
@@ -163,13 +163,13 @@ func TestValidateRedisApplicationRef(t *testing.T) {
 }
 
 func TestRedisAppReady(t *testing.T) {
-	ready := map[string]interface{}{"status": map[string]interface{}{
-		"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}},
+	ready := map[string]any{"status": map[string]any{
+		"conditions": []any{map[string]any{"type": "Ready", "status": "True"}},
 	}}
-	notReady := map[string]interface{}{"status": map[string]interface{}{
-		"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": "False", "reason": "HelmUpgradeFailed", "message": "boom"}},
+	notReady := map[string]any{"status": map[string]any{
+		"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "HelmUpgradeFailed", "message": "boom"}},
 	}}
-	noCond := map[string]interface{}{"status": map[string]interface{}{}}
+	noCond := map[string]any{"status": map[string]any{}}
 
 	if proceed, _, _ := redisAppReady(ready); !proceed {
 		t.Error("Ready=True should proceed")
@@ -644,7 +644,7 @@ func TestReconcileRedisRestore_CreatesBatchJobInTargetNamespace(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newRedisAppRef("cache"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.RedisStrategyKind,
 				Name:     "redis-strategy",
 			},
@@ -660,7 +660,7 @@ func TestReconcileRedisRestore_CreatesBatchJobInTargetNamespace(t *testing.T) {
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: backup.Name},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(backupsv1alpha1.DefaultApplicationAPIGroup),
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
 				Kind:     redisAppKind,
 				Name:     "cache-copy",
 			},
@@ -709,7 +709,7 @@ func TestReconcileRedisRestore_CompletesSucceeds(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newRedisAppRef("cache"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.RedisStrategyKind,
 				Name:     "redis-strategy",
 			},
@@ -761,7 +761,7 @@ func TestReconcileRedisRestore_FailsOnUnmappableTargetKind(t *testing.T) {
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: newRedisAppRef("cache"),
 			StrategyRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(strategyv1alpha1.GroupVersion.Group),
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
 				Kind:     strategyv1alpha1.RedisStrategyKind,
 				Name:     "redis-strategy",
 			},

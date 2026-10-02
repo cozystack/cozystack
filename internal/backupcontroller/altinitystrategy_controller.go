@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -107,12 +108,12 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 // the release shorthand, the run mode, and the resolved parameters.
 func renderAltinityTemplate(
 	tmpl corev1.PodTemplateSpec,
-	app map[string]interface{},
+	app map[string]any,
 	releaseName, releaseNamespace, mode string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) (*corev1.PodTemplateSpec, error) {
-	ctxMap := map[string]interface{}{
+	ctxMap := map[string]any{
 		"Application": app,
 		"Release": map[string]string{
 			"Name":      releaseName,
@@ -134,7 +135,7 @@ func renderAltinityTemplate(
 		if backup.Spec.ApplicationRef.APIGroup != nil {
 			sourceAPIGroup = *backup.Spec.ApplicationRef.APIGroup
 		}
-		ctxMap["Backup"] = map[string]interface{}{
+		ctxMap["Backup"] = map[string]any{
 			"Name":      backup.Name,
 			"Namespace": backup.Namespace,
 			"ApplicationRef": map[string]string{
@@ -294,9 +295,7 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	}
 
 	labels := map[string]string{altinityLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildAltinityBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
@@ -337,9 +336,7 @@ func (r *RestoreJobReconciler) ensureAltinityRestoreJob(
 	}
 
 	labels := map[string]string{altinityLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 
 	desired := buildAltinityBatchJob(namespace, name, labels, rendered)
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
@@ -369,9 +366,7 @@ func buildAltinityBatchJob(namespace, name string, labels map[string]string, ren
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}
-	for k, v := range labels {
-		pod.Labels[k] = v
-	}
+	maps.Copy(pod.Labels, labels)
 	backoffLimit := int32(2)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -478,7 +473,7 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 // default ("apps.cozystack.io"); RESTMapping must apply the same default so
 // a BackupJob/RestoreJob with apiGroup omitted does not blow up at lookup
 // time with a misleading "no matches for /ClickHouse" error.
-func (r *BackupJobReconciler) getApplicationUnstructured(ctx context.Context, namespace string, ref corev1.TypedLocalObjectReference) (map[string]interface{}, error) {
+func (r *BackupJobReconciler) getApplicationUnstructured(ctx context.Context, namespace string, ref corev1.TypedLocalObjectReference) (map[string]any, error) {
 	group := backupsv1alpha1.DefaultApplicationAPIGroup
 	if ref.APIGroup != nil && *ref.APIGroup != "" {
 		group = *ref.APIGroup
@@ -500,7 +495,7 @@ func (r *BackupJobReconciler) getApplicationUnstructured(ctx context.Context, na
 
 // getApplicationUnstructured is the RestoreJob-side mirror. Same APIGroup
 // default applies (see the BackupJob variant for the rationale).
-func (r *RestoreJobReconciler) getApplicationUnstructured(ctx context.Context, namespace string, ref corev1.TypedLocalObjectReference) (map[string]interface{}, error) {
+func (r *RestoreJobReconciler) getApplicationUnstructured(ctx context.Context, namespace string, ref corev1.TypedLocalObjectReference) (map[string]any, error) {
 	group := backupsv1alpha1.DefaultApplicationAPIGroup
 	if ref.APIGroup != nil && *ref.APIGroup != "" {
 		group = *ref.APIGroup
@@ -566,7 +561,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		}
 	}
 	targetRef := corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(targetAPIGroup),
+		APIGroup: new(targetAPIGroup),
 		Kind:     targetAppKind,
 		Name:     targetAppName,
 	}

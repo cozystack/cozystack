@@ -1,0 +1,372 @@
+suite: init-script rejects database and extension names that break out of the SQL
+
+# A database name is interpolated into CREATE DATABASE "<db>", the "<db>_admin"
+# role, a single-quoted literal in the superuser DO block, and a shell role list;
+# an extension name into CREATE EXTENSION in the superuser session. The username
+# guard already hardens the same class for users. These guards mirror it for
+# databases and extensions, so a "'"/'"'/";"/space cannot escape into arbitrary
+# superuser SQL or the shell. The extension is quoted at the call site (real names
+# carry "-", e.g. uuid-ossp). Reverting either guard lets the render succeed and
+# fails a reject test; unquoting CREATE EXTENSION fails the quoting test.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: fails the render for a database name with a single quote (DO-block breakout)
+    set:
+      databases:
+        "x' OR true": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "x'' OR true": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  - it: fails the render for a database name with a semicolon and space
+    set:
+      databases:
+        "a; DROP": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "a; DROP": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  - it: fails the render for an extension name carrying injection
+    set:
+      databases:
+        mydb:
+          extensions:
+            - "x; ALTER ROLE app SUPERUSER; --"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid extension name "x; ALTER ROLE app SUPERUSER; --" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
+
+  - it: quotes the extension name so a hyphenated one (uuid-ossp) is valid SQL
+    set:
+      databases:
+        mydb:
+          extensions:
+            - uuid-ossp
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS uuid-ossp;'
+
+  # PostgreSQL folds an unquoted identifier to lowercase, so an extension written
+  # as PostGIS resolves to the postgis control file when unquoted. Quoting keeps the case
+  # and looks for PostGIS.control instead, which does not exist: CREATE EXTENSION
+  # fails under ON_ERROR_STOP and the post-upgrade init-job wedges the release.
+  # Fold the name before quoting so it resolves as it did unquoted.
+  - it: folds a mixed-case extension name to lowercase before quoting it
+    set:
+      databases:
+        mydb:
+          extensions:
+            - PostGIS
+            - UUID-OSSP
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "postgis";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "PostGIS";'
+
+  # When CREATE EXTENSION rendered the value unquoted, writing the quotes into the
+  # value was the only way to get a hyphenated extension, so existing releases
+  # carry '"uuid-ossp"'. One surrounding pair is the identifier's own quoting:
+  # the name inside it is what the charset guard checks and what gets quoted.
+  - it: strips one pair of surrounding quotes from an extension name
+    set:
+      databases:
+        mydb:
+          extensions:
+            - '"uuid-ossp"'
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS ""'
+
+  - it: renders on upgrade for an extension name written with its own quotes
+    release:
+      upgrade: true
+    set:
+      databases:
+        mydb:
+          extensions:
+            - '"uuid-ossp"'
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+
+  # A quoted identifier kept its case when it was rendered unquoted, so it must
+  # resolve to the same control file now; only an unquoted name is folded.
+  - it: keeps the case of an extension name written with its own quotes
+    set:
+      databases:
+        mydb:
+          extensions:
+            - '"PostGIS"'
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "PostGIS";'
+
+  - it: fails the render for an injection inside an extension name's own quotes
+    set:
+      databases:
+        mydb:
+          extensions:
+            - '"x"; ALTER ROLE app SUPERUSER; --"'
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid extension name .* for database "mydb": an extension name may contain only letters'
+
+  - it: fails the render for an extension name with an unbalanced quote
+    set:
+      databases:
+        mydb:
+          extensions:
+            - '"uuid-ossp'
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid extension name .* for database "mydb": an extension name may contain only letters'
+
+  # The value was once spliced into CREATE EXTENSION whole, so a release can carry
+  # a clause after the name. The guard still refuses it; the message has to say
+  # how to get past it without losing the dependency the clause pulled in.
+  - it: tells how to replace a CASCADE clause when it refuses one on upgrade
+    release:
+      upgrade: true
+    set:
+      databases:
+        mydb:
+          extensions:
+            - earthdistance CASCADE
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid extension name "earthdistance CASCADE" for database "mydb": .*A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e\.g\. \[cube, earthdistance\]$'
+
+  - it: creates extensions in the order they are listed
+    set:
+      databases:
+        mydb:
+          extensions:
+            - cube
+            - earthdistance
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)CREATE EXTENSION IF NOT EXISTS "cube";\s*CREATE EXTENSION IF NOT EXISTS "earthdistance";'
+
+  - it: renders normally for a valid database and extension
+    set:
+      databases:
+        mydb:
+          extensions:
+            - pg_trgm
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "mydb"'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "pg_trgm";'
+
+  # A database name seeds "<db>_readonly" (a PostgreSQL role); "_readonly" is 9
+  # bytes, so the cap is 54 (not the username's 63). 55 chars fails; 54 renders
+  # (its readonly role is exactly 63 bytes). Reverting the cap to 253 lets 55
+  # through into a silently-truncated, orphan-dropped role.
+  - it: fails the render for a database name of 55 characters (readonly role past 63)
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  - it: renders normally for a database name at the 54-character boundary
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+
+  # The extension length cap (63, a PostgreSQL identifier) needs its own pin — the
+  # sibling username/database caps have boundary tests, this one did not. 64 fails,
+  # 63 renders. Reverting the extension cap to 253 lets 64 through.
+  - it: fails the render for an extension name of 64 characters
+    set:
+      databases:
+        mydb:
+          extensions:
+            - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid extension name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
+
+  - it: renders normally for an extension name at the 63-character boundary
+    set:
+      databases:
+        mydb:
+          extensions:
+            - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";'
+
+  # A database may declare extensions and no roles at all (roles is optional in
+  # the schema). The grant-assignment loop chained $d.roles.admin/readonly, and a
+  # chained field access off a nil .roles nil-pointers the render when a user
+  # exists and the database has no roles key. Binding $roles := $d.roles | default
+  # dict and dereferencing the local avoids it (the user is in neither role, so it
+  # gets REVOKEs), mirroring the mariadb db.yaml guard. Reverting to the inline
+  # $d.roles.admin chain turns this red with a nil-pointer render error.
+  - it: renders when a database has extensions but no roles while users exist
+    set:
+      users:
+        app: {}
+      databases:
+        mydb:
+          extensions:
+            - pg_trgm
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "mydb_admin" FROM "app";'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REVOKE "mydb_readonly" FROM "app";'
+
+  # Past 54 bytes the name's <db>_admin/<db>_readonly roles truncate past 63
+  # bytes. The next init-job run orphan-drops the truncated role, DROP OWNED only
+  # reaches the database it runs in, and DROP ROLE then fails on the grants inside
+  # the long-named database, so such a release cannot survive a second run anyway.
+  # The cap therefore holds on upgrade as well: failing the
+  # render names the problem instead of crash-looping the init-job. Gating the cap
+  # to install turns this red.
+  - it: still fails on upgrade for a 55-character database name
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  # Past 63 bytes CREATE DATABASE itself truncates the name as well, so the next
+  # run re-runs CREATE under the full name and fails on "already exists".
+  - it: still fails on upgrade for a 64-character database name
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  # The charset is the injection guard: a new database added on upgrade is still a
+  # new name, and a quote or ";" in it would break out of superuser SQL, so it is
+  # never gated to install.
+  - it: still fails on upgrade for a database name outside the charset
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        "a; DROP": {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "a; DROP": a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the "<db>_admin" and "<db>_readonly" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed'
+
+  # "." and a ".." prefix are rejected for usernames because a username is a
+  # Secret key; a database name is not, and both are valid quoted identifiers.
+  - it: renders a database named "." and one starting with ".."
+    set:
+      databases:
+        ".": {}
+        "..x": {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "\.\.x"'
+
+  # "." and a ".." prefix are not extension names; the guard rejects them with the
+  # same message. Dropping either conjunct lets the render succeed, so the matching
+  # test fails.
+  - it: fails the render for an extension named "."
+    set:
+      databases:
+        mydb:
+          extensions: ["."]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid extension name "." for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'
+
+  - it: fails the render for an extension name starting with ".."
+    set:
+      databases:
+        mydb:
+          extensions: ["..x"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid extension name "..x" for database "mydb": an extension name may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL identifier interpolated into CREATE EXTENSION in a superuser session; real names carry "-", e.g. uuid-ossp, so it is quoted at the call site). A clause after the name, such as CASCADE or SCHEMA, is not accepted: remove it from the value, which leaves an extension that is already installed as it is, and list the extensions it depends on before it, e.g. [cube, earthdistance]'

@@ -323,6 +323,179 @@
         }
       }
     },
+    "tracingStorages": {
+      "description": "Configuration of traces storage instances. Empty by default (tracing off): no backend and no trace collector are rendered. Adding an entry provisions a VictoriaTraces backend and, while tracingCollector.enabled is true, deploys the OTLP collector in front of it.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "mode",
+          "name",
+          "retentionPeriod",
+          "storage",
+          "storageClassName"
+        ],
+        "properties": {
+          "mode": {
+            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters. Treat as immutable once a backend exists: mode selects which Kind is rendered under the same name, so changing it on a running backend re-identifies the object rather than reconfiguring it. Switching from \"single\" to \"cluster\" prunes the VTSingle and the operator garbage-collects its PVC (stored traces are lost); switching from \"cluster\" to \"single\" (or removing the entry) leaves the vtstorage PVCs Bound and billed until the whole Monitoring release is deleted. The API cannot guard this (transition rules are not available on an array-item field), so this note is the only guard: migrate deliberately, accepting the loss.",
+            "type": "string",
+            "default": "cluster",
+            "enum": [
+              "cluster",
+              "single"
+            ]
+          },
+          "name": {
+            "description": "Name of the storage instance: a lowercase RFC 1123 label of at most 42 characters. Treat as immutable once a backend exists: the VTCluster/VTSingle, its Services, PVCs and Grafana datasource are all named after it, so renaming an entry deploys a new, empty backend and removes the old one, the same way changing mode does (single mode loses the old PVC, cluster mode leaves the old vtstorage PVCs Bound until the whole Monitoring release is deleted).",
+            "type": "string"
+          },
+          "retentionDiskUsageBytes": {
+            "description": "Optional disk-usage cap as a VictoriaMetrics BytesString (e.g. \"8GB\" or \"8GiB\"), bounding disk use on top of the age-based retentionPeriod. Uses byte-suffix grammar (kb/mb/gb/tb, KiB/MiB/GiB/TiB), NOT the Kubernetes-quantity grammar of the sibling storage field, so \"8Gi\" is rejected by the operator. In cluster mode the cap is per vtstorage replica (replicaCount 2), so the effective total is twice the value.",
+            "type": "string"
+          },
+          "retentionPeriod": {
+            "description": "Retention period for traces.",
+            "type": "string",
+            "default": "14d"
+          },
+          "storage": {
+            "description": "Persistent volume size.",
+            "default": "10Gi",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
+          },
+          "storageClassName": {
+            "description": "StorageClass used to store the data.",
+            "type": "string",
+            "default": "replicated"
+          }
+        }
+      }
+    },
+    "tracingCollector": {
+      "description": "OpenTelemetry Collector for trace ingestion.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "replicas",
+        "samplingPercentage"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction). The collector fronts a single backend: while it is enabled, tracingStorages must hold at most one entry, and adding a second one fails the whole Monitoring render until the extra entry is removed or the collector is disabled.",
+          "type": "boolean",
+          "default": true
+        },
+        "redactAttributes": {
+          "description": "Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "replicas": {
+          "description": "Number of collector replicas. Head sampling is trace-id-deterministic, so replicas\u003e1 are safe and remove the single-ingest-path SPOF.",
+          "type": "integer",
+          "default": 1,
+          "minimum": 1
+        },
+        "resources": {
+          "description": "Resource configuration for the collector.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "default": 1,
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "samplingPercentage": {
+          "description": "Head-sampling percentage applied at the collector before export.",
+          "type": "integer",
+          "default": 10,
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
     "alerta": {
       "description": "Configuration for the Alerta service.",
       "type": "object",
@@ -333,6 +506,59 @@
           "type": "object",
           "default": {},
           "properties": {
+            "email": {
+              "description": "Configuration for email alerts. Alerts carrying the label notify_email with the string value true are emailed when their severity is in the severities list (default critical and major). A bare YAML boolean does not match. Alerts listed in alertnames are emailed unless matched by an earlier platform route.",
+              "type": "object",
+              "default": {},
+              "required": [
+                "from",
+                "smarthost",
+                "to"
+              ],
+              "properties": {
+                "alertnames": {
+                  "description": "Alert names emailed whether or not the rule carries the notify_email label, with no severity filter. Earlier platform routes still take precedence. Alerts with `event=\"Heartbeat\"`, including `Watchdog`, go only to Alerta, and alerts with severity `none`, `CDIDefaultStorageClassDegraded` and `CDINoDefaultStorageClass` are blackholed and never reach email. This is the way to opt in alerts the platform ships, since their helm-owned rule definitions cannot be labelled per cluster. Entries must be plain Prometheus alert names such as `KubeAPIDown`, and anything else fails the render. Empty adds no extra route.",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "authUsername": {
+                  "description": "Username for SMTP LOGIN/PLAIN authentication. The password is read from the `password` key of a Secret named `alertmanager-email-password` in the release namespace, which the platform operator creates. The name is fixed and the Secret is mounted into Alertmanager, so a missing Secret blocks the whole Alertmanager rollout, not only email delivery. The credential in it must belong to this tenant alone. `smarthost` is chosen by whoever writes the Monitoring, so one relay credential provisioned under the same name in every namespace can be collected by pointing `smarthost` at a host the tenant controls.",
+                  "type": "string",
+                  "default": ""
+                },
+                "from": {
+                  "description": "Sender address, one only. A display name is accepted. It takes the same narrower form as `to`, and an address outside it fails the render.",
+                  "type": "string",
+                  "default": ""
+                },
+                "repeatInterval": {
+                  "description": "Minimum time before a still-firing alert is emailed again, as an Alertmanager duration with units `y`, `w`, `d`, `h`, `m`, `s`, `ms` in descending order, each at most once, such as `5m`, `12h` or `1h30m`. Delivery is evaluated every 5m, so shorter intervals take effect at 5m and other intervals round up to a multiple of 5m. Zero, a unit out of order and a total beyond what Alertmanager accepts fail the render. Empty keeps the 12h default.",
+                  "type": "string",
+                  "default": ""
+                },
+                "severities": {
+                  "description": "Severities the notify_email route accepts (e.g. [\"critical\",\"major\",\"warning\"]). Empty keeps the default of critical and major. List every severity in use to email opted-in alerts regardless of severity. Entries must be plain severity names, and anything else fails the render.",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "smarthost": {
+                  "description": "SMTP server as `host:port` (e.g. \"smtp.example.com:465\"). A value without a port, an invalid bracketed IP address or a port with leading zeros fails the render. Port 465 uses implicit TLS, other ports use STARTTLS.",
+                  "type": "string",
+                  "default": ""
+                },
+                "to": {
+                  "description": "Recipient address, or several separated by commas. A display name is accepted, such as `Oncall \u003concall@example.org\u003e`, as long as it carries no comma. Quote display names containing punctuation such as `:`, `@`, parentheses or `?`. RFC 2047 encoded words are not accepted. IP domain literals accept dotted-quad IPv4 only. IPv6 literals are rejected because Go mail parsers disagree on their syntax across versions. ASCII control characters are rejected. Addresses must be literal, so Alertmanager template actions are rejected. The accepted form is deliberately narrower than RFC 5322. The local part must be a dot-atom, with no leading, trailing or doubled dot, and quoted local parts, comments and a `mailto:` prefix are rejected. An address outside that form fails the render, because Alertmanager parses addresses only when it sends and drops the notification with no record a tenant can read.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            },
             "slack": {
               "description": "Configuration for Slack alerts.",
               "type": "object",

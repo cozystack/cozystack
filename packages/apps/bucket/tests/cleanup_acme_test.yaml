@@ -84,14 +84,14 @@ tests:
       # Host-scoped challenge sweep filtering on .spec.dnsName == our host
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "kubectl get challenge -n tenant-root --request-timeout=30s -o jsonpath=.*@.spec.dnsName=='\\$HOST'"
+          pattern: "kubectl get challenge -n tenant-root -o jsonpath=.*@.spec.dnsName=='\\$HOST'"
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubectl delete challenge -n tenant-root "\$ch" --ignore-not-found'
       # Host-scoped orphaned solver Ingress sweep filtering on rules[0].host
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "kubectl get ingress -n tenant-root -l acme.cert-manager.io/http01-solver=true --request-timeout=30s -o jsonpath=.*@.spec.rules\\[0\\].host=='\\$HOST'"
+          pattern: "kubectl get ingress -n tenant-root -l acme.cert-manager.io/http01-solver=true -o jsonpath=.*@.spec.rules\\[0\\].host=='\\$HOST'"
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubectl delete ingress -n tenant-root "\$ing" --ignore-not-found'

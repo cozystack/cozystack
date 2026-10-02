@@ -53,6 +53,7 @@ update:
 	@# sanity-check tail below.
 	grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.permittedHostDevices }}\n    permittedHostDevices:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.mediatedDevicesConfiguration }}\n    mediatedDevicesConfiguration:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
+	grep -q '{{- with .Values.migrations }}' $(CR_FILE) || sed -i '/^    evictionStrategy:/i\    {{- with .Values.migrations }}\n    migrations:\n      {{- toYaml . | nindent 6 }}\n    {{- end }}' $(CR_FILE)
 	@# Sanity-check: every cozystack patch MUST end up in the file. If the
 	@# hand-merge step moved or renamed an anchor (developerConfiguration:,
 	@# - VMExport, featureGates:, evictionStrategy:) the sed silently no-ops and the chart
@@ -71,10 +72,14 @@ update:
 	@# for, and their absence cannot surface as a value that stopped taking
 	@# effect — the CR simply goes back to deploying virt-template, to letting
 	@# KubeVirt skip NAD resource injection, and to image volumes an apiserver
-	@# below 1.35 discards. The payload lines of the blocks above are exposed the
-	@# same way; covering them is a wider change than this. `make update` cannot
-	@# repair a partial block — the directive guard is what stops the insert — so
-	@# name the missing marker and let the operator restore it.
+	@# below 1.35 discards. Every other payload line stays outside these checks:
+	@# the device tables, the cpuAllocationRatio value, and the `- {{ . }}` entry
+	@# inside each of the extraFeatureGates and disabledFeatureGates ranges, whose
+	@# deletion leaves `make update` exiting 0 with the range wrapped around
+	@# nothing. migrations is the one block validated whole, below.
+	@# `make update` cannot repair a partial block — the directive guard is what
+	@# stops the insert — so name the missing marker and let the operator restore
+	@# it.
 	@grep -q '{{- if .Values.cpuAllocationRatio }}' $(CR_FILE) || { echo "ERROR: directive '{{- if .Values.cpuAllocationRatio }}' not inserted — restore the 'developerConfiguration:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- range .Values.extraFeatureGates }}' $(CR_FILE) || { echo "ERROR: directive '{{- range .Values.extraFeatureGates }}' not inserted — restore the '- VMExport' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- range .Values.disabledFeatureGates }}' $(CR_FILE) || { echo "ERROR: directive '{{- range .Values.disabledFeatureGates }}' not inserted — restore the 'featureGates:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
@@ -88,3 +93,11 @@ update:
 	@grep -q '{{- $$staticDisabledFeatureGates := ' $(CR_FILE) || { echo "ERROR: marker '{{- \$$staticDisabledFeatureGates := ' missing from the guard header — the disabledFeatureGates block below references it and the render would fail. Restore the header block at the top of $(CR_FILE)" >&2; exit 1; }
 	@grep -q '{{- with .Values.permittedHostDevices }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.permittedHostDevices }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
 	@grep -q '{{- with .Values.mediatedDevicesConfiguration }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.mediatedDevicesConfiguration }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@grep -q '{{- with .Values.migrations }}' $(CR_FILE) || { echo "ERROR: directive '{{- with .Values.migrations }}' not inserted — restore the 'evictionStrategy:' anchor in $(CR_FILE) and re-run" >&2; exit 1; }
+	@# A retained directive skips insertion even if its body or end was lost.
+	@# Check the whole block in order; only END decides the exit status.
+	@awk '\
+		$$0 == "    migrations:" { keys++ } \
+		$$0 == "    {{- with .Values.migrations }}" { blocks++; step=1; next } \
+		step { expected = step == 1 ? "    migrations:" : step == 2 ? "      {{- toYaml . | nindent 6 }}" : "    {{- end }}"; if ($$0 != expected) bad=1; step=(step+1)%4 } \
+		END { exit !(blocks == 1 && keys == 1 && step == 0 && !bad) }' $(CR_FILE) || { echo "ERROR: migrations block is partial or duplicated — restore the complete block or delete all its remaining lines from $(CR_FILE) and re-run" >&2; exit 1; }

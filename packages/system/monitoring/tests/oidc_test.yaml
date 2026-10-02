@@ -179,6 +179,28 @@ tests:
           content: groups
         documentIndex: 1
 
+  # The count and kind assertions above already reject extra realm objects. Keep
+  # this named invariant beside them so ownership remains explicit: the tenant
+  # chart, rather than each Monitoring release, provisions the group directory.
+  - it: mode=System provisions no KeycloakRealmGroup
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      # Positive control first: the template DOES emit here, so the negative
+      # below is a statement about KeycloakRealmGroup rather than about an empty
+      # render.
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          any: true
+      - containsDocument:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          any: true
+        not: true
+
   - it: mode=System audience scope pins id_token.aud to the per-instance clientId
     template: templates/grafana/oidc-keycloak.yaml
     set:
@@ -188,6 +210,10 @@ tests:
       - equal:
           path: metadata.name
           value: tenant-root-monitoring-audience
+        documentIndex: 0
+      - equal:
+          path: spec.protocolMappers[0].protocolMapper
+          value: oidc-audience-mapper
         documentIndex: 0
       - equal:
           path: spec.protocolMappers[0].config["included.client.audience"]
@@ -445,6 +471,11 @@ tests:
         - email: bob@example.com
           role: Viewer
     asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_MODE
+            value: System
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -724,3 +755,21 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.users[0].role: \"Superuser\" is not one of the allowed values Admin, Editor, Viewer."
+
+  # The grafana OIDC issuer realm is driven by _cluster.oidc-realm-name
+  # (authentication.oidc.realmName in the platform). A renamed realm must reach
+  # grafana's auth/token/userinfo URLs, or Grafana SSO breaks against a realm
+  # Keycloak no longer serves under the old name.
+  - it: mode=System grafana.yaml threads a custom realm name into the OIDC URLs
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      _cluster.oidc-realm-name: acme
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].auth_url
+          value: "https://keycloak.example.org/realms/acme/protocol/openid-connect/auth"

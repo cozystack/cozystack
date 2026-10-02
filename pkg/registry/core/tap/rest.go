@@ -26,6 +26,7 @@ import (
 	"k8s.io/klog/v2"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -179,7 +180,26 @@ func (r *REST) pendingTapByName(ctx context.Context, name string) (*corev1alpha1
 // materialization is pending.
 // -----------------------------------------------------------------------------
 
-func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
+// createDryRun and deleteDryRun carry the caller's dry-run directive down to
+// the backing write. The dynamic client takes the directive by value, so a
+// request that reaches it without one performs the write for real: a
+// --dry-run=server connect would create the Flux source and a dry-run
+// disconnect would delete the PackageSource.
+func createDryRun(opts *metav1.CreateOptions) []string {
+	if opts == nil {
+		return nil
+	}
+	return opts.DryRun
+}
+
+func deleteDryRun(opts *metav1.DeleteOptions) []string {
+	if opts == nil {
+		return nil
+	}
+	return opts.DryRun
+}
+
+func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, opts *metav1.CreateOptions) (runtime.Object, error) {
 	in, ok := obj.(*corev1alpha1.Tap)
 	if !ok {
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected a Tap object, got %T", obj))
@@ -197,29 +217,29 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
-	repo := &unstructured.Unstructured{Object: map[string]interface{}{
+	repo := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "source.toolkit.fluxcd.io/v1",
 		"kind":       "OCIRepository",
-		"metadata": map[string]interface{}{
+		"metadata": map[string]any{
 			"name":        target.FluxSourceName,
 			"namespace":   "cozy-system",
-			"labels":      map[string]interface{}{tapconst.Label: "true"},
-			"annotations": map[string]interface{}{tapconst.NameAnnotation: target.FluxSourceName},
+			"labels":      map[string]any{tapconst.Label: "true"},
+			"annotations": map[string]any{tapconst.NameAnnotation: target.FluxSourceName},
 		},
-		"spec": map[string]interface{}{
+		"spec": map[string]any{
 			"url":      target.URL,
 			"interval": "5m0s",
-			"ref":      map[string]interface{}{"tag": target.Tag},
+			"ref":      map[string]any{"tag": target.Tag},
 		},
 	}}
 	if in.Spec.SecretRef != "" {
-		_ = unstructured.SetNestedMap(repo.Object, map[string]interface{}{"name": in.Spec.SecretRef}, "spec", "secretRef")
+		_ = unstructured.SetNestedMap(repo.Object, map[string]any{"name": in.Spec.SecretRef}, "spec", "secretRef")
 	}
 
 	// Create the Flux source, idempotently: a repeat connect updates the
 	// existing source (new tag/secret) rather than erroring.
 	src := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system")
-	if _, err := src.Create(ctx, repo, metav1.CreateOptions{FieldManager: "cozystack-api"}); err != nil {
+	if _, err := src.Create(ctx, repo, metav1.CreateOptions{FieldManager: "cozystack-api", DryRun: createDryRun(opts)}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return nil, apierrors.NewInternalError(fmt.Errorf("create Flux source for tap %s: %w", target.FluxSourceName, err))
 		}
@@ -236,8 +256,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
 		// Update only the fields this API owns (spec, the tap label and name
-		// annotation) on the FETCHED object, so the operator's finalizer and
-		// materialized-revision annotation on the existing source survive.
+		// annotation) on the FETCHED object, so the operator's finalizer survives.
+		// Clear the materialized-revision annotation so a re-connect re-materializes
+		// and recovers a registration Package (or PackageSource) removed out-of-band
+		// since the last materialization, the same recovery `cozypkg tap` performs.
 		cur.Object["spec"] = repo.Object["spec"]
 		labels := cur.GetLabels()
 		if labels == nil {
@@ -250,8 +272,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			ann = map[string]string{}
 		}
 		ann[tapconst.NameAnnotation] = target.FluxSourceName
+		delete(ann, tapconst.MaterializedRevisionAnnotation)
 		cur.SetAnnotations(ann)
-		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api"}); err != nil {
+		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api", DryRun: createDryRun(opts)}); err != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, err))
 		}
 	}
@@ -273,7 +296,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 // GracefulDeleter — disconnect a community tap (mirrors `cozypkg untap`)
 // -----------------------------------------------------------------------------
 
-func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, _ *metav1.DeleteOptions) (runtime.Object, bool, error) {
+func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, opts *metav1.DeleteOptions) (runtime.Object, bool, error) {
 	u, err := r.dyn.Resource(gvrPackageSources).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -282,7 +305,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			// name). Fall back to removing that source so a pending or
 			// collision-blocked connect is still recoverable from the dashboard
 			// rather than orphaning a finalized OCIRepository.
-			return r.deleteOrphanTapSource(ctx, name)
+			return r.deleteOrphanTapSource(ctx, name, deleteDryRun(opts))
 		}
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("get PackageSource %q: %w", name, err))
 	}
@@ -297,14 +320,54 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			fmt.Errorf("%q is not a tapped repository; official sources are protected", name))
 	}
 
-	tap := buildTap(ps, r.appDefIndex(ctx))
+	idx := r.appDefIndex(ctx)
+	tap := buildTap(ps, idx)
 	if deleteValidation != nil {
 		if err := deleteValidation(ctx, &tap); err != nil {
 			return nil, false, err
 		}
 	}
 
-	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+	// Remove the tap-managed registration Package FIRST, so the repository's apps
+	// de-register from the catalog (deleting it garbage-collects the registration
+	// HelmReleases and their ApplicationDefinitions). It is deleted only when it
+	// belongs to THIS source (label AND source annotation): a Package a later tap
+	// created under a reused name, or a foreign Package, is left in place.
+	//
+	// Package before PackageSource is deliberate: if the Package delete fails, the
+	// PackageSource is still present, so a repeat disconnect re-enters this path
+	// and retries; deleting the PackageSource first would drop a repeat disconnect
+	// into deleteOrphanTapSource, which never revisits the Package, stranding it.
+	srcName := ""
+	if ps.Spec.SourceRef != nil {
+		srcName = ps.Spec.SourceRef.Name
+	}
+	if pu, err := r.dyn.Resource(gvrPackages).Get(ctx, name, metav1.GetOptions{}); err == nil {
+		// Delete only a managed registration Package (owned AND still at the auto
+		// default variant), the same predicate the materializer and untap use, so
+		// a user's pinned install is never removed by disconnect.
+		variant, _, _ := unstructured.NestedString(pu.Object, "spec", "variant")
+		if collision.ManagedRegistration(pu, srcName, variant) {
+			// UID + ResourceVersion preconditions: delete only this exact object,
+			// not one the user replaced or pinned in-place between Get and Delete.
+			uid := pu.GetUID()
+			rv := pu.GetResourceVersion()
+			delOpts := metav1.DeleteOptions{DryRun: deleteDryRun(opts), Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}}
+			// A conflict is tolerated here (unlike the operator's retry loop): the
+			// managed registration Package carries an ownerReference TO its
+			// PackageSource, and disconnect deletes that PackageSource next, so
+			// garbage collection reaps a Package this delete missed; a Package the
+			// user pinned in the gap has shed that ownerRef (pinRegistrationToUser)
+			// and is correctly spared.
+			if err := r.dyn.Resource(gvrPackages).Delete(ctx, name, delOpts); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				return nil, false, apierrors.NewInternalError(fmt.Errorf("delete registration Package %q: %w", name, err))
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, false, apierrors.NewInternalError(fmt.Errorf("check registration Package %q: %w", name, err))
+	}
+
+	if err := r.dyn.Resource(gvrPackageSources).Delete(ctx, name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil {
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("delete PackageSource %q: %w", name, err))
 	}
 
@@ -317,7 +380,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 			if ns == "" {
 				ns = "cozy-system"
 			}
-			if err := r.dyn.Resource(gvrOCIRepos).Namespace(ns).Delete(ctx, ref.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.dyn.Resource(gvrOCIRepos).Namespace(ns).Delete(ctx, ref.Name, metav1.DeleteOptions{DryRun: deleteDryRun(opts)}); err != nil && !apierrors.IsNotFound(err) {
 				klog.V(2).InfoS("tap disconnected but its OCIRepository could not be deleted", "source", ref.Name, "err", err)
 			}
 		}
@@ -329,7 +392,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 // deleteOrphanTapSource removes a tap whose OCIRepository exists but whose
 // PackageSource has not been materialized. It matches the labeled OCIRepository
 // carrying the tap-name annotation and deletes it.
-func (r *REST) deleteOrphanTapSource(ctx context.Context, name string) (runtime.Object, bool, error) {
+func (r *REST) deleteOrphanTapSource(ctx context.Context, name string, dryRun []string) (runtime.Object, bool, error) {
 	list, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").List(ctx, metav1.ListOptions{
 		LabelSelector: tapconst.Label + "=true",
 	})
@@ -341,7 +404,7 @@ func (r *REST) deleteOrphanTapSource(ctx context.Context, name string) (runtime.
 		if item.GetAnnotations()[tapconst.NameAnnotation] != name {
 			continue
 		}
-		if err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Delete(ctx, item.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Delete(ctx, item.GetName(), metav1.DeleteOptions{DryRun: dryRun}); err != nil && !apierrors.IsNotFound(err) {
 			return nil, false, apierrors.NewInternalError(fmt.Errorf("delete tap source %q: %w", item.GetName(), err))
 		}
 		tap := &corev1alpha1.Tap{
@@ -393,7 +456,7 @@ func (r *REST) appDefIndex(ctx context.Context) map[string]cozyv1alpha1.Applicat
 	return indexAppDefsByChartRef(ads)
 }
 
-func fromUnstructured(u *unstructured.Unstructured, target interface{}) error {
+func fromUnstructured(u *unstructured.Unstructured, target any) error {
 	return runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, target)
 }
 
@@ -435,7 +498,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
 	row := func(t *corev1alpha1.Tap) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{t.Name, t.Spec.Source.Kind, t.Spec.Ready, len(t.Spec.Packages)},
+			Cells:  []any{t.Name, t.Spec.Source.Kind, t.Spec.Ready, len(t.Spec.Packages)},
 			Object: runtime.RawExtension{Object: t},
 		}
 	}

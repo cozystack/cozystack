@@ -1902,6 +1902,32 @@ cozyreport_select_objects "virtualmachine instances" kubectl get vmi -A --no-hea
     cozyreport_read_object "$DIR/describe.txt" kubectl describe vmi -n "$NAMESPACE" "$NAME"
   done
 
+# -- cdi module
+#
+# CDI deletes an importer pod once, right after marking its PVC Succeeded, and
+# never retries that delete. If that delete fails, the Completed pod keeps
+# pvc-protection on the PVC and a later DataVolume delete hangs. The broken-pod
+# walk skips Completed pods, so every pod carrying CDI's own label is read here,
+# whatever its phase and namespace, next to the controller log where a failed
+# delete is reported. The controller runs at -v=1 and logs every reconcile, and
+# the failed delete can be an hour older than the report, so this log keeps ten
+# times the tail the other controller logs get.
+#
+# Only the log reads sit behind the probe. An importer pod is owned by its PVC,
+# not by cdi-deployment, so it outlives a Deployment that is gone or a probe that
+# got no answer, and it is the evidence this module exists for.
+echo "Collecting CDI state..."
+DIR=$REPORT_DIR/cdi
+mkdir -p "$DIR"
+cozyreport_read_object "$DIR/pods.yaml" \
+  kubectl get pod -A -l app=containerized-data-importer -o yaml
+if cozyreport_probe "cdi logs" kubectl get deploy -n cozy-kubevirt-cdi cdi-deployment; then
+  cozyreport_read_object "$DIR/cdi-deployment.log" \
+    kubectl logs -n cozy-kubevirt-cdi deploy/cdi-deployment --tail=20000
+  cozyreport_read_object "$DIR/cdi-deployment-previous.log" \
+    kubectl logs -n cozy-kubevirt-cdi deploy/cdi-deployment --tail=20000 --previous
+fi
+
 echo "Collecting services..."
 cozyreport_read_object "$REPORT_DIR/kubernetes/services.txt" kubectl get svc -A
 COZYREPORT_OBJECTS_DEADLINE=$(( $(date +%s) + COZYREPORT_OBJECTS_BUDGET_DEFAULT ))

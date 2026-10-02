@@ -3,6 +3,7 @@ package lineagecontrollerwebhook
 import (
 	"context"
 	"testing"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,38 +88,43 @@ func TestReconcile_BuildsAppCRDMapByKind(t *testing.T) {
 	}
 }
 
-// TestReconcile_DuplicateKindKeepsFirst pins the duplicate handling:
-// when two ApplicationDefinitions have the same Application.Kind, the
-// reconciler keeps the first one and logs about the duplicate. (Order
-// is whatever the API returns; the test just asserts uniqueness.)
-func TestReconcile_DuplicateKindKeepsFirst(t *testing.T) {
+// TestReconcile_DuplicateKindKeepsOwner pins the duplicate handling: when two
+// ApplicationDefinitions declare the same Application.Kind, the lineage map
+// keeps the owner under the shared rule (created first, then by name), the same
+// definition cozystack-api and the chartRef reconciler treat as the owner. The
+// newcomer is tried on both sides of the owner by name, so neither a first-wins
+// nor a last-wins walk of the list can pass.
+func TestReconcile_DuplicateKindKeepsOwner(t *testing.T) {
 	scheme := newWebhookScheme(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	first := &cozyv1alpha1.ApplicationDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor"},
-		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
-			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
-		},
-	}
-	dup := &cozyv1alpha1.ApplicationDefinition{
-		ObjectMeta: metav1.ObjectMeta{Name: "harbor-shadow"},
-		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
-			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
-		},
-	}
+	for _, newcomerName := range []string{"a-harbor-shadow", "z-harbor-shadow"} {
+		t.Run(newcomerName, func(t *testing.T) {
+			owner := &cozyv1alpha1.ApplicationDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "harbor", CreationTimestamp: metav1.NewTime(base)},
+				Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+					Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
+				},
+			}
+			newcomer := &cozyv1alpha1.ApplicationDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: newcomerName, CreationTimestamp: metav1.NewTime(base.Add(time.Hour))},
+				Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+					Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Harbor"},
+				},
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(owner, newcomer).Build()
 
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(first, dup).
-		Build()
-
-	w := &LineageControllerWebhook{Client: fakeClient, Scheme: scheme}
-	if _, err := w.Reconcile(context.TODO(), ctrl.Request{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	cfg := w.config.Load().(*runtimeConfig)
-	if len(cfg.appCRDMap) != 1 {
-		t.Fatalf("expected exactly one Harbor entry (duplicate dropped), got %d", len(cfg.appCRDMap))
+			w := &LineageControllerWebhook{Client: fakeClient, Scheme: scheme}
+			if _, err := w.Reconcile(context.TODO(), ctrl.Request{}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			cfg := w.config.Load().(*runtimeConfig)
+			if len(cfg.appCRDMap) != 1 {
+				t.Fatalf("expected exactly one Harbor entry (duplicate dropped), got %d", len(cfg.appCRDMap))
+			}
+			if got := cfg.appCRDMap[appRef{"apps.cozystack.io", "Harbor"}]; got == nil || got.Name != "harbor" {
+				t.Fatalf("expected the owner harbor, got %+v", got)
+			}
+		})
 	}
 }

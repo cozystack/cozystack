@@ -1,0 +1,147 @@
+suite: substrate switch guard (assertSubstrateMatches)
+
+# Two silent failures, both of them only visible against the live cluster.
+#
+# Switching an existing pool rolls every worker to the other hypervisor and, on
+# the way, Helm deletes the machine template the draining MachineSet still
+# references: the retention loop looks up only the kind the NEW substrate uses,
+# so the old one stops being rendered. That is the failure the loop exists to
+# prevent, reached from the other side.
+#
+# A pool whose substrate differs from its parent cluster's is the second one.
+# The README says the two must match and nothing enforced it; such a pool gets
+# machines that no infrastructure cluster owns.
+#
+# The `## @immutable` marker on the value is dashboard-only, which is why both
+# checks read the live object. Offline they are inert, like the other guards.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: refuses to switch a pool that already runs KubeVirt workers
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+    kubernetesProvider:
+      scheme: &scheme
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinedeployments"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/Cluster":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "clusters"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinesets"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "kubevirtmachinetemplates"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/ProxmoxMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "proxmoxmachinetemplates"}
+          namespaced: true
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-nodes-myk8s-md0
+          spec:
+            clusterName: kubernetes-myk8s
+            template:
+              spec:
+                infrastructureRef:
+                  kind: KubevirtMachineTemplate
+                  name: kubernetes-myk8s-md0-abc123
+        - &schemeOnlyMs
+          kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec:
+            template:
+              spec:
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: none}
+        - &schemeOnlyKmt
+          kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+        - &schemeOnlyPmt
+          kind: ProxmoxMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "already runs KubevirtMachineTemplate workers"
+
+  - it: refuses a proxmox pool under a KubeVirt cluster
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - &kubevirtParent
+          kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: kubernetes-myk8s, namespace: tenant-test}
+          spec:
+            infrastructureRef:
+              kind: KubevirtCluster
+              name: kubernetes-myk8s
+        - *schemeOnlyMs
+        - *schemeOnlyKmt
+        - *schemeOnlyPmt
+    asserts:
+      - failedTemplate:
+          errorPattern: "parent cluster \"kubernetes-myk8s\" runs on KubevirtCluster"
+
+  - it: renders when the pool agrees with its parent
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *kubevirtParent
+        - *schemeOnlyMs
+        - *schemeOnlyKmt
+        - *schemeOnlyPmt
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name
+
+  - it: renders offline, where there is nothing to compare against
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name

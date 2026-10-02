@@ -34,7 +34,8 @@
 #
 # Every commit in the range is checked as written; nothing is required of a
 # commit, so a message with no trailer at all — a merge commit among them —
-# passes. Only a trailer that exists and is wrong fails.
+# passes. Only a trailer that exists and is wrong fails. An empty range fails:
+# a check that examined nothing must not read as one that found nothing wrong.
 set -euo pipefail
 
 RANGE="${1:-}"
@@ -66,6 +67,21 @@ SESSION_URL='https?://([^/@[:space:]]*@)?([a-z0-9-]+\\.)*(claude\\.ai|chatgpt\\.
 # there is not a command `set -e` looks at, so an unresolvable range would walk
 # zero commits and report success.
 SHAS="$(git rev-list "$RANGE")"
+
+# An empty range is not a pass. The pre-push recipe in docs/agents/contributing.md
+# resolves origin/main..HEAD against the working directory's HEAD, so an agent
+# whose shell sits in a checkout at or behind the base resolves it to nothing
+# here, and an "OK" over zero commits is a green nobody can tell from a real one.
+# (A checkout on an unrelated branch resolves to that branch's commits instead,
+# not to nothing — a wrong-branch check this guard does not claim to catch.) The CI
+# path stays sound: it builds the range from the merge base and the head SHA of a
+# pull request, which GitHub refuses to open with no commits between the two. It
+# does go empty once the base branch has absorbed the head's commits, but only
+# after the PR has nothing left to merge, where a red trailer check is harmless.
+if [ -z "$SHAS" ]; then
+  echo "check-commit-trailers: range '$RANGE' is empty; no commits were checked" >&2
+  exit 1
+fi
 
 bad=0
 for sha in $SHAS; do

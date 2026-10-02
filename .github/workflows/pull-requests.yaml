@@ -79,6 +79,7 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
+      talos: ${{ steps.p.outputs.talos }}
     steps:
       # Claim the required context for THIS run before anything can be merged on
       # the strength of the last one. Commit statuses are latest-wins per (sha,
@@ -127,7 +128,7 @@ jobs:
               description: 'e2e in progress — this run has not reported yet',
               target_url: RUN_URL,
             });
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Compute changed files and build matrix
@@ -182,6 +183,9 @@ jobs:
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          talos="$(hack/build-talos-needed.sh /tmp/changed_norenames.txt)"
+          echo "Talos build needed: $talos"
+          echo "talos=$talos" >> "$GITHUB_OUTPUT"
           # Package dirs the PR edited (packages/<area>/<name>). Their committed
           # refs are the PR's intent and must survive the current-main overlay —
           # otherwise an upstream image bump in a non-build-unit package would be
@@ -226,14 +230,14 @@ jobs:
       # The default pull_request checkout is GitHub's prospective merge commit,
       # not just the head branch. That makes base-branch package drift visible.
       - name: Checkout prospective merge
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       # Execute the verifier from the trusted base SHA. An older rc-derived head
       # may not contain it, and a PR must not be able to weaken its own guard.
       - name: Checkout release tooling from base
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling
@@ -305,7 +309,7 @@ jobs:
       && !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
@@ -314,12 +318,19 @@ jobs:
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
-      # One make process owns all four runner CPUs. Each BATS file is a separate
-      # prerequisite, so the long tail no longer runs as one nine-minute shell
+      # The make processes share one four-slot jobserver. Each BATS file is a
+      # separate target, so the long tail no longer runs as one nine-minute shell
       # loop; Helm and Go targets share the same bounded pool. Output stays
       # grouped by target instead of four test logs interleaving.
+      #
+      # -k is required, not cosmetic: unit-tests and test-controllers are two
+      # independent goals on the same command line, and without -k make stops
+      # handing out new work the moment any unit-tests prerequisite fails —
+      # test-controllers then never starts and reports nothing, so a red BATS
+      # file hides the entire Go controller suite. -k lets already-schedulable
+      # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
-        run: make unit-tests test-controllers -j4 --output-sync=target
+        run: make unit-tests test-controllers -j4 -k --output-sync=target
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
@@ -337,25 +348,26 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
         pkg: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
       # installer is built in finalize, but some package image targets shell out
-      # to flux; install it if absent (idempotent, cheap).
+      # to flux; install the pinned version when it is not already present.
       - name: Set up build toolchain
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          if ! command -v flux >/dev/null; then
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
       - name: Set up Docker config
@@ -401,6 +413,10 @@ jobs:
           # pulls go through the docker.io mirror (BUILDX_ARGS adds
           # --builder=$(BUILDER)).
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
+          # and on this x86-64 runner the arm64 half would be emulated anyway;
+          # CI builds amd64 until arm64 has a native leg of its own.
+          PLATFORM: linux/amd64
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PR images are consumed by digest; :latest belongs to releases.
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -444,29 +460,40 @@ jobs:
           path: _out/oci/*.oci.tar
           if-no-files-found: error
 
-  # Talos is its own leg: the installer tarball is heavy and the talos image is
+  # Talos is its own leg: the installer tarball is heavy and the Talos image is
   # built from it, so both live in one job. No nocloud disk is built here any
-  # more, and e2e no longer downloads one -- the container lane boots the Talos
-  # image directly. `images/talos/profiles/nocloud.yaml` is therefore compiled
-  # by nightly.yaml and by the tag build's `make assets` rather than per PR;
-  # what a PR still compiles is installer.yaml, which shares every input with it
-  # bar the platform and the output format. Always runs on non-docs PRs, because
-  # the patch fragment and the installer chain need it regardless of the
-  # per-package matrix scope.
+  # more, and e2e no longer downloads one -- the container lane boots the
+  # upstream Talos container image. `images/talos/profiles/nocloud.yaml` is
+  # therefore compiled by nightly.yaml and by the tag build's `make assets`.
+  #
+  # For same-repo PRs, the plan job classifies the rename-blind changed-path
+  # list with build-talos-needed.sh. That list includes direct Talos sources and
+  # the shared Makefile/Buildx/workflow inputs that determine this job's output;
+  # line-based classification avoids depending on the formatting of `touched`.
+  # A successful run stamps packages/extra/bootbox/images/matchbox.tag, and
+  # finalize preserves that generated ref when it overlays base-branch images.
+  #
+  # Fork PRs keep the previous unconditional behavior as a conservative scope
+  # boundary. Their build/export and privileged publication path spans a second
+  # workflow and is not optimized here. The installer job also exports an OCI
+  # archive, so archive availability is not a reason to require Talos itself.
   build-talos:
     name: Build Talos
     needs: ["plan"]
     if: |
       needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
+      && (
+        github.event.pull_request.head.repo.fork
+        || needs.plan.outputs.talos == 'true'
+      )
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 40
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -502,6 +529,10 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job. The arm64 installer needs no QEMU,
+          # but nothing a PR runs boots it. matchbox still gets the arm64 kernel
+          # and initramfs.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
@@ -545,24 +576,25 @@ jobs:
       && !contains(github.event.pull_request.labels.*.name, 'release')
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
-      && needs.build-talos.result == 'success'
+      && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
       - name: Set up build toolchain
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          if ! command -v flux >/dev/null; then
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
             install_script="$(mktemp)"
             curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
             rm -f "$install_script"
           fi
       - name: Download patch fragments
@@ -623,13 +655,39 @@ jobs:
       # cozystack-packages:<line> for every maintained release-<major>.<minor>
       # branch, so each base branch has its own artifact to read.
       #
+      # A base that is neither main nor a line (a stacked PR's feature branch) has
+      # no artifact, and a `/` in it is not even a valid OCI tag. It reads the
+      # artifact of whichever of main and the lines it has the fewest commits on
+      # top of. A tie goes to main. A line with no commit of its own yet is, in
+      # the graph, main at the cut commit, so a stack on it ties and reads the
+      # artifact built from main's tip. That artifact carries newer images than
+      # the line once main moves past the cut. The stack keeps reading it until
+      # it contains a commit of the line's own. Breaking the tie towards the
+      # line instead would misroute the far more common branch forked from main
+      # before the cut, which ties the same way.
+      #
       # A missing artifact stays a no-op (packages keep their committed refs), which
       # also covers a line whose first build-release run has not landed yet.
       - name: Pull base-branch packages tree
         run: |
+          ARTIFACT_REF="$BASE_REF"
+          if [ "$BASE_REF" != "main" ] \
+            && ! printf '%s' "$BASE_REF" | grep -qE '^release-[0-9]+\.[0-9]+$'; then
+            ARTIFACT_REF=main
+            # A re-run can outlive its base: the payload keeps a branch deleted since.
+            if git rev-parse --verify --quiet "origin/${BASE_REF}" >/dev/null; then
+              best="$(git rev-list --count "origin/main..origin/${BASE_REF}")"
+              for line in $(git for-each-ref --format='%(refname:lstrip=3)' 'refs/remotes/origin/release-*' \
+                              | grep -E '^release-[0-9]+\.[0-9]+$'); do
+                n="$(git rev-list --count "origin/${line}..origin/${BASE_REF}")"
+                if [ "$n" -lt "$best" ]; then best="$n"; ARTIFACT_REF="$line"; fi
+              done
+            fi
+            echo "::notice::Base ${BASE_REF} publishes no packages artifact; overlaying cozystack-packages:${ARTIFACT_REF}."
+          fi
           rm -rf _out/mainpkgs
           mkdir -p _out/mainpkgs
-          if ! flux pull artifact "oci://${REGISTRY}/cozystack-packages:${BASE_REF}" \
+          if ! flux pull artifact "oci://${REGISTRY}/cozystack-packages:${ARTIFACT_REF}" \
                  --output _out/mainpkgs; then
             rm -rf _out/mainpkgs
             # Degrading to committed refs is safe, but SAY so: on a release line a
@@ -637,10 +695,10 @@ jobs:
             # yet (first build pending, or its branch filter does not match this
             # branch), and the PR is then testing the line's last release instead of
             # its tip. Silent would look identical to a working overlay.
-            if [ "${BASE_REF}" = "main" ]; then
-              echo "cozystack-packages:${BASE_REF} pull failed — keeping committed refs"
+            if [ "${ARTIFACT_REF}" = "main" ]; then
+              echo "cozystack-packages:${ARTIFACT_REF} pull failed — keeping committed refs"
             else
-              echo "::warning title=No packages artifact for ${BASE_REF}::Keeping committed refs, so unbuilt packages use this line's last release rather than its tip. Check that build-release.yaml has run for ${BASE_REF}."
+              echo "::warning title=No packages artifact for ${ARTIFACT_REF}::Keeping committed refs, so unbuilt packages use this line's last release rather than its tip. Check that build-release.yaml has run for ${ARTIFACT_REF}."
             fi
           fi
         env:
@@ -657,7 +715,14 @@ jobs:
         # including the empty directory the step above leaves when a line has no
         # artifact yet.
         run: |
-          hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
+          rebuilt="$BUILD_MATRIX"
+          if [ "$TALOS_RESULT" = "success" ]; then
+            case "$rebuilt" in
+              '[]') rebuilt='["packages/extra/bootbox"]' ;;
+              *) rebuilt="${rebuilt%]},\"packages/extra/bootbox\"]" ;;
+            esac
+          fi
+          hack/overlay-main-images.sh _out/mainpkgs "$rebuilt" "$PR_TOUCHED" \
             || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
         env:
           # The set of packages THIS PR rebuilt; their pr-<N>-<sha> refs are
@@ -665,6 +730,10 @@ jobs:
           # plan job from the Makefile (a JSON array of package dirs), not from
           # untrusted PR input — passed via env per workflow-injection hygiene.
           BUILD_MATRIX: ${{ needs.plan.outputs.matrix }}
+          # build-talos writes matchbox.tag under extra/bootbox rather than its
+          # own package. Preserve that generated ref only when the job actually
+          # succeeded; when it was skipped, the base-branch ref should overlay.
+          TALOS_RESULT: ${{ needs.build-talos.result }}
           # Packages THIS PR edited (changed-file dirs from the plan job's git
           # diff). Their committed refs are the PR's intent — an upstream image
           # bump in a non-build-unit package would otherwise be silently reverted
@@ -700,6 +769,8 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
@@ -759,7 +830,7 @@ jobs:
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -878,7 +949,7 @@ jobs:
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -1064,7 +1135,7 @@ jobs:
             echo "Running selected chainsaw suites: $suites"
           fi
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"

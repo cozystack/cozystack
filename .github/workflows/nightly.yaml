@@ -53,9 +53,16 @@ jobs:
       packages_digest: ${{ steps.publish.outputs.packages_digest }}
     steps:
       - name: Set up toolchain (skopeo, flux, yq, helm)
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          command -v flux   >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
           command -v yq     >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
           command -v helm   >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
@@ -116,7 +123,7 @@ jobs:
           echo "Resolved main build: sha=$sha version=$version packages_ref=$packages_ref"
 
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
@@ -183,7 +190,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
@@ -201,6 +208,9 @@ jobs:
       # rebuild of any cozystack image.
       - name: Build nocloud disk
         run: make -C packages/core/talos talos-nocloud
+        env:
+          # The e2e sandbox boots amd64 only.
+          PLATFORM: linux/amd64
       - name: Publish disk to GHCR
         env:
           VERSION: ${{ needs.mirror.outputs.version }}
@@ -235,14 +245,21 @@ jobs:
       packages: read
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
       - name: Set up toolchain (flux, oras)
+        env:
+          FLUX_VERSION: "2.8.6"
         run: |
-          command -v flux >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
           command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
       - name: Login to GHCR
         env:
@@ -315,7 +332,7 @@ jobs:
       - name: Run E2E tests (full suite)
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"

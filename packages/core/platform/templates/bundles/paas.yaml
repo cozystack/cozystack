@@ -1,5 +1,5 @@
-{{- if and .Values.bundles.paas.enabled (not (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted"))) }}
-{{- fail "bundles.paas.enabled can only be true when bundles.system.variant is 'isp-full', 'isp-full-generic', or 'isp-hosted'" }}
+{{- if and .Values.bundles.paas.enabled (not (has .Values.bundles.system.variant (list "isp-full" "isp-full-generic" "isp-hosted" "isp-slim" "isp-slim-generic" "isp-hosted-slim"))) }}
+{{- fail "bundles.paas.enabled can only be true when bundles.system.variant is 'isp-full', 'isp-full-generic', 'isp-hosted', 'isp-slim', 'isp-slim-generic', or 'isp-hosted-slim'" }}
 {{- end }}
 {{- /* The variant check above is not sufficient: bundles.system.variant keeps its
        value when bundles.system.enabled is false, so a preset could select a valid
@@ -11,27 +11,27 @@
 {{- if and .Values.bundles.paas.enabled (not .Values.bundles.system.enabled) }}
 {{- fail "bundles.paas.enabled requires bundles.system.enabled: the paas catalog depends on packages emitted by the system bundle (cozystack.cozystack-engine, which ships the ApplicationDefinition CRD, plus cozystack.networking, cozystack.cert-manager, cozystack.prometheus-operator-crds, cozystack.postgres-operator and cozystack.objectstorage-controller). To run a hosted platform where the host provides CNI, storage and virtualisation, keep bundles.system.enabled: true and set bundles.system.variant: isp-hosted (which selects a noop networking Package) with bundles.iaas.enabled: false — do not disable the system bundle." }}
 {{- end }}
-{{- if and .Values.bundles.paas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted")) }}
-{{include "cozystack.platform.package.default" (list "cozystack.mariadb-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kafka-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.clickhouse-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.foundationdb-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.redis-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.mongodb-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.opensearch-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.clickhouse-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.foundationdb-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.harbor-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kafka-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.mariadb-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.mongodb-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.nats-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.openbao-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.opensearch-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.postgres-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.qdrant-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.redis-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.valkey-application" $) }}
+{{- if and .Values.bundles.paas.enabled (has .Values.bundles.system.variant (list "isp-full" "isp-full-generic" "isp-hosted" "isp-slim" "isp-slim-generic" "isp-hosted-slim")) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.mariadb-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.kafka-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.clickhouse-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.foundationdb-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.rabbitmq-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.redis-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.mongodb-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.opensearch-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.clickhouse-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.foundationdb-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.harbor-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.kafka-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.mariadb-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.mongodb-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.nats-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.openbao-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.opensearch-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.postgres-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.qdrant-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.rabbitmq-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.redis-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.valkey-application" $) }}
 {{- end }}

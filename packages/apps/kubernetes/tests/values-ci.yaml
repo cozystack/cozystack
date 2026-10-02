@@ -3,6 +3,6 @@ _namespace:
   monitoring: ""
   ingress: ""
   seaweedfs: ""
-  host: ""
+  host: "example.org"
 _cluster:
   cluster-domain: cozy.local

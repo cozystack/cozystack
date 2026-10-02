@@ -423,16 +423,16 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh
         check:
           ($error == null): true
-    # The 30m budget covers what this step drives: bucket provisioning, a
+    # The 36m budget covers what this step drives: bucket provisioning, a
     # single-replica source MongoDB coming up (psmdb reconcile, PVC bind, image
     # pull, pbm-agent sidecars) and the logical dump to S3 (convention 6:
     # justified in-line). It is not lowered for the skipped restore because
     # run-all.sh's own per-wait budgets up to the backup already exceed it, so
     # this is the ceiling that fires either way. run-all.sh fails fast on a
     # terminal BackupJob phase and stalled HelmReleases rather than polling out
-    # the budget.
+    # the budget. Sized with the 660s source HR wait in run-all.sh.
     - script:
-        timeout: 30m
+        timeout: 36m
         content: |
           set -eu
           cd ../../..

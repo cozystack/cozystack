@@ -25,7 +25,12 @@ spec:
       kind: Bucket
       format: yaml
   - script:
-      content: kubectl -n cozy-objectstorage-controller get pods
+      # Bound the read the same way the step above documents: a catch script
+      # inherits timeouts.exec (5m), and a kubectl left holding the op's
+      # stdout/stderr pipe keeps the op alive to that ceiling (#4268). The inner
+      # cap cuts it at a known budget; the op timeout is the backstop above it.
+      timeout: 1m
+      content: timeout 30 kubectl -n cozy-objectstorage-controller get pods
   steps:
   - name: create-bucket
     try:
@@ -86,18 +91,59 @@ spec:
           workdir=$(mktemp -d)
           trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
-          # Extract credentials for both users
-          kubectl -n "$NAMESPACE" get secret bucket-test-admin \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/admin.json"
-          kubectl -n "$NAMESPACE" get secret bucket-test-viewer \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/viewer.json"
+          # Cap every S3 and apiserver call at its own deadline. A chainsaw
+          # `script` op runs the shell under exec.CommandContext with stdout and
+          # stderr wired to in-process buffers
+          # (pkg/engine/operations/script/operation.go): when the op `timeout`
+          # fires it SIGKILLs the shell alone — not its descendants — and
+          # cmd.Wait() does not return until every process that inherited those
+          # pipe fds has closed them. An mc left retrying a slow S3 call after
+          # the shell is gone keeps that pipe open, so the op runs past its
+          # declared ceiling instead of being cut at it. In #4268 a sibling
+          # script step of exactly this shape — `verify-every-bucket-takes-a-write`
+          # in the `bucket-1-capacity` Test further down this file — ran
+          # 606s under a 300s ceiling for this reason; this step is capped because
+          # it shares that shape, not because it produced that number. Per-command
+          # caps stop any single call outliving its budget, so a hang fails fast
+          # and legibly and the op `timeout` stays a backstop whose inner budgets
+          # sit under its 5m ceiling: 2×30 for the two `k` reads + 2×45 for the
+          # two `mc cp` PUTs + at most 7×15 for the other `mc` calls (eight other
+          # call sites, but the two cleanup `mc rm` are mutually exclusive) + the
+          # 30s port-forward readiness wait = at most 285s. mc and kubectl both
+          # exit on SIGTERM. The 30s `k` cap matches the redis suite's own `k`
+          # wrapper (`redis/chainsaw-test.yaml:298`), a terminal cap like this
+          # one; the 45s PUT cap matches the one terminal `mc cp` in the tree,
+          # in `verify-every-bucket-takes-a-write` further down this file, which
+          # sizes it for a volume grow. The 15s cap on the `mc` reads has no
+          # terminal precedent: `_lib/backup-access-preflight.sh:107` caps `mc`
+          # at 15s too, but inside a `while :;` retry loop where a 124 costs one
+          # attempt rather than the step, so it is not one. timeout execs its
+          # argument directly, so these wrappers do not recurse.
+          k()  { timeout 30 kubectl "$@"; }
+          mc() { timeout 15 mc "$@"; }  # reads/list/rm; the two PUTs call `timeout 45 mc` directly
+
+          # Extract credentials for both users. Land the encoded value in a file
+          # before decoding it: piping `k … | base64 -d` (no pipefail here) would
+          # take base64's exit status and mask a timed-out `k` (exit 124), which
+          # would then surface three lines down as an empty-credential `mc alias
+          # set` instead of at the read. As two statements, `set -e` stops on the
+          # `k` read itself.
+          k -n "$NAMESPACE" get secret bucket-test-admin \
+            -o jsonpath='{.data.BucketInfo}' > "$workdir/admin.b64"
+          base64 -d "$workdir/admin.b64" > "$workdir/admin.json"
+          k -n "$NAMESPACE" get secret bucket-test-viewer \
+            -o jsonpath='{.data.BucketInfo}' > "$workdir/viewer.b64"
+          base64 -d "$workdir/viewer.b64" > "$workdir/viewer.json"
           ADMIN_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/admin.json")
           ADMIN_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/admin.json")
           VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/viewer.json")
           VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/viewer.json")
           BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/admin.json")
 
-          # Port-forward to the S3 endpoint; cleaned up by the trap
+          # Port-forward to the S3 endpoint; cleaned up by the trap. This 30s is
+          # a readiness deadline for the forward coming up (distinct from the 30s
+          # apiserver-read cap in k()); if it never listens, timeout exits 124 and
+          # `set -e` fails the step.
           kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
           pf_pid=$!
           timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
@@ -107,7 +153,11 @@ spec:
 
           # Admin (readwrite) can upload, list, download
           echo "readwrite test" > "$workdir/rw-test.txt"
-          mc cp --insecure "$workdir/rw-test.txt" "rw-user/$BUCKET_NAME/rw-test.txt"
+          # The PUT takes 45s, not the 15s mc() wrapper: this is the first write
+          # into a bucket created a few steps earlier, and a working PUT can wait
+          # up to ~10s while the master grows a volume for it — the same budget
+          # `verify-every-bucket-takes-a-write` gives its write for that reason.
+          timeout 45 mc cp --insecure "$workdir/rw-test.txt" "rw-user/$BUCKET_NAME/rw-test.txt"
           mc ls --insecure "rw-user/$BUCKET_NAME/rw-test.txt"
           mc cp --insecure "rw-user/$BUCKET_NAME/rw-test.txt" "$workdir/rw-test-download.txt"
 
@@ -119,12 +169,28 @@ spec:
           # enforcement landed with seaweedfs-cosi-driver v0.3.1 (#1921,
           # eab9b034f), so a successful upload is a regression, not a known
           # gap — fail hard.
+          # Capture the status rather than branching on `mc` directly: an `if`
+          # suspends `set -e`, so a `timeout` firing here (exit 124) would be
+          # indistinguishable from the access-denied non-zero this probe expects,
+          # and a 45s hang on the deny path would read as a passed check. This is
+          # the first `ro-user` write in the step — no earlier call exercised it —
+          # so its health is not established elsewhere. Success (exit 0) is the
+          # readonly regression; 124 is a timed-out probe; both fail. Any other
+          # non-zero is the expected denial.
           echo "readonly test" > "$workdir/ro-test.txt"
-          if mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt"; then
+          ro_status=0
+          # Same 45s write budget as the readwrite PUT above, bypassing the 15s
+          # mc() wrapper; a 124 here is still a timed-out probe (handled below).
+          timeout 45 mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt" || ro_status=$?
+          if [ "$ro_status" -eq 0 ]; then
             echo "FAIL: read-only user must NOT be able to upload (accessPolicy=readonly regression; enforced since cosi-driver v0.3.1, #1921)" >&2
             # Drop the object the viewer should not have been able to create
             # (via the admin user, which is unambiguously allowed to delete).
             mc rm --insecure "rw-user/$BUCKET_NAME/ro-test.txt" || true
+            exit 1
+          fi
+          if [ "$ro_status" -eq 124 ]; then
+            echo "FAIL: read-only upload probe timed out at its 45s cap; the deny path is not proven healthy, so it cannot pass" >&2
             exit 1
           fi
 
@@ -134,3 +200,195 @@ spec:
           ($error == null): true
 # The Bucket CR was applied by chainsaw and is deleted automatically during
 # cleanup — no explicit teardown step needed.
+---
+# Slot exhaustion leaves every COSI object green and fails only the write, so
+# readiness alone cannot see it: the master answers `assign` with a grow that
+# returns no volume, and the S3 gateway times the PUT out. Each bucket here
+# therefore has to take an object, not just report ready.
+#
+# Three buckets, because the count has to exceed what a 10Gi volume serves at
+# a 1000 MB size limit and six volumes per grow, nine slots per server,
+# whether or not the platform's cozy-backups collection and the unnamed
+# default one have grown yet, and this suite can observe neither. With either
+# of them grown, the second bucket is already refused. With neither, the first
+# bucket takes six slots and the second the remaining three, since a grow keeps
+# what it gets, so the third is refused.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bucket-1-capacity
+spec:
+  catch:
+  - events: {}
+  - get:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: Bucket
+      format: yaml
+  - podLogs:
+      namespace: tenant-root
+      selector: app.kubernetes.io/component=master
+      tail: 200
+  # The master logs a grow failure without the slot accounting behind it, so a
+  # log alone reads the same whether the shipped limit is too coarse for the
+  # PVC or an earlier collection in this run is still holding the budget. Max
+  # against Volumes per server separates those two.
+  # Read from inside the master rather than through a port-forward: the image
+  # ships curl, so this needs nothing on the host and adds no second fixed
+  # port to the reason this suite cannot run in parallel.
+  - description: master slot accounting
+    script:
+      timeout: 2m
+      content: |
+        set -u
+        echo "» master /dir/status (Max is the slot count per server, Volumes what is held):"
+        timeout 60 kubectl -n tenant-root exec statefulset/seaweedfs-master -- \
+          curl -s --max-time 20 http://localhost:9333/dir/status \
+          || echo "» /dir/status read failed"
+        echo
+        exit 0
+  steps:
+  - name: create-buckets
+    try:
+    - apply:
+        file: buckets-capacity.yaml
+
+  - name: wait-buckets-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap1
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap2
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-cap3
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap1
+          status:
+            bucketReady: true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap2
+          status:
+            bucketReady: true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-cap3
+          status:
+            bucketReady: true
+    # BucketAccess reconciles separately from the claim, and the write step
+    # reads the Secret it produces. Without these the step can fail on a
+    # missing Secret rather than on the capacity it is here to measure.
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap1-admin
+          status:
+            accessGranted: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap2-admin
+          status:
+            accessGranted: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-cap3-admin
+          status:
+            accessGranted: true
+
+  - name: verify-every-bucket-takes-a-write
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+
+          echo "capacity probe" > "$workdir/probe.txt"
+
+          for name in cap1 cap2 cap3; do
+            # Keep the read and the decode as separate commands. This runs under
+            # /bin/sh, where pipefail is unavailable, and a pipeline would let a
+            # failed Secret read look successful when base64 exits zero on empty
+            # input — surfacing at mc as the credentials error this case exists
+            # to rule out.
+            if ! kubectl -n "$NAMESPACE" get secret "bucket-${name}-admin" \
+                -o jsonpath='{.data.BucketInfo}' > "$workdir/${name}.b64"; then
+              echo "failed to read BucketInfo Secret $NAMESPACE/bucket-${name}-admin" >&2
+              exit 1
+            fi
+            if ! base64 -d < "$workdir/${name}.b64" > "$workdir/${name}.json"; then
+              echo "BucketInfo Secret $NAMESPACE/bucket-${name}-admin is not valid base64" >&2
+              exit 1
+            fi
+            ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID // ""' "$workdir/${name}.json")
+            SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey // ""' "$workdir/${name}.json")
+            BUCKET_NAME=$(jq -r '.spec.bucketName // ""' "$workdir/${name}.json")
+            if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ] || [ -z "$BUCKET_NAME" ]; then
+              echo "BucketInfo Secret $NAMESPACE/bucket-${name}-admin lacks access key, secret key, or bucket name" >&2
+              exit 1
+            fi
+
+            # Each mc call carries its own limit, because the step timeout only
+            # kills this shell and a hung PUT, the failure this case exists for,
+            # would keep the step waiting on mc's pipes. That PUT never fails on
+            # its own: the gateway answers 5xx and mc retries without a word, so
+            # the limit is what ends it and the catch block is what shows why.
+            # The PUT gets the longest because a working one can still wait up
+            # to ten seconds while the master grows a volume for the bucket.
+            # With the port-forward wait the sum stays under the step's five
+            # minutes.
+            timeout 15 mc alias set "$name" https://localhost:8333 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+            timeout 45 mc cp --insecure "$workdir/probe.txt" "$name/$BUCKET_NAME/probe.txt"
+            timeout 15 mc rm --insecure "$name/$BUCKET_NAME/probe.txt"
+          done
+        check:
+          ($error == null): true

@@ -16,6 +16,7 @@ kubectl -n "$NAMESPACE" delete secret "${NATS_RESTORE_NAME}-backup-s3" --ignore-
 kubectl -n "$NAMESPACE" delete secret "${NATS_NAME}-backup-s3" --ignore-not-found
 kubectl -n "$NAMESPACE" delete nats "$NATS_RESTORE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete nats "$NATS_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete pod -l cozystack.io/backup-demo=nats --grace-period=1 --ignore-not-found
 kubectl -n "$NAMESPACE" delete bucket "$BUCKET_NAME" --ignore-not-found
 rm -f "$SCRIPT_DIR/.bucket-info.env"
 kubectl delete backupclass "$BACKUPCLASS_NAME" --ignore-not-found

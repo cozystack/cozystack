@@ -1,4 +1,4 @@
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}

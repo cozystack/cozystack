@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -102,13 +103,13 @@ func validateRedisApplicationRef(ref corev1.TypedLocalObjectReference) error {
 // a driver that blocked on a missing condition would wedge backups for those
 // apps until the deadline. When the app is genuinely unreachable, the Job itself
 // fails with the connection error rather than the driver hanging.
-func redisAppReady(app map[string]interface{}) (proceed bool, reason, message string) {
+func redisAppReady(app map[string]any) (proceed bool, reason, message string) {
 	conditions, found, err := unstructured.NestedSlice(app, "status", "conditions")
 	if err != nil || !found {
 		return true, "", ""
 	}
 	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
+		cond, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -185,12 +186,12 @@ func redisRestoreObjectKey(b *backupsv1alpha1.Backup) string {
 // named target. Mirrors renderAltinityTemplate.
 func renderRedisTemplate(
 	tmpl corev1.PodTemplateSpec,
-	app map[string]interface{},
+	app map[string]any,
 	releaseName, releaseNamespace, mode, objectKey string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) (*corev1.PodTemplateSpec, error) {
-	ctxMap := map[string]interface{}{
+	ctxMap := map[string]any{
 		"Application": app,
 		"Release": map[string]string{
 			"Name":      releaseName,
@@ -205,7 +206,7 @@ func renderRedisTemplate(
 		if backup.Spec.ApplicationRef.APIGroup != nil {
 			sourceAPIGroup = *backup.Spec.ApplicationRef.APIGroup
 		}
-		ctxMap["Backup"] = map[string]interface{}{
+		ctxMap["Backup"] = map[string]any{
 			"Name":      backup.Name,
 			"Namespace": backup.Namespace,
 			"ApplicationRef": map[string]string{
@@ -439,9 +440,7 @@ func (r *BackupJobReconciler) ensureRedisJob(
 	rendered *corev1.PodTemplateSpec,
 ) (*batchv1.Job, error) {
 	labels := map[string]string{redisLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 	return ensureBackupBatchJob(ctx, r.Client, r.Scheme, owner, namespace, name, labels, rendered)
 }
 
@@ -543,7 +542,7 @@ func (r *RestoreJobReconciler) reconcileRedisRestore(ctx context.Context, restor
 		}
 	}
 	targetRef := corev1.TypedLocalObjectReference{
-		APIGroup: stringPtr(targetAPIGroup),
+		APIGroup: new(targetAPIGroup),
 		Kind:     targetAppKind,
 		Name:     targetAppName,
 	}
@@ -685,9 +684,7 @@ func (r *RestoreJobReconciler) ensureRedisRestoreJob(
 	rendered *corev1.PodTemplateSpec,
 ) (*batchv1.Job, error) {
 	labels := map[string]string{redisLabelMode: mode}
-	for k, v := range ownerLabels {
-		labels[k] = v
-	}
+	maps.Copy(labels, ownerLabels)
 	return ensureBackupBatchJob(ctx, r.Client, r.Scheme, owner, namespace, name, labels, rendered)
 }
 

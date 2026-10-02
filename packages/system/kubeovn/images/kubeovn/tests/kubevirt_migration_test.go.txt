@@ -1,0 +1,100 @@
+package controller
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
+	kubevirtv1 "kubevirt.io/api/core/v1"
+	"kubevirt.io/client-go/kubecli"
+
+	mockovs "github.com/kubeovn/kube-ovn/mocks/pkg/ovs"
+	"github.com/kubeovn/kube-ovn/pkg/ovsdb/ovnnb"
+)
+
+func TestVMIMigrationSchedulingRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		sourceNode       string
+		targetNode       string
+		wantRetry        bool
+		wantSetup        bool
+		missingTargetPod bool
+	}{
+		{"target pod not created", "source", "target", true, true, true},
+		{"target not scheduled", "source", "", true, true, false},
+		{"source not known", "", "target", true, true, false},
+		{"both nodes unknown", "", "", true, true, false},
+		{"already scheduled", "source", "target", false, true, false},
+		{"same node", "source", "source", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockCtrl := gomock.NewController(t)
+			virtClient := kubecli.NewMockKubevirtClient(mockCtrl)
+			migrationClient := kubecli.NewMockVirtualMachineInstanceMigrationInterface(mockCtrl)
+			vmiClient := kubecli.NewMockVirtualMachineInstanceInterface(mockCtrl)
+			nbClient := mockovs.NewMockNbClient(mockCtrl)
+			migration := &kubevirtv1.VirtualMachineInstanceMigration{
+				ObjectMeta: metav1.ObjectMeta{Name: "migration", Namespace: "default", UID: "migration-uid"},
+				Spec:       kubevirtv1.VirtualMachineInstanceMigrationSpec{VMIName: "vm"},
+				Status: kubevirtv1.VirtualMachineInstanceMigrationStatus{
+					Phase:          kubevirtv1.MigrationScheduling,
+					MigrationState: &kubevirtv1.VirtualMachineInstanceMigrationState{},
+				},
+			}
+			vmi := &kubevirtv1.VirtualMachineInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "default"},
+				Status:     kubevirtv1.VirtualMachineInstanceStatus{NodeName: tc.sourceNode},
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "target", Namespace: "default", Labels: map[string]string{
+					kubevirtv1.MigrationJobLabel: string(migration.UID),
+				}},
+				Spec: corev1.PodSpec{NodeName: tc.targetNode},
+			}
+			indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+			if !tc.missingTargetPod {
+				require.NoError(t, indexer.Add(pod))
+			}
+			virtClient.EXPECT().VirtualMachineInstanceMigration("default").Return(migrationClient).AnyTimes()
+			virtClient.EXPECT().VirtualMachineInstance("default").Return(vmiClient).AnyTimes()
+			migrationClient.EXPECT().Get(gomock.Any(), "migration", metav1.GetOptions{}).Return(migration, nil).AnyTimes()
+			vmiClient.EXPECT().Get(gomock.Any(), "vm", metav1.GetOptions{}).Return(vmi, nil).AnyTimes()
+			nbClient.EXPECT().ListNormalLogicalSwitchPorts(false, map[string]string{"pod": "default/vm"}).Return([]ovnnb.LogicalSwitchPort{{Name: "vm-port"}}, nil).AnyTimes()
+			if tc.wantSetup {
+				nbClient.EXPECT().SetLogicalSwitchPortMigrateOptions("vm-port", "source", "target").Return(nil).Times(1)
+			}
+			queue := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]())
+			t.Cleanup(queue.ShutDown)
+			controller := &Controller{
+				config: &Configuration{KubevirtClient: virtClient}, podsLister: corelisters.NewPodLister(indexer),
+				OVNNbClient: nbClient, addOrUpdateVMIMigrationQueue: queue,
+			}
+			const key = "default/migration"
+			queue.Add(key)
+			require.True(t, processNextWorkItem("migration", queue, controller.handleAddOrUpdateVMIMigration, getWorkItemKey))
+			if tc.wantRetry {
+				require.Equal(t, 1, queue.NumRequeues(key), "a missing or unscheduled target must not drop the migration event")
+				vmi.Status.NodeName = "source"
+				scheduledPod := pod.DeepCopy()
+				scheduledPod.Spec.NodeName = "target"
+				if tc.missingTargetPod {
+					require.NoError(t, indexer.Add(scheduledPod))
+				} else {
+					require.NoError(t, indexer.Update(scheduledPod))
+				}
+				// The VMIM stays in Scheduling: only the rate-limited retry can finish setup.
+				require.Eventually(t, func() bool { return queue.Len() == 1 }, time.Second, time.Millisecond)
+				require.True(t, processNextWorkItem("migration", queue, controller.handleAddOrUpdateVMIMigration, getWorkItemKey))
+			}
+			require.Zero(t, queue.NumRequeues(key))
+			require.Zero(t, queue.Len())
+		})
+	}
+}

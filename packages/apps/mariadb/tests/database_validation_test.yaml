@@ -1,0 +1,485 @@
+suite: db.yaml rejects a database name that cannot install
+
+# A database name becomes the Database CR spec.name and (via "_"->"-") the
+# Database CR metadata.name <release>-<name>, plus each Grant's database and
+# metadata.name. Kubernetes requires that resource name to be a DNS-1123
+# subdomain, and two names differing only in "_" vs "-" collide on one Database
+# CR. Without a guard such names render and fail opaquely at apply — the same
+# class the username guard already catches. Mirror it for databases. Reverting
+# the guard in db.yaml lets the render succeed, so the reject tests fail.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: mdb-test
+  namespace: tenant-test
+
+set:
+  users:
+    app:
+      maxUserConnections: 10
+
+tests:
+  - it: fails for an uppercase database name (invalid Database CR name)
+    set:
+      databases:
+        My.Db:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "My.Db": it also names the Database resource "mdb-test-My.Db", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails for a database name with a trailing "-"
+    set:
+      databases:
+        foo-:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "foo-": it also names the Database resource "mdb-test-foo-", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  - it: fails for two database names that collide after the "_"->"-" mapping
+    set:
+      databases:
+        a_b:
+          roles:
+            admin: [app]
+        a-b:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database names "a-b" and "a_b" both map to the Database resource name "mdb-test-a-b" ("_" renders as "-"); rename one of them'
+
+  # The Grant CR name is the join <release>-<dbDNS>-<userDNS>-<role>, so two
+  # different (database, user) pairs that split the "-"/"_" differently collide
+  # on one Grant even when each database and each username is individually unique
+  # and valid. Per-field guards miss this join; the guard must track the whole
+  # rendered Grant name. Here (db "a", user "b-c") and (db "a-b", user "c") both
+  # render mdb-test-a-b-c-admin.
+  - it: fails when two (database,user) admin grants collide on one Grant name
+    set:
+      users:
+        b-c:
+          maxUserConnections: 10
+        c:
+          maxUserConnections: 10
+      databases:
+        a:
+          roles:
+            admin: [b-c]
+        a-b:
+          roles:
+            admin: [c]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the Grant resource name "mdb-test-a-b-c" is produced by both (database "a", user "b-c") and (database "a-b", user "c") ("_" renders as "-"); rename a database or user so their Grants do not collide'
+
+  # The Grant name <release>-<db>-<member> can exceed 253 even when the database
+  # name fits: a Grant role member need not be a declared user, so the username
+  # cap never sees it, and the 128-char member cap is checked after this guard. A
+  # long database name cannot drive it, because the 64-char MariaDB database cap
+  # rejects that first. Assert the guard's OWN message (errorPattern) so a fixture
+  # tripping a sibling guard cannot masquerade as coverage.
+  - it: fails when the Grant name exceeds 253 characters though the database name fits
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the Grant resource name .* exceeds the 253-character limit Kubernetes puts on a resource name'
+
+  # A role list has no uniqueItems in the schema, so admin: [bob, bob] is legal
+  # and renders as a single Grant. The collision guard must
+  # not treat a user duplicated within one role as a collision with itself and
+  # abort the whole render — dedupe first.
+  - it: renders one Grant for a user listed twice in the same role
+    set:
+      users:
+        bob:
+          maxUserConnections: 10
+      databases:
+        testdb:
+          roles:
+            admin: [bob, bob]
+    asserts:
+      # doc 0 Database, doc 1 the single Grant; no self-collision failure
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: mdb-test-testdb-bob
+      - documentIndex: 1
+        equal:
+          path: spec.privileges[0]
+          value: ALL
+
+  # A name in databases.<db>.roles.admin/readonly is NOT one of .Values.users,
+  # so it never passes the username guard in secret.yaml, yet it forms the Grant
+  # CR name <release>-<db>-<user>. A member outside the DNS-1123 charset (here
+  # "Weird.User!") renders a Grant name the apiserver rejects opaquely — the
+  # class the guards exist to close. The Grant guard must check the charset too,
+  # not only the length.
+  - it: fails for a role member that is not a valid DNS-1123 name
+    set:
+      users:
+        gooduser:
+          maxUserConnections: 10
+      databases:
+        mydb:
+          roles:
+            admin: ["Weird.User!"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid role member "Weird.User!" for database "mydb": it names the Grant resource "mdb-test-mydb-Weird.User!", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters'
+
+  - it: renders normally for a valid lowercase database name
+    set:
+      databases:
+        mydb:
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Database
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: mydb
+
+  # The database and Grant "_"/"-" collision guards are gated to install, for the
+  # same reason as the username one: an existing release already took the silent
+  # overwrite, and blocking its upgrades only makes a running release worse. On
+  # upgrade both colliding pairs render instead of failing. Removing
+  # ".Release.IsInstall" from either guard turns the matching test red.
+  - it: renders on upgrade for two database names that collide on install
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        a_b:
+          roles:
+            admin: [app]
+        a-b:
+          roles:
+            admin: [app]
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders on upgrade for two (database,user) grants that collide on install
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        b-c:
+          maxUserConnections: 10
+        c:
+          maxUserConnections: 10
+      databases:
+        a:
+          roles:
+            admin: [b-c]
+        a-b:
+          roles:
+            admin: [c]
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  # A charset/DNS-invalid database name never applied, so its guard stays on the
+  # upgrade path too rather than deferring an opaque apiserver rejection.
+  - it: still fails on upgrade for an invalid Database CR name
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        My.Db:
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "My.Db": it also names the Database resource "mdb-test-My.Db", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit); use a lowercase name without a leading or trailing "-" or "."'
+
+  # The database name is the MariaDB database identifier (Database CR spec.name),
+  # capped by the server at 64 characters; a longer CREATE DATABASE fails with
+  # "Incorrect database name". Cap it at render. 65 fails, 64 renders.
+  - it: fails the render for a database name of 65 characters (past the MariaDB identifier limit)
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid database name "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a MariaDB database identifier is at most 64 characters'
+
+  - it: renders normally for a database name at the 64-character boundary
+    set:
+      databases:
+        "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: "daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  # A Grant role member need not be one of .Values.users, so the 80-character
+  # username cap in secret.yaml (which iterates only .Values.users) never sees it.
+  # The server caps an account name at 128 characters, so a longer member renders
+  # a Grant whose GRANT the server rejects. Cap it at render. The database is kept
+  # short so the Grant name stays under 253 and THIS guard, not the length guard,
+  # fires; assert its own message so a sibling cannot shadow it.
+  - it: fails for a role member longer than the 128-character MariaDB account limit
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid role member "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" for database "db": a MariaDB account name is at most 128 characters, so the server rejects the GRANT for a longer one. A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username length cap in secret.yaml never sees it'
+
+  - it: renders normally for a role member at the 128-character boundary
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: spec.username
+          value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  # Unlike the 253 and DNS-1123 Grant guards, a too-long member renders a Grant
+  # the apiserver accepts (spec.username has no CRD maxLength), so a release that
+  # already applied it must keep upgrading: on upgrade the cap skips a member
+  # whose Grant already exists. Applying the cap on upgrade regardless of the
+  # Grant makes this fail to render.
+  - it: renders on upgrade for an over-128 role member whose Grant already exists
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "k8s.mariadb.com/v1alpha1/Grant":
+          gvr: {group: k8s.mariadb.com, version: v1alpha1, resource: grants}
+          namespaced: true
+      objects:
+        - apiVersion: k8s.mariadb.com/v1alpha1
+          kind: Grant
+          metadata:
+            name: mdb-test-db-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            namespace: tenant-test
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 1
+        equal:
+          path: spec.username
+          value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+  # The DNS-1123 Grant-member charset guard, by contrast, stays on both paths: an
+  # invalid name renders a Grant metadata.name the apiserver rejects, so it never
+  # applied and gating it to install would only defer the same opaque failure to
+  # the apiserver on upgrade. Wrapping that guard in ".Release.IsInstall" turns
+  # this red.
+  - it: still fails on upgrade for a role member that is not a valid DNS-1123 name
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        gooduser:
+          maxUserConnections: 10
+      databases:
+        mydb:
+          roles:
+            admin: ["Weird.User!"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid role member "Weird.User!" for database "mydb": it names the Grant resource "mdb-test-mydb-Weird.User!", which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, "-" and ".", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters'
+
+  # A member added on upgrade has no Grant yet, so it is as new as one on install
+  # and the cap still names it; gating the cap to install alone would let the
+  # common path, adding a member to a running release, render silently. Dropping
+  # the "not lookup" conjunct lets the render succeed, so this fails.
+  - it: still fails on upgrade for a NEW over-128 role member
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid role member "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" for database "db": a MariaDB account name is at most 128 characters, so the server rejects the GRANT for a longer one. A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username length cap in secret.yaml never sees it'
+
+  # A non-ASCII member fails the DNS-1123 guard for its charset, which runs before
+  # the 128 cap: 65 characters of 2-byte "é" are 130 bytes, and reporting them as
+  # "at most 128 characters" would send the tenant shortening a name that is short
+  # enough. Moving the 80 cap back above the DNS-1123 guard turns this red.
+  - it: reports a non-ASCII role member for its charset, not its byte length
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid role member .* which Kubernetes requires to be a DNS-1123 subdomain'
+
+  # A fresh install has no running release to protect, so the cap holds even when
+  # a stale Grant of that name is already in the namespace. Dropping the
+  # ".Release.IsInstall" conjunct lets the render succeed, so this fails.
+  - it: still fails on install for an over-128 role member a stale Grant carries
+    kubernetesProvider:
+      scheme:
+        "k8s.mariadb.com/v1alpha1/Grant":
+          gvr: {group: k8s.mariadb.com, version: v1alpha1, resource: grants}
+          namespaced: true
+      objects:
+        - apiVersion: k8s.mariadb.com/v1alpha1
+          kind: Grant
+          metadata:
+            name: mdb-test-db-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            namespace: tenant-test
+    set:
+      databases:
+        db:
+          roles:
+            admin: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a MariaDB account name is at most 128 characters'
+
+  # The Database CRD allows a spec.name of 80 characters while the server allows
+  # 64, so a name of 65-80 renders a Database the apiserver accepts and only the
+  # operator's SQL fails. A release that already applied one must keep upgrading:
+  # on upgrade the 64 cap skips a name whose Database already exists. Applying the
+  # cap on upgrade regardless of the Database makes this fail to render.
+  - it: renders on upgrade for a 65-character database whose Database already exists
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "k8s.mariadb.com/v1alpha1/Database":
+          gvr: {group: k8s.mariadb.com, version: v1alpha1, resource: databases}
+          namespaced: true
+      objects:
+        - apiVersion: k8s.mariadb.com/v1alpha1
+          kind: Database
+          metadata:
+            name: mdb-test-ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+            namespace: tenant-test
+    set:
+      databases:
+        "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd":
+          roles:
+            admin: [app]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.name
+          value: "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+  # A database added on upgrade has no Database yet, so it is as new as one on
+  # install. Dropping the "not lookup" conjunct lets the render succeed, so this
+  # fails.
+  - it: still fails on upgrade for a NEW 65-character database name
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      databases:
+        "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd":
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a MariaDB database identifier is at most 64 characters'
+
+  # A fresh install has no release to protect, so the cap holds even when a stale
+  # Database of that name is in the namespace. Dropping the ".Release.IsInstall"
+  # conjunct lets the render succeed, so this fails.
+  - it: still fails on install for a 65-character database a stale Database carries
+    kubernetesProvider:
+      scheme:
+        "k8s.mariadb.com/v1alpha1/Database":
+          gvr: {group: k8s.mariadb.com, version: v1alpha1, resource: databases}
+          namespaced: true
+      objects:
+        - apiVersion: k8s.mariadb.com/v1alpha1
+          kind: Database
+          metadata:
+            name: mdb-test-ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+            namespace: tenant-test
+    set:
+      databases:
+        "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd":
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a MariaDB database identifier is at most 64 characters'
+
+  # Past 80 characters the apiserver rejects the Database itself (CRD maxLength),
+  # so such a name never applied and is rejected on upgrade too, even if a
+  # Database of that name somehow exists. Dropping the 80 conjunct lets the render
+  # succeed, so this fails.
+  - it: still fails on upgrade for an 81-character database name
+    release:
+      name: mdb-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "k8s.mariadb.com/v1alpha1/Database":
+          gvr: {group: k8s.mariadb.com, version: v1alpha1, resource: databases}
+          namespaced: true
+      objects:
+        - apiVersion: k8s.mariadb.com/v1alpha1
+          kind: Database
+          metadata:
+            name: mdb-test-ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+            namespace: tenant-test
+    set:
+      databases:
+        "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd":
+          roles:
+            admin: [app]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a MariaDB database identifier is at most 64 characters'

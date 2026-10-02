@@ -190,7 +190,7 @@ func writeScaffold(dir string, files []scaffoldFile) error {
 // not the apiserver-rejected "Foo-bar".
 func capitalize(s string) string {
 	var b strings.Builder
-	for _, seg := range strings.Split(s, "-") {
+	for seg := range strings.SplitSeq(s, "-") {
 		if seg == "" {
 			continue
 		}

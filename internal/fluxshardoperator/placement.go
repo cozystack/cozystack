@@ -53,10 +53,7 @@ type PlacementInput struct {
 //     exceeds RebalanceThreshold, preferring the smallest tenant that achieves
 //     the reduction (cheaper handoff).
 func ComputePlacement(in PlacementInput) map[string]string {
-	k := in.ShardCount
-	if k < 1 {
-		k = 1
-	}
+	k := max(in.ShardCount, 1)
 
 	assign := make(map[string]string, len(in.Tenants))
 	load := make([]int, k)
@@ -216,10 +213,7 @@ const (
 // RecommendedShardCount is the raw autosizing formula:
 // K = clamp(ceil(H / hrTargetPerShard), 1, min(maxAutoShards, T)).
 func RecommendedShardCount(helmReleases, tenants int) int {
-	k := (helmReleases + hrTargetPerShard - 1) / hrTargetPerShard
-	if k < 1 {
-		k = 1
-	}
+	k := max((helmReleases+hrTargetPerShard-1)/hrTargetPerShard, 1)
 	limit := maxAutoShards
 	if tenants > 0 && tenants < limit {
 		limit = tenants

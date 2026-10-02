@@ -100,7 +100,15 @@ tls: {}
 ## @section Application-specific parameters
 ##
 
+##
+## @enum {string} PreloadLibrary
+## @value pg_stat_statements
+## @value auto_explain
+## @value pgaudit
+## @value pg_prewarm
+
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
+## @field {[]PreloadLibrary} [sharedPreloadLibraries] - Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
 ## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
@@ -119,6 +127,12 @@ postgresql:
 ##   archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command (shell commands),
 ##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
 ##   shared_preload_libraries (arbitrary .so loading)
+##
+## To preload a module, use the `sharedPreloadLibraries` allowlist instead of the
+## blocked `shared_preload_libraries` parameter:
+##   sharedPreloadLibraries:
+##     - pg_stat_statements
+##     - auto_explain
 ##
 ## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
 ##   archive_mode, primary_conninfo, wal_level, max_replication_slots
@@ -230,19 +244,15 @@ autoscaling:
 ##
 
 ## @typedef {struct} User - User configuration.
-## @field {string} [password] - Password for the user.
 ## @field {bool} [replication] - Whether the user has replication privileges.
 
-## @param {map[string]User} users - Users configuration map.
+## @param {map[string]User} users - Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
 users: {}
 ## Example:
 ## users:
-##   user1:
-##     password: strongpassword
-##   user2:
-##     password: hackme
-##   airflow:
-##     password: qwerty123
+##   user1: {}
+##   user2: {}
+##   airflow: {}
 ##   debezium:
 ##     replication: true
 
@@ -349,6 +359,7 @@ backup:
 ## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} [backupID] - Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
 ## @field {string} oldName - Previous cluster name before deletion.
 ## @field {string} [serverName] - Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
 ## @field {string} [newServerName] - WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
@@ -358,6 +369,7 @@ bootstrap:
   enabled: false
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
+  backupID: ""
   oldName: ""
   serverName: ""
   newServerName: ""

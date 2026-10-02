@@ -3,7 +3,7 @@ NAME=ingress-nginx-system
 # Pinned: the controller image is a cozystack rebuild (protobuf exporter) and
 # only exists for selected upstream versions, so the chart must not drift ahead
 # of the tags published under ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter.
-CHART_VERSION=4.11.5
+CHART_VERSION=4.11.6
 
 include ../../../hack/package.mk
 

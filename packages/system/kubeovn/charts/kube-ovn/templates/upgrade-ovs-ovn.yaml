@@ -1,4 +1,5 @@
-{{- if include "kubeovn.ovn.versionCompatibility" . -}}
+{{- if include "kubeovn.renderFullOnly" . }}
+{{- if include "kubeovn.ovn.upgradeNeeded" . -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -149,18 +150,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: ENABLE_SSL
-              value: "{{ .Values.networking.ENABLE_SSL }}"
-            - name: OVN_DB_IPS
-              value: "{{ .Values.MASTER_NODES | default (include "kubeovn.nodeIPs" .) }}"
-            - name: OVN_VERSION_COMPATIBILITY
-              value: '{{ include "kubeovn.ovn.versionCompatibility" . }}'
           command:
             - bash
             - -eo
             - pipefail
             - -c
-            - /kube-ovn/upgrade-ovs.sh 2>&1 | tee -a /var/log/kube-ovn/upgrade-ovs.log
+            - |
+              touch /var/log/kube-ovn/upgrade-ovs.log
+              chmod 640 /var/log/kube-ovn/upgrade-ovs.log
+              /kube-ovn/upgrade-ovs.sh 2>&1 | tee -a /var/log/kube-ovn/upgrade-ovs.log
           volumeMounts:
             - mountPath: /var/log/kube-ovn
               name: kube-ovn-log
@@ -175,3 +173,5 @@ spec:
             optional: true
             secretName: kube-ovn-tls
 {{- end -}}
+
+{{- end }}

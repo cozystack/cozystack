@@ -59,8 +59,6 @@ func newEtcdTestClient(t *testing.T, objs ...client.Object) client.Client {
 		Build()
 }
 
-func ptrBool(v bool) *bool { return &v }
-
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -151,7 +149,7 @@ func TestValidateRenderedEtcdDestination(t *testing.T) {
 // See review feedback in github.com/cozystack/cozystack PR #2641,
 // review #4327696458, blocker #1.
 func TestEtcdDestinationTemplate_NoPVCField(t *testing.T) {
-	typ := reflect.TypeOf(strategyv1alpha1.EtcdDestinationTemplate{})
+	typ := reflect.TypeFor[strategyv1alpha1.EtcdDestinationTemplate]()
 	if _, ok := typ.FieldByName("PVC"); ok {
 		t.Fatal("EtcdDestinationTemplate must not expose a PVC field; " +
 			"upstream PVC restore is broken (asymmetric path between " +
@@ -161,7 +159,7 @@ func TestEtcdDestinationTemplate_NoPVCField(t *testing.T) {
 	// Defense-in-depth: same for the snapshot persistence struct.
 	// snap.Destination embeds EtcdDestinationTemplate, so a re-added
 	// PVC field would also leak through Backup.status.underlyingResources.
-	snapType := reflect.TypeOf(etcdBackupSnapshot{})
+	snapType := reflect.TypeFor[etcdBackupSnapshot]()
 	destField, ok := snapType.FieldByName("Destination")
 	if !ok {
 		t.Fatal("etcdBackupSnapshot must have a Destination field")
@@ -221,7 +219,7 @@ func TestStrategyToEtcdBackupDestination_S3(t *testing.T) {
 			Endpoint:             "https://e",
 			Key:                  "etcd-src/",
 			Region:               "us-east-1",
-			ForcePathStyle:       ptrBool(true),
+			ForcePathStyle:       new(true),
 			CredentialsSecretRef: strategyv1alpha1.EtcdLocalObjectReference{Name: "creds"},
 		},
 	}
@@ -259,7 +257,7 @@ func TestEtcdBackupSnapshot_RoundTrip(t *testing.T) {
 				Bucket:               "b",
 				Endpoint:             "https://e",
 				Key:                  "etcd-src/",
-				ForcePathStyle:       ptrBool(true),
+				ForcePathStyle:       new(true),
 				CredentialsSecretRef: strategyv1alpha1.EtcdLocalObjectReference{Name: "creds"},
 			},
 		},
@@ -1536,7 +1534,7 @@ func suspendedHelmRelease(namespace, name string, suspend bool) *unstructured.Un
 	hr.SetGroupVersionKind(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"})
 	hr.SetNamespace(namespace)
 	hr.SetName(name)
-	_ = unstructured.SetNestedMap(hr.Object, map[string]interface{}{"suspend": suspend}, "spec")
+	_ = unstructured.SetNestedMap(hr.Object, map[string]any{"suspend": suspend}, "spec")
 	return hr
 }
 
@@ -1804,7 +1802,7 @@ func TestSetEtcdRestoreHRSuspended(t *testing.T) {
 		hr.SetGroupVersionKind(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"})
 		hr.SetNamespace(ns)
 		hr.SetName(name)
-		spec := map[string]interface{}{}
+		spec := map[string]any{}
 		if suspended != nil {
 			spec["suspend"] = *suspended
 		}

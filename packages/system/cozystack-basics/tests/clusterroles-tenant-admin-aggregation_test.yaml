@@ -1,0 +1,36 @@
+suite: cozystack-basics tenant admin aggregation stays open to out-of-chart grants
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# cozy:tenant:admin:base enumerates the apps.cozystack.io resources a tenant
+# owner may write, so an application removed from the catalog loses its entry
+# there. Platform migration 57 re-grants a removed application's kind on the
+# clusters that still run an instance, by applying its own ClusterRole under the
+# label below. Change the label or turn cozy:tenant:admin into a plain role and
+# that grant silently stops reaching anyone, on exactly the clusters whose
+# owners need it to remove what they have left.
+tests:
+  - it: cozy:tenant:admin aggregates every ClusterRole labelled for tenant admin
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin
+    asserts:
+      - contains:
+          path: aggregationRule.clusterRoleSelectors
+          content:
+            matchLabels:
+              rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+
+  - it: cozy:tenant:admin:base reaches tenant admins through that same label
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-admin"]
+          value: "true"

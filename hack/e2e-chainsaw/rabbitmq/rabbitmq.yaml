@@ -7,3 +7,5 @@ spec:
   size: 1Gi
   resourcesPreset: c1.small
   version: v4.2
+  users:
+    app: {}

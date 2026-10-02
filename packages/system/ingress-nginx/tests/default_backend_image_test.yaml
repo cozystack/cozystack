@@ -1,0 +1,15 @@
+suite: ingress-nginx default backend image
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+templates:
+  - charts/ingress-nginx/templates/default-backend-deployment.yaml
+tests:
+  - it: runs the multi-arch custom-error-pages image pinned by digest
+    # The chart default, registry.k8s.io/defaultbackend-amd64, has no arm64
+    # build and crash-loops there with "exec format error". The digest is the
+    # multi-arch index, so every node pulls its own architecture.
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.k8s.io/ingress-nginx/custom-error-pages:v1.2.9@sha256:203d3020005dbdd735c1ad51f238d8663b9851399b52cc0c9c9e3f7273b6b299

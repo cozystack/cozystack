@@ -5,6 +5,13 @@ piraeusServer:
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
+  gracefulShutdown:
+    # Release unused Secondary DRBD resources before satellite termination so
+    # ZFS can release their backing zvols during normal Talos shutdown.
+    # The hook also runs on satellite pod restarts. Enable only when satellite
+    # and node restarts are serialized: Piraeus has one DaemonSet per node, so
+    # a shared configuration change can otherwise stop several replicas at once.
+    enabled: false
 # Whether the node substrate can run DRBD at all.
 #
 # Disable on any substrate where the DRBD kernel module is unavailable or

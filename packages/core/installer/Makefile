@@ -31,12 +31,21 @@ image-operator:
 		yq -i '.cozystackOperator.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-operator.json
 
+# flux push artifact REPLACES its built-in ignore list when --ignore-paths is
+# given, so the defaults are repeated here. node_modules/ is the addition: a
+# developer who runs `pnpm install` under images/console leaves the console's
+# dependency tree in packages/, and one file above Helm's 5MB per-file limit
+# makes the dashboard chart unloadable on every cluster that pulls the bundle.
+# Held by hack/check-packages-artifact-ignores.bats.
+PACKAGES_IGNORE_PATHS := .git/,.gitignore,.gitmodules,.gitattributes,*.jpg,*.jpeg,*.gif,*.png,*.wmv,*.flv,*.tar.gz,*.zip,node_modules/
+
 image-packages:
 	mkdir -p ../../../_out/assets images
 	echo $$(git rev-parse HEAD; git diff HEAD; git ls-files --others --exclude-standard) | shasum -a 256 > ../platform/.build-revision
 	flux push artifact \
 		oci://$(REGISTRY)/cozystack-packages:$(IMAGE_TAG) \
 		--path=../../../packages \
+		--ignore-paths='$(PACKAGES_IGNORE_PATHS)' \
 		--source=https://github.com/cozystack/cozystack \
 		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \
 		2>&1 | tee images/cozystack-packages.log

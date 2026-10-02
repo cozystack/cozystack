@@ -27,7 +27,7 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Name: "vm1",
 			},
 			expected: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				APIGroup: new(DefaultApplicationAPIGroup),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
@@ -40,7 +40,7 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Name:     "vm1",
 			},
 			expected: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				APIGroup: new(DefaultApplicationAPIGroup),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
@@ -48,12 +48,12 @@ func TestNormalizeApplicationRef(t *testing.T) {
 		{
 			name: "apiGroup is empty string - should default to apps.cozystack.io",
 			input: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(""),
+				APIGroup: new(""),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
 			expected: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				APIGroup: new(DefaultApplicationAPIGroup),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
@@ -61,12 +61,12 @@ func TestNormalizeApplicationRef(t *testing.T) {
 		{
 			name: "apiGroup is explicitly set - should keep it",
 			input: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("custom.api.group.io"),
+				APIGroup: new("custom.api.group.io"),
 				Kind:     "CustomApp",
 				Name:     "custom-app",
 			},
 			expected: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("custom.api.group.io"),
+				APIGroup: new("custom.api.group.io"),
 				Kind:     "CustomApp",
 				Name:     "custom-app",
 			},
@@ -74,12 +74,12 @@ func TestNormalizeApplicationRef(t *testing.T) {
 		{
 			name: "apiGroup is apps.cozystack.io - should keep it",
 			input: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				APIGroup: new(DefaultApplicationAPIGroup),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
 			expected: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				APIGroup: new(DefaultApplicationAPIGroup),
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
@@ -126,7 +126,7 @@ func TestResolveBackupClass(t *testing.T) {
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
 							},
@@ -139,7 +139,7 @@ func TestResolveBackupClass(t *testing.T) {
 						},
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-mariadb",
 							},
@@ -160,7 +160,7 @@ func TestResolveBackupClass(t *testing.T) {
 			backupClassName: "velero",
 			wantErr:         false,
 			expectedStrategyRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				APIGroup: new("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-vm",
 			},
@@ -178,12 +178,12 @@ func TestResolveBackupClass(t *testing.T) {
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-mariadb",
 							},
 							Application: backupsv1alpha1.ApplicationSelector{
-								APIGroup: stringPtr("apps.cozystack.io"),
+								APIGroup: new("apps.cozystack.io"),
 								Kind:     "MariaDB",
 							},
 							Parameters: map[string]string{
@@ -194,14 +194,14 @@ func TestResolveBackupClass(t *testing.T) {
 				},
 			},
 			applicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "MariaDB",
 				Name:     "mariadb1",
 			},
 			backupClassName: "velero",
 			wantErr:         false,
 			expectedStrategyRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				APIGroup: new("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-mariadb",
 			},
@@ -219,7 +219,7 @@ func TestResolveBackupClass(t *testing.T) {
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
 							},
@@ -241,7 +241,7 @@ func TestResolveBackupClass(t *testing.T) {
 			backupClassName: "velero",
 			wantErr:         false,
 			expectedStrategyRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				APIGroup: new("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-vm",
 			},
@@ -276,7 +276,7 @@ func TestResolveBackupClass(t *testing.T) {
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
 							},
@@ -304,12 +304,12 @@ func TestResolveBackupClass(t *testing.T) {
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
 							StrategyRef: corev1.TypedLocalObjectReference{
-								APIGroup: stringPtr("strategy.backups.cozystack.io"),
+								APIGroup: new("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
 							},
 							Application: backupsv1alpha1.ApplicationSelector{
-								APIGroup: stringPtr("custom.api.group.io"),
+								APIGroup: new("custom.api.group.io"),
 								Kind:     "VirtualMachine",
 							},
 						},
@@ -317,7 +317,7 @@ func TestResolveBackupClass(t *testing.T) {
 				},
 			},
 			applicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"), // Different apiGroup
+				APIGroup: new("apps.cozystack.io"), // Different apiGroup
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},

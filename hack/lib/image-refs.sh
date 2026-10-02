@@ -2,9 +2,10 @@
 # Shared enumeration of where cozystack vendors its image references.
 #
 # Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
-# hack/nightly-mirror.sh and hack/verify-promoted-packages.sh. It exists because
-# the first three call sites each grew their own idea of where a ref can live,
-# and drifted: promote-retag and nightly-mirror scanned only the depth-2
+# hack/nightly-mirror.sh, hack/verify-promoted-packages.sh,
+# hack/stitch-multiarch.sh and hack/verify-multiarch.sh. It exists because the
+# first three call sites each grew their own idea of where a ref can live, and
+# drifted: promote-retag and nightly-mirror scanned only the depth-2
 # values.yaml, while the promote workflow's tag rewrite scanned those plus
 # packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
 # images/*.tag file was therefore invisible to all three — never retagged to
@@ -96,7 +97,7 @@ image_ref_files() {
 #   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
 #   2. split map      {[registry,] repository, tag, digest}   (e.g. .cilium.image)
 #   3. split map      {[registry,] repository, tag: <tag>@sha256:<digest>}
-#                     (e.g. .linstorCSI.image; .keycloak-operator.image adds registry)
+#                     (e.g. .linstorCSI.image)
 #   4. chart-global   global.registry.address + global.images.<n>.{repository, tag}
 #                     (kube-ovn's wrapper chart)
 #   5. OCI artifact   {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}

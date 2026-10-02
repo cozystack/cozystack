@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -70,9 +71,7 @@ func HandleMutatePods(w http.ResponseWriter, r *http.Request) {
 
 	mergedAnnotations := map[string]string{}
 	if pod.Annotations != nil {
-		for k, v := range pod.Annotations {
-			mergedAnnotations[k] = v
-		}
+		maps.Copy(mergedAnnotations, pod.Annotations)
 	}
 
 	nsRoutes, nsHasRoutes := nsAnnotations[AnnotationRoutes]

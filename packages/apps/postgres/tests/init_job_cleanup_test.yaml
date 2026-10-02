@@ -24,8 +24,7 @@ set:
   _cluster:
     scheduling: {}
   users:
-    app:
-      password: secret
+    app: {}
 
 tests:
   - it: "init-job sets ttlSecondsAfterFinished so Kubernetes GCs it after the run"

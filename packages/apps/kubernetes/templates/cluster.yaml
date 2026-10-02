@@ -25,6 +25,34 @@
 {{-   end }}
 {{- end }}
 {{- $etcd := .Values._namespace.etcd }}
+{{- /* Substrate selects the infrastructure half of the cluster. The control
+       plane is Kamaji either way, so this changes exactly one object — the
+       one Cluster.infrastructureRef points at — plus the two tenant addons
+       that only exist because the workers are KubeVirt VMs (the kubevirt-csi
+       driver and the KubeVirt cloud-controller-manager RBAC). */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
+       these fields and has no DHCP mode, so an unset pool is not a default —
+       it is a ProxmoxCluster that never reaches Ready and worker Machines that
+       wait on it forever. Refuse at render time instead. */}}
+{{- if not .Values.proxmox.ipv4Config.addresses }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode" }}
+{{- end }}
+{{- if not .Values.proxmox.ipv4Config.gateway }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.gateway" }}
+{{- end }}
+{{- if not .Values.proxmox.dnsServers }}
+{{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
+{{- end }}
+{{- include "kubernetes.assertDnsServersAreAddresses" . }}
+{{- end }}
+{{- include "kubernetes.assertSubstrateUnchanged" . }}
+{{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
   _namespace.etcd in cozystack-values yet - either the operator forgot to
@@ -56,7 +84,6 @@
 {{- $podCIDR := "10.243.0.0/16" }}
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
 {{- if not $etcd }}
 ---
 apiVersion: v1
@@ -193,6 +220,65 @@ data:
 {{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
 {{-   end }}
 {{- end }}
+{{- /*
+  Mirrors the `managed` map of buildKubeAPIServerCommand in Kamaji's
+  internal/builders/controlplane/deployment.go (lines 726-774 at 26.9.4-edge,
+  the tag packages/system/kamaji builds), narrowed to what this chart renders:
+  an etcd DataStore, konnectivity on, no dataStoreOverrides. Kamaji cuts each
+  entry at the first "=" and drops it when the name is in that map, so the
+  bare two-entry spelling loses its flag and leaves the value behind as a
+  positional argument the apiserver refuses. Re-derive this list on every
+  Kamaji bump; the extraArgs description in values.yaml names the same flags.
+*/}}
+{{- $kamajiManagedArgs := list
+      "--advertise-address" "--client-ca-file" "--enable-admission-plugins"
+      "--service-cluster-ip-range" "--kubelet-client-certificate"
+      "--kubelet-client-key" "--kubelet-preferred-address-types"
+      "--proxy-client-cert-file" "--proxy-client-key-file"
+      "--requestheader-allowed-names" "--requestheader-client-ca-file"
+      "--secure-port" "--service-account-key-file"
+      "--service-account-signing-key-file" "--tls-cert-file"
+      "--tls-private-key-file" "--etcd-servers" "--etcd-cafile"
+      "--etcd-certfile" "--etcd-keyfile" "--etcd-prefix"
+      "--etcd-compaction-interval" "--egress-selector-config-file" }}
+{{- /*
+  Two of those flags have a field on the KamajiControlPlane that the control
+  plane renders them from, so an --flag=value entry is moved into that field
+  instead of refused, on every render: the entry stays in the values and
+  nothing rewrites it. The last entry wins, as it did while the control plane
+  kept one entry per flag name. The moved entry is left out of the rendered
+  extraArgs, so the list below is the one the apiserver receives.
+*/}}
+{{- $movedArgFields := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $admissionControllers := .Values.controlPlane.apiServer.admissionControllers | default list }}
+{{- $preferredAddressTypes := get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default list }}
+{{- $movedArgs := dict }}
+{{- $keptExtraArgs := include "kubernetes.apiServer.keptExtraArgs" . | fromJsonArray }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   $field := get $movedArgFields $flag }}
+{{-   if ne $field "" }}
+{{-     if not (contains "=" (toString $arg)) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q with its value in a separate entry — the tenant control plane sets %s itself, from %s, and drops the entry naming it, which leaves the value behind as an argument the apiserver refuses. Write it as %s=value so the chart moves it into %s, or set that field instead." $arg $flag $field $flag $field) }}
+{{-     end }}
+{{-     $fieldIsSet := ternary (gt (len $admissionControllers) 0) (gt (len $preferredAddressTypes) 0) (eq $flag "--enable-admission-plugins") }}
+{{-     if $fieldIsSet }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while %s is also set — the tenant control plane takes %s only from %s, so the entry cannot apply. Remove the entry, or empty %s to have the chart take the list from it." $arg $field $flag $field $field) }}
+{{-     end }}
+{{-     if contains "\"" (toString $arg) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, whose value is quoted — the apiserver strips the quotes when it reads the list and the chart does not, so it cannot move the names into %s as written. Write the value without quotes." $arg $field) }}
+{{-     end }}
+{{-     $items := uniq (compact (splitList "," (trimPrefix (printf "%s=" $flag) (toString $arg)))) }}
+{{-     if eq (len $items) 0 }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, which names nothing — the chart moves this flag into %s and has no list to move. Remove the entry." $arg $field) }}
+{{-     end }}
+{{-     $movedArgs = set $movedArgs $flag $items }}
+{{-   else if has $flag $kamajiManagedArgs }}
+{{-     fail (printf "controlPlane.apiServer.extraArgs contains %q — the tenant control plane sets %s itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns." $arg $flag) }}
+{{-   end }}
+{{- end }}
+{{- $admissionControllers = $admissionControllers | default (get $movedArgs "--enable-admission-plugins") }}
+{{- $preferredAddressTypes = $preferredAddressTypes | default (get $movedArgs "--kubelet-preferred-address-types") | default (list "InternalIP" "ExternalIP") }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -214,7 +300,7 @@ spec:
     name: {{ .Release.Name }}
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-    kind: KubevirtCluster
+    kind: {{ $infraKind }}
     name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
 ---
@@ -256,6 +342,60 @@ metadata:
 {{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
 {{- end }}
 {{- /*
+  Aggregation-layer UID plumbing. What is rendered per version, why an
+  opt-out renders nothing rather than failing, and how the operator's own
+  entries change that are in docs/oidc-tenant.md. That table is the one
+  to update; there is deliberately no copy of it here.
+
+  The chart never renders a --feature-gates term of its own, so it never
+  enables an alpha gate for the operator; it reads the operator's gate entries
+  only to find an opt-out.
+
+  Anchors for the split, read at v1.32.13 and v1.35.6:
+  staging/src/k8s.io/apiserver/pkg/features/kube_features.go for the gate's
+  versioned spec, and .../server/options/authentication.go Validate() for
+  the refusals the guards below mirror. The version that decides is the
+  EFFECTIVE one, which --emulated-version moves down.
+
+  Every entry of a flag reaches the apiserver, so every entry is read, and
+  the three flags accumulate differently. --requestheader-uid-headers is a
+  pflag StringSlice whose repeats append, so the apiserver validates the
+  union and an element the chart adds can only satisfy caseInsensitiveHas.
+  --feature-gates collects into one bucket per component and is handed to
+  featureGate.Set() once, so the last term for a gate name wins across
+  entries. --emulated-version is a StringSlice too, and toVersionMap refuses
+  two elements naming the same component.
+
+  Two pins decide that: the tenant control plane build in
+  packages/system/kamaji, and the owner of the CR field read here,
+  cluster-api-control-plane-provider-kamaji in
+  packages/system/capi-providers-cpprovider, which copies
+  spec.apiServer.extraArgs into the TenantControlPlane verbatim. A bump of
+  either is a reason to re-read this block.
+
+  Ownership is resolved after the arg loop because the merged reading of
+  each flag, and the interaction between them, are known only once every
+  arg has been seen.
+*/}}
+{{- $uidHeaderUnsupported := false }}
+{{- $emulatedKubeVersion := "" }}
+{{- $emulatedKubeDuplicated := false }}
+{{- $uidGateOptedOut := false }}
+{{- $uidHeaderArgSeen := "" }}
+{{- $uidHeaderEmptyArg := "" }}
+{{- $emulatedQuoted := false }}
+{{- $gateArgUnreadable := false }}
+{{- $emulatedArgUnreadable := false }}
+{{- $uidHeaderConforms := false }}
+{{- $uidHeaderHasEmpty := false }}
+{{- $gateValues := dict }}
+{{- $gateArgs := dict }}
+{{- $gateArgSeen := "" }}
+{{- $uidGateSetting := "" }}
+{{- $allBetaSetting := "" }}
+{{- $versionPattern := `^\s*v?([0-9]+(?:\.[0-9]+)*)(.*)$` }}
+{{- $uidArgs := list }}
+{{- /*
   Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
   exclusive with `--authentication-config`. The kube-apiserver refuses
   to boot when both are set (`--authentication-config cannot be used with
@@ -269,12 +409,295 @@ metadata:
   preserved for backward compatibility.
 */}}
 {{- if $oidcEnabled }}
-{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
+{{- /*
+  The chart appends its own arguments after the operator's, starting with
+  --authentication-config. pflag gives a valueless long flag the next argv
+  element as its value whatever that element looks like, so an operator
+  entry that ends the list with one of the three flags read here swallows
+  that appended argument, and the AuthenticationConfiguration is never
+  applied. What that costs depends on the flag: a uid-headers list takes the
+  path verbatim and the apiserver starts with OIDC silently off, while
+  featureGate.Set and toVersionMap both reject it and the apiserver exits.
+  Silent is the one worth refusing the render over, and the other two arrive
+  at the same place by a louder road.
+
+  Earlier in the list the same shape takes the operator's own next entry,
+  which is theirs to mean. No entry between the two goes missing on the way
+  to the apiserver: an entry the control plane would drop is refused above or
+  moved out of this list.
+*/}}
+{{-   $userExtraArgs := $keptExtraArgs }}
+{{-   if gt (len $userExtraArgs) 0 }}
+{{-     $lastUserArg := index $userExtraArgs (sub (len $userExtraArgs) 1) }}
+{{-     if has $lastUserArg (list "--requestheader-uid-headers" "--feature-gates" "--emulated-version") }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs ends with %q while spec.oidc.mode is %q — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value." $lastUserArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{-   range $arg := $userExtraArgs }}
 {{-     if hasPrefix "--oidc-" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
 {{-     end }}
 {{-     if hasPrefix "--authentication-config" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if eq $arg "--requestheader-uid-headers" }}
+{{- /*
+  The space-separated spelling, as two elements. pflag pairs them, so the
+  entry counts as present even though its value lives in the next element
+  and this loop never looks there. Presence is what the gate-disabled guard
+  needs; conformance and emptiness stay unknown, exactly as for a quoted
+  value below. The arrangement where the element pflag pairs with is the
+  chart's own is refused above, before this loop runs.
+*/}}
+{{-       if eq $uidHeaderArgSeen "" }}
+{{-         $uidHeaderArgSeen = $arg }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--requestheader-uid-headers=" $arg }}
+{{- /*
+  An empty value is not an entry: readAsCSV returns an empty slice, pflag
+  appends nothing from it, and Validate() only inspects a non-empty list.
+
+  Only --flag=value is read for its value here. One element holding both the
+  flag and its value, separated by a space, reaches pflag as an unknown flag
+  and the apiserver refuses to start; the two-element spelling is handled
+  above.
+
+  Match whole ELEMENTS and do NOT trim them: caseInsensitiveHas compares with
+  strings.EqualFold and pflag's CSV reader keeps surrounding spaces, so
+  "X-Remote-Uid-Extra" and "X-Remote-Uid " are both something else, and the
+  chart answers them by adding its own element rather than by reading them
+  permissively. The emptiness test is the one that trims, because
+  checkForWhiteSpaceOnly does, and it refuses the union whatever else it holds.
+
+  A quoted value is read by encoding/csv before the apiserver sees it and
+  this code does not reproduce that, so a quoted entry counts as present and
+  contributes nothing else: it can neither show the union conforms nor show
+  an element is empty. That is the rule for the whole block: fail only where
+  the operator's own entry would stop the apiserver from starting, and
+  withhold a reading rather than guess at one.
+*/}}
+{{-       $headerValue := trimPrefix "--requestheader-uid-headers=" $arg }}
+{{-       if ne $headerValue "" }}
+{{-         if eq $uidHeaderArgSeen "" }}
+{{-           $uidHeaderArgSeen = $arg }}
+{{-         end }}
+{{-         if not (contains "\"" $headerValue) }}
+{{-           range $h := splitList "," $headerValue }}
+{{-             if eq (lower $h) "x-remote-uid" }}
+{{-               $uidHeaderConforms = true }}
+{{-             end }}
+{{-             if eq (trim $h) "" }}
+{{-               $uidHeaderHasEmpty = true }}
+{{-               if eq $uidHeaderEmptyArg "" }}
+{{-                 $uidHeaderEmptyArg = $arg }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-     if or (eq $arg "--feature-gates") (eq $arg "--emulated-version") }}
+{{- /*
+  The space-separated spelling of the two flags whose values decide what is
+  rendered. pflag pairs the element with the next one, but the value is in
+  an element this loop does not read, so neither the gate nor the effective
+  version can be settled. Withhold what depends on that reading, the way a
+  quoted value does: rendering against a reading that was never taken is the
+  one outcome worth avoiding.
+*/}}
+{{-       if eq $arg "--feature-gates" }}
+{{-         $gateArgUnreadable = true }}
+{{-       else }}
+{{-         $emulatedArgUnreadable = true }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--feature-gates=" $arg }}
+{{- /*
+  Values resolve as strconv.ParseBool resolves them (0/f/F, 1/t/T), names
+  compare exactly, and both only after the component prefix is off: the flag
+  is a colon-separated multimap parsed above featureGate.Set(), which is the
+  layer `known[Feature(k)]` belongs to.
+
+  A blanket AllBeta counts: setUnsetBetaGates skips a key an explicit entry
+  already wrote, so the explicit one wins in either map-iteration order.
+
+  Settings accumulate across entries into one dict because the multimap
+  does: every entry's terms land in the same per-component bucket and are
+  joined into a single featureGate.Set(), so the last term for a gate name
+  wins and no earlier entry is dropped.
+*/}}
+{{-       $gateValue := trimPrefix "--feature-gates=" $arg }}
+{{-       range $g := splitList "," $gateValue }}
+{{- /*
+  --feature-gates is a colon-separated multimap: each element is
+  component:name=value, and an element with no component belongs to the
+  empty key, which Set() folds into kube. Reading the whole "kube:Name" as
+  the gate name misses every prefixed spelling. Zero-length elements are
+  skipped the way ColonSeparatedMultimapStringString skips them.
+*/}}
+{{-         if ne $g "" }}
+{{-           $element := $g }}
+{{-           $elementIsKube := true }}
+{{-           if contains ":" $element }}
+{{-             $component := trim (index (splitList ":" $element) 0) }}
+{{- /*
+  Only a literal "kube" keys under the kube component. An empty component,
+  as in ":Foo=true", keys under "" exactly like an unprefixed element. A
+  foreign component keeps its prefix and never matches one of the gate names
+  below.
+*/}}
+{{-             if has $component (list "kube" "") }}
+{{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
+{{-             else }}
+{{-               $elementIsKube = false }}
+{{-             end }}
+{{-           end }}
+{{-           if $elementIsKube }}
+{{-             $kv := splitList "=" $element }}
+{{-             if eq (len $kv) 2 }}
+{{-               $gname := trim (index $kv 0) }}
+{{-               $gval := trim (index $kv 1) }}
+{{-               $resolved := "" }}
+{{-               if has $gval (list "1" "t" "T" "true" "TRUE" "True") }}
+{{-                 $resolved = "true" }}
+{{-               else if has $gval (list "0" "f" "F" "false" "FALSE" "False") }}
+{{-                 $resolved = "false" }}
+{{-               end }}
+{{-               if and (ne $resolved "") (has $gname (list "RemoteRequestHeaderUID" "AllBeta")) }}
+{{-                 $gateValues = set $gateValues $gname $resolved }}
+{{- /*
+  Keyed by gate name, so the opt-out message can quote the entry that carries
+  the setting it names rather than whichever entry happened to be read last.
+*/}}
+{{-                 $gateArgs = set $gateArgs $gname $arg }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--emulated-version=" $arg }}
+{{- /*
+  Emulation moves the version the gate resolves at, and the header flag has
+  to follow it rather than the image tag. featureSpecAtEmulationVersion
+  (featureSpecAtEmulationAndMinCompatVersion by v1.35) walks the versioned
+  specs down to the emulated version, so RemoteRequestHeaderUID
+  is alpha-and-off at an emulated 1.32 on any binary, and the apiserver
+  refuses the header flag there.
+
+  The value is a CSV of component=version, and an element naming no component
+  is kube's. Anything else names another component and is none of our
+  business. $versionPattern copies versionMatchRE from version.Parse, which
+  toVersionMap uses: an optional v, a run of dot-separated numbers, and
+  anything after it ignored, so the chart reads v1.32, 1.32.0 and 1.32-rc all
+  as 1.32. A version it cannot parse is left
+  alone, the way an unparseable gate value is: the apiserver rejects it on its
+  own terms. A non-zero patch component in an unquoted value fails the render
+  instead: toVersionMap refuses it too, and the render error names the entry
+  where the apiserver would only crash-loop.
+
+  Elements accumulate across entries, and toVersionMap refuses two of them
+  naming the same component. A second kube element therefore stops the
+  apiserver and leaves no version this code can trust, so it is tracked and
+  the header flag is withheld rather than rendered against a guess.
+*/}}
+{{-       $emulatedValue := trimPrefix "--emulated-version=" $arg }}
+{{-       if ne $emulatedValue "" }}
+{{-         if contains "\"" $emulatedValue }}
+{{-           $emulatedQuoted = true }}
+{{-         end }}
+{{-         range $e := splitList "," $emulatedValue }}
+{{-           $parts := regexSplit "=" (trim $e) 2 }}
+{{-           $candidate := "" }}
+{{-           if eq (len $parts) 1 }}
+{{-             $candidate = trim (index $parts 0) }}
+{{-           else if eq (trim (index $parts 0)) "kube" }}
+{{-             $candidate = trim (index $parts 1) }}
+{{-           end }}
+{{-           if ne $candidate "" }}
+{{-             if ne $emulatedKubeVersion "" }}
+{{-               $emulatedKubeDuplicated = true }}
+{{-             end }}
+{{-             $emulatedKubeVersion = $candidate }}
+{{-             if and (not (contains "\"" $emulatedValue)) (regexMatch $versionPattern $candidate) }}
+{{-               $numeric := splitList "." (regexReplaceAll $versionPattern $candidate "${1}") }}
+{{-               if and (ge (len $numeric) 3) (ne (atoi (index $numeric 2)) 0) }}
+{{-                 fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses an --emulated-version with a non-zero patch component (patch version not allowed), so the control plane would refuse to start. Emulation takes major.minor: write %s.%s instead of %s." $arg $.Values.oidc.mode (index $numeric 0) (index $numeric 1) $candidate) }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{-   $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
+{{-   $allBetaSetting = dig "AllBeta" "" $gateValues }}
+{{- /*
+  Emulation can only move the effective version down, so the lower of the two
+  decides. A tenant asking to emulate something newer than its own image is
+  rejected by the apiserver; reading the lower one keeps the chart from
+  rendering a flag that version cannot take.
+*/}}
+{{-   $chartMinorParts := splitList "." (trimPrefix "v" .Values.version) }}
+{{-   $chartMinor := atoi (index $chartMinorParts 1) }}
+{{-   $effectiveMinor := $chartMinor }}
+{{-   if regexMatch $versionPattern $emulatedKubeVersion }}
+{{-     $emulatedParts := splitList "." (regexReplaceAll $versionPattern $emulatedKubeVersion "${1}") }}
+{{-     if ge (len $emulatedParts) 2 }}
+{{-       $emulatedMinor := atoi (index $emulatedParts 1) }}
+{{-       if lt $emulatedMinor $effectiveMinor }}
+{{-         $effectiveMinor = $emulatedMinor }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  The fail messages are migration instructions, so they name the version the
+  decision was taken at, which is not the image tag when emulation moved it.
+*/}}
+{{-   $versionForMessage := .Values.version }}
+{{-   if and (ne $emulatedKubeVersion "") (ne $effectiveMinor $chartMinor) }}
+{{-     $versionForMessage = printf "%s emulating %s" .Values.version $emulatedKubeVersion }}
+{{-   end }}
+{{-   $uidHeaderUnsupported = lt $effectiveMinor 33 }}
+{{-   if eq $uidGateSetting "false" }}
+{{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "RemoteRequestHeaderUID" "" $gateArgs }}
+{{-   else if and (ne $uidGateSetting "true") (eq $allBetaSetting "false") }}
+{{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "AllBeta" "" $gateArgs }}
+{{-   end }}
+{{-   $argUnreadable := or $gateArgUnreadable $emulatedArgUnreadable }}
+{{- /*
+  An unreadable entry leaves the gate or the version unknown, and what
+  follows holds in every state it can hide. An explicit
+  RemoteRequestHeaderUID=false is an opt-out at every version, so it is
+  refused behind an unread --emulated-version; a blanket AllBeta reaches
+  the gate only while the gate is beta, which a lower emulated version can
+  undo, so it waits for a reading. An unread --feature-gates term can turn
+  the gate back on, so it keeps the opt-out refusal off. An empty element
+  is fatal with the gate in either state. X-Remote-Uid beside an
+  operator's own list can only help: the gate off refuses that list anyway.
+  What the chart adds with no list of the operator's beside it, X-Remote-Uid
+  alone, waits for a reading.
+*/}}
+{{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated) }}
+{{-     if $uidGateOptedOut }}
+{{-       if and (ne $uidHeaderArgSeen "") (not $gateArgUnreadable) (or (not $emulatedArgUnreadable) (eq $uidGateSetting "false")) }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q alongside %q, while spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off." $uidHeaderArgSeen $gateArgSeen $.Values.oidc.mode $versionForMessage) }}
+{{-       end }}
+{{-     end }}
+{{-     if $uidHeaderHasEmpty }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry." $uidHeaderEmptyArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if not $uidGateOptedOut }}
+{{- /*
+  Adding a second X-Remote-Uid to a list that already has one is harmless,
+  so this is only about leaving a conforming setup rendering as it did.
+*/}}
+{{-       if and (not $uidHeaderConforms) (or (not $argUnreadable) (ne $uidHeaderArgSeen "")) }}
+{{-         $uidArgs = append $uidArgs "--requestheader-uid-headers=X-Remote-Uid" }}
+{{-       end }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -294,13 +717,16 @@ spec:
       REPLACE patch that clears the stale value.
     */}}
     extraArgs:
-      {{- with .Values.controlPlane.apiServer.extraArgs }}
+      {{- with $keptExtraArgs }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
       - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- with $uidArgs }}
+      {{- toYaml . | nindent 6 }}
       {{- end }}
-      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
+      {{- end }}
+      {{- if not (or $keptExtraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
       {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
@@ -316,6 +742,10 @@ spec:
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
+  {{- with $admissionControllers }}
+  admissionControllers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   addons:
     konnectivity:
       {{- $konnVersion := include "kubernetes.konnectivityVersion" $ | trim }}
@@ -331,15 +761,20 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
-    preferredAddressTypes:
-    - InternalIP
-    - ExternalIP
+    preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
-    serviceType: ClusterIP
+    {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
+          over the pod network, where a ClusterIP is meaningful. A Proxmox
+          worker is a VM on the hypervisor network and cannot route to one at
+          all: it boots, fails to reach the endpoint, and never files a CSR —
+          a silence that looks like a broken bootstrap rather than an
+          unreachable address. Publishing the Service moves the endpoint onto
+          a network the workers share. */}}
+    serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
-      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
+      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .)) }}:443
       className: "{{ $ingress }}"
     additionalServicePorts:
       - name: talos-trustd
@@ -438,10 +873,53 @@ spec:
   version: {{ $.Chart.Version }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtCluster
+kind: {{ $infraKind }}
 metadata:
+  {{- if not $isProxmox }}
+  {{- /* KubevirtCluster carries managed-by: nothing has to reconcile it, and
+        the annotation keeps CAPI from waiting on an infrastructure controller
+        that will never answer.
+
+        ProxmoxCluster must NOT carry it. The annotation tells CAPI the object
+        is owned by something outside Cluster API, so the Cluster controller
+        never sets the ownerRef on it — and capmox's reconciler exits at
+        "Waiting for Cluster Controller to set OwnerRef on ProxmoxCluster"
+        without ever building the InClusterIPPool the workers draw addresses
+        from. The control plane being external is expressed instead by
+        spec.externalManagedControlPlane below, which is the field capmox
+        actually reads. */}}
   annotations:
     cluster.x-k8s.io/managed-by: kamaji
+  {{- end }}
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
+{{- if $isProxmox }}
+spec:
+  {{- /* KubevirtCluster needs no spec: its workers live in this cluster and
+        reach the apiserver over the pod network. A ProxmoxCluster addresses an
+        external hypervisor, so it carries what capmox cannot infer — where VMs
+        may be placed, which addresses they may take, and who resolves names for
+        them.
+
+        externalManagedControlPlane is not decoration next to the managed-by
+        annotation above: capmox reads the FIELD, not the annotation. Its
+        ProxmoxCluster webhook skips endpoint validation only when the field is
+        set, and on an absent controlPlaneEndpoint it does not return a
+        validation error — it panics
+        (internal/webhook/proxmoxcluster_webhook.go:105), so the admission
+        request fails with a nil-pointer stack trace instead of a message.
+        Kamaji owns the endpoint here, so the field is simply true. */}}
+  externalManagedControlPlane: true
+  {{- with .Values.proxmox.allowedNodes }}
+  allowedNodes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  dnsServers:
+    {{- toYaml .Values.proxmox.dnsServers | nindent 4 }}
+  ipv4Config:
+    addresses:
+      {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
+    gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
+    prefix: {{ .Values.proxmox.ipv4Config.prefix }}
+{{- end }}
 {{- end }}

@@ -118,6 +118,18 @@ describe("AdminPage routing & access gate", () => {
     ).toBeInTheDocument()
   })
 
+  it("serves Repositories under Administration, with no operator area", async () => {
+    renderWithK8sProvider(
+      <TenantProvider>
+        <AdminPage />
+      </TenantProvider>,
+      { client: makeClient({ nodes: false, backupclasses: false }), initialRoute: "/taps" },
+    )
+    expect(
+      await screen.findByRole("heading", { name: "Repositories" }),
+    ).toBeInTheDocument()
+  })
+
   it("guards capacity routes for a backup-only operator hitting a capacity URL", async () => {
     // The capacity area must stay closed without nodes/list, even though the
     // portal itself is now ungated.

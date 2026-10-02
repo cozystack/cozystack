@@ -131,14 +131,12 @@ EOF
     grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
   done
 
-  # Images whose host is NOT inside `repository` must be selected too. Both are
-  # built and pushed to $REGISTRY by cozystack, both carry the digest in `tag`,
-  # and both were dropped by the ownership filter for looking host-less — so
-  # neither has ever received a 1.x release tag (on GHCR keycloak-operator has
-  # only `latest`, and kubeovn's newest cozystack-versioned tag predates 1.0).
-  # keycloak-operator splits the host into a sibling `registry` key; kubeovn
-  # keeps it in the document-level global.registry.address, written by the
-  # cozystack/kubeovn-chart wrapper's own `make image`.
+  # Both images are built and pushed to $REGISTRY by cozystack and carry the
+  # digest in `tag`, and neither has ever received a 1.x release tag (on GHCR
+  # keycloak-operator has only `latest`, and kubeovn's newest cozystack-versioned
+  # tag predates 1.0), so they get one only if the ownership filter counts them
+  # as ours. kubeovn keeps its host in global.registry.address, apart from
+  # `repository`.
   for owned in keycloak-operator kubeovn; do
     grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
   done

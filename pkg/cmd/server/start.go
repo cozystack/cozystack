@@ -27,6 +27,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
@@ -240,23 +241,55 @@ func (o *CozyServerOptions) Complete() error {
 		fmt.Printf("Failed to list ApplicationDefinitions (retrying in %v): %v\n", delay, err)
 		time.Sleep(delay)
 
-		delay = time.Duration(float64(delay) * 1.5)
-		if delay > maxDelay {
-			delay = maxDelay
-		}
+		delay = min(time.Duration(float64(delay)*1.5), maxDelay)
 	}
 
-	// Convert to ResourceConfig
-	o.ResourceConfig = &config.ResourceConfig{}
-	for _, crd := range crdList.Items {
-		resource, err := buildResourceFromCRD(crd, hrFlags)
-		if err != nil {
-			return err
-		}
-		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
+	resourceConfig, err := resourceConfigFrom(crdList.Items, hrFlags)
+	if err != nil {
+		return err
 	}
+	o.ResourceConfig = resourceConfig
 
 	return nil
+}
+
+// resourceConfigFrom converts the ApplicationDefinitions to the resource config
+// cozystack-api serves. A kind declared by more than one definition is
+// registered once, for the definition that owns it, rather than as two
+// resources for one GVK; the definitions left out are logged.
+func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (*config.ResourceConfig, error) {
+	owned, skipped := ownedDefinitions(defs)
+	for _, msg := range skipped {
+		fmt.Printf("Skipping %s\n", msg)
+	}
+	resourceConfig := &config.ResourceConfig{}
+	for _, crd := range owned {
+		resource, err := buildResourceFromCRD(crd, hrFlags)
+		if err != nil {
+			return nil, err
+		}
+		resourceConfig.Resources = append(resourceConfig.Resources, resource)
+	}
+	return resourceConfig, nil
+}
+
+// ownedDefinitions returns the definitions that own their application kind
+// under the shared rule in appdefowner, and a message for each one left out
+// because an older definition already owns its kind. The same rule decides which
+// definition the chartRef reconciler and the lineage webhook treat as the owner.
+func ownedDefinitions(defs []v1alpha1.ApplicationDefinition) ([]v1alpha1.ApplicationDefinition, []string) {
+	owners := appdefowner.Owners(defs)
+	var kept []v1alpha1.ApplicationDefinition
+	var skipped []string
+	for _, d := range defs {
+		kind := d.Spec.Application.Kind
+		if kind != "" && owners[kind] != d.Name {
+			skipped = append(skipped, fmt.Sprintf("ApplicationDefinition %q declares kind %s already owned by %q", d.Name, kind, owners[kind]))
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept, skipped
 }
 
 // buildResourceFromCRD assembles the config.Resource (typed release fields plus

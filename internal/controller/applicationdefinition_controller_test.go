@@ -2,10 +2,14 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"testing"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/config"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -227,5 +231,114 @@ func TestApplicationDefinition_HashUnchangedSkipsPatch(t *testing.T) {
 	}
 	if r.lastHandled.IsZero() {
 		t.Fatalf("expected lastHandled advanced after no-op reconcile")
+	}
+}
+
+// hashWithAnnotations computes the config hash for a single ApplicationDefinition
+// carrying the given metadata annotations.
+func hashWithAnnotations(t *testing.T, annotations map[string]string) string {
+	t.Helper()
+
+	scheme := newAppDefScheme(t)
+	appDef := &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-instance", Annotations: annotations},
+	}
+	r := &ApplicationDefinitionReconciler{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef).Build(),
+		Scheme: scheme,
+	}
+
+	hash, err := r.computeConfigHash(context.TODO())
+	if err != nil {
+		t.Fatalf("computeConfigHash: %v", err)
+	}
+	return hash
+}
+
+// TestApplicationDefinition_HashCoversReleaseAnnotations pins that a change
+// confined to a release.cozystack.io/* annotation moves the hash. cozystack-api
+// reads those annotations once, at start-up (pkg/cmd/server/start.go), so the
+// config-hash rollout is the only thing that makes such a change take effect.
+// A hash built from spec alone leaves the annotation inert on an existing
+// cluster until the api pod happens to restart for an unrelated reason, which
+// is indistinguishable from the change never having been delivered.
+func TestApplicationDefinition_HashCoversReleaseAnnotations(t *testing.T) {
+	bare := hashWithAnnotations(t, nil)
+	annotated := hashWithAnnotations(t, map[string]string{
+		config.HelmInstallDisableWaitAnnotation: "true",
+	})
+
+	if bare == annotated {
+		t.Fatalf("hash ignores %s: %q for both", config.HelmInstallDisableWaitAnnotation, bare)
+	}
+
+	flipped := hashWithAnnotations(t, map[string]string{
+		config.HelmInstallDisableWaitAnnotation: "false",
+	})
+	if flipped == annotated {
+		t.Fatalf("hash ignores the annotation's value: %q for both true and false", annotated)
+	}
+}
+
+// TestApplicationDefinition_HashIgnoresUnrelatedAnnotations pins the other half:
+// only the release.cozystack.io/ prefix counts. kubectl and Flux rewrite their
+// own annotations on every apply, and hashing those would roll out cozystack-api
+// on every reconcile of every ApplicationDefinition.
+func TestApplicationDefinition_HashIgnoresUnrelatedAnnotations(t *testing.T) {
+	bare := hashWithAnnotations(t, nil)
+	noisy := hashWithAnnotations(t, map[string]string{
+		"kubectl.kubernetes.io/last-applied-configuration": `{"metadata":{"name":"vm-instance"}}`,
+		"meta.helm.sh/release-name":                        "vm-instance-rd",
+	})
+
+	if bare != noisy {
+		t.Fatalf("unrelated annotations moved the hash: %q vs %q", bare, noisy)
+	}
+}
+
+// TestApplicationDefinition_HashTracksKindOwnership pins that the config hash
+// that restarts cozystack-api moves when ownership of a kind moves, even though
+// no spec changed: ownership depends on creation time, which the spec does not
+// carry. It also pins that a cluster with no duplicate kinds hashes exactly as
+// before ownership existed, so the upgrade itself does not restart the API.
+func TestApplicationDefinition_HashTracksKindOwnership(t *testing.T) {
+	scheme := newAppDefScheme(t)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(name string, at time.Time) *cozyv1alpha1.ApplicationDefinition {
+		d := &cozyv1alpha1.ApplicationDefinition{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(at)}}
+		d.Spec.Application.Kind = "Harbor"
+		return d
+	}
+	hash := func(objs ...*cozyv1alpha1.ApplicationDefinition) string {
+		b := fake.NewClientBuilder().WithScheme(scheme)
+		for _, o := range objs {
+			b = b.WithObjects(o)
+		}
+		r := &ApplicationDefinitionReconciler{Client: b.Build(), Scheme: scheme}
+		h, err := r.computeConfigHash(context.TODO())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	// Same names, same specs; only which one was created first differs.
+	harborOwns := hash(mk("harbor", base), mk("tap-harbor", base.Add(time.Hour)))
+	tapOwns := hash(mk("harbor", base.Add(2*time.Hour)), mk("tap-harbor", base.Add(time.Hour)))
+	if harborOwns == tapOwns {
+		t.Fatal("hash did not change when ownership of the kind moved to another definition")
+	}
+
+	single := mk("harbor", base)
+	view, err := json.Marshal([]struct {
+		Name string                                 `json:"name"`
+		Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
+	}{{Name: single.Name, Spec: single.Spec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(view)
+	if got := hash(single); got != hex.EncodeToString(sum[:]) {
+		t.Fatal("hash of a cluster without duplicate kinds changed format, which would restart cozystack-api on upgrade")
 	}
 }

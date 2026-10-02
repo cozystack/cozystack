@@ -11,7 +11,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,8 +133,8 @@ func sgFromSelector(sel metav1.LabelSelector) (string, bool) {
 		return "", false
 	}
 	for k := range sel.MatchLabels {
-		if strings.HasPrefix(k, sdnv1alpha1.MembershipLabelPrefix) {
-			return strings.TrimPrefix(k, sdnv1alpha1.MembershipLabelPrefix), true
+		if after, ok := strings.CutPrefix(k, sdnv1alpha1.MembershipLabelPrefix); ok {
+			return after, true
 		}
 	}
 	return "", false
@@ -324,12 +326,59 @@ func stripInternalAnnotations(m map[string]string) map[string]string {
 
 // hasFinalizer reports whether list contains the named finalizer.
 func hasFinalizer(list []string, name string) bool {
-	for _, f := range list {
-		if f == name {
-			return true
+	return slices.Contains(list, name)
+}
+
+// dryRunDeleteResult derives the object and synchronous-delete result that the
+// backing API would return without re-reading storage. A dry-run leaves the
+// stored object untouched, so a post-delete Get cannot distinguish an
+// immediate delete from one held by existing or garbage-collection finalizers.
+func dryRunDeleteResult(current *CiliumNetworkPolicy, opts *metav1.DeleteOptions) (*CiliumNetworkPolicy, bool) {
+	out := current.DeepCopy()
+	finalizers := make([]string, 0, len(current.Finalizers)+1)
+	for _, finalizer := range current.Finalizers {
+		if finalizer != metav1.FinalizerOrphanDependents && finalizer != metav1.FinalizerDeleteDependents {
+			finalizers = append(finalizers, finalizer)
 		}
 	}
-	return false
+
+	var orphanDependents *bool
+	if opts != nil {
+		orphanDependents = opts.OrphanDependents //nolint:staticcheck // SA1019: the apiserver still honours the deprecated field (shouldOrphanDependents), so the dry-run mirror reads it too.
+	}
+	if orphanDependents != nil {
+		if *orphanDependents {
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		}
+	} else if opts != nil && opts.PropagationPolicy != nil {
+		switch *opts.PropagationPolicy {
+		case metav1.DeletePropagationOrphan:
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		case metav1.DeletePropagationForeground:
+			finalizers = append(finalizers, metav1.FinalizerDeleteDependents)
+		}
+	} else {
+		// With no explicit policy, the backing API preserves an existing GC
+		// finalizer. CiliumNetworkPolicy uses background propagation by default,
+		// so it does not synthesize one when neither is already present.
+		if hasFinalizer(current.Finalizers, metav1.FinalizerOrphanDependents) {
+			finalizers = append(finalizers, metav1.FinalizerOrphanDependents)
+		} else if hasFinalizer(current.Finalizers, metav1.FinalizerDeleteDependents) {
+			finalizers = append(finalizers, metav1.FinalizerDeleteDependents)
+		}
+	}
+
+	out.Finalizers = finalizers
+	if len(finalizers) == 0 && out.DeletionTimestamp == nil {
+		return out, true
+	}
+	if out.DeletionTimestamp == nil {
+		now := metav1.Now()
+		out.DeletionTimestamp = &now
+	}
+	zero := int64(0)
+	out.DeletionGracePeriodSeconds = &zero
+	return out, false
 }
 
 func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
@@ -386,9 +435,7 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// Kubernetes PUT semantics — a label or annotation the caller drops must
 	// disappear, not linger from the previous object.
 	out.Labels = make(map[string]string, len(sg.Labels)+1)
-	for k, v := range sg.Labels {
-		out.Labels[k] = v
-	}
+	maps.Copy(out.Labels, sg.Labels)
 	// The marker label is owned by the storage and must always win, so it is set
 	// last. Otherwise a tenant could submit spec labels that overwrite it and
 	// orphan an enforced policy — created and applied by Cilium, but invisible
@@ -400,9 +447,7 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// spec.attachments — so the tenant cannot set or clobber it directly, and a
 	// cleared attachments list drops the annotation rather than leaving it stale.
 	out.Annotations = make(map[string]string, len(sg.Annotations)+1)
-	for k, v := range sg.Annotations {
-		out.Annotations[k] = v
-	}
+	maps.Copy(out.Annotations, sg.Annotations)
 	if enc := encodeAttachments(sg.Spec.Attachments); enc != "" {
 		out.Annotations[attachmentsAnnotation] = enc
 	} else {
@@ -485,21 +530,6 @@ func nsFrom(ctx context.Context) (string, error) {
 
 func isSecurityGroup(np *CiliumNetworkPolicy) bool {
 	return np.Labels != nil && np.Labels[sgLabelKey] == sgLabelValue
-}
-
-// createOptionsFromUpdate carries the caller's write intent (dry-run, field
-// manager, field validation) from an update request into the create it triggers
-// on the force-create path, so a dry-run apply cannot become a real write and
-// field-manager attribution is preserved.
-func createOptionsFromUpdate(opts *metav1.UpdateOptions) *metav1.CreateOptions {
-	if opts == nil {
-		return &metav1.CreateOptions{}
-	}
-	return &metav1.CreateOptions{
-		DryRun:          opts.DryRun,
-		FieldManager:    opts.FieldManager,
-		FieldValidation: opts.FieldValidation,
-	}
 }
 
 // -----------------------------------------------------------------------------
@@ -627,7 +657,7 @@ func (r *REST) Create(
 	}
 
 	np := securityGroupToPolicy(in, nil)
-	if err := r.c.Create(ctx, np, &client.CreateOptions{Raw: opts}); err != nil {
+	if err := r.c.Create(ctx, np, registry.ClientCreateOptions(opts)); err != nil {
 		return nil, err
 	}
 	return policyToSecurityGroup(np), nil
@@ -786,7 +816,7 @@ func (r *REST) Update(
 				return nil, false, err
 			}
 		}
-		err := r.c.Create(ctx, newNp, &client.CreateOptions{Raw: createOptionsFromUpdate(opts)})
+		err := r.c.Create(ctx, newNp, registry.ClientCreateOptionsFromUpdate(opts))
 		return policyToSecurityGroup(newNp), true, err
 	}
 
@@ -803,7 +833,7 @@ func (r *REST) Update(
 	if newNp.ResourceVersion == "" {
 		newNp.ResourceVersion = cur.ResourceVersion
 	}
-	err = r.c.Update(ctx, newNp, &client.UpdateOptions{Raw: opts})
+	err = r.c.Update(ctx, newNp, registry.ClientUpdateOptions(opts))
 	return policyToSecurityGroup(newNp), false, err
 }
 
@@ -828,7 +858,11 @@ func (r *REST) Delete(
 		return nil, false, err
 	}
 	current := &CiliumNetworkPolicy{}
-	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+	// Read through the direct (uncached) client: the dry-run branch derives its
+	// prospective result from this object, and a stale cache copy could
+	// misreport the finalizer set - the same skew the post-delete read below
+	// guards against.
+	if err := r.w.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, err
 	}
 	if !isSecurityGroup(current) {
@@ -845,8 +879,12 @@ func (r *REST) Delete(
 			return nil, false, err
 		}
 	}
-	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts}); err != nil {
+	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts)); err != nil {
 		return nil, false, err
+	}
+	if opts != nil && len(opts.DryRun) > 0 {
+		prospective, deleted := dryRunDeleteResult(current, opts)
+		return policyToSecurityGroup(prospective), deleted, nil
 	}
 	// Report whether the delete completed synchronously, per the
 	// rest.GracefulDeleter contract whose bool means "instantly deleted". Read the
@@ -864,13 +902,8 @@ func (r *REST) Delete(
 	if getErr != nil {
 		return nil, false, getErr
 	}
-	// The object is still present. A dry-run never removes it, so the prospective
-	// result is read from its authoritative finalizers: none means the real delete
-	// would be instant. A non-dry-run delete that left the object means a finalizer
-	// is holding it as Terminating, so it is asynchronous.
-	if opts != nil && len(opts.DryRun) > 0 && len(after.Finalizers) == 0 {
-		return policyToSecurityGroup(after), true, nil
-	}
+	// A non-dry-run delete that left the object means a finalizer is holding it
+	// as Terminating, so it is asynchronous.
 	return policyToSecurityGroup(after), false, nil
 }
 
@@ -1062,7 +1095,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	now := time.Now()
 	row := func(o *sdnv1alpha1.SecurityGroup) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
+			Cells:  []any{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}

@@ -131,7 +131,7 @@ jobs:
       #    upper bound" a property of the checkout rather than an instruction the
       #    prompt has to talk the agent into honouring.
       - name: Checkout rc tag
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.parse.outputs.rc_tag }}
           fetch-depth: 0
@@ -147,7 +147,7 @@ jobs:
       # actions/checkout rather than by shelling out to the repo's own tooling.
       # Gitignored, so the caller's `git add -A` never stages it.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling

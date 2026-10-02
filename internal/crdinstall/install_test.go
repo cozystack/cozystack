@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,13 +64,7 @@ func TestWriteEmbeddedManifests(t *testing.T) {
 		"cozystack.io_packagesources.yaml",
 	}
 	for _, expected := range expectedFiles {
-		found := false
-		for _, actual := range yamlFiles {
-			if actual == expected {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(yamlFiles, expected)
 		if !found {
 			t.Errorf("expected file %q not found in output, got %v", expected, yamlFiles)
 		}
@@ -179,8 +174,8 @@ func establishedInterceptor() interceptor.Funcs {
 				return nil
 			}
 			if u.GetKind() == "CustomResourceDefinition" {
-				_ = unstructured.SetNestedSlice(u.Object, []interface{}{
-					map[string]interface{}{
+				_ = unstructured.SetNestedSlice(u.Object, []any{
+					map[string]any{
 						"type":   "Established",
 						"status": "True",
 					},

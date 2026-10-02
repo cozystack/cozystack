@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	lcw "github.com/cozystack/cozystack/internal/lineagecontrollerwebhook"
@@ -159,6 +160,9 @@ func main() {
 		setupLog.Error(err, "unable to setup webhook", "webhook", "LineageWebhook")
 		os.Exit(1)
 	}
+	mgr.GetWebhookServer().Register(lcw.ApplicationDefinitionKindValidatorPath, &admission.Webhook{
+		Handler: lcw.NewApplicationDefinitionKindValidator(mgr.GetClient(), mgr.GetScheme()),
+	})
 
 	// +kubebuilder:scaffold:builder
 

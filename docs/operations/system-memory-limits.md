@@ -8,7 +8,7 @@ Talos Linux v1.12 introduced a userspace OOM handler, enabled by default, that r
 
 Setting a priority on a system component to stop these kills looks like a fix and changes nothing about them. Take that claim narrowly, because priority is far from inert elsewhere: it still drives scheduler preemption, kubelet eviction ordering, and the `oom_score_adj` kubelet hands the kernel OOM killer. None of those three is what kills these pods. The one ordering input this handler has is the Kubernetes **QoS class**, inferred from the cgroup path rather than from any pod object — a different axis from priority, so a `system-node-critical` pod with no memory limit is an ordinary candidate like any other.
 
-The handler scores each pod cgroup with a CEL expression. The default in Talos v1.13.6, the version Cozystack currently ships, is:
+The handler scores each pod cgroup with a CEL expression. The default in Talos v1.14.2, the version Cozystack currently ships for host nodes, is:
 
 ```
 memory_max.hasValue() ? 0.0 :
@@ -20,11 +20,11 @@ Any cgroup scoring zero is dropped from the candidate set entirely. A pod whose 
 
 Three consequences follow, and all three are easy to get wrong:
 
-- Only a **limit** grants immunity. A memory **request** merely moves the pod from BestEffort to Burstable, which under the v1.13.6 default `strictCgroupClassOrdering: true` means "killed second" rather than "not killed" — Burstable cgroups are considered only once no BestEffort one is eligible, and the score then breaks ties within the class. That setting arrived in v1.13.4; on v1.13.0 through v1.13.3 the score alone decided, so a large Burstable pod could outrank a small BestEffort one.
+- Only a **limit** grants immunity. A memory **request** merely moves the pod from BestEffort to Burstable, which under the default `strictCgroupClassOrdering: true` means "killed second" rather than "not killed" — Burstable cgroups are considered only once no BestEffort one is eligible, and the score then breaks ties within the class. That setting arrived in v1.13.4; on v1.13.0 through v1.13.3 the score alone decided, so a large Burstable pod could outrank a small BestEffort one.
 - **Every** container in the pod needs a limit, init containers included. Kubelet only sets pod-level `memory.max` when all of them have one, so a single limit-free sidecar puts the whole pod back in the candidate set.
 - CPU limits are irrelevant here. The ranking expression is given the cgroup's path, its QoS class, and `memory.max`, `memory.current` and `memory.peak` — no CPU information of any kind.
 
-Victim selection is also decoupled from the trigger. The cgroup that caused the pressure and the cgroup that gets `SIGKILL`ed are unrelated by design. In practice the pods carrying limits are overwhelmingly tenant workloads — managed applications are sized through resource presets, and a tenant namespace with `resourceQuotas` configured gets a default limit of its own — while system components carried none until the change this page describes. That inverts the intended order: a tenant workload thrashing against its own multi-gigabyte limit drives node-wide memory PSI, and `metallb-speaker` or `linstor-satellite`, using a few dozen megabytes and entirely uninvolved, is killed for it, repeatedly, until the pressure subsides.
+Victim selection is also decoupled from the trigger. The cgroup that caused the pressure and the cgroup that gets `SIGKILL`ed are unrelated by design. In practice the pods carrying limits are overwhelmingly tenant workloads — managed applications are sized through resource presets, and a tenant namespace with `resourceQuotas` configured gets a default limit of its own — while system components carried none until the change this page describes. That inverts the intended order: whatever fires the trigger, `metallb-speaker` or `linstor-satellite`, using a few dozen megabytes and entirely uninvolved, is the one killed for it, repeatedly, until the pressure subsides. On Talos v1.13.x a tenant workload thrashing against its own multi-gigabyte limit is enough to fire it, through the node-wide PSI clause described [below](#when-the-trigger-itself-is-the-problem).
 
 ## What Cozystack does
 
@@ -114,18 +114,17 @@ Both halves of that signature — `OOM controller triggered`, then `no eligible 
 
 ## When the trigger itself is the problem
 
-Giving system components limits stops them being *victims*. It does not stop the handler *triggering*, and a node under genuine sustained pressure will keep firing. The v1.13.6 default trigger is:
+Giving system components limits stops them being *victims*. It does not stop the handler *triggering*, and a node under genuine sustained pressure will keep firing. The v1.14.2 default trigger is:
 
 ```
 (multiply_qos_vectors(d_qos_memory_full_total, {System: 8.0, Podruntime: 4.0}) > 3000.0 &&
  multiply_qos_vectors(qos_memory_full_avg10, {System: 1.0, Podruntime: 1.0}) > 5.0 &&
- time_since_trigger > duration("5s")) ||
-(memory_full_avg10 > 75.0 && time_since_trigger > duration("10s"))
+ time_since_trigger > duration("5s"))
 ```
 
-The first clause is QoS-aware, which is what keeps unrelated pressure from firing it, and it reached that shape over three changes rather than one: [siderolabs/talos#12602](https://github.com/siderolabs/talos/pull/12602) replaced the original global-PSI trigger with the per-QoS form in v1.13.0, [#12632](https://github.com/siderolabs/talos/pull/12632) added the `qos_memory_full_avg10 > 5.0` conjunct to make it less sensitive, and [#13725](https://github.com/siderolabs/talos/pull/13725) added the `5s` cooldown in v1.13.6. The second clause is a global-PSI backstop that is still cause-blind, and a single workload thrashing inside its own cgroup limit can drive root `memory_full` above 75 while the node has free RAM. The `10s` term makes that clause fire at most once per 10 seconds, which is a useful fingerprint when reading the controller log.
+It fires only on memory stalls in the `System` and `Podruntime` cgroups, so pressure confined to pods does not trip it. It reached that shape over four changes: [siderolabs/talos#12602](https://github.com/siderolabs/talos/pull/12602) replaced the original global-PSI trigger with the per-QoS form in v1.13.0, [#12632](https://github.com/siderolabs/talos/pull/12632) added the `qos_memory_full_avg10 > 5.0` conjunct to make it less sensitive, [#13725](https://github.com/siderolabs/talos/pull/13725) added the `5s` cooldown in v1.13.6, and [#13895](https://github.com/siderolabs/talos/pull/13895) dropped a second clause, `memory_full_avg10 > 75.0 && time_since_trigger > duration("10s")`, in v1.14.0. That clause was a cause-blind global-PSI backstop: a single workload thrashing inside its own cgroup limit could drive root `memory_full` above 75 while the node had free RAM. Any node still running a v1.13 release carries it, tenant Kubernetes workers included. A tenant worker's machine config is rendered by the `kubernetes-nodes` chart, which accepts no extra documents, so the workaround below is for host nodes only.
 
-If a cluster trips the backstop persistently, it can be relaxed through an `OOMConfig` machine-config document — at the cost of raising the last-resort guard before the kernel OOM killer takes over. The document also accepts `cgroupRankingExpression`, `strictCgroupClassOrdering` and `sampleInterval`; anything left out keeps its default, so overriding the trigger alone is enough here:
+On a v1.13 host node the backstop can be removed without upgrading, through an `OOMConfig` machine-config document that sets the v1.14 trigger — at the cost of the last-resort guard before the kernel OOM killer takes over. The document also accepts `cgroupRankingExpression`, `strictCgroupClassOrdering` and `sampleInterval`; anything left out keeps its default, so overriding the trigger alone is enough here:
 
 ```yaml
 apiVersion: v1alpha1
@@ -133,8 +132,7 @@ kind: OOMConfig
 triggerExpression: |-
   (multiply_qos_vectors(d_qos_memory_full_total, {System: 8.0, Podruntime: 4.0}) > 3000.0 &&
    multiply_qos_vectors(qos_memory_full_avg10, {System: 1.0, Podruntime: 1.0}) > 5.0 &&
-   time_since_trigger > duration("5s")) ||
-  (memory_full_avg60 > 90.0 && time_since_trigger > duration("60s"))
+   time_since_trigger > duration("5s"))
 ```
 
-Prefer fixing the workload that is generating the pressure. Persistent triggering means a pod is sitting at its memory ceiling and reclaiming constantly, and raising that pod's limit addresses the cause rather than the symptom.
+Prefer fixing the workload that is generating the pressure. Persistent triggering on v1.14 means the system and runtime cgroups keep stalling for memory, and capping the pod that is growing into the node's memory addresses the cause rather than the symptom. On v1.13 it can also mean a pod sitting at its own memory ceiling and reclaiming constantly, which raising that pod's limit addresses.

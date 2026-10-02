@@ -1,3 +1,4 @@
+{{- if include "kubeovn.renderFullOnly" . }}
 kind: Deployment
 apiVersion: apps/v1
 metadata:
@@ -67,6 +68,9 @@ spec:
           command: ["/kube-ovn/start-ovn-monitor.sh"]
           args:
           - --secure-serving={{- .Values.func.SECURE_SERVING }}
+          {{- if or .Values.networking.TLS_MIN_VERSION .Values.networking.TLS_MAX_VERSION .Values.networking.TLS_CIPHER_SUITES }}
+          {{- include "kubeovn.componentTLSArgs" . | nindent 10 }}
+          {{- end }}
           - --log_file=/var/log/kube-ovn/kube-ovn-monitor.log
           - --logtostderr=false
           - --alsologtostderr=true
@@ -171,3 +175,5 @@ spec:
         - name: kube-ovn-log
           hostPath:
             path: {{ .Values.log_conf.LOG_DIR }}/kube-ovn
+
+{{- end }}

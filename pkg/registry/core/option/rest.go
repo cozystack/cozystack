@@ -203,7 +203,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
 	row := func(o *corev1alpha1.Option) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{o.Name, len(o.Spec.Items)},
+			Cells:  []any{o.Name, len(o.Spec.Items)},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}

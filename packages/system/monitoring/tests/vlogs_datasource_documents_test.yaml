@@ -1,0 +1,35 @@
+suite: vlogs GrafanaDatasource is one document per logsStorages entry
+templates:
+  - templates/vlogs/grafana-datasource.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# The range emits one GrafanaDatasource per logsStorages entry. Without a `---`
+# separator inside the range two entries concatenate into a single document with
+# duplicate keys, the later entry overwrites the earlier one, and every log store
+# but the last gets no datasource. These cases pin that each entry is its own
+# document.
+tests:
+  - it: renders one datasource for the default single-entry logsStorages
+    asserts:
+      - hasDocuments:
+          count: 1
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: vlogs-generic
+
+  - it: renders a separate datasource document per logsStorages entry
+    set:
+      logsStorages:
+        - name: generic
+          retentionPeriod: "1"
+          storage: 10Gi
+        - name: audit
+          retentionPeriod: "7"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2

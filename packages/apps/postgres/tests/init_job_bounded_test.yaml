@@ -1,0 +1,99 @@
+suite: the init-job is bounded so a purged restore target cannot deadlock the Helm hook
+
+# Clearing bootstrap.enabled arms the init Job as a post-install,post-upgrade Helm
+# hook that Helm blocks on. Its pod mounts <release>-superuser (which CNPG deletes
+# with the Cluster) and waited `until pg_isready; do sleep 5; done` with no bound
+# and no activeDeadlineSeconds. When a second restore purges the same target while
+# that hook is still pending, the hook can never finish and Helm deadlocks on it —
+# the postgres-2-backup-roundtrip E2E caught exactly this. Bound the Job (a hard
+# activeDeadlineSeconds and no retries) and the readiness wait (a bounded loop that
+# exits) so a purged target fails the hook fast instead of hanging forever.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+  users:
+    app: {}
+
+tests:
+  # On an UPGRADE the Cluster is already up, so pg_isready answers in seconds, but
+  # the deadline must still leave room for the per-schema grant DO block on a large
+  # existing database — 540s, well below the 10m (600s) hook budget so a purged
+  # target's Job fails with its own diagnostic before Helm's generic timeout, yet
+  # not the tight 300s that would fail a legitimate long grant pass. A bump back to
+  # 600 (== the Helm timeout) reddens here.
+  - it: the init Job is bounded on upgrade with grant-loop headroom and does not retry
+    template: templates/init-job.yaml
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 540
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook"]
+          pattern: post-upgrade
+  # On a fresh INSTALL nothing is running yet — the same release is provisioning the
+  # Cluster (PVC, image pull, initdb) — and there is no purge hazard, so the cold
+  # start gets the near-full budget (570s) rather than the tight upgrade deadline
+  # that would fail a slow-but-healthy first boot. Collapsing this back to one number
+  # for both contexts reddens one side or the other.
+  - it: the init Job gives a cold install the near-full budget
+    template: templates/init-job.yaml
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 570
+
+  # The wait is bounded by wall-clock elapsed ($SECONDS), not by an attempt count:
+  # an attempt count ignores the time pg_isready itself takes, so 110 attempts of
+  # "sleep 5" really ran past the 570s Job deadline and the Job was killed before
+  # the loop could print its diagnostic or leave the create-users/grant work any
+  # time. The bound sits below activeDeadlineSeconds so the tail is reserved for
+  # that work. Reverting to an attempt counter, or raising the bound to the Job
+  # deadline, reddens these.
+  - it: the readiness wait is bounded by elapsed time on install, reserving the deadline tail
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'until pg_isready ; do sleep 5; done'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'attempts'
+      # Install (the suite default): the cold, still-provisioning Cluster gets up to
+      # 480s of script time, leaving at most 90s of the 570s Job deadline (less the
+      # pod's start-up, which the Job clock counts) for the work after readiness.
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'if \[ "\$SECONDS" -ge 480 \]; then'
+
+  - it: the readiness wait is tight on upgrade (Cluster already up, purge hazard)
+    template: templates/init-script.yaml
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      # Upgrade: the Cluster is already up, so give up after 250s, leaving up to 290s
+      # of the 540s Job deadline for the per-schema grant pass on a large database.
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'if \[ "\$SECONDS" -ge 250 \]; then'

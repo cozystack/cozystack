@@ -176,7 +176,7 @@ chart-emitted CronJob renders only when `backup.schedule` is non-empty.
 ### resources and resourcesPreset
 
 `resources` sets explicit CPU and memory configurations for each replica.
-When left empty, the preset defined in `resourcesPreset` is applied.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
 
 ```yaml
 resources:

@@ -70,3 +70,10 @@ permittedHostDevices: {}
 #     mediatedDeviceTypes:
 #     - nvidia-740
 mediatedDevicesConfiguration: {}
+
+# Passed to spec.configuration.migrations on the KubeVirt CR.
+# Empty leaves KubeVirt's migration defaults unchanged.
+# bandwidthPerMigration is a quantity in bytes per second.
+# Set through spec.components.platform.values.kubevirt.migrations
+# on the cozystack.cozystack-platform Package.
+migrations: {}

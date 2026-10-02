@@ -225,10 +225,11 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Application-specific parameters
 
-| Name                    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type                     | Value |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----- |
-| `postgresql`            | PostgreSQL server configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `object`                 | `{}`  |
-| `postgresql.parameters` | PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots. | `map[string]intOrString` | `{}`  |
+| Name                                | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type                     | Value |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ----- |
+| `postgresql`                        | PostgreSQL server configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `object`                 | `{}`  |
+| `postgresql.sharedPreloadLibraries` | Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.                              | `[]string`               | `[]`  |
+| `postgresql.parameters`             | PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots. | `map[string]intOrString` | `{}`  |
 
 
 ### Quorum-based synchronous replication
@@ -258,11 +259,10 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Users configuration
 
-| Name                      | Description                                  | Type                | Value   |
-| ------------------------- | -------------------------------------------- | ------------------- | ------- |
-| `users`                   | Users configuration map.                     | `map[string]object` | `{}`    |
-| `users[name].password`    | Password for the user.                       | `string`            | `""`    |
-| `users[name].replication` | Whether the user has replication privileges. | `bool`              | `false` |
+| Name                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type                | Value   |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
+| `users`                   | Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret. | `map[string]object` | `{}`    |
+| `users[name].replication` | Whether the user has replication privileges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `bool`              | `false` |
 
 
 ### Databases configuration
@@ -305,6 +305,7 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 | `bootstrap`               | Bootstrap configuration.                                                                                                                                                                                                                                                                                                                                                     | `object` | `{}`    |
 | `bootstrap.enabled`       | Whether to restore from a backup.                                                                                                                                                                                                                                                                                                                                            | `bool`   | `false` |
 | `bootstrap.recoveryTime`  | Timestamp (RFC3339) for point-in-time recovery; empty means latest.                                                                                                                                                                                                                                                                                                          | `string` | `""`    |
+| `bootstrap.backupID`      | Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.                                                                               | `string` | `""`    |
 | `bootstrap.oldName`       | Previous cluster name before deletion.                                                                                                                                                                                                                                                                                                                                       | `string` | `""`    |
 | `bootstrap.serverName`    | Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.                               | `string` | `""`    |
 | `bootstrap.newServerName` | WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name. | `string` | `""`    |
@@ -315,7 +316,7 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 ### resources and resourcesPreset
 
 `resources` sets explicit CPU and memory configurations for each replica.
-When left empty, the preset defined in `resourcesPreset` is applied.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
 
 ```yaml
 resources:
@@ -326,7 +327,7 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
@@ -334,15 +335,14 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 ```yaml
 users:
-  user1:
-    password: strongpassword
-  user2:
-    password: hackme
-  airflow:
-    password: qwerty123
+  user1: {}
+  user2: {}
+  airflow: {}
   debezium:
     replication: true
 ```
+
+Passwords cannot be set here — they are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o json | jq -r '.data["user1"]' | base64 -d` (a username may contain a `.`, which `jsonpath` would treat as a path step and return nothing).
 
 ### databases
 
@@ -362,3 +362,5 @@ databases:
     extensions:     
     - hstore        
 ```
+
+A database name may contain only letters, digits and `-._`, and must be at most 54 characters. Renaming a database by changing its key in values makes the init-job drop the old database with its data. To keep the data, a platform administrator first renames it as the CNPG superuser (`ALTER DATABASE "<old>" RENAME TO <new>`, `ALTER ROLE "<old>_admin" RENAME TO <new>_admin` and the same for `_readonly`), and only then is the key changed; the chart then adopts the renamed database on the next reconcile.

@@ -1,0 +1,41 @@
+suite: bootbox machines guards an empty apex in isolation
+templates:
+  - templates/matchbox/machines.yaml
+
+release:
+  name: bootbox
+  namespace: tenant-root
+
+# The guard sits at the top of machines.yaml, before the machines range, so the
+# failing case needs no machines (the default [] is schema-valid). The positive
+# case supplies a schema-complete machine to emit a Hardware object.
+
+tests:
+  - it: fails when _namespace is injected with an empty host and no host override
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the iPXE URL from the apex when it is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      machines:
+        - arch: x86_64
+          hostname: node1
+          mac: ["aa:bb:cc:dd:ee:ff"]
+          uefi: true
+          leaseTime: 3600
+          ip:
+            address: 192.0.2.10
+            gateway: 192.0.2.1
+            netmask: 255.255.255.0
+    asserts:
+      - equal:
+          path: spec.interfaces[0].netboot.ipxe.url
+          value: "https://bootbox.example.org/boot.ipxe"

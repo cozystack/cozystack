@@ -1,0 +1,103 @@
+suite: TalosConfigTemplate replacement on an immutable spec
+# CABPT's validating webhook rejects any change to spec, so the Job's kubectl
+# apply fails the moment any input the render depends on genuinely changes —
+# the apiserver address being the one that moves in practice. What is pinned
+# here is that the Job replaces it, that it only does so for that specific
+# failure, and that it may delete nothing else.
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+tests:
+  - it: replaces the template when the apiserver reports it immutable
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # Anchored to the case label: the comment above it and the echo inside the
+      # branch both contain the words, so matching them anywhere would stay green
+      # with the label turned into `*)`, deleting the template on any error.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?m)^\s*\*"is immutable"\*\)\s*$'
+      # The target in full: a delete naming anything but the template this Job
+      # applies would take out a sibling pool's, or the pre-hash one the
+      # outgoing MachineSet still references, and a prefix match would not see
+      # it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete talosconfigtemplate "\$\{TCT_NAME\}" -n "\$NS"'
+
+  # Any other apply error must stop the Job: a delete followed by a create that
+  # fails for the same reason would leave the pool with no template at all.
+  - it: still fails the Job on any other apply error
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # Anchored to the `*)` branch. A bare `exit 1` pattern passes on the one
+      # the input-timeout path already has near the top of the script, so it
+      # stays green with this branch's `exit 1` deleted.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?s)\*\)\s*\n\s*echo "\$APPLY_OUT" >&2\s*\n\s*exit 1'
+
+  - it: may delete only this pool's own template
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      # The name is this pool's content-hash one. Which hash is not pinned here:
+      # that it equals the name the Job applies and the MachineDeployment
+      # references is hack/check-talosconfigtemplate-name-agreement.bats' job.
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames[0]
+          pattern: '^kubernetes-myk8s-md0-[0-9a-f]{6}$'
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "delete")].resourceNames
+          count: 1
+      # delete must stay bound to this pool's own template: an unnamed rule
+      # carrying it, alone or folded into the unnamed create, would let the Job
+      # remove a sibling pool's template.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["bootstrap.cluster.x-k8s.io"]
+            resources: ["talosconfigtemplates"]
+            verbs: ["delete"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["bootstrap.cluster.x-k8s.io"]
+            resources: ["talosconfigtemplates"]
+            verbs: ["create", "delete"]
+
+  # Several clusters can share a tenant namespace, so an unnamed get/patch/update
+  # would let this Job rewrite a sibling pool's machineconfig. create cannot be
+  # narrowed by RBAC and stays unnamed.
+  - it: may read and write only this pool's own template
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      # The name is this pool's content-hash one. Which hash is not pinned here:
+      # that it equals the name the Job applies and the MachineDeployment
+      # references is hack/check-talosconfigtemplate-name-agreement.bats' job.
+      - matchRegex:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames[0]
+          pattern: '^kubernetes-myk8s-md0-[0-9a-f]{6}$'
+      - lengthEqual:
+          path: rules[?(@.resources[0] == "talosconfigtemplates" && @.verbs[0] == "get")].resourceNames
+          count: 1
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["bootstrap.cluster.x-k8s.io"]
+            resources: ["talosconfigtemplates"]
+            verbs: ["get", "create", "patch", "update"]

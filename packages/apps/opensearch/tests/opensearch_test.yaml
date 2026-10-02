@@ -619,3 +619,50 @@ tests:
           path: spec.selector["opster.io/opensearch-cluster"]
           value: mydb
         documentIndex: 1
+
+  ###################################
+  # securityconfig update job       #
+  ###################################
+
+  - it: gives the securityconfig update job its own resources
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.security.config.updateJob.resources.requests.memory
+          value: 256Mi
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.memory
+          value: 512Mi
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.requests.cpu
+          value: 100m
+        documentIndex: 0
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.cpu
+          value: "1"
+        documentIndex: 0
+
+  # securityadmin configures the cluster once and exits, so what it needs does
+  # not grow with the cluster. Tying it to the preset would hand it 128Mi again
+  # on the smallest one, which is the amount it is OOMKilled at.
+  - it: keeps the update job resources off the node sizing preset
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      resourcesPreset: "nano"
+      resources: {}
+    asserts:
+      - equal:
+          path: spec.security.config.updateJob.resources.limits.memory
+          value: 512Mi
+        documentIndex: 0

@@ -1,0 +1,33 @@
+migrations:
+  enabled: true
+# Slim variants emit the base platform only; everything else is opt-in through
+# bundles.enabledPackages, including every paas/naas package. iaas is refused.
+# An opt-in package does not pull in its dependsOn: list the whole chain, or the
+# Package stays DependenciesNotReady. The chain is the dependsOn of the
+# package in sources/, followed recursively; for example harbor-application
+# needs postgres-operator and redis-operator. The
+# Tenant etcd, monitoring and seaweedfs switches need their application and
+# its chain opted in as well.
+# victoria-metrics-operator and prometheus-operator-crds stay on even without
+# monitoring: linstor, the tenant ingress release and most paas operators
+# depend on them.
+# Networking is Cilium alone (no KubeOVN), and Cilium L2 announcements replace
+# MetalLB: a LoadBalancer Service gets its address from a CiliumLoadBalancerIPPool
+# announced by a CiliumL2AnnouncementPolicy, both created by the admin.
+# Cilium takes pod ranges from node.spec.podCIDR, so kube-controller-manager
+# must allocate node CIDRs (Talos and k3s do by default; kubeadm needs
+# --pod-network-cidr). The networking.*CIDR values here are KubeOVN-only.
+bundles:
+  system:
+    enabled: true
+    variant: "isp-slim"
+  iaas:
+    enabled: false
+  paas:
+    enabled: true
+  naas:
+    enabled: true
+# Tenant/root does not run monitoring here, so the cozy-monitoring redirects
+# into it would dead-end; see monitoring.rootEnabled in values.yaml.
+monitoring:
+  rootEnabled: false

@@ -8,6 +8,15 @@ opensearch-operator:
     replicaCount: 1
     # Enable cluster-wide mode to watch all namespaces
     watchNamespace: ""
+    # Built in-tree from images/opensearch-operator, which carries the patches
+    # under its patches/ directory. Without this block the vendored chart
+    # falls back to opensearchproject/opensearch-operator at the chart's
+    # appVersion, which is the unpatched upstream build, and the reference stays
+    # outside the first-party set hack/lib/image-refs.sh collects for promote,
+    # retag and mirror. `make image` rewrites both keys on every build.
+    image:
+      repository: ghcr.io/cozystack/cozystack/opensearch-operator
+      tag: v2.8.0@sha256:cbe6b50f13aa5abf338209d38dfcd80e73296e97510465b5fca73a0130bfaad7
   kubeRbacProxy:
     image:
       # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream

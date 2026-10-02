@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 14 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
@@ -8,6 +7,9 @@
 # function under `set -eu -x`, so assertions are direct shell tests that exit
 # non-zero on failure. setup()/teardown() are not honored — each test creates
 # and cleans its own scratch dir.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 #
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
@@ -22,15 +24,16 @@
 #
 # The expected set is derived the way the script's full-suite branch derives it
 # rather than pinned as a literal, so adding or disabling a Chainsaw suite does
-# not need an edit in fourteen places here.
+# not need an edit at every full-suite assertion here.
 #
 # A helper rather than an inline one-liner because cozytest.sh runs each @test
 # under `set -x`: a bare failing `[ ... ]` prints the two values already
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
-      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort | paste -sd ' ' -
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
+      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' \
+      | sort -u | paste -sd ' ' -
 }
 
 assert_selection() {
@@ -48,11 +51,11 @@ assert_full_suite() {
 
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/apps/postgres/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
+    rm -rf "$tmp"
 }
 
 @test "operator diff selects all dependent app suites" {
@@ -60,7 +63,6 @@ assert_full_suite() {
     # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
     # DB). monitoring has no chainsaw suite so it's filtered out by the selector.
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
@@ -70,6 +72,7 @@ assert_full_suite() {
         echo "operator diff must not trigger full suite; got: $output" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "engine-dependency change does not fan out via the ordering edge" {
@@ -80,7 +83,6 @@ assert_full_suite() {
     # genuine direct dependents (postgres, harbor, ...), never unrelated apps
     # like kafka that reach cert-manager solely through the engine.
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/cert-manager/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
@@ -90,6 +92,7 @@ assert_full_suite() {
         echo "cert-manager change must not fan out via engine; got: $output" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "cozystack-basics does not narrow to a suite that lands downstream of it" {
@@ -168,7 +171,6 @@ assert_full_suite() {
 
 @test "library change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
@@ -183,41 +185,44 @@ assert_full_suite() {
         cat "$tmp/err" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "docs-only diff selects nothing" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "docs/README.md" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 @test "kubernetes-application maps to the two kubernetes suites" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/apps/kubernetes/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
     # OIDC System -> CustomConfig lifecycle coverage is folded into latest.
-    ! echo "$output" | grep -q "kubernetes-oidc-"
+    if echo "$output" | grep -q "kubernetes-oidc-"; then
+        echo "FAIL: selector still names the removed OIDC suites" >&2
+        false
+    fi
+    rm -rf "$tmp"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "dashboards/gpu/gpu-fleet.json" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
+    rm -rf "$tmp"
 }
 
 @test "shared E2E helper script triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/_lib/run-kubernetes.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
@@ -227,60 +232,85 @@ assert_full_suite() {
         cat "$tmp/err" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }
 
 @test "chainsaw config change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/.chainsaw.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "install bats triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-install-cozystack.bats" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "per-suite edit selects only that suite, never escalates" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-chainsaw/redis/chainsaw-test.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "redis" ]
+    rm -rf "$tmp"
 }
 
 @test "pull-requests workflow change triggers full suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo ".github/workflows/pull-requests.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
 }
 
 @test "backup example harness edit selects its app suite" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "examples/backups/postgres/run-all.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "postgres" ]
+    rm -rf "$tmp"
 }
 
 @test "backup example without a matching suite selects nothing" {
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "examples/backups/no-such-app/run.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
     [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
+@test "a shared backup helper escalates instead of selecting nothing" {
+    # examples/backups/_lib/ is sourced by the backup walkthroughs, so it is
+    # shared material the way hack/e2e-chainsaw/_lib/ is. Read as an app named
+    # _lib it matched no suite and selected nothing, which both lanes take as
+    # "skip Chainsaw": a change to every walkthrough at once would test none.
+    # Also pinned beside an app path, where selecting only that app would pass
+    # a test that checked for a non-empty selection.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for diff in "examples/backups/_lib/wait-helpers.sh" \
+        "examples/backups/_lib/wait-helpers.sh examples/backups/postgres/run-all.sh"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a shared backup helper was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'examples/backups/_lib/wait-helpers.sh' is shared by every backup walkthrough" "$tmp/err"; then
+            echo "the escalation must name the helper; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    rm -rf "$tmp"
 }
 
 # --- #3392: every path is classified; unclassified escalates -----------------
@@ -407,12 +437,12 @@ assert_full_suite() {
 # invisible to a caller that pipes it; a caller assembling the list itself sees
 # it immediately. Both cases below are red without `|| [ -n "$file" ]`.
 #
-# Cleanup here, as in every test added with this change, is the last statement
-# of the body rather than a `trap ... EXIT`: that trap replaces the one the bats
-# binary installs for its own bookkeeping, and a test failing under it can print
-# no TAP line at all, which is the opposite of what a regression pin is for.
-# Last, not before the assertion, so that `set -e` leaves the scratch directory
-# behind on failure for inspection (docs/agents/e2e-testing.md §3).
+# Cleanup here, as everywhere in this file, is the last statement of the body
+# rather than a `trap ... EXIT`: that trap replaces the one the bats binary
+# installs for its own bookkeeping, and a test failing under it can print no TAP
+# line at all, which is the opposite of what a regression pin is for. Last, not
+# before the assertion, so that `set -e` leaves the scratch directory behind on
+# failure for inspection (docs/agents/e2e-testing.md §3).
 
 @test "editing a disabled chainsaw suite selects nothing" {
     # A .disabled suite runs nowhere, so its edits are the one file class that
@@ -443,11 +473,11 @@ assert_full_suite() {
 }
 
 @test "a top-level unit bats file selects nothing" {
-    # All 60 non-e2e hack/*.bats files used to escalate to the full suite. The
+    # The non-e2e hack/*.bats files used to escalate to the full suite. The
     # root Makefile is the authority on which of them the e2e sandbox runs:
     # BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
     # keeps exactly these for the unit lane, and packages/core/testing's recipes
-    # execute only the three it filters out. So the sandbox never runs one of
+    # execute only the ones it filters out. So the sandbox never runs one of
     # these, and no Chainsaw suite can regress from an edit to one.
     #
     # Not a green gate with nothing behind it: `make unit-tests` DOES run them,
@@ -478,7 +508,7 @@ assert_full_suite() {
 }
 
 @test "every hack/*.bats file lands on the lane its name says" {
-    # The rule above is a claim about 63 files, asserted on two of them. This
+    # The rule above is a claim about every hack/*.bats, asserted on two. This
     # pins the claim itself: for every hack/*.bats in the tree, the selector's
     # verdict must agree with the Makefile's split -- e2e-prefixed escalates,
     # everything else selects nothing. A file added with a name that fits neither
@@ -504,11 +534,10 @@ assert_full_suite() {
     # no rule at all and escalated as unclassified -- 5 of the last 150 merged
     # pull requests, all of them the migration deleting one of these files.
     #
-    # Mapped rather than marked inert: what is left here is wired to nothing
-    # today, and inert would bake that in and go quietly wrong the day a lane
-    # runs them again. This asserts the mapping on a name that IS a suite, so it
-    # measures the rule rather than the orphan status of the files that happen to
-    # remain.
+    # Mapped rather than marked inert: the files formerly kept here were wired to
+    # nothing after migration, and inert would go quietly wrong if this layout
+    # returns. This fixture asserts the rule independently of the historical file
+    # inventory.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/e2e-apps/postgres.bats" > "$tmp/diff"
@@ -738,6 +767,28 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a suite written as chainsaw-test.yml is discovered" {
+    # Chainsaw loads chainsaw-test.yml when there is no chainsaw-test.yaml, so a
+    # suite spelled that way runs. Enumerated by the .yaml name alone it was
+    # absent from every escalation and unselectable by its own per-suite edits,
+    # and a suite that exists but is never selected reds nothing.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/beta"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/beta/chainsaw-test.yml"
+    # A directory holding both spellings is still one suite.
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a .yml suite" "$output" "alpha beta"
+    echo hack/e2e-chainsaw/beta/step.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "a per-suite edit must select a .yml suite" "$output" "beta"
+    rm -rf "$tmp"
+}
+
 @test "an unterminated last line is still classified" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -903,6 +954,42 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a seaweedfs change selects every suite that uses tenant-root's object storage" {
+    # cozystack.seaweedfs-application used to map to a seaweedfs suite that does
+    # not exist, so every seaweedfs change ran the whole suite. bucket is not the
+    # only suite it can break. The backup round-trips write to the same instance
+    # through the in-cluster seaweedfs-s3 endpoint, most of them verifying its
+    # CA, which bucket skips; harbor gets its registry storage from a BucketClaim
+    # served by the seaweedfs COSI driver, and no graph edge links the two. The
+    # expected set is read off the suites' own yaml rather than written here, so
+    # a new suite that names the endpoint or a BucketClaim there and is left out
+    # of src_to_suites goes red. A suite reaching seaweedfs only through a
+    # sourced script is invisible to the scan; the round-trips pass S3_ENDPOINT
+    # in their yaml, which is what makes it hold today. Comment lines are
+    # skipped, which is what keeps etcd out: its round-trip is gated off in CI
+    # and names the endpoint only in prose.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    want=''
+    for s in $(full_suite_list); do
+        if cat hack/e2e-chainsaw/"$s"/*.y*ml | grep -v '^[[:space:]]*#' \
+            | grep -qE 'seaweedfs-s3|BucketClaim|objectstorage\.k8s\.io'; then
+            want="${want:+$want }$s"
+        fi
+    done
+    # Premise: the scan must find the suite that exists for this, or it is
+    # reading the wrong files.
+    case " $want " in *" bucket "*) ;; *) echo "premise broken: scan found '$want'" >&2; exit 1 ;; esac
+    for path in packages/system/seaweedfs/values.yaml packages/extra/seaweedfs/values.yaml \
+        packages/system/seaweedfs-db/values.yaml packages/system/seaweedfs-rd/Chart.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        assert_selection "a seaweedfs change must select the suites that use it: $path" \
+            "$output" "$want"
+    done
+    rm -rf "$tmp"
+}
+
 @test "every suite round-trips between the two mapping tables" {
     # select-install.sh maps a suite to the PackageSource that installs it, and
     # select-e2e.sh must map that source back to the suite. A suite that does
@@ -929,46 +1016,34 @@ assert_full_suite() {
     done
 }
 
-@test "an edit to a non-suite directory under e2e-chainsaw escalates" {
+@test "an edit to a non-suite directory under e2e-chainsaw escalates on its own account" {
     # Only a switched-off suite is ignorable. Shared material next to _lib/, or
     # a suite nested deeper than the depth-2 scan looks, is invisible to
-    # all_apps — selecting nothing for it would skip E2E outright, so it
-    # escalates through the backstop instead. That backstop is the one path
-    # still reaching the bottom of the script now that the graph decides per
-    # path, so pin it rather than assume it stays reachable.
+    # all_apps, and selecting nothing for it would skip E2E outright.
+    #
+    # The mixed diff is the regression pin. When the name was left for the final
+    # intersection to drop, the path escalated alone, through the empty-selection
+    # backstop, but beside any path that contributed a suite the run narrowed to
+    # that suite with nothing on stderr -- the merge-before-escalate shape #3330
+    # removed from the graph walk. The single-path case passes either way.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     # Premise: the directory must not exist, or all_apps would hold it and the
     # test would be measuring the ordinary per-suite rule.
     [ ! -d hack/e2e-chainsaw/_fixtures ]
-    echo "hack/e2e-chainsaw/_fixtures/tenant.yaml" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-    assert_full_suite "$output"
-    # The backstop is the last branch that could reach the full suite without
-    # saying so. It names the directly-selected names it could not resolve, which
-    # for this diff is the directory the per-suite rule derived.
-    if ! grep -q "select-e2e:.*no runnable suite is named by.*_fixtures" "$tmp/err"; then
-        echo "the backstop must name what it could not resolve; stderr was:" >&2
-        cat "$tmp/err" >&2
-        exit 1
-    fi
-    # Several unresolved directories, with one of them repeated: every distinct
-    # name must appear, exactly once, in one line. The list used to be built by
-    # `tr | sort -u | grep -v | paste`, whose exit status is paste's, so a failure
-    # anywhere earlier in it would have gone unseen under set -e and printed a
-    # partial name or none at all -- the same last-command blindness this script
-    # fixes for the suite list and the yq indexes. The escalation is already
-    # decided by then, so the only casualty is the reason line, which is exactly
-    # what these asserts exist to defend.
-    [ ! -d hack/e2e-chainsaw/_zz ]
-    printf '%s\n' hack/e2e-chainsaw/_fixtures/a.yaml \
-        hack/e2e-chainsaw/_fixtures/b.yaml \
-        hack/e2e-chainsaw/_zz/c.yaml > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
-    assert_full_suite "$output"
-    line=$(grep 'no runnable suite is named by' "$tmp/err")
-    assert_selection "the backstop must name every unresolved directory once" \
-        "$line" "select-e2e: no runnable suite is named by '_fixtures _zz' — escalating to the full suite"
+    for diff in "hack/e2e-chainsaw/_fixtures/tenant.yaml" \
+        "hack/e2e-chainsaw/_fixtures/tenant.yaml packages/apps/postgres/values.yaml" \
+        "hack/e2e-chainsaw/postgres/chainsaw-test.yaml hack/e2e-chainsaw/_fixtures/tenant.yaml"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a non-suite directory under e2e-chainsaw was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'hack/e2e-chainsaw/_fixtures/tenant.yaml' names no runnable suite ('_fixtures')" "$tmp/err"; then
+            echo "the escalation must name the path and the directory it read; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
     rm -rf "$tmp"
 }
 

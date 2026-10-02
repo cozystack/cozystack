@@ -64,7 +64,56 @@ spec:
 {{- define "cozystack.platform.package.optional.default" -}}
 {{- $name := index . 0 -}}
 {{- $root := index . 1 -}}
-{{- include "cozystack.platform.package.optional" (list $name "default" $root) }}
+{{- $components := dict -}}
+{{- if gt (len .) 2 -}}
+{{- $components = index . 2 -}}
+{{- end -}}
+{{- include "cozystack.platform.package.optional" (list $name "default" $root $components) }}
+{{ end }}
+
+{{/*
+Emits "true" on the slim variants, empty otherwise.
+*/}}
+{{- define "cozystack.platform.slim" -}}
+{{- if has .Values.bundles.system.variant (list "isp-slim" "isp-slim-generic" "isp-hosted-slim") }}true{{ end -}}
+{{- end }}
+
+{{/*
+A package that is always on in the full variants and opt-in (bundles.enabledPackages)
+on the slim ones. Takes the same arguments as cozystack.platform.package.
+*/}}
+{{- define "cozystack.platform.package.full" -}}
+{{- if include "cozystack.platform.slim" (index . 2) -}}
+{{- include "cozystack.platform.package.optional" . }}
+{{- else -}}
+{{- include "cozystack.platform.package" . }}
+{{- end -}}
+{{ end }}
+
+{{/*
+Emits the cozystack.networking Package. Call as
+(list $ <components> <full variant> <slim variant>). The slim variants run Cilium
+alone: no KubeOVN component, and Cilium L2 announcements stand in for MetalLB.
+*/}}
+{{- define "cozystack.platform.package.networking" -}}
+{{- $root := index . 0 -}}
+{{- $components := index . 1 -}}
+{{- $variant := index . 2 -}}
+{{- if include "cozystack.platform.slim" $root -}}
+{{- if dig "encryption" "enabled" false ($root.Values.networking | default dict) -}}
+{{- fail "networking.encryption.enabled is not supported on the slim variants: their Cilium-only datapath has no encryption wiring yet" -}}
+{{- end -}}
+{{- $variant = index . 3 -}}
+{{- $_ := unset $components "kubeovn" -}}
+{{- $cilium := dig "cilium" "values" "cilium" dict $components -}}
+{{- $_ := set $cilium "l2announcements" (dict "enabled" true) -}}
+{{- $_ := set $components "cilium" (dict "values" (dict "cilium" $cilium)) -}}
+{{- end -}}
+{{- include "cozystack.platform.package" (list "cozystack.networking" $variant $root $components) }}
+{{- end }}
+
+{{- define "cozystack.platform.package.full.default" -}}
+{{- include "cozystack.platform.package.full" (list (index . 0) "default" (index . 1)) }}
 {{ end }}
 
 {{/*
@@ -111,17 +160,20 @@ false
 {{- end }}
 
 {{/*
-Common system packages shared between isp-full and isp-full-generic bundles.
+Common system packages shared between the isp-full, isp-full-generic, isp-slim and
+isp-slim-generic bundles.
 Does NOT include the packages each variant emits itself: networking (variant
 differs), linstor (talos.enabled differs), multus (stageCniPlugins differs) and
 cozystack-scheduler (emitted with its own variant in both branches)
 */}}
 {{- define "cozystack.platform.system.common-packages" -}}
 {{- $root := . -}}
+{{- if not (include "cozystack.platform.slim" $root) -}}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $root) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $root) }}
-{{include "cozystack.platform.package.default" (list "cozystack.metallb" $root) }}
+{{- end }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}

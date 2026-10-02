@@ -34,7 +34,7 @@
 {{- end -}}
 
 {{- define "monitoring.oidc.grafanaHost" -}}
-{{- $namespaceHost := .Values._namespace.host -}}
+{{- $namespaceHost := include "cozy-lib.ns-host-required" . -}}
 {{- printf "grafana.%s" (.Values.host | default $namespaceHost) -}}
 {{- end -}}
 
@@ -44,7 +44,8 @@
 
 {{- define "monitoring.oidc.systemIssuerURL" -}}
 {{- $host := index .Values._cluster "root-host" -}}
-{{- printf "https://keycloak.%s/realms/cozy" $host -}}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" | toString -}}
+{{- printf "https://keycloak.%s/realms/%s" $host $realm -}}
 {{- end -}}
 
 {{- /*
@@ -212,5 +213,44 @@
 {{- $users := $oidc.users | default (list) -}}
 {{- if and (ne ($secretName | toString) "") (gt (len $users) 0) -}}
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Values here reach the VictoriaTraces CRs unchecked: the installed CRDs are the
+  trimmed ones (crds.plain: false), so spec is x-kubernetes-preserve-unknown-fields.
+    - name is at most 42 characters: the operator names the StatefulSet
+      vtstorage-<name>, and each pod carries the label controller-revision-hash:
+      vtstorage-<name>-<hash> (hash up to 10 characters, value capped at 63).
+    - storage is positive: in single mode the operator mounts an EmptyDir when
+      the requested size IsZero, so the store reports operational with no volume.
+    - retentionDiskUsageBytes uses the operator's BytesString grammar, which
+      rejects the Kubernetes-quantity `Gi` suffix that storage uses.
+*/ -}}
+{{- define "monitoring.tracingStorages.validate" -}}
+{{- $seen := dict -}}
+{{- range $i, $s := .Values.tracingStorages -}}
+{{-   $name := $s.name | default "" | toString -}}
+{{-   if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name)) (gt (len $name) 42) -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) of at most 42 characters, so that the vtstorage-<name>-<hash> pod revision label stays within 63." $i $name) -}}
+{{-   end -}}
+{{-   if hasKey $seen $name -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first." $i $name) -}}
+{{-   end -}}
+{{-   $_ := set $seen $name true -}}
+{{-   $mode := $s.mode | default "cluster" -}}
+{{-   if and (ne $mode "cluster") (ne $mode "single") -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" $name) -}}
+{{-   end -}}
+{{-   $storage := $s.storage | default "" | toString -}}
+{{-   if or (regexMatch "^[+-]?[0.]*([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" $storage) (hasPrefix "-" $storage) -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created." $name) -}}
+{{-   end -}}
+{{-   with $s.retentionDiskUsageBytes -}}
+{{-     $bytes := . | toString -}}
+{{-     if not (regexMatch "^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$" $bytes) -}}
+{{-       fail (printf "monitoring: tracingStorages[%s].retentionDiskUsageBytes %q is not a valid VictoriaMetrics BytesString (^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$). Its units differ from the sibling `storage` field (a Kubernetes quantity like 10Gi): write 8GB or 8GiB, not 8Gi." $name $bytes) -}}
+{{-     end -}}
+{{-   end -}}
 {{- end -}}
 {{- end -}}

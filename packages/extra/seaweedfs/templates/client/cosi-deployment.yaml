@@ -1,5 +1,5 @@
 {{- if eq .Values.topology "Client" }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment

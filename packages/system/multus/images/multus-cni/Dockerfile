@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26@sha256:079e59808d2d252516e27e3f3a9c003740dee7f75e55aa71528766d52bcfc16a AS build
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS build
 
 ARG VERSION=v4.3.0
 ARG TARGETPLATFORM
@@ -34,7 +34,7 @@ RUN ./hack/build-go.sh
 # release CNI_PLUGINS_VERSION was last checked against; the same test compares
 # the two.
 #
-# kube-ovn-cni-plugins-checked-against: v1.15.10
+# kube-ovn-cni-plugins-checked-against: v1.15.26
 #
 # Talos strips the same upstream release in siderolabs/talos' Dockerfile down to
 # bridge, firewall, host-local, loopback and portmap, and adds flannel from a
@@ -46,7 +46,7 @@ RUN ./hack/build-go.sh
 # CNI_PLUGINS_VERSION above -- it is about the VERSIONS matching, not about
 # which plugins exist.
 #
-# talos-cni-plugins-checked-against: v1.13.6
+# talos-cni-plugins-checked-against: v1.14.2
 ARG TARGETARCH
 ARG CNI_PLUGINS_VERSION=v1.9.1
 # SHA-256 of cni-plugins-linux-<arch>-<version>.tgz, from the release's per-asset
@@ -67,7 +67,7 @@ RUN set -eux; \
     tar -xz -C /cni-plugins-licenses -f /tmp/cni-plugins.tgz ./LICENSE; \
     rm -f /tmp/cni-plugins.tgz
 
-FROM debian:stable-slim@sha256:ee12ffb55625b99d62837a72f037d9b2f18fd0c787a89c2b9a4f09666c48776c
+FROM debian:stable-slim@sha256:5bc3287b25407c965a30f38e32603dc253a3869e1b12a21ac09bfc27fd8b13ce
 LABEL org.opencontainers.image.source=https://github.com/cozystack/cozystack
 COPY --from=build /usr/src/multus-cni/bin /usr/src/multus-cni/bin
 COPY --from=build /usr/src/multus-cni/LICENSE /usr/src/multus-cni/LICENSE

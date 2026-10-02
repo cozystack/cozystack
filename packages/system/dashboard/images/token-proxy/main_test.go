@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,8 +9,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"html/template"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -405,3 +409,134 @@ func TestHealthzReady_ReportsCacheState(t *testing.T) {
 // the entire fix turns on this option, so a future upstream rename
 // surfaces as a build error here instead of a silent semantic change.
 var _ jwk.RegisterOption = jwk.WithWaitReady(false)
+
+// writeBranding writes a branding config.json to a temp dir, mirroring how the
+// cozy-dashboard-console-config ConfigMap is projected into the container.
+func writeBranding(t *testing.T, json string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, []byte(json), 0o600); err != nil {
+		t.Fatalf("write branding: %v", err)
+	}
+	return p
+}
+
+// TestNewLoginData_DefaultsWithoutBranding pins the fallback: with no branding
+// file the login page keeps its historical unbranded shape (title "Login", no
+// logo, no brand heading). A missing file must never break sign-in.
+func TestNewLoginData_DefaultsWithoutBranding(t *testing.T) {
+	d := newLoginData("/oauth2/sign_in", "", filepath.Join(t.TempDir(), "absent.json"))
+	if d.Title != "Login" {
+		t.Errorf("Title = %q, want Login", d.Title)
+	}
+	if d.Heading != "" {
+		t.Errorf("Heading = %q, want empty", d.Heading)
+	}
+	if d.LogoSrc != "" {
+		t.Errorf("LogoSrc = %q, want empty", d.LogoSrc)
+	}
+}
+
+// TestNewLoginData_AppliesBranding proves the branding keys from the console
+// ConfigMap reach the login model: titleText -> <title>, logoText -> heading,
+// logoSvg -> an <img> data: URI.
+//
+// logoSvg in config.json is already base64 (the SPA's Logo.tsx consumes it
+// that way), so the value must be prefixed verbatim, never re-encoded. The
+// decode-back assertion is the contract: a second encoding would make the
+// payload decode to the base64 text instead of the original SVG, i.e. a broken
+// image on every cluster that configured a logo.
+func TestNewLoginData_AppliesBranding(t *testing.T) {
+	svg := "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"
+	svgB64 := base64.StdEncoding.EncodeToString([]byte(svg))
+	p := writeBranding(t, `{"titleText":"Acme Cloud","logoText":"Acme","logoSvg":`+quoteJSON(svgB64)+`}`)
+	d := newLoginData("/oauth2/sign_in", "", p)
+	if d.Title != "Acme Cloud" {
+		t.Errorf("Title = %q, want Acme Cloud", d.Title)
+	}
+	if d.Heading != "Acme" {
+		t.Errorf("Heading = %q, want Acme", d.Heading)
+	}
+	want := template.URL("data:image/svg+xml;base64," + svgB64)
+	if d.LogoSrc != want {
+		t.Errorf("LogoSrc = %q, want %q (logoSvg must not be re-encoded)", d.LogoSrc, want)
+	}
+	// The data: prefix is mandatory because LogoSrc is template.URL: nothing
+	// without it may reach the field.
+	const prefix = "data:image/svg+xml;base64,"
+	if !strings.HasPrefix(string(d.LogoSrc), prefix) {
+		t.Fatalf("LogoSrc %q lacks the fixed %q prefix", d.LogoSrc, prefix)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(string(d.LogoSrc), prefix))
+	if err != nil {
+		t.Fatalf("payload is not valid base64: %v", err)
+	}
+	if string(decoded) != svg {
+		t.Errorf("payload decodes to %q, want the original SVG %q (double-encoded)", decoded, svg)
+	}
+}
+
+// TestNewLoginData_MalformedBrandingFallsBack proves a corrupt config.json
+// degrades to the unbranded page instead of erroring the handler.
+func TestNewLoginData_MalformedBrandingFallsBack(t *testing.T) {
+	p := writeBranding(t, `{not json`)
+	d := newLoginData("/oauth2/sign_in", "", p)
+	if d.Title != "Login" || d.Heading != "" || d.LogoSrc != "" {
+		t.Errorf("malformed branding leaked into %+v", d)
+	}
+}
+
+// TestLoginTemplate_RendersBranding executes the real template and asserts the
+// branded title, heading and logo data URI survive rendering — in particular
+// that html/template does not rewrite the data: URI to #ZgotmplZ, which would
+// silently blank the logo.
+func TestLoginTemplate_RendersBranding(t *testing.T) {
+	svg := "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"
+	svgB64 := base64.StdEncoding.EncodeToString([]byte(svg))
+	p := writeBranding(t, `{"titleText":"Acme Cloud","logoText":"Acme","logoSvg":`+quoteJSON(svgB64)+`}`)
+	var buf bytes.Buffer
+	if err := loginTmpl.Execute(&buf, newLoginData("/oauth2/sign_in", "", p)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "#ZgotmplZ") {
+		t.Fatal("logo data URI was sanitized to #ZgotmplZ")
+	}
+	// The SVG mime "+" renders as the HTML entity &#43; inside the attribute,
+	// which the browser decodes back to "+"; assert on the surviving prefix and
+	// the operator's base64 payload verbatim (re-encoding it would change it).
+	for _, want := range []string{
+		"<title>Acme Cloud</title>",
+		`class="brand">Acme</h1>`,
+		`src="data:image/svg`,
+		"base64," + svgB64,
+		"Kubernetes API Token",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+}
+
+// TestLoginTemplate_RendersUnbranded pins the default page: title "Login", no
+// logo <img>, no brand heading.
+func TestLoginTemplate_RendersUnbranded(t *testing.T) {
+	var buf bytes.Buffer
+	if err := loginTmpl.Execute(&buf, newLoginData("/oauth2/sign_in", "", "")); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "<title>Login</title>") {
+		t.Error("default page lost its <title>Login</title>")
+	}
+	if strings.Contains(out, "class=\"logo\"") || strings.Contains(out, "class=\"brand\"") {
+		t.Error("unbranded page rendered a logo or brand heading")
+	}
+}
+
+// quoteJSON returns s as a JSON string literal so an SVG with quotes embeds
+// cleanly into the test fixtures above.
+func quoteJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

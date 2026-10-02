@@ -1,0 +1,37 @@
+suite: seaweedfs COSI deployment guards an empty apex in isolation
+templates:
+  - templates/client/cosi-deployment.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: fails when topology is Client and the apex is empty with no host override
+    set:
+      topology: Client
+      _namespace:
+        host: ""
+        ingress: tenant-root
+      filer:
+        grpcHost: seaweedfs-filer
+        grpcPort: 18888
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the S3 endpoint from the apex when it is set
+    set:
+      topology: Client
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      filer:
+        grpcHost: seaweedfs-filer
+        grpcPort: 18888
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENDPOINT
+            value: https://s3.example.org

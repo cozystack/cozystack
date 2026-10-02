@@ -24,10 +24,10 @@ The scope is **definitions only** — vhosts, users, permissions, queues, exchan
 | Name                         | Description                                                                                                                                                                                                                                                                                                                                               | Type       | Value     |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
 | `replicas`                   | Number of RabbitMQ replicas.                                                                                                                                                                                                                                                                                                                              | `int`      | `3`       |
-| `resources`                  | Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                                                                                                                                        | `object`   | `{}`      |
+| `resources`                  | Explicit CPU and memory configuration for each RabbitMQ replica. Every resource left unset here is taken from `resourcesPreset`.                                                                                                                                                                                                                          | `object`   | `{}`      |
 | `resources.cpu`              | CPU available to each replica.                                                                                                                                                                                                                                                                                                                            | `quantity` | `""`      |
 | `resources.memory`           | Memory (RAM) available to each replica.                                                                                                                                                                                                                                                                                                                   | `quantity` | `""`      |
-| `resourcesPreset`            | Default sizing preset used when `resources` is omitted.                                                                                                                                                                                                                                                                                                   | `string`   | `t1.nano` |
+| `resourcesPreset`            | Default sizing preset. It supplies every resource `resources` does not set, not only a `resources` left empty entirely.                                                                                                                                                                                                                                   | `string`   | `s1.nano` |
 | `size`                       | Persistent Volume Claim size available for application data.                                                                                                                                                                                                                                                                                              | `quantity` | `10Gi`    |
 | `storageClass`               | StorageClass used to store the data.                                                                                                                                                                                                                                                                                                                      | `string`   | `""`      |
 | `external`                   | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                          | `bool`     | `false`   |
@@ -128,7 +128,7 @@ kubectl delete secret rabbitmq-<name>-ca rabbitmq-<name>-tls --namespace <tenant
 ### resources and resourcesPreset
 
 `resources` sets explicit CPU and memory configurations for each replica.
-When left empty, the preset defined in `resourcesPreset` is applied.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
 
 ```yaml
 resources:
@@ -139,13 +139,7 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-| Preset name | CPU    | memory  |
-|-------------|--------|---------|
-| `nano`      | `100m` | `128Mi` |
-| `micro`     | `250m` | `256Mi` |
-| `small`     | `500m` | `512Mi` |
-| `medium`    | `500m` | `1Gi`   |
-| `large`     | `1`    | `2Gi`   |
-| `xlarge`    | `2`    | `4Gi`   |
-| `2xlarge`   | `4`    | `8Gi`   |
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
+
+See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 

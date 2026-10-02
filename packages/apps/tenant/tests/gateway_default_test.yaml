@@ -11,7 +11,7 @@ templates:
 # Rules under test (see _helpers.tpl::tenant.gatewayEffective):
 #   - gateway unset                     → OFF own (inherit from parent)
 #   - gateway=true  explicit            → ON  own (LB IP / cert burned)
-#   - gateway=false explicit            → OFF own (parked, no inherit)
+#   - gateway=false explicit            → OFF own (same as unset, still inherits)
 #
 # The inheritance propagation itself happens in namespace.yaml:
 # $gateway := $parentNamespace.gateway | default ""
@@ -86,12 +86,12 @@ tests:
           path: kind
           value: HelmRelease
 
-  - it: gateway=false explicit → no own HelmRelease (parked)
-    # The escape hatch. Operator opts out of any Gateway publishing,
-    # even inheritance: namespace.yaml writes _namespace.gateway as
-    # empty string (the cozystack-basics-side label pins this in
-    # cozystack-values-secret_test.yaml), and the parent Gateway's
-    # allowedRoutes selector therefore does not match this namespace.
+  - it: gateway=false explicit → no own HelmRelease (same as unset)
+    # An explicit false renders no own Gateway HelmRelease, exactly like
+    # leaving the key unset. It does NOT opt out of inheritance:
+    # tenant.gatewayEffective returns "false" for both false and unset, so
+    # namespace.yaml keeps _namespace.gateway pointing at the nearest
+    # ancestor that owns a Gateway and this tenant still publishes through it.
     set:
       gateway: false
       host: ""

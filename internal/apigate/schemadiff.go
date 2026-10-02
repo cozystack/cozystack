@@ -17,9 +17,14 @@ limitations under the License.
 package apigate
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
+
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 )
 
 // diffSchema walks a base and head OpenAPIv3Schema node in lockstep and
@@ -36,6 +41,41 @@ func diffSchema(path string, base, head Schema) []string {
 	var out []string
 	diffNode(path, base, head, &out)
 	sort.Strings(out)
+	return out
+}
+
+// diffNameSchema reports a tightened constraint on metadata.name. An
+// application declares those beside "properties" at the schema root, where the
+// walk over spec never looks. A declaration the API server cannot enforce
+// refuses every create of the kind, the harshest outcome a schema change can
+// have, so it is reported whenever it changes. The type is left out of the
+// diff: a name is a string whether or not the declaration says so.
+func diffNameSchema(base, head Schema) []string {
+	headRaw, present := head[appsv1alpha1.NameSchemaExtension]
+	if !present || reflect.DeepEqual(base[appsv1alpha1.NameSchemaExtension], headRaw) {
+		return nil
+	}
+	encoded, err := json.Marshal(headRaw)
+	if err == nil {
+		_, err = validation.ParseNameDeclaration(encoded)
+	}
+	if err != nil {
+		return []string{fmt.Sprintf("metadata.name: %s cannot be enforced, so every create of this kind is refused: %v", appsv1alpha1.NameSchemaExtension, err)}
+	}
+	return diffSchema("metadata.name", nameDeclaration(base), nameDeclaration(head))
+}
+
+func nameDeclaration(s Schema) Schema {
+	declared, ok := s[appsv1alpha1.NameSchemaExtension].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := Schema{}
+	for k, v := range declared {
+		if k != "type" {
+			out[k] = v
+		}
+	}
 	return out
 }
 

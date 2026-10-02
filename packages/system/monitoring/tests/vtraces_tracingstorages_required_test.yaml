@@ -1,0 +1,447 @@
+suite: VictoriaTraces backend renders per tracingStorages entry (off by default)
+templates:
+  - templates/vtraces/vtraces.yaml
+  - templates/vtraces/grafana-datasource.yaml
+
+# tracingStorages drives the VTCluster/VTSingle backend(s) for distributed
+# tracing. It is EMPTY by default, so tracing is off out of the box and nothing
+# is provisioned — nothing produces spans until the trace collector ships, so an
+# absent backend drops no data (unlike logsStorages, which is why there is no
+# fail-on-empty guard here yet). These cases pin the off-by-default state, the
+# cluster/single split, the datasource, and the rejected invalid mode.
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+tests:
+  - it: renders nothing by default (tracing off, empty tracingStorages)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no datasource by default (tracing off)
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a VTCluster for a cluster-mode entry
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTCluster
+          name: generic
+
+  - it: renders a VTSingle when mode is single
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic
+
+  - it: renders one traces backend per tracingStorages entry
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: audit
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: sets the retention period on the VTCluster storage component
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.storage.retentionPeriod
+          value: "14d"
+
+  - it: renders an optional disk-usage cap only when set (cluster mode)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8GB"
+    asserts:
+      - equal:
+          path: spec.storage.retentionMaxDiskSpaceUsageBytes
+          value: "8GB"
+
+  - it: renders the disk-usage cap at the top level for single mode
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "4GB"
+    asserts:
+      - equal:
+          path: spec.retentionMaxDiskSpaceUsageBytes
+          value: "4GB"
+
+  - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: vtraces-generic
+      - equal:
+          path: spec.datasource.type
+          value: jaeger
+      - equal:
+          path: spec.datasource.url
+          value: http://vtselect-generic.tenant-root.svc:10471/select/jaeger
+
+  - it: points the datasource at vtsingle:10428 for single mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.datasource.url
+          value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
+
+  - it: fails the render when mode is neither cluster nor single
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: singel
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[generic].mode must be either "cluster" or "single"'
+
+  - it: rejects retentionDiskUsageBytes in Kubernetes-quantity grammar (8Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[generic].retentionDiskUsageBytes "8Gi" is not a valid VictoriaMetrics BytesString (^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$). Its units differ from the sibling `storage` field (a Kubernetes quantity like 10Gi): write 8GB or 8GiB, not 8Gi.'
+
+  - it: rejects duplicate names across tracingStorages
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: dup
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: dup
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[1].name "dup" is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first.'
+
+  - it: rejects a name that is not an RFC 1123 label
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: Main_1
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[0].name \"Main_1\" must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) of at most 42 characters, so that the vtstorage-<name>-<hash> pod revision label stays within 63."
+
+  - it: renders a 42-character name (the longest the revision label allows)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTCluster
+          name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - it: rejects a 43-character name (vtstorage-<name>-<hash> revision label over 63)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[0].name \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) of at most 42 characters, so that the vtstorage-<name>-<hash> pod revision label stays within 63."
+
+  - it: renders a numeric name as a string
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: 2024
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: metadata.name
+          value: "2024"
+
+  - it: rejects an empty storage in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (0Gi) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 0Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (0) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "0"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (0.0) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "0.0"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (0e3) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "0e3"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (.0) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: ".0"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (0m) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "0m"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (+0) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "+0"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a zero storage (-0Mi) in single mode (the operator would mount an EmptyDir)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "-0Mi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: rejects a negative storage (-1Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: "-1Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingStorages[generic].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created."
+
+  - it: accepts an explicitly signed positive storage (+5Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "+5Gi"
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic
+
+  - it: accepts a non-zero storage written with an exponent (5e3)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: "5e3"
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic
+
+  - it: renders a numeric name as a string in single mode
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: 2024
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: metadata.name
+          value: "2024"
+
+  - it: accepts a fractional non-zero storage (0.5Gi)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 0.5Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: generic

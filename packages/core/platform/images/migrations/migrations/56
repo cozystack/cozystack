@@ -423,9 +423,9 @@ kubectl get helmrelease --all-namespaces \
         continue
       fi
 
-      # Helm refuses release names longer than 53 characters. rest.go today caps a
-      # new cluster name at 32 (maxKubernetesClusterName = 53 - len("kubernetes-nodes-")
-      # - len("-md0")) precisely so its pools fit, but a legacy or hand-created
+      # Helm refuses release names longer than 53 characters. The kubernetes chart
+      # caps a new cluster name at 32 (its `## @name` declaration, enforced by
+      # cozystack-api) precisely so its pools fit, but a legacy or hand-created
       # cluster name can be longer, and combined with the longer kubernetes-nodes-
       # prefix the child name can overflow. Do NOT fail the whole migration
       # here: exiting would deadlock the platform pre-upgrade hook for EVERY

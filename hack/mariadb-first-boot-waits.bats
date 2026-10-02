@@ -1,0 +1,1412 @@
+#!/usr/bin/env bats
+# -----------------------------------------------------------------------------
+# Contract: nothing that waits for a database HelmRelease to become Ready may
+# allow less than that release can legitimately take. The backup walkthroughs
+# of the suites in MBW_SUITES carry such waits, and each suite is checked on
+# its own; for mariadb the chainsaw suite's HR-Ready asserts are checked too.
+# The other suites' HR-Ready asserts sit under the floor by per-suite choice
+# (item 6 of the reviewer checklist in docs/agents/e2e-testing.md) and are
+# left out.
+#
+# A wait has two floors and must beat the larger one by MBW_START_MARGIN. The
+# margin is a policy value, not a measurement: it stands for the time the
+# wait's clock runs before the install's -- the Application reconcile, the
+# chart artifact fetch and the helm-controller queue -- none of which the tree
+# bounds. It equals the headroom every wait held here already carries.
+#
+# The first floor is the chart's first-boot budget, computed only for a suite
+# whose MBW_SUITES row names a chart with a startupProbe; for the others only a
+# measurement could give it. For mariadb: helm-controller defaults
+# spec.waitStrategy to `poller`, kstatus has no rule for
+# k8s.mariadb.com/MariaDB and reads its Ready=False as InProgress, so the
+# install MAY span a first boot. "May", because a poll landing before the
+# operator's first status write reads a condition-less CR as Current, which is
+# why the suite keeps an endpoint assert after the HR-Ready one. The budget is
+# initialDelaySeconds + (failureThreshold - 1) * periodSeconds, with the
+# threshold from the chart and the operator's defaults of 20 and 10 (both
+# probe shapes, in mariadb-operator's pkg/builder/container_builder.go). It
+# is one boot, not one per replica, because the operator sets
+# PodManagementPolicy: Parallel. Were that wrong, two replicas would serialize
+# to 620s, the floor would bind there, and 660 would fall short of the margin
+# over it.
+#
+# The second floor is the install timeout cozystack-api stamps on the release
+# (pkg/cmd/server/start.go). A wait equal to it expires first, because its clock
+# starts when the step runs and the install's only after the Application is
+# reconciled and the chart fetched. Of the floors this file computes, it is
+# the one that binds today in every suite. Each suite's ApplicationDefinition
+# is held to not override it.
+#
+# What is not guarded, because each would make the numbers slack rather than
+# short: cozystack-api taking --helmrelease-install-timeout from a manifest
+# (only cozystack-operator is passed it today); a waitStrategy of `legacy` on
+# a suite's RD; the UseHelm3Defaults feature gate. healthCheckExprs alone
+# resolves to `poller`, so it is not a lever. Also unguarded: an operator bump
+# that moves the probe defaults; a timed non-HelmRelease assert placed ahead of
+# the HelmRelease one inside a wait-helmrelease-ready step, or an HR-Ready
+# assert in a step with another name, since the suite extractor selects by step
+# name and takes the first timeout in the step.
+#
+# The waits are also held against the Chainsaw op that runs the walkthrough,
+# because an op that runs out SIGKILLs the script and loses its error. Per
+# suite, the op minus the HelmRelease waits it reaches, bucket included, must
+# keep the remainder in MBW_SUITES; a wait the op never reaches, the mongodb
+# target behind the SKIP_RESTORE=1 its op passes, is not counted. For mariadb
+# the op minus the ceilings up to and including the source wait is held as well;
+# extending that past the source wait would sum ceilings the script reaches only
+# on the happy path. Every remainder sits at exactly its constant, so raising a
+# wait without raising the op reds.
+#
+# The errexit test reaches beyond the MBW_SUITES walkthrough waits:
+# wait_hr_ready is defined once, in examples/backups/_lib/wait-helpers.sh, for
+# every backup example, and that test runs its exit branches through the
+# helpers run-all.sh sources. hack/backup-examples-shared-helpers.bats holds it
+# to that one definition.
+#
+# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
+# own line; there is no bats `run` or `$status`, and no setup/teardown.
+# Assertions are direct shell tests that exit non-zero. A `}` at column zero
+# gets `return 0` inserted ahead of it, so the helpers below report through
+# stdout only and never through an exit status.
+#
+# Run with: hack/cozytest.sh hack/mariadb-first-boot-waits.bats
+# -----------------------------------------------------------------------------
+
+MBW_SCRIPT="examples/backups/mariadb/run-all.sh"
+MBW_CHART="packages/apps/mariadb/templates/mariadb.yaml"
+MBW_SUITE="hack/e2e-chainsaw/mariadb/chainsaw-test.yaml"
+MBW_APISERVER="pkg/cmd/server/start.go"
+# Seconds the round-trip op must keep free after the ceilings up to and
+# including the source wait. A ratchet on today's figure, not a derived bound:
+# raise it deliberately, never let it fall.
+MBW_OP_REMAINDER=870
+# How many ceilings that prefix is made of: bucket release, two bucket fields,
+# S3 preflight, source wait. Pinned exactly, because both ways of losing one shrink the sum
+# and GROW the remainder, which is the loosening direction.
+MBW_PREFIX_CEILINGS=5
+# Seconds a wait must exceed its floor by. Policy, not measurement; the header
+# says what it stands for.
+MBW_START_MARGIN=60
+# One row per suite: name | the prefix the database waits' release argument
+# starts with | the chart whose startupProbe gives a first-boot floor, or - |
+# seconds the round-trip op must keep free once every HelmRelease wait it
+# reaches, the bucket one included, is paid. The suite, op script and RD
+# paths follow from the name, and the waits are read from every
+# examples/backups/<name>/*.sh rather than a listed subset, so a wait added in
+# a new file joins both the count and the sum. The last column is a
+# ratchet on each op's remainder from before its waits were raised to clear
+# the floor, which that raise kept: raise it deliberately, never let it fall.
+MBW_SUITES='mariadb|"mariadb-|packages/apps/mariadb/templates/mariadb.yaml|900
+mongodb|"$MONGODB_|-|1200
+rabbitmq|"$RABBITMQ_|-|900
+clickhouse|"clickhouse-|-|2700'
+
+# Print one "<release-arg> <timeout>" line per wait_hr_ready call in $1 whose
+# release argument starts with $2, compared as a literal string, or every call
+# when $2 is `*`. A call that
+# passes no timeout prints "default" for it, because the helper's own fallback
+# then applies and the call site says nothing about the budget it accepted.
+# With $3 = yes the read stops at the column-zero `if` that tests
+# SKIP_RESTORE, which is where a walkthrough run with SKIP_RESTORE=1 exits. Any
+# other mention -- a default assigned early, say -- must not stop it, or the
+# waits after it drop out of the sum and the remainder grows. Comment lines
+# need no filter: both patterns are anchored at column zero.
+mbw_db_waits() {
+  awk -v p="$2" -v stop="${3:-no}" '
+        stop == "yes" && /^if[[:space:]].*SKIP_RESTORE/ { exit }
+        /^wait_hr_ready[[:space:]]/ && (p == "*" || index($2, p) == 1) {
+          print $2, ($3 == "" ? "default" : $3)
+        }' "$1"
+}
+
+mbw_suite_row() {
+  printf '%s\n' "$MBW_SUITES" | awk -F'|' -v s="$1" '$1 == s'
+}
+
+# Print how many distinct releases the "<release-arg> <timeout>" lines on
+# stdin wait for. Two waits on the source and none on the target is still two
+# waits, so the count alone would pass a walkthrough that never gates its
+# restore target.
+mbw_distinct_releases() {
+  awk '{ print $1 }' | sort -u | grep -c . || true
+}
+
+# Print every release argument wait_hr_ready is called with in $1, mariadb or
+# not. Used to show the extractor above is selecting rather than matching
+# everything.
+mbw_all_waits() {
+  grep -v '^[[:space:]]*#' "$1" \
+    | awk '/^wait_hr_ready[[:space:]]/ { print $2 }'
+}
+
+# Print the timeout, in seconds, of the first assert in each
+# `wait-helmrelease-ready` step of the Chainsaw suite $1 -- each such step holds
+# exactly one, and it is the HelmRelease gate this contract is about. Chainsaw
+# takes a Go duration, so m and s suffixes are converted and anything else is
+# printed verbatim for the caller to reject. A step that states no timeout at
+# all prints "unset" rather than nothing, the same way the script-side extractor
+# reports "default": this repo sets timeouts.assert to 5m in
+# hack/e2e-chainsaw/.chainsaw.yaml, under every floor here, so silently
+# skipping such a step would drop the worst case.
+mbw_suite_hr_waits() {
+  awk '
+    # Close the previous step first, so an untimed one is reported wherever it
+    # sits. seen is per-step, not per-file: set per file, it would hide every
+    # untimed step after the first timed one.
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]*/ {
+      if (instep && !seen) print "unset"
+      instep = 0
+    }
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]*wait-helmrelease-ready[[:space:]]*$/ {
+      instep = 1; seen = 0; next
+    }
+    instep && !seen && /^[[:space:]]*timeout:[[:space:]]*[^[:space:]]+[[:space:]]*$/ {
+      sub(/^[[:space:]]*timeout:[[:space:]]*/, "")
+      sub(/[[:space:]]*$/, "")
+      if ($0 ~ /^[0-9]+m$/)      { sub(/m$/, ""); print $0 * 60 }
+      else if ($0 ~ /^[0-9]+s$/) { sub(/s$/, ""); print $0 + 0 }
+      else                       { print }
+      seen = 1
+    }
+    END { if (instep && !seen) print "unset" }
+  ' "$1"
+}
+
+# Print, in seconds, the Install.Timeout cozystack-api stamps on every
+# generated HelmRelease. A waiter that expires at the same moment gives up
+# exactly when the install records why it failed, so this is the second floor
+# every wait here has to beat.
+mbw_install_timeout() {
+  awk '/HelmReleaseInstallTimeout:[[:space:]]*"[0-9]+[ms]"/ {
+         match($0, /"[0-9]+[ms]"/)
+         v = substr($0, RSTART + 1, RLENGTH - 2)
+         if (v ~ /m$/) { sub(/m$/, "", v); print v * 60 } else { sub(/s$/, "", v); print v + 0 }
+         exit
+       }' "$1"
+}
+
+# Print "ok" when a wait of $1 seconds is at least MBW_START_MARGIN above a
+# floor of $2, "low" otherwise.
+# Echoes rather than returning a status, like every helper here: cozytest
+# injects `return 0` before a `}` at column zero, which would make an
+# exit-status verdict always succeed.
+#
+# Split out so the comparison itself can be pinned. Inline it is not
+# pinnable: every wait in the tree clears every floor, so a floor operand
+# replaced by 0 leaves the live values green while the guard accepts any
+# positive number. As a helper it takes fixtures.
+mbw_wait_clears_floor() {
+  if [ "$1" -ge $(( $2 + MBW_START_MARGIN )) ]; then printf 'ok\n'; else printf 'low\n'; fi
+}
+
+# Print the chart's first-boot startup budget for a failureThreshold of $1.
+# initialDelaySeconds=20 and periodSeconds=10 are the operator's probe defaults,
+# which the chart deliberately does not override; both probe shapes carry them,
+# so the arithmetic holds whichever the operator picks. Extracted because the
+# two call sites below would otherwise each carry their own copy of it, and a
+# budget that differs between them is worse than one that is wrong in both.
+mbw_startup_budget() {
+  printf '%s\n' "$(( 20 + ($1 - 1) * 10 ))"
+}
+
+# Print the seconds budget of every wait in $1 that runs up to and including the
+# first mariadb wait_hr_ready, one per line. These are the ceilings the Chainsaw
+# script op has to contain before the source instance can even fail: the bucket
+# release, the two bucket fields, the S3 preflight and the source wait itself.
+# Continuation lines are joined first, because two of the calls wrap.
+#
+# The waits are anchored at column zero: the flow of this script runs
+# unindented, while an indented wait sits inside a helper definition --
+# wait_app_grant_ready wraps one whose budget arrives in a variable, and reading
+# it as part of the flow would count a ceiling that never runs there. The S3
+# preflight is read at any indent, because it runs in the flow under the gate
+# the Chainsaw op sets and is defined in a library, not here.
+#
+# A call whose last field is not a bare integer prints `skip` rather than
+# nothing. Dropping it silently would shrink the sum, and a smaller sum makes
+# the remainder guard MORE permissive -- the one direction a ratchet must never
+# drift in. The caller treats any `skip` as a failure, so a wait that starts
+# taking its budget from a variable or a default stops the contract instead of
+# quietly loosening it.
+mbw_prefix_ceilings() {
+  grep -v '^[[:space:]]*#' "$1" \
+    | awk '{ if (sub(/\\$/, "")) { buf = buf $0 " "; next }
+             line = buf $0; buf = ""
+             # The split below names an explicit regex separator rather than
+             # using the default one, so trailing whitespace becomes an empty
+             # final field and a perfectly literal budget reads as absent. That
+             # is a false red on the kind of edit an editor makes by itself,
+             # and a false red is cheapest to green by deleting the guard.
+             sub(/[[:space:]]+$/, "", line)
+             if (line ~ /^wait_hr_ready|^wait_for_field|^[[:space:]]*cozy_backup_access_preflight[[:space:]]/) {
+               n = split(line, f, /[[:space:]]+/)
+               if (f[n] ~ /^[0-9]+$/) print f[n]; else print "skip"
+             }
+             if (line ~ /^wait_hr_ready[[:space:]]+"mariadb-/) exit
+           }'
+}
+
+# Print the seconds budget of the Chainsaw `- script:` op in $1 that runs the
+# round-trip script $2, identified by what it RUNS rather than by how big it is.
+# The mariadb suite has three ops with a minute timeout -- an 8m pre-clean,
+# this one, and an 8m cleanup -- and taking the largest looks equivalent while
+# the round-trip op is the largest. It is not: raising an unrelated op past it
+# silently moves the ratchet onto the wrong number, in the loosening direction,
+# and nothing reds.
+# Selecting on the script it invokes cannot drift that way, because the identity
+# does not depend on the values being compared.
+#
+# Comment lines are excluded from that match. The full path written into a
+# comment inside an EARLIER op would move the measurement onto that op, and the
+# ops ahead of each round-trip are far shorter than it, so the remainder
+# would collapse and the tests below would fail loudly: the exclusion
+# prevents a false red, not a silent pass.
+mbw_suite_script_op() {
+  awk -v s="$2" '
+       /^[[:space:]]*-[[:space:]]+script:[[:space:]]*$/ { inop = 1; t = ""; next }
+       inop && /^[[:space:]]*timeout:[[:space:]]*[0-9]+m[[:space:]]*$/ {
+         match($0, /[0-9]+/); t = substr($0, RSTART, RLENGTH) * 60; next
+       }
+       inop && !/^[[:space:]]*#/ && index($0, s) {
+         if (t != "") { print t; exit }
+       }
+       /^[[:space:]]*-[[:space:]]+[a-z]/ && !/script:/ { inop = 0 }
+      ' "$1"
+}
+
+# Print "yes" when the `- script:` op in $1 runs $2 with SKIP_RESTORE=1 on the
+# same command, continuation lines joined; "no" otherwise. Read from the op
+# rather than listed per suite, so an op that stops passing it counts the
+# waits past the skip again and its ratchet reds. Another command in the op
+# carrying it must not count: that would drop waits the script still runs.
+mbw_op_skips_restore() {
+  awk -v s="$2" '
+       function close_op() {
+         if (inop && hit) { print (skip ? "yes" : "no"); done = 1; exit }
+         inop = 0
+       }
+       /^[[:space:]]*-[[:space:]]+script:[[:space:]]*$/ { close_op(); inop = 1; hit = 0; skip = 0; next }
+       /^[[:space:]]*-[[:space:]]+[a-z]/ && !/script:/ { close_op() }
+       inop && !/^[[:space:]]*#/ {
+         if (sub(/\\[[:space:]]*$/, "")) { buf = buf $0 " "; next }
+         line = buf $0; buf = ""
+         if (index(line, s)) {
+           hit = 1
+           if (line ~ /(^|[^A-Za-z0-9_])SKIP_RESTORE=1([^0-9]|$)/) skip = 1
+         }
+       }
+       END { if (!done) { close_op(); if (!done) print "no" } }
+      ' "$1"
+}
+
+# Print the larger of the two floors a wait has to beat: $1 the chart's own
+# first-boot startup budget, $2 the install timeout the generated release
+# carries. Which of them binds is not fixed. Today the install timeout does, and
+# the startup budget would only take over if failureThreshold grew past it, so
+# neither may be assumed to be the operative one.
+mbw_compute_floor() {
+  if [ "$1" -ge "$2" ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi
+}
+
+# Print the failureThreshold the chart sets on the MariaDB CR's startupProbe.
+# Scoped to the startupProbe block by INDENTATION, so a threshold added to some
+# other probe later cannot be mistaken for this one. Closing the block on "the
+# next key that is not failureThreshold" would instead close it on a sibling:
+# adding periodSeconds under startupProbe is a legitimate chart edit, and it
+# would leave this returning nothing and the contract red for the wrong reason.
+mbw_failure_threshold() {
+  awk '
+    /^[[:space:]]*startupProbe:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/); blockindent = RLENGTH; inblock = 1; next
+    }
+    inblock && /[^[:space:]]/ {
+      match($0, /^[[:space:]]*/)
+      if (RLENGTH <= blockindent) { inblock = 0 }
+    }
+    inblock && /^[[:space:]]*failureThreshold:[[:space:]]*[0-9]+[[:space:]]*$/ {
+      sub(/^[[:space:]]*failureThreshold:[[:space:]]*/, "")
+      sub(/[[:space:]]*$/, "")
+      print
+      exit
+    }
+  ' "$1"
+}
+
+# Print the first-boot budget the chart's own comment says its threshold buys,
+# in seconds. The chart states it as "A threshold of 30 lifts the budget to
+# 310s", one sentence below a paragraph explaining that a shorter budget leaves
+# the datadir half-initialised and the pod crash-looping with no path back.
+# Reading the requirement out of the chart keeps it derived: raise the
+# threshold and update the sentence, and both sides move together.
+mbw_documented_budget() {
+  # Comment markers stripped and lines joined before matching, because the
+  # sentence is wrapped: "lifts the" ends one line and "budget to 310s" starts
+  # the next. A line-oriented read finds nothing and reports the chart as
+  # silent, which is the loudest possible way to be wrong about a file that
+  # does say it.
+  sed 's/^[[:space:]]*#[[:space:]]*//' "$1" \
+    | tr '\n' ' ' | tr -s ' ' \
+    | grep -o 'lifts the budget to [0-9][0-9]*s' \
+    | head -1 | tr -cd '0-9'
+}
+
+# Print, one per line, every reason the database waits of suite $1 fail the
+# floor contract; print nothing when they pass. The waits must be exactly two,
+# each a literal clearing the floor by MBW_START_MARGIN, and the suite's RD must
+# not move the floor off the server default. Every wait counts here, reached by
+# the op or not: a wait the op skips still runs in the walkthrough on its own.
+# $2 replaces examples/backups/$1 as the directory the waits are read from and
+# $3 the RD path, so a fixture can drive the whole check.
+mbw_suite_floor_errors() {
+  mbw_row=$(mbw_suite_row "$1")
+  [ -n "$mbw_row" ] || { printf 'no MBW_SUITES row for %s\n' "$1"; return 0; }
+  mbw_prefix=$(printf '%s\n' "$mbw_row" | cut -d'|' -f2)
+  mbw_chart=$(printf '%s\n' "$mbw_row" | cut -d'|' -f3)
+  mbw_rd=${3:-packages/system/$1-rd/cozyrds/$1.yaml}
+  # grep exits non-zero on a file it cannot open, so a moved RD would send both
+  # checks below down their false branch and pass having read nothing.
+  if [ ! -f "$mbw_rd" ]; then
+    printf '%s not found, so the floor cannot be checked against a per-application override\n' "$mbw_rd"
+  else
+    if grep -q "release.cozystack.io/helm-install-timeout" "$mbw_rd"; then
+      printf '%s sets a per-application install timeout; the floor here derives from the server default and must be taught to read the override\n' "$mbw_rd"
+    fi
+    # With waiting disabled the install no longer spans the app coming up, so
+    # the premise is gone rather than merely mis-numbered.
+    if grep -q "release.cozystack.io/helm-install-disable-wait" "$mbw_rd"; then
+      printf '%s disables the install wait; HelmRelease readiness no longer spans the app coming up and this contract no longer describes it\n' "$mbw_rd"
+    fi
+  fi
+  mbw_install=$(mbw_install_timeout "$MBW_APISERVER")
+  mbw_floor=$mbw_install
+  mbw_why="release install timeout ${mbw_install}s"
+  if [ "$mbw_chart" != "-" ]; then
+    mbw_budget=$(mbw_startup_budget "$(mbw_failure_threshold "$mbw_chart")")
+    mbw_floor=$(mbw_compute_floor "$mbw_budget" "$mbw_install")
+    mbw_why="startup budget ${mbw_budget}s from $mbw_chart, $mbw_why"
+  fi
+  mbw_waits=
+  for mbw_f in "${2:-examples/backups/$1}"/*.sh; do
+    mbw_waits="$mbw_waits$(mbw_db_waits "$mbw_f" "$mbw_prefix")
+"
+  done
+  mbw_n=$(printf '%s' "$mbw_waits" | grep -c . || true)
+  if [ "$mbw_n" -ne 2 ]; then
+    printf 'expected exactly 2 %s waits with a release argument starting %s in %s/*.sh, found %s:\n%s\n' \
+      "$1" "$mbw_prefix" "${2:-examples/backups/$1}" "$mbw_n" "$mbw_waits"
+  fi
+  mbw_nd=$(printf '%s' "$mbw_waits" | mbw_distinct_releases)
+  if [ "$mbw_nd" -ne 2 ]; then
+    printf 'the %s waits name %s distinct releases, expected 2 -- the source and the restore target each need their own:\n%s\n' \
+      "$1" "$mbw_nd" "$mbw_waits"
+  fi
+  mbw_ifs=$IFS
+  IFS='
+'
+  for mbw_line in $mbw_waits; do
+    IFS=$mbw_ifs
+    mbw_name=${mbw_line% *}
+    mbw_t=${mbw_line##* }
+    case "$mbw_t" in
+      ''|*[!0-9]*)
+        printf 'wait_hr_ready %s states no literal timeout (got %s); the budget must be at least %ss\n' \
+          "$mbw_name" "$mbw_t" "$(( mbw_floor + MBW_START_MARGIN ))"
+        continue
+        ;;
+    esac
+    if [ "$(mbw_wait_clears_floor "$mbw_t" "$mbw_floor")" != "ok" ]; then
+      printf 'wait_hr_ready %s allows %ss; the floor is %ss (%s) and a wait must exceed it by MBW_START_MARGIN=%ss\n' \
+        "$mbw_name" "$mbw_t" "$mbw_floor" "$mbw_why" "$MBW_START_MARGIN"
+    fi
+  done
+  IFS=$mbw_ifs
+}
+
+# Print every reason the round-trip op of suite $1 fails to keep its MBW_SUITES
+# remainder once the HelmRelease waits it reaches are paid; print nothing when
+# it keeps it. A wait past a SKIP_RESTORE exit the op takes is not reached. The
+# bucket wait counts: an op raised together with it must keep the remainder,
+# not gain the raise as slack. $2 and $3 replace the suite file and the
+# examples/backups/$1 directory, so a fixture can drive the whole check.
+mbw_suite_slack_errors() {
+  mbw_row=$(mbw_suite_row "$1")
+  [ -n "$mbw_row" ] || { printf 'no MBW_SUITES row for %s\n' "$1"; return 0; }
+  mbw_want=$(printf '%s\n' "$mbw_row" | cut -d'|' -f4)
+  mbw_suite=${2:-hack/e2e-chainsaw/$1/chainsaw-test.yaml}
+  mbw_sdir=${3:-examples/backups/$1}
+  mbw_script="$mbw_sdir/run-all.sh"
+  mbw_op=$(mbw_suite_script_op "$mbw_suite" "$mbw_script")
+  case "$mbw_op" in
+    ''|*[!0-9]*)
+      printf 'no timeout found on the op in %s that runs %s (got %s)\n' "$mbw_suite" "$mbw_script" "$mbw_op"
+      return 0
+      ;;
+  esac
+  mbw_skip=$(mbw_op_skips_restore "$mbw_suite" "$mbw_script")
+  mbw_waits=
+  for mbw_f in "$mbw_sdir"/*.sh; do
+    mbw_waits="$mbw_waits$(mbw_db_waits "$mbw_f" '*' "$mbw_skip")
+"
+  done
+  # A bucket wait that stops being read -- indented into an `if`, say --
+  # shrinks the sum and widens the slack in silence.
+  mbw_nb=$(printf '%s' "$mbw_waits" | grep -c '^"bucket-' || true)
+  if [ "$mbw_nb" -ne 1 ]; then
+    printf 'expected the %s op to reach exactly 1 bucket HelmRelease wait, found %s:\n%s\n' "$1" "$mbw_nb" "$mbw_waits"
+    return 0
+  fi
+  mbw_sum=0
+  mbw_list=
+  for mbw_t in $(printf '%s' "$mbw_waits" | awk '{ print $NF }'); do
+    case "$mbw_t" in
+      *[!0-9]*)
+        printf 'a %s wait the op reaches states no literal budget (%s); the sum would shrink, which loosens this guard\n' "$1" "$mbw_t"
+        return 0
+        ;;
+    esac
+    mbw_sum=$(( mbw_sum + mbw_t ))
+    mbw_list="$mbw_list $mbw_t"
+  done
+  mbw_slack=$(( mbw_op - mbw_sum ))
+  if [ "$mbw_slack" -lt "$mbw_want" ]; then
+    printf 'the %s round-trip op (%ss) leaves %ss once the HelmRelease waits it reaches (%s, SKIP_RESTORE=1 passed: %s) are paid\n' \
+      "$1" "$mbw_op" "$mbw_slack" "${mbw_list# }" "$mbw_skip"
+    printf 'that is below the %ss MBW_SUITES reserves for the rest of the flow; a wait was raised or the op was lowered\n' "$mbw_want"
+    printf 'the fix is the op in the same change -- not lowering the remainder -- or a late failure is SIGKILLed instead of reported\n'
+  fi
+}
+
+@test "the chart still declares the startup failure threshold the budget derives from" {
+    # Without this the budget below silently becomes 20 + (0-1)*10 = 10 and
+    # every wait passes it. The threshold is what the whole contract hangs on,
+    # so its absence has to be a failure and not a default.
+    mbw_threshold=$(mbw_failure_threshold "$MBW_CHART")
+    case "$mbw_threshold" in
+      ''|*[!0-9]*)
+        echo "no numeric startupProbe.failureThreshold found in $MBW_CHART (got '${mbw_threshold}')" >&2
+        exit 1
+        ;;
+    esac
+    # Not a bare lower bound: a threshold of 3 is positive, and the chart's own
+    # comment describes it as leaving the datadir half-initialised and the pod
+    # crash-looping permanently. The floor comparison cannot see that either,
+    # because max(40, 600) is still 600 and every wait clears it.
+    # The requirement comes from the chart rather than from a literal here.
+    mbw_want=$(mbw_documented_budget "$MBW_CHART")
+    case "$mbw_want" in
+      ''|*[!0-9]*)
+        echo "$MBW_CHART no longer states what budget its threshold buys" >&2
+        echo "expected a sentence of the form 'lifts the budget to <N>s'; without it this contract cannot tell a tuned threshold from a catastrophic one" >&2
+        exit 1
+        ;;
+    esac
+    mbw_budget=$(mbw_startup_budget "$mbw_threshold")
+    [ "$mbw_budget" -ge "$mbw_want" ] || {
+        echo "startupProbe.failureThreshold ${mbw_threshold} gives a ${mbw_budget}s first-boot budget, under the ${mbw_want}s the chart states it needs" >&2
+        echo "the chart's comment explains what a short budget costs: a datadir with system tables but no root grant, and a pod that crash-loops with no path back" >&2
+        exit 1
+    }
+}
+
+@test "the install-timeout extractor converts its unit rather than assuming minutes" {
+    # start.go carries "10m" today, so the seconds arm never runs against the
+    # tree. A default written as "600s" read as 600 minutes would raise the
+    # floor thirtyfold and red every wait; written the other way, a minutes
+    # value read as seconds would drop it to a number every wait clears. Neither
+    # is reachable from live values, so both are fixtures.
+    mbw_tmp=$(mktemp)
+    printf 'HelmReleaseInstallTimeout: "600s",\n' > "$mbw_tmp"
+    mbw_got=$(mbw_install_timeout "$mbw_tmp")
+    rm -f "$mbw_tmp"
+    [ "$mbw_got" = "600" ] || { echo "600s gave '${mbw_got}', expected 600" >&2; exit 1; }
+
+    mbw_tmp=$(mktemp)
+    printf 'HelmReleaseInstallTimeout: "10m",\n' > "$mbw_tmp"
+    mbw_got=$(mbw_install_timeout "$mbw_tmp")
+    rm -f "$mbw_tmp"
+    [ "$mbw_got" = "600" ] || { echo "10m gave '${mbw_got}', expected 600" >&2; exit 1; }
+}
+
+@test "the api server still declares the install timeout the floor derives from" {
+    # The second half of the floor. Absent or unreadable, max() below collapses
+    # to the startup budget alone and the contract silently stops pinning the
+    # reason both call sites give for their current values.
+    mbw_install=$(mbw_install_timeout "$MBW_APISERVER")
+    case "$mbw_install" in
+      ''|*[!0-9]*)
+        echo "no numeric HelmReleaseInstallTimeout default found in $MBW_APISERVER (got '${mbw_install}')" >&2
+        exit 1
+        ;;
+    esac
+    [ "$mbw_install" -ge 60 ] || {
+        echo "HelmReleaseInstallTimeout default parsed as ${mbw_install}s, which is too small to be the real default; the extractor is probably reading the wrong literal" >&2
+        exit 1
+    }
+}
+
+@test "a wait clears the floor only by the start margin" {
+    # The comparison the whole contract ends in. Every wait in the tree clears
+    # every floor, so this is another place where live values cannot tell a
+    # correct implementation from a broken one; fixtures can. The literals
+    # assume the 60s policy margin, so changing MBW_START_MARGIN means
+    # restating them here on purpose.
+    [ "$MBW_START_MARGIN" = "60" ] || { echo "MBW_START_MARGIN is '${MBW_START_MARGIN}', the fixtures below are written for 60" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 660 600)
+    [ "$mbw_got" = "ok" ] || { echo "660 vs 600 gave '${mbw_got}', expected ok: the margin is met exactly" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 659 600)
+    [ "$mbw_got" = "low" ] || { echo "659 vs 600 gave '${mbw_got}', expected low: one second short of the margin" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 601 600)
+    [ "$mbw_got" = "low" ] || { echo "601 vs 600 gave '${mbw_got}', expected low: a second over the floor is not the margin" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 600 600)
+    [ "$mbw_got" = "low" ] || { echo "600 vs 600 gave '${mbw_got}', expected low: equal is not enough" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 599 600)
+    [ "$mbw_got" = "low" ] || { echo "599 vs 600 gave '${mbw_got}', expected low" >&2; exit 1; }
+    mbw_got=$(mbw_wait_clears_floor 1 600)
+    [ "$mbw_got" = "low" ] || { echo "1 vs 600 gave '${mbw_got}', expected low; a floor operand replaced by 0 would say ok here" >&2; exit 1; }
+}
+
+@test "the startup budget is the probe arithmetic and not some other formula" {
+    # Fixtures for the same reason as the two below. With the live threshold of
+    # 30 the budget is 310, the floor is max(310, 600) = 600 either way, and
+    # both 660s waits clear it -- so `20 +` silently becoming `20 *` (580) or
+    # the -1 being dropped (320) leaves every test in this file green while the
+    # number the header explains is no longer the number computed.
+    mbw_got=$(mbw_startup_budget 30)
+    [ "$mbw_got" = "310" ] || { echo "budget(30) = ${mbw_got}, expected 310 = 20 + 29*10" >&2; exit 1; }
+    mbw_got=$(mbw_startup_budget 1)
+    [ "$mbw_got" = "20" ] || { echo "budget(1) = ${mbw_got}, expected 20: one failure allowed is initialDelaySeconds alone" >&2; exit 1; }
+    mbw_got=$(mbw_startup_budget 2)
+    [ "$mbw_got" = "30" ] || { echo "budget(2) = ${mbw_got}, expected 30; a dropped -1 would say 40 here" >&2; exit 1; }
+    mbw_got=$(mbw_startup_budget 100)
+    [ "$mbw_got" = "1010" ] || { echo "budget(100) = ${mbw_got}, expected 1010; this is the case where the budget half becomes the binding floor" >&2; exit 1; }
+}
+
+@test "the floor is the larger of the two bounds, whichever way they are ordered" {
+    # The only arithmetic the whole contract rests on, and the one nothing else
+    # exercises: with the real values 310 and 600 both waits clear either bound,
+    # so a max silently turned into a min would go unnoticed and the guard would
+    # start measuring from 310 instead of 600. Fixtures, because the tree cannot
+    # currently produce a case where the two disagree in the other direction.
+    mbw_got=$(mbw_compute_floor 310 600)
+    [ "$mbw_got" = "600" ] || { echo "floor(310,600) = ${mbw_got}, expected the larger 600" >&2; exit 1; }
+    mbw_got=$(mbw_compute_floor 600 310)
+    [ "$mbw_got" = "600" ] || { echo "floor(600,310) = ${mbw_got}, expected the larger 600" >&2; exit 1; }
+    mbw_got=$(mbw_compute_floor 910 600)
+    [ "$mbw_got" = "910" ] || { echo "floor(910,600) = ${mbw_got}, expected the larger 910; a startup budget past the install timeout must take over" >&2; exit 1; }
+    mbw_got=$(mbw_compute_floor 600 600)
+    [ "$mbw_got" = "600" ] || { echo "floor(600,600) = ${mbw_got}, expected 600" >&2; exit 1; }
+}
+
+@test "the startup threshold is read from the startupProbe block and no other" {
+    # Third helper in the same class as the two above. The chart carries exactly
+    # one failureThreshold today, so a first-match read returns the same 30 and
+    # every test that reads the TREE stays green with the indentation scoping
+    # deleted. The fixture below is what makes that loss red, which is the whole
+    # reason it is a fixture and not a tree read.
+    mbw_got=$(mbw_failure_threshold - <<'MBW_FIXTURE'
+        livenessProbe:
+          failureThreshold: 3
+        startupProbe:
+          failureThreshold: 30
+MBW_FIXTURE
+)
+    [ "$mbw_got" = "30" ] || { echo "a livenessProbe threshold ahead of the startupProbe gave '${mbw_got}', expected 30" >&2; exit 1; }
+
+    mbw_got=$(mbw_failure_threshold - <<'MBW_FIXTURE'
+        startupProbe:
+          periodSeconds: 10
+          failureThreshold: 30
+MBW_FIXTURE
+)
+    [ "$mbw_got" = "30" ] || { echo "a sibling key inside startupProbe gave '${mbw_got}', expected 30; closing the block on the next non-failureThreshold key would report nothing here" >&2; exit 1; }
+
+    mbw_got=$(mbw_failure_threshold - <<'MBW_FIXTURE'
+        startupProbe:
+          periodSeconds: 10
+        livenessProbe:
+          failureThreshold: 3
+MBW_FIXTURE
+)
+    [ -z "$mbw_got" ] || { echo "a startupProbe carrying no threshold gave '${mbw_got}', expected nothing so the guard above fires instead of a neighbouring probe's number being used" >&2; exit 1; }
+}
+
+@test "the prefix extractor reports a wait it cannot parse instead of dropping it" {
+    # The `skip` branch has no live trigger: every prefix call in the script
+    # states a literal today, so removing the branch leaves the whole file green.
+    # It guards a future state, and a guard against a future state can only be
+    # pinned by a fixture. The direction matters -- a dropped ceiling shrinks the
+    # sum and LOOSENS the remainder ratchet, so silence here is worse than a
+    # false red.
+    mbw_tmp=$(mktemp)
+    {
+        printf 'wait_hr_ready "bucket-x" 300\n'
+        printf 'wait_for_field foo bar baz qux "$NAMESPACE" "$some_variable"\n'
+        printf 'wait_hr_ready "mariadb-src" 660\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_prefix_ceilings "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = "300 skip 660 " ] || {
+        echo "expected '300 skip 660 ', got: '${mbw_out}'" >&2
+        exit 1
+    }
+
+    # And an indented call belongs to a helper definition, not to the flow.
+    mbw_tmp=$(mktemp)
+    {
+        printf 'wait_app_grant_ready() {\n'
+        printf '    wait_for_field grants.k8s.mariadb.com "$cr" x y "$ns" "$timeout"\n'
+        printf '}\n'
+        printf 'wait_hr_ready "bucket-x" 300\n'
+        printf 'wait_hr_ready "mariadb-src" 660\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_prefix_ceilings "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = "300 660 " ] || {
+        echo "an indented call inside a helper was read as flow: '${mbw_out}', expected '300 660 '" >&2
+        exit 1
+    }
+
+    # The S3 preflight is the exception: it runs in the flow, indented only
+    # because it sits under the COZY_E2E_BACKUP_PREFLIGHT gate the Chainsaw op
+    # sets, so its ceiling is part of what the op has to contain.
+    mbw_tmp=$(mktemp)
+    {
+        printf 'wait_hr_ready "bucket-x" 300
+'
+        printf 'if [[ "${COZY_E2E_BACKUP_PREFLIGHT:-0}" == "1" ]]; then
+'
+        printf '    cozy_backup_access_preflight "$NAMESPACE" "bucket-x-u" 90
+'
+        printf 'fi
+'
+        printf 'wait_hr_ready "mariadb-src" 660
+'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_prefix_ceilings "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = "300 90 660 " ] || {
+        echo "the gated S3 preflight was dropped from the prefix: '${mbw_out}', expected '300 90 660 '" >&2
+        exit 1
+    }
+}
+
+@test "the op is identified by the script it runs, not by being the largest" {
+    # The live tree cannot separate the two rules: the round-trip op IS the
+    # largest today, so selecting on size and selecting on identity agree, and a
+    # fixture is the only thing that can tell them apart. The fixture puts a
+    # bigger unrelated op first, which is the only state in which selecting by
+    # size and selecting by identity disagree.
+    mbw_tmp=$(mktemp)
+    {
+        printf '  - script:\n      timeout: 60m\n      content: |\n        echo unrelated\n'
+        printf '  - script:\n      timeout: 42m\n      content: |\n        examples/backups/mariadb/run-all.sh\n'
+    } > "$mbw_tmp"
+    mbw_got=$(mbw_suite_script_op "$mbw_tmp" examples/backups/mariadb/run-all.sh)
+    rm -f "$mbw_tmp"
+    [ "$mbw_got" = "2520" ] || {
+        echo "with a larger unrelated op present the helper returned '${mbw_got}', expected 2520" >&2
+        exit 1
+    }
+
+    # And it must not return the unrelated op's budget when the round-trip op is
+    # absent: reporting a number for a suite that does not run the script would
+    # make the ratchet measure something with no relation to it at all.
+    mbw_tmp=$(mktemp)
+    printf '  - script:\n      timeout: 60m\n      content: |\n        echo unrelated\n' > "$mbw_tmp"
+    mbw_got=$(mbw_suite_script_op "$mbw_tmp" examples/backups/mariadb/run-all.sh)
+    rm -f "$mbw_tmp"
+    [ -z "$mbw_got" ] || {
+        echo "with no round-trip op the helper returned '${mbw_got}', expected nothing" >&2
+        exit 1
+    }
+
+    # The SKIP_RESTORE reading, one fixture per branch of the reader. Only
+    # mongodb passes it, on the same line as the script, so the live tree
+    # exercises none of the refusals.
+    mbw_tmp=$(mktemp)
+    mbw_fail=
+    mbw_sk() {
+        mbw_want=$1 mbw_why=$2; shift 2
+        printf '%s\n' "$@" > "$mbw_tmp"
+        mbw_got=$(mbw_op_skips_restore "$mbw_tmp" x/run-all.sh)
+        [ "$mbw_got" = "$mbw_want" ] || mbw_fail="$mbw_fail
+${mbw_why}: got '${mbw_got}', expected ${mbw_want}"
+    }
+    mbw_sk yes 'skip on the command that runs the script' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=1 x/run-all.sh'
+    mbw_sk yes 'skip on a continued line of that command' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=1 \' '          x/run-all.sh'
+    mbw_sk no 'skip on another command in the op' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=1 other' '        x/run-all.sh'
+    mbw_sk no 'skip in a comment' \
+        '  - script:' '      content: |' '        # SKIP_RESTORE=1 x/run-all.sh' '        x/run-all.sh'
+    mbw_sk no 'a longer variable name ending in SKIP_RESTORE' \
+        '  - script:' '      content: |' '        MY_SKIP_RESTORE=1 x/run-all.sh'
+    mbw_sk no 'a value other than 1' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=10 x/run-all.sh'
+    mbw_sk no 'skip only in a later op running the script' \
+        '  - script:' '      content: |' '        x/run-all.sh' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=1 x/run-all.sh'
+    mbw_sk no 'skip only in a later non-script item' \
+        '  - script:' '      content: |' '        x/run-all.sh' \
+        '  - description: cleanup' '    content: |' '        SKIP_RESTORE=1 x/run-all.sh'
+    mbw_sk no 'no op runs the script' \
+        '  - script:' '      content: |' '        SKIP_RESTORE=1 other'
+    rm -f "$mbw_tmp"
+    [ -z "$mbw_fail" ] || { printf '%s\n' "$mbw_fail" >&2; exit 1; }
+}
+
+@test "the timeout dump survives the errexit its own caller sets" {
+    # The only behavioural test here, and it exists because a static check
+    # cannot see this class at all. wait_hr_ready's timeout branch reads the
+    # release into variables, and under the caller's `set -e` an assignment
+    # takes its command substitution's exit status, so a read that fails kills
+    # the script AT the assignment: no dump, no return, and the diagnostic dies
+    # in the case it was added for.
+    #
+    # Run in a subshell with the SAME options run-all.sh sets. A weaker set --
+    # `set -u` without errexit, say -- cannot observe this at all: the failing
+    # assignment is only fatal when errexit is live, so a check that omits it
+    # reports the branch working while production dies at that line.
+    #
+    # Each arm stubs kubectl for one of the answers the branch must tell apart,
+    # and discriminates on the QUERY rather than answering everything alike: a
+    # stub that returns the same string to every call makes the conditions dump
+    # emit it too, and an assertion on it would then pass with the branch it
+    # names deleted.
+    # Sourced the way run-all.sh sources it, so the shared body is reached
+    # through the walkthrough's own helpers rather than loaded directly.
+    for mbw_helper in examples/backups/mariadb/00-helpers.sh; do
+    # Run under bash EXPLICITLY, not under the runner's shell. run-all.sh and
+    # the helpers are #!/bin/bash; cozytest.sh is #!/bin/sh and sources this
+    # file, so on the CI runner the body would execute under dash, where
+    # `set -o pipefail` is an illegal option and the helper's `local x=()` is a
+    # parse error. On macOS /bin/sh is bash, so the wrong-interpreter version
+    # runs green locally and proves nothing -- which is the same defect this
+    # test exists to catch, one level up.
+    #
+    # First arm: kubectl cannot answer at all. Its own message has to reach the
+    # output, and the branch must not report the release as absent, because it
+    # does not know that.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() { echo "the server is currently unable to handle the request" >&2; return 1; }
+        wait_hr_ready "nosuch" 0 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"could not look up HelmRelease/nosuch"*"unable to handle the request"*) ;;
+      *)
+        echo "$mbw_helper: a kubectl that cannot answer is not reported as such, with its own message" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+    case "$mbw_out" in
+      *"never appeared"*|*"(none recorded)"*)
+        echo "$mbw_helper: a kubectl that cannot answer is reported as a verdict about the release" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Second arm: kubectl answers, and the release is not there. The stub
+    # answers as kubectl does, NotFound and exit 1 unless --ignore-not-found is
+    # passed, so a lookup that drops the flag reads as a failed one here too,
+    # and prints a warning on stderr, which must not read as a release found.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() {
+            case "$*" in
+              *--ignore-not-found*) echo "Warning: a notice on stderr" >&2; return 0 ;;
+            esac
+            echo "Error from server (NotFound): helmreleases \"nosuch\" not found" >&2
+            return 1
+        }
+        wait_hr_ready "nosuch" 0 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"HelmRelease/nosuch never appeared in unit"*) ;;
+      *)
+        echo "$mbw_helper: an absent release is not reported as never having appeared" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Third arm: the release was there and is gone by the deadline, which is
+    # not "never appeared". The stub reads the helper's own `elapsed` through
+    # bash's dynamic scoping, because the lookup runs in a command substitution
+    # and a counter the stub kept for itself would not survive it.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        sleep() { :; }
+        kubectl() {
+            case "$*" in
+              *"-o name"*) [ "$elapsed" -eq 0 ] && echo "helmrelease.helm.toolkit.fluxcd.io/nosuch" ;;
+            esac
+            return 0
+        }
+        wait_hr_ready "nosuch" 5 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"HelmRelease/nosuch was deleted from unit"*) ;;
+      *)
+        echo "$mbw_helper: a release deleted while waiting is not reported as deleted" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Fourth arm: the release was there all along and only the last lookup
+    # failed. That failure is reported, and the dump still runs, because it is
+    # what the release has to say.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        sleep() { :; }
+        kubectl() {
+            case "$*" in
+              *"-o name"*)
+                if [ "$elapsed" -eq 0 ]; then echo "helmrelease.helm.toolkit.fluxcd.io/nosuch"; return 0; fi
+                echo "connection reset by peer" >&2; return 1 ;;
+              *.reason*) printf "  Ready=False (Progressing): install in progress\n" ;;
+            esac
+            return 0
+        }
+        wait_hr_ready "nosuch" 5 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"connection reset by peer"*"Ready=False (Progressing)"*) ;;
+      *)
+        echo "$mbw_helper: a failed last lookup on a release seen earlier skips the dump" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Fifth arm: the release exists and has no history yet. kubectl defaults
+    # --allow-missing-template-keys to true, so the history read prints nothing
+    # and exits 0, and the branch has to say so rather than print a blank.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() {
+            case "$*" in
+              *"-o name"*) echo "helmrelease.helm.toolkit.fluxcd.io/nosuch" ;;
+            esac
+            return 0
+        }
+        wait_hr_ready "nosuch" 0 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"(none recorded)"*) ;;
+      *)
+        echo "$mbw_helper: an existing release with empty history did not reach the history line" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Sixth arm: the release exists and the history read fails. That is not
+    # "none recorded", and kubectl's own message has to reach the output.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() {
+            case "$*" in
+              *"-o name"*) echo "helmrelease.helm.toolkit.fluxcd.io/nosuch" ;;
+              *status.history*) echo "history read refused" >&2; return 1 ;;
+            esac
+            return 0
+        }
+        wait_hr_ready "nosuch" 0 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"history read refused"*"history: kubectl could not read it"*) ;;
+      *)
+        echo "$mbw_helper: a failed history read is not reported as one, with kubectl's message" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Seventh arm: history PRESENT. Every arm above lands outside the printf that
+    # actually emits the history, so without this one the whole conditional
+    # could be replaced by the bare "(none recorded)" line with every test here
+    # still green.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() {
+            case "$*" in
+              *"-o name"*) echo "helmrelease.helm.toolkit.fluxcd.io/nosuch" ;;
+              *status.history*) printf "  history: deployed 1.2.3 2026-01-01T00:00:00Z\n" ;;
+              # Matched on `.reason`, which the every-condition query asks for
+              # and a single-Ready-message query does not, so reverting that
+              # jsonpath falls through to nothing and the assertion fails: a
+              # stub can be told to return anything, but it cannot be asked the
+              # old question and answer the new one.
+              *.reason*) printf "  Ready=False (Progressing): install in progress\n" ;;
+            esac
+            return 0
+        }
+        wait_hr_ready "nosuch" 0 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"history: deployed 1.2.3"*) ;;
+      *)
+        echo "$mbw_helper: a release WITH history did not reach the printf branch" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+    case "$mbw_out" in
+      *"Ready=False (Progressing)"*) ;;
+      *)
+        echo "$mbw_helper: the timeout branch did not ask for every condition with its reason" >&2
+        echo "a single-Ready-message query loses the reason a failing install records" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+
+    # Eighth arm: Stalled. The terminal exit takes the same dump as the
+    # timeout, since the Ready message alone may already describe a retry
+    # rather than the failure. A zero budget cannot tell this exit from the
+    # timeout one, so the budget here is large and `sleep` fails the run:
+    # only the Stalled exit can end the wait.
+    mbw_out=$(bash -c '
+        set -euo pipefail
+        NAMESPACE=unit
+        # shellcheck disable=SC1090
+        . "$1"
+        kubectl() {
+            case "$*" in
+              *"-o name"*) echo "helmrelease.helm.toolkit.fluxcd.io/nosuch" ;;
+              *Stalled*) printf "True" ;;
+              *status.history*) printf "  history: failed 1.2.3 2026-01-01T00:00:00Z\n" ;;
+              *.reason*) printf "  Stalled=True (RetriesExceeded): install failed\n" ;;
+              *) : ;;
+            esac
+            return 0
+        }
+        sleep() { echo "slept: the Stalled exit did not fire" >&2; exit 3; }
+        wait_hr_ready "nosuch" 3600 2>&1
+    ' _ "$mbw_helper") || true
+    case "$mbw_out" in
+      *"is Stalled (terminal)"*"Stalled=True (RetriesExceeded)"*"history: failed 1.2.3"*) ;;
+      *)
+        echo "$mbw_helper: a Stalled release did not get the conditions and history dump" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+        ;;
+    esac
+    done
+
+}
+
+@test "a trailing space does not turn a literal budget into skip" {
+    # The extractor splits on an explicit regex, so whitespace at end of line
+    # becomes an empty final field. Pinned against a fixture rather than the
+    # tree, because the tree has no such line -- and if one ever appears, this
+    # test is what says the contract still reads it rather than reporting a
+    # budget that is not there.
+    mbw_out=$(printf 'wait_hr_ready "bucket-x" 300   \nwait_hr_ready "mariadb-src" 660\n' | mbw_prefix_ceilings -)
+    mbw_want="300
+660"
+    [ "$mbw_out" = "$mbw_want" ] || {
+        echo "trailing whitespace changed the extraction:" >&2
+        printf 'got:\n%s\nwant:\n%s\n' "$mbw_out" "$mbw_want" >&2
+        exit 1
+    }
+    # The skip path still has to work: a budget that is genuinely not a literal
+    # must still stop the contract rather than be silently dropped.
+    mbw_out=$(printf 'wait_hr_ready "bucket-x" "$SOME_VAR"\nwait_hr_ready "mariadb-src" 660\n' | mbw_prefix_ceilings -)
+    case "$mbw_out" in
+      skip*) ;;
+      *) echo "a non-literal budget no longer reports skip; got: ${mbw_out}" >&2; exit 1 ;;
+    esac
+}
+
+@test "the round-trip op keeps its remainder over the ceilings up to the source wait" {
+    # The floor tests below can force a breach here: raise the api-server
+    # install-timeout default and the floor rises, those tests red, and the
+    # cheapest way to green them is to raise the two waits -- which the op then
+    # has to absorb, or a late failure is SIGKILLed instead of reported.
+    #
+    # What is pinned is the REMAINDER, not the sum. "The op exceeds the ceilings
+    # up to and including the source wait" is the obvious form and it is vacuous here: at
+    # 2520 against 1650 it holds, and it still holds after the waits go to 960s
+    # (2520 against 1950) -- which is exactly the case that must not pass. The
+    # remainder is what the flow spends on everything the ceilings do not name,
+    # and a raise paid out of it is precisely the silent breach.
+    #
+    # The slack is zero today: 2520 - 1650 is exactly MBW_OP_REMAINDER, so the
+    # next raise anywhere in the prefix reds this immediately. That is the
+    # intent, not an accident of the numbers.
+    #
+    # MBW_OP_REMAINDER is a ratchet on that stated figure, not a derived bound:
+    # nothing in the tree can compute what the applies and the secret
+    # materialisation need. It may be raised deliberately; it may not fall.
+    mbw_ceilings=$(mbw_prefix_ceilings "$MBW_SCRIPT")
+    case "$mbw_ceilings" in
+      '') echo "no wait ceilings found up to the source wait in $MBW_SCRIPT" >&2; exit 1 ;;
+    esac
+    case "$mbw_ceilings" in
+      *skip*)
+        echo "a wait up to and including the source wait states no literal budget:" >&2
+        printf '%s\n' "$mbw_ceilings" >&2
+        echo "the sum below would silently shrink, which loosens the ratchet" >&2
+        exit 1
+        ;;
+    esac
+    # The `skip` branch above closes one route to a shrunk sum, a budget that
+    # stops being a literal. This closes the other: the extractor anchors at
+    # column zero, so indenting a flow call -- wrapping it in an `if` or a retry
+    # loop -- drops its ceiling silently, shrinking the sum and growing the
+    # remainder, which the ratchet below would pass.
+    mbw_count=$(printf '%s\n' "$mbw_ceilings" | wc -l | tr -d ' ')
+    [ "$mbw_count" -eq "$MBW_PREFIX_CEILINGS" ] || {
+        echo "found ${mbw_count} prefix ceilings up to and including the source wait, expected ${MBW_PREFIX_CEILINGS}:" >&2
+        printf '%s\n' "$mbw_ceilings" >&2
+        echo "a lost ceiling shrinks the sum and loosens the remainder ratchet; a new one needs the remainder re-derived" >&2
+        exit 1
+    }
+    mbw_sum=0
+    for mbw_c in $mbw_ceilings; do mbw_sum=$(( mbw_sum + mbw_c )); done
+    [ "$mbw_sum" -ge 600 ] || {
+        echo "prefix ceilings sum to ${mbw_sum}s, too small to be the real set; the extractor is reading the wrong lines" >&2
+        exit 1
+    }
+    mbw_op=$(mbw_suite_script_op "$MBW_SUITE" "$MBW_SCRIPT")
+    case "$mbw_op" in
+      ''|*[!0-9]*)
+        echo "no script-op timeout found in $MBW_SUITE (got '${mbw_op}')" >&2
+        exit 1
+        ;;
+    esac
+    mbw_remainder=$(( mbw_op - mbw_sum ))
+    [ "$mbw_remainder" -ge "$MBW_OP_REMAINDER" ] || {
+        echo "the round-trip op leaves ${mbw_remainder}s after the ${mbw_sum}s of ceilings ahead of and including the source wait" >&2
+        echo "ceilings: $(printf '%s ' $mbw_ceilings)" >&2
+        echo "that is below the ${MBW_OP_REMAINDER}s this file reserves for the applies and the secret materialisation" >&2
+        echo "three edits reach this state: a ceiling up to and including the source wait was raised, one was added, or the op was lowered" >&2
+        echo "the fix is whichever of those you meant, plus the op in the same change -- not raising MBW_OP_REMAINDER" >&2
+        echo "a wait was raised without the op absorbing it, and a late failure is now SIGKILLed with the process group instead of reported" >&2
+        exit 1
+    }
+}
+
+@test "the per-suite floor check refuses each way a walkthrough falls short" {
+    # Every live wait sits at exactly 660 on two distinct releases, so each
+    # branch below could be disabled with the tree still green; fixtures fed
+    # through the directory override are what exercise them.
+    mbw_got=$(printf '"mariadb-${A}" 660\n"mariadb-${A}" 660\n' | mbw_distinct_releases)
+    [ "$mbw_got" = "1" ] || { echo "the same release twice gave '${mbw_got}', expected 1" >&2; exit 1; }
+    mbw_dir=$(mktemp -d)
+    mbw_fail=
+    # Passes clean, so every refusal below is the fixture's doing.
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\nwait_hr_ready "mariadb-${DST}" 660\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    [ -z "$mbw_got" ] || mbw_fail="two distinct 660s waits were refused: ${mbw_got}"
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\nwait_hr_ready "mariadb-${DST}" 659\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    case "$mbw_got" in *"allows 659s"*MBW_START_MARGIN*) ;; *) mbw_fail="$mbw_fail
+a 659s wait was not refused for the margin: '${mbw_got}'" ;; esac
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    case "$mbw_got" in *"expected exactly 2"*) ;; *) mbw_fail="$mbw_fail
+a single wait was not refused: '${mbw_got}'" ;; esac
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\nwait_hr_ready "mariadb-${DST}"\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    case "$mbw_got" in *"states no literal timeout"*) ;; *) mbw_fail="$mbw_fail
+a wait with no timeout was not refused: '${mbw_got}'" ;; esac
+    # Two waits on the source and none on the target is still two waits.
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\nwait_hr_ready "mariadb-${SRC}" 660\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    case "$mbw_got" in *"1 distinct releases"*) ;; *) mbw_fail="$mbw_fail
+a doubled source wait was not refused: '${mbw_got}'" ;; esac
+    printf 'wait_hr_ready "mariadb-${SRC}" 660\nwait_hr_ready "mariadb-${DST}" 660\n' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_floor_errors nosuch "$mbw_dir")
+    case "$mbw_got" in *"no MBW_SUITES row"*) ;; *) mbw_fail="$mbw_fail
+a suite with no row was not refused: '${mbw_got}'" ;; esac
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir" "$mbw_dir/no-rd.yaml")
+    case "$mbw_got" in *"not found"*) ;; *) mbw_fail="$mbw_fail
+a missing RD was not refused: '${mbw_got}'" ;; esac
+    printf 'release.cozystack.io/helm-install-timeout: 20m\n' > "$mbw_dir/rd.yaml"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir" "$mbw_dir/rd.yaml")
+    case "$mbw_got" in *"sets a per-application install timeout"*) ;; *) mbw_fail="$mbw_fail
+an RD overriding the install timeout was not refused: '${mbw_got}'" ;; esac
+    printf 'release.cozystack.io/helm-install-disable-wait: "true"\n' > "$mbw_dir/rd.yaml"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir" "$mbw_dir/rd.yaml")
+    case "$mbw_got" in *"disables the install wait"*) ;; *) mbw_fail="$mbw_fail
+an RD disabling the install wait was not refused: '${mbw_got}'" ;; esac
+    # The startup-budget half binds only past the install timeout, which no
+    # live chart reaches: a threshold of 100 buys 1010s and 660 falls short.
+    printf 'startupProbe:\n  failureThreshold: 100\n' > "$mbw_dir/chart.yaml"
+    MBW_SUITES="mariadb|\"mariadb-|$mbw_dir/chart.yaml|900"
+    mbw_got=$(mbw_suite_floor_errors mariadb "$mbw_dir")
+    case "$mbw_got" in *"the floor is 1010s"*) ;; *) mbw_fail="$mbw_fail
+a startup budget above the install timeout did not bind: '${mbw_got}'" ;; esac
+    rm -rf "$mbw_dir"
+    [ -z "$mbw_fail" ] || { printf '%s\n' "$mbw_fail" >&2; exit 1; }
+}
+
+@test "the per-suite op check refuses each way an op falls short" {
+    # Every live remainder sits at exactly its constant and only mongodb skips,
+    # so a threshold, a skip passed where none is, or an early SKIP_RESTORE
+    # mention stopping the read could each slip in with the tree green. The
+    # mariadb row wants 900s; the waits below total 1620s, or 960s when the
+    # read stops at the skip.
+    mbw_dir=$(mktemp -d)
+    mbw_fail=
+    printf '%s\n' 'wait_hr_ready "bucket-${B}" 300' 'SKIP_RESTORE="${SKIP_RESTORE:-0}"' \
+        'wait_hr_ready "mariadb-${SRC}" 660' 'if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then' '    exit 0' 'fi' \
+        'wait_hr_ready "mariadb-${DST}" 660' > "$mbw_dir/run-all.sh"
+    mbw_mkop() { printf '  - script:\n      timeout: %s\n      content: |\n        %s%s/run-all.sh\n' "$1" "$2" "$mbw_dir" > "$mbw_dir/suite.yaml"; }
+    mbw_mkop 42m ''
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    [ -z "$mbw_got" ] || mbw_fail="an op leaving exactly 900s was refused: ${mbw_got}"
+    mbw_mkop 41m ''
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"leaves 840s"*) ;; *) mbw_fail="$mbw_fail
+an op 60s short, with no skip, was not refused: '${mbw_got}'" ;; esac
+    mbw_mkop 31m 'SKIP_RESTORE=1 '
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    [ -z "$mbw_got" ] || mbw_fail="$mbw_fail
+a skipping op leaving exactly 900s was refused: ${mbw_got}"
+    mbw_mkop 30m 'SKIP_RESTORE=1 '
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"leaves 840s"*) ;; *) mbw_fail="$mbw_fail
+a skipping op 60s short was not refused, or the read stopped before the source wait: '${mbw_got}'" ;; esac
+    # A bucket wait that is not read, or has no budget, would leave the sum
+    # 300s short with nothing else to notice: the floor check skips buckets.
+    mbw_mkop 42m ''
+    printf '%s\n' '    wait_hr_ready "bucket-${B}" 300' 'wait_hr_ready "mariadb-${SRC}" 660' \
+        'wait_hr_ready "mariadb-${DST}" 660' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"exactly 1 bucket"*) ;; *) mbw_fail="$mbw_fail
+an indented bucket wait was not refused: '${mbw_got}'" ;; esac
+    printf '%s\n' 'wait_hr_ready "bucket-${B}"' 'wait_hr_ready "mariadb-${SRC}" 660' \
+        'wait_hr_ready "mariadb-${DST}" 660' > "$mbw_dir/run-all.sh"
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"states no literal budget"*) ;; *) mbw_fail="$mbw_fail
+a bucket wait with no budget was not refused: '${mbw_got}'" ;; esac
+    mbw_got=$(mbw_suite_slack_errors nosuch "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"no MBW_SUITES row"*) ;; *) mbw_fail="$mbw_fail
+a suite with no row was not refused: '${mbw_got}'" ;; esac
+    printf '  - script:\n      content: |\n        %s/run-all.sh\n' "$mbw_dir" > "$mbw_dir/suite.yaml"
+    mbw_got=$(mbw_suite_slack_errors mariadb "$mbw_dir/suite.yaml" "$mbw_dir")
+    case "$mbw_got" in *"no timeout found"*) ;; *) mbw_fail="$mbw_fail
+an op with no timeout was not refused: '${mbw_got}'" ;; esac
+    rm -rf "$mbw_dir"
+    [ -z "$mbw_fail" ] || { printf '%s\n' "$mbw_fail" >&2; exit 1; }
+}
+
+@test "the mariadb walkthrough's database waits clear the floor by the start margin" {
+    mbw_err=$(mbw_suite_floor_errors mariadb)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the mariadb round-trip op keeps its slack once the waits it reaches are paid" {
+    mbw_err=$(mbw_suite_slack_errors mariadb)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the mongodb walkthrough's database waits clear the floor by the start margin" {
+    mbw_err=$(mbw_suite_floor_errors mongodb)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the mongodb round-trip op keeps its slack once the waits it reaches are paid" {
+    mbw_err=$(mbw_suite_slack_errors mongodb)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the rabbitmq walkthrough's database waits clear the floor by the start margin" {
+    mbw_err=$(mbw_suite_floor_errors rabbitmq)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the rabbitmq round-trip op keeps its slack once the waits it reaches are paid" {
+    mbw_err=$(mbw_suite_slack_errors rabbitmq)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the clickhouse walkthrough's database waits clear the floor by the start margin" {
+    mbw_err=$(mbw_suite_floor_errors clickhouse)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the clickhouse round-trip op keeps its slack once the waits it reaches are paid" {
+    mbw_err=$(mbw_suite_slack_errors clickhouse)
+    [ -z "$mbw_err" ] || { printf '%s\n' "$mbw_err" >&2; exit 1; }
+}
+
+@test "the chainsaw suite's HelmRelease-ready asserts beat the same budget" {
+    # Same wait, same mechanism, different file. This assert is the first gate
+    # in each suite, so if it expires below a legal first boot the suite reds on
+    # a healthy instance -- the defect this contract exists to stop.
+    mbw_threshold=$(mbw_failure_threshold "$MBW_CHART")
+    mbw_budget=$(mbw_startup_budget "$mbw_threshold")
+    mbw_install=$(mbw_install_timeout "$MBW_APISERVER")
+    mbw_floor=$(mbw_compute_floor "$mbw_budget" "$mbw_install")
+    mbw_out=$(mbw_suite_hr_waits "$MBW_SUITE")
+    mbw_count=$(printf '%s\n' "$mbw_out" | grep -c '[0-9]' || true)
+    [ "$mbw_count" -ge 2 ] || {
+        echo "expected at least 2 wait-helmrelease-ready timeouts in $MBW_SUITE, found ${mbw_count}:" >&2
+        printf '%s\n' "$mbw_out" >&2
+        exit 1
+    }
+    # Split in the current shell rather than piped into `while`: a pipeline
+    # runs its loop in a subshell, where `exit 1` ends only the subshell and
+    # the test carries on green.
+    mbw_ifs=$IFS
+    IFS='
+'
+    for mbw_timeout in $mbw_out; do
+        IFS=$mbw_ifs
+        case "$mbw_timeout" in
+          *[!0-9]*)
+            echo "unparsed wait-helmrelease-ready timeout '${mbw_timeout}' in $MBW_SUITE" >&2
+            exit 1
+            ;;
+        esac
+        [ "$(mbw_wait_clears_floor "$mbw_timeout" "$mbw_floor")" = "ok" ] || {
+            echo "a wait-helmrelease-ready assert allows ${mbw_timeout}s; the floor is ${mbw_floor}s (startup budget ${mbw_budget}s, release install timeout ${mbw_install}s) and a wait must exceed it by MBW_START_MARGIN=${MBW_START_MARGIN}s" >&2
+            exit 1
+        }
+    done
+    IFS=$mbw_ifs
+}
+
+@test "the extractor rejects a mariadb wait that states no timeout" {
+    # The helper's own fallback is 300s, below any realistic budget, so a call
+    # site that omits the argument must not read as compliant. Checked against
+    # a fixture: the real script is expected to state its budgets, so this
+    # branch of the contract has no cover in the tree itself.
+    mbw_tmp=$(mktemp)
+    printf 'wait_hr_ready "mariadb-${MARIADB_SRC_NAME}"\n' > "$mbw_tmp"
+    mbw_out=$(mbw_db_waits "$mbw_tmp" '"mariadb-')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = '"mariadb-${MARIADB_SRC_NAME}" default' ] || {
+        echo "expected the timeout to be reported as 'default', got: ${mbw_out}" >&2
+        exit 1
+    }
+}
+
+@test "the suite extractor reports a wait-helmrelease-ready step that states no timeout" {
+    # hack/e2e-chainsaw/.chainsaw.yaml sets timeouts.assert to 5m, under every
+    # floor this file computes, so a step that omits `timeout:` is the worst
+    # case and must not be skipped in silence. Fixtures, because the tree
+    # states every timeout.
+    mbw_tmp=$(mktemp)
+    {
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        timeout: 11m\n        resource: {}\n'
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        resource: {}\n'
+        printf '  - name: next-step\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_suite_hr_waits "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    # The timed step goes FIRST on purpose. With only an untimed step the
+    # fixture cannot tell "reports it" from "reports it only in first
+    # position", and an extractor that resets its state per step and one that
+    # never resets it both pass a single-element fixture.
+    [ "$mbw_out" = "660 unset " ] || {
+        echo "expected '660 unset ', got: '${mbw_out}'" >&2
+        exit 1
+    }
+    # Units other than minutes, and a unit the extractor does not know. Every
+    # timeout in the tree is written Nm, so the seconds arm and the verbatim
+    # fallback are both unreachable from live values -- the same argument this
+    # file makes for the arithmetic helpers, applied to the branch that decides
+    # what a number MEANS. A seconds budget silently read as minutes would be a
+    # sixtyfold error in the safe-looking direction.
+    mbw_tmp=$(mktemp)
+    {
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        timeout: 90s\n        resource: {}\n'
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        timeout: 2h\n        resource: {}\n'
+        printf '  - name: next-step\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_suite_hr_waits "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = "90 2h " ] || {
+        echo "expected '90 2h ' (seconds converted, unknown unit passed through), got: '${mbw_out}'" >&2
+        exit 1
+    }
+
+    # Third fixture: the file ENDS inside an untimed wait step, so no `- name:`
+    # line ever closes it. That is the awk END rule, and the two fixtures above
+    # cannot reach it -- both end on `- name: next-step`, which closes the block
+    # first. Without this the END branch is the one unexercised path in an
+    # extractor every other branch of which is pinned.
+    mbw_tmp=$(mktemp)
+    {
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        timeout: 11m\n        resource: {}\n'
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        resource: {}\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_suite_hr_waits "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    [ "$mbw_out" = "660 unset " ] || {
+        echo "a file ending inside an untimed step gave: '${mbw_out}', expected '660 unset '" >&2
+        exit 1
+    }
+    mbw_tmp=$(mktemp)
+    {
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        resource: {}\n'
+        printf '  - name: wait-helmrelease-ready\n    try:\n    - assert:\n        timeout: 6m\n        resource: {}\n'
+        printf '  - name: next-step\n'
+    } > "$mbw_tmp"
+    mbw_out=$(mbw_suite_hr_waits "$mbw_tmp" | tr '\n' ' ')
+    rm -f "$mbw_tmp"
+    # Two consecutive wait steps, the first untimed: the close-previous rule has
+    # to fire before the open-new one or the first is swallowed.
+    [ "$mbw_out" = "unset 360 " ] || {
+        echo "expected 'unset 360 ', got: '${mbw_out}'" >&2
+        exit 1
+    }
+}
+
+@test "the extractor selects mariadb waits and leaves the others alone" {
+    # The example also waits for the Bucket release, and the floor check is
+    # deliberately held to the database waits; the op checks do count the
+    # bucket wait, as a ceiling the op has to contain. The reason is scope, not
+    # the floor: packages/system/bucket-rd sets neither helm-install-timeout
+    # nor helm-install-disable-wait, so the bucket release carries the same
+    # 600s floor and its 300s wait is under it. Holding it to the floor would
+    # report a real under-budget, but one that belongs to whoever raises the
+    # bucket waits, and keeping it out keeps a floor failure naming one cause.
+    mbw_all=$(mbw_all_waits "$MBW_SCRIPT")
+    printf '%s\n' "$mbw_all" | grep -q '^"bucket-' || {
+        echo "expected $MBW_SCRIPT to wait for a bucket release; the fixture this test reasons about is gone" >&2
+        printf '%s\n' "$mbw_all" >&2
+        exit 1
+    }
+    mbw_selected=$(mbw_db_waits "$MBW_SCRIPT" '"mariadb-')
+    # `if !` rather than `grep -q ... && { ... }`: the latter evaluates to the
+    # grep's own status when it does not match, which under set -e ends the test
+    # unless a trailing `exit 0` follows it -- and that terminator silently makes
+    # anything appended below it dead code.
+    if printf '%s\n' "$mbw_selected" | grep -q 'bucket-'; then
+        echo "the mariadb extractor picked up a non-mariadb release:" >&2
+        printf '%s\n' "$mbw_selected" >&2
+        exit 1
+    fi
+}

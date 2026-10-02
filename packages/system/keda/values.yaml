@@ -76,12 +76,20 @@ keda:
   # subchart patch. Digests are the multi-arch image-index digests for the 2.20.2
   # tag on ghcr.io (amd64/arm64/s390x); bump them in lockstep with
   # KEDA_CHART_VERSION in the Makefile whenever the chart is re-vendored.
+  # registry and repository repeat the chart defaults so the digest-pinned ref
+  # is complete in this file, where the release tooling reads it.
   image:
     keda:
+      registry: ghcr.io
+      repository: kedacore/keda
       tag: "2.20.2@sha256:fe74c7b8849586a67ad2201bcb89e7f5ac221ff90399ecaa8fd28427f1ef11e6"
     metricsApiServer:
+      registry: ghcr.io
+      repository: kedacore/keda-metrics-apiserver
       tag: "2.20.2@sha256:27286536a8a775aeeee37a7e343f8ecebb27ebf680ee1181a4f99e82eefb253b"
     webhooks:
+      registry: ghcr.io
+      repository: kedacore/keda-admission-webhooks
       tag: "2.20.2@sha256:41f74102aba7959c6e8d08b433ab8a5fd6cae7c5646c78f7fe3de40a52df3439"
   # Cozystack's cluster domain, not the upstream chart default "cluster.local".
   # KEDA's metrics-apiserver dials the operator's metrics gRPC service at

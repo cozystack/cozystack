@@ -73,22 +73,54 @@ Generate a stable UUID for cloud-init re-initialization upon upgrade.
 {{/*
 Domain resources (cpu, memory) as a JSON object.
 Used in vm.yaml for rendering and in the update hook for merge patches.
+
+cpu and sockets are schema-typed as quantities but land in domain.cpu.cores
+and domain.cpu.sockets, which KubeVirt declares as uint32. Casting 500m to an
+integer yields 0, and KubeVirt boots a zero core count as one core, so only a
+whole count within uint32 gets past this point. The raw spelling is decoded
+as YAML, so +2, 2.0 or 1e1 pass as the integers they decode to; a leading
+zero is refused outright, because YAML decodes 010 as octal 8. Presence
+rather than truth, so that a 0 is refused instead of read as unset. Memory
+stays a quantity, which KubeVirt accepts as such, but a zero or negative
+amount sizes nothing.
 */}}
 {{- define "virtual-machine.domainResources" -}}
+{{- $resources := .Values.resources | default dict -}}
+{{- $counts := dict -}}
+{{- range $field := list "cpu" "sockets" -}}
+  {{- $value := index $resources $field -}}
+  {{- if not (kindIs "invalid" $value) -}}
+    {{- $raw := printf "%v" $value -}}
+    {{- $count := (printf "v: %s" $raw | fromYaml).v -}}
+    {{- $isNumber := or (kindIs "int" $count) (kindIs "int64" $count) (kindIs "float64" $count) -}}
+    {{- $whole := and $isNumber (gt (float64 $count) 0.0) (le (float64 $count) 4294967295.0) (eq (floor $count) (float64 $count)) -}}
+    {{- if or (not $whole) (regexMatch "^\\+?0[0-9]" $raw) -}}
+      {{- fail (printf "resources.%s (%s) must be a positive whole number, such as 2. It becomes the VM's domain.cpu.%s, which KubeVirt declares as an unsigned integer, so a millicore, suffixed, fractional, zero, out-of-range or leading-zero quantity cannot size the guest. Set a whole number, or remove the field." $field $raw (ternary "cores" "sockets" (eq $field "cpu"))) -}}
+    {{- end -}}
+    {{- $_ := set $counts $field ($count | int64) -}}
+  {{- end -}}
+{{- end -}}
+{{- $memory := index $resources "memory" -}}
+{{- if not (kindIs "invalid" $memory) -}}
+  {{- $rawMemory := printf "%v" $memory -}}
+  {{- if not (gt (regexFind "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)" $rawMemory | float64) 0.0) -}}
+    {{- fail (printf "resources.memory (%s) must be a positive quantity, such as 8Gi. A zero or negative amount cannot size the guest. Set an amount, or remove the field." $rawMemory) -}}
+  {{- end -}}
+{{- end -}}
 {{- $result := dict -}}
-{{- if or .Values.cpuModel (and .Values.resources .Values.resources.cpu .Values.resources.sockets) -}}
+{{- if or .Values.cpuModel (and $counts.cpu $counts.sockets) -}}
   {{- $cpu := dict -}}
-  {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets -}}
-    {{- $_ := set $cpu "cores" (.Values.resources.cpu | int64) -}}
-    {{- $_ := set $cpu "sockets" (.Values.resources.sockets | int64) -}}
+  {{- if and $counts.cpu $counts.sockets -}}
+    {{- $_ := set $cpu "cores" $counts.cpu -}}
+    {{- $_ := set $cpu "sockets" $counts.sockets -}}
   {{- end -}}
   {{- if .Values.cpuModel -}}
     {{- $_ := set $cpu "model" .Values.cpuModel -}}
   {{- end -}}
   {{- $_ := set $result "cpu" $cpu -}}
 {{- end -}}
-{{- if and .Values.resources .Values.resources.memory -}}
-  {{- $_ := set $result "resources" (dict "requests" (dict "memory" .Values.resources.memory)) -}}
+{{- with $memory -}}
+  {{- $_ := set $result "resources" (dict "requests" (dict "memory" .)) -}}
 {{- end -}}
 {{- $result | toJson -}}
 {{- end -}}
@@ -104,23 +136,18 @@ domain.cpu.cores and domain.cpu.sockets only when they are non-zero;
 validateMemory in memory.go conflicts on domain.resources.requests.memory
 whenever the key is present, zero included. A resources block that supplies
 all three therefore replaces the matcher, the same way the kubernetes-nodes
-chart already sizes its worker VMs. The zero guard on the cpu half is why a
-cores of 0 next to a matcher renders instead of failing: KubeVirt does not
-call it a conflict, so the instance type simply sizes the VM.
+chart already sizes its worker VMs.
 
 Everything below is decided from what domainResources actually emitted, never
 from which keys the user set. The two readings differ, and only the first one
 is the question KubeVirt asks. domainResources needs cpu and sockets together
-before it writes domain.cpu, so resources.cpu on its own emits nothing and
-conflicts with nothing; those releases render today and must keep rendering.
-It also puts cpu and sockets through int64, which yields 0 for a quantity the
-schema accepts, so resources.cpu of 500m emits a domain.cpu.cores of 0 that
-sizes nothing while looking set. Reading the emitted values catches that one
-alongside a plain unset field, and it survives a resources block the user nulls
-outright, which Helm coalescing turns into a nil .Values.resources that a raw
-field read would dereference. cpuModel writes domain.cpu.model, which
-conflicts only when the instance type declares a model of its own, so it is
-deliberately not among the three fields read back here.
+before it writes domain.cpu, so a whole resources.cpu on its own emits nothing
+and conflicts with nothing; those releases render today and must keep
+rendering. Reading the emitted values also survives a resources block the
+user nulls outright, which Helm coalescing turns into a nil .Values.resources
+that a raw field read would dereference. cpuModel writes domain.cpu.model,
+which conflicts only when the instance type declares a model of its own, so
+it is deliberately not among the three fields read back here.
 
 A block that emits some sizing but not all of it has no safe reading next to an
 instance type: dropping the matcher would size the VM from fields the user

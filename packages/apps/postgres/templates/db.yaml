@@ -71,7 +71,7 @@ spec:
   # <release>-ca, which holds the CA private key next to ca.crt.
   certificates:
     serverAltDNSNames:
-      - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
+      - {{ printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .) }}
   {{- end }}
   {{/*
     s3Credentials points at the operator-supplied Secret when
@@ -221,9 +221,14 @@ spec:
   bootstrap:
     recovery:
       source: {{ .Values.bootstrap.oldName }}
-      {{- if .Values.bootstrap.recoveryTime }}
+      {{- if or .Values.bootstrap.recoveryTime .Values.bootstrap.backupID }}
       recoveryTarget:
-        targetTime: {{ .Values.bootstrap.recoveryTime }}
+        {{- with .Values.bootstrap.backupID }}
+        backupID: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.bootstrap.recoveryTime }}
+        targetTime: {{ . }}
+        {{- end }}
       {{- end }}
   externalClusters:
     - name: {{ .Values.bootstrap.oldName }}
@@ -255,6 +260,26 @@ spec:
   {{- end }}
   {{- end }}
   postgresql:
+    {{- /*
+      Preloading is exposed as a closed allowlist rather than through the blocked
+      shared_preload_libraries parameter. The parameter is free text and accepts a
+      path, so it can point at a writable location; a bare name from this list can
+      only resolve inside $libdir, which lives on the read-only image filesystem.
+      The names below all ship with the CloudNativePG PostgreSQL image. The enum in
+      values.schema.json is the primary guard; this check backs it up for renders
+      that bypass schema validation. helm-unittest cannot reach it, since the schema
+      rejects first, so hack/check-postgres-preload-allowlist.bats pins it instead.
+    */ -}}
+    {{- with .Values.postgresql.sharedPreloadLibraries }}
+    {{- $allowedPreload := list "pg_stat_statements" "auto_explain" "pgaudit" "pg_prewarm" }}
+    shared_preload_libraries:
+      {{- range . }}
+      {{- if not (has . $allowedPreload) }}
+      {{- fail (printf "SECURITY: shared preload library %q is not allowed. Allowed: %s. Loading a library from an arbitrary path enables code execution inside the instance." . (join ", " $allowedPreload)) }}
+      {{- end }}
+      - {{ quote . }}
+      {{- end }}
+    {{- end }}
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
       {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
@@ -329,9 +354,10 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
-  # Pin the barman-cloud sidecar's S3 request checksum to when_required
-  # (rationale in cozy-lib.barman.checksumSidecarConfiguration).
-  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
+  # Size the barman-cloud sidecar explicitly instead of inheriting the tenant
+  # LimitRange default of 128Mi, and pin its S3 request checksum (rationale in
+  # cozy-lib.barman.sidecarConfiguration).
+  {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ $destinationPath }}
     endpointURL: {{ $endpointURL }}
@@ -358,8 +384,8 @@ kind: ObjectStore
 metadata:
   name: {{ .Release.Name }}-recovery
 spec:
-  # Same S3 request-checksum pin as the backup ObjectStore above.
-  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
+  # Same sidecar configuration as the backup ObjectStore above.
+  {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ $destinationPath }}
     endpointURL: {{ $endpointURL }}

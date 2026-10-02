@@ -46,6 +46,7 @@ import (
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/cacert"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
+	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	"github.com/cozystack/cozystack/internal/telemetry"
@@ -261,8 +262,9 @@ func main() {
 	}
 
 	if err = (&controller.ApplicationDefinitionHelmReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("applicationdefinition-helm-reconciler"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
 		os.Exit(1)
@@ -283,6 +285,13 @@ func main() {
 		BufferPercent: quotaBufferPercent,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
+		os.Exit(1)
+	}
+
+	if err = (&tenantlogrouting.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantLogRouting")
 		os.Exit(1)
 	}
 

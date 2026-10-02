@@ -47,6 +47,7 @@ import (
 	"github.com/cozystack/cozystack/internal/backupcontroller/etcdtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/kafkatypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mongodbapp"
@@ -79,6 +80,7 @@ func init() {
 	utilruntime.Must(etcdtypes.AddToScheme(scheme))
 	utilruntime.Must(etcdapp.AddToScheme(scheme))
 	utilruntime.Must(rabbitmqtypes.AddToScheme(scheme))
+	utilruntime.Must(kafkatypes.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -208,6 +210,11 @@ func main() {
 			setupLog.Error(err, "unable to add SystemCredentialsProjector runnable")
 			os.Exit(1)
 		}
+	}
+
+	if err := mgr.Add(&backupcontroller.LegacyPasswordScrubber{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add LegacyPasswordScrubber runnable")
+		os.Exit(1)
 	}
 
 	// The default Strategy CRs and the Velero BSL are Helm-templated behind

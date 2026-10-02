@@ -14,15 +14,11 @@ import {
 import type { HeaderTab } from "@cozystack/ui"
 import { CommandPaletteProvider, useCommandPalette } from "./components/command-palette/command-palette-provider.tsx"
 import { CommandPalette } from "./components/command-palette/command-palette.tsx"
-import type { AppConfig } from "./lib/config.ts"
+import { AppConfigContext, useAppConfig, type AppConfig } from "./lib/config.ts"
 import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 
-interface ShellProps {
-  config: AppConfig
-  username?: string
-}
-
-function Shell({ config, username }: ShellProps) {
+function Shell({ username }: { username?: string }) {
+  const config = useAppConfig()
   const { pathname } = useLocation()
   const inMarketplace = pathname.startsWith("/marketplace")
   const inAdmin = pathname.startsWith("/admin")
@@ -72,10 +68,12 @@ export interface AppProps {
 
 export default function App({ config = {}, username }: AppProps) {
   return (
-    <TenantProvider>
-      <CommandPaletteProvider>
-        <Shell config={config} username={username} />
-      </CommandPaletteProvider>
-    </TenantProvider>
+    <AppConfigContext.Provider value={config}>
+      <TenantProvider>
+        <CommandPaletteProvider>
+          <Shell username={username} />
+        </CommandPaletteProvider>
+      </TenantProvider>
+    </AppConfigContext.Provider>
   )
 }

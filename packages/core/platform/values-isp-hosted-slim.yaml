@@ -1,0 +1,28 @@
+migrations:
+  enabled: true
+# The minimal counterpart of isp-hosted: the host provides CNI, storage and load
+# balancing, and only the Cozystack control plane is emitted. The paas/naas
+# packages and the system packages that do not need a Cozystack-managed data
+# plane are opt-in through bundles.enabledPackages; iaas is refused.
+# An opt-in package does not pull in its dependsOn: list the whole chain, or the
+# Package stays DependenciesNotReady. The chain is the dependsOn of the
+# package in sources/, followed recursively; for example harbor-application
+# needs postgres-operator and redis-operator. The
+# Tenant etcd, monitoring and seaweedfs switches need their application and
+# its chain opted in as well.
+# victoria-metrics-operator and prometheus-operator-crds stay on even without
+# monitoring: the tenant ingress release and most paas operators depend on them.
+bundles:
+  system:
+    enabled: true
+    variant: "isp-hosted-slim"
+  iaas:
+    enabled: false
+  paas:
+    enabled: true
+  naas:
+    enabled: true
+# Tenant/root does not run monitoring here, so the cozy-monitoring redirects
+# into it would dead-end; see monitoring.rootEnabled in values.yaml.
+monitoring:
+  rootEnabled: false

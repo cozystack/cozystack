@@ -1,3 +1,11 @@
+{{- /* KubeVirt-only: the cloud-controller-manager and the CSI driver here
+      exist to reach the workers' VirtualMachines and their DataVolumes in
+      THIS cluster. On the proxmox substrate the VMs are on an external
+      hypervisor: the CSI node plugin comes from the proxmox-csi package and
+      its controller, with the cloud-controller-manager, runs in this cluster
+      (templates/csi-proxmox/, templates/ccm-proxmox/). Rendering these would
+      leave a controller in the tenant reconciling objects that do not exist. */}}
+{{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,3 +23,4 @@ data:
       apps.cozystack.io/application.kind: Kubernetes
       apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
       internal.cozystack.io/tenantresource: "true"
+{{- end }}

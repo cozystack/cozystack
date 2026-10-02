@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Contract for the bounded parallel unit-test fan-out used by PR CI.
 
-@test "every non-E2E BATS file is an independent Make prerequisite" {
+@test "every non-E2E BATS file is an independent Make target" {
     # --output-sync arrived in GNU Make 4.0, and macOS still ships 3.81, where
     # this invocation dies on an unknown option rather than telling the reader
     # why. CI is on 4.x, so the contract is still enforced where it gates a
@@ -29,7 +29,7 @@
 }
 
 @test "PR workflow shares four slots across unit and controller targets" {
-    grep -qF 'run: make unit-tests test-controllers -j4 --output-sync=target' \
+    grep -qF 'run: make unit-tests test-controllers -j4 -k --output-sync=target' \
         .github/workflows/pull-requests.yaml || {
         echo "PR checks do not use the bounded four-slot make invocation" >&2
         exit 1

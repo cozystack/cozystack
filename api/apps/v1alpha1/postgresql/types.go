@@ -52,7 +52,7 @@ type ConfigSpec struct {
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
-	// Users configuration map.
+	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map.
@@ -130,6 +130,9 @@ type Backup struct {
 }
 
 type Bootstrap struct {
+	// Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
+	// +kubebuilder:default:=""
+	BackupID string `json:"backupID,omitempty"`
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
@@ -174,6 +177,8 @@ type PostgreSQL struct {
 	// PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
 	Parameters map[string]intstr.IntOrString `json:"parameters,omitempty"`
+	// Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
+	SharedPreloadLibraries []PreloadLibrary `json:"sharedPreloadLibraries,omitempty"`
 }
 
 type Quorum struct {
@@ -210,11 +215,12 @@ type TLS struct {
 }
 
 type User struct {
-	// Password for the user.
-	Password string `json:"password,omitempty"`
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="pg_stat_statements";"auto_explain";"pgaudit";"pg_prewarm"
+type PreloadLibrary string
 
 // +kubebuilder:validation:Enum="ReadConnections";"ReadCPUUtilization"
 type ReadMetric string

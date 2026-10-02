@@ -42,6 +42,8 @@ type Route struct {
 }
 
 type Subnet struct {
+	// Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM
+	AllowSubnets []string `json:"allowSubnets,omitempty"`
 	// IP address range
 	Cidr string `json:"cidr,omitempty"`
 	// Subnet name

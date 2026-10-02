@@ -53,7 +53,6 @@ const KIND_TO_SIMPLE_ICON: Record<string, SimpleIconData> = {
   Redis: siRedis,
 
   // NaaS
-  HTTPCache: siNginx,
   VPN: siWireguard,
 
   // Administration

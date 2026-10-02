@@ -1,5 +1,10 @@
 .PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
 
+# Before any include, the last file make has read is this one: MAKEFILES and
+# -f files given before it are earlier in the list, -f files after it are not
+# read yet.
+ROOT_MAKEFILE := $(lastword $(MAKEFILE_LIST))
+
 include hack/common-envs.mk
 
 build-deps:
@@ -10,31 +15,41 @@ build-deps:
 	@awk --version | grep -q GNU || (echo "GNU awk is required" && exit 1)
 
 build: build-deps
-	make -C packages/apps/http-cache image
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
+	make -C packages/apps/vpn image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image
 	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
+	make -C packages/system/migration-controller image
 	make -C packages/system/flux-shard-operator image
+	make -C packages/system/flux-plunger image
 	make -C packages/system/cilium image
 	make -C packages/system/linstor image
 	make -C packages/system/linstor-gui image
+	make -C packages/system/kubeovn image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/kubeovn-plunger image
+	make -C packages/system/kilo image
 	make -C packages/system/dashboard image
 	make -C packages/system/metallb image
+	make -C packages/system/talos-log-collector image
 	make -C packages/system/kamaji image
 	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-infraprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/system/redis-operator image
+	make -C packages/system/harbor image
+	make -C packages/system/velero image
+	make -C packages/system/opensearch-operator image
+	make -C packages/system/keycloak-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
 	make -C packages/core/platform image
@@ -107,7 +122,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -134,6 +149,16 @@ migrations-target-check:
 go-unit-tests:
 	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
 
+# The nested Go modules (image sources and the published API types) are
+# outside ./... of the root module, so no other target reaches their tests.
+# git ls-files, not find: gitignored checkouts such as .claude/worktrees
+# hold whole copies of this repository.
+go-module-tests:
+	@for mod in $$(git ls-files '*/go.mod' | xargs -n1 dirname); do \
+		echo "--- go test $$mod ---"; \
+		(cd "$$mod" && go test -count=1 ./...) || exit 1; \
+	done
+
 # Go tests for the controllers and supporting packages under ./internal.
 # Excludes ./pkg/... and ./cmd/... — those are run separately by
 # go-unit-tests above (pkg subset) and skipped (cmd) until their tests
@@ -150,8 +175,10 @@ test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
-# up automatically on the next `make unit-tests` run.
+# through cozytest.sh. This glob is one level deep: live-cluster suites under
+# hack/e2e-* or in subdirectories need an invocation in packages/core/testing.
+# hack/bats-runner-coverage.bats reports files that neither runner selects.
+# Park a suite with the .bats.disabled suffix to exclude it from the audit.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
@@ -174,7 +201,12 @@ BATS_UNIT_TARGETS := $(patsubst hack/%.bats,bats-unit-%,$(BATS_UNIT_FILES))
 # the live stream -- see the COZYTEST_TRACE comment in hack/cozytest.sh.
 COZYTEST_TRACE ?= 0
 
-bats-unit-tests: bats-unit-files-check $(BATS_UNIT_TARGETS)
+# A sub-make with --keep-going, so one red file does not stop make from
+# scheduling the files after it; the sub-make still exits non-zero if any
+# file failed (hack/bats-unit-keep-going.bats covers both). It shares the
+# caller's -j slots and --output-sync through MAKEFLAGS.
+bats-unit-tests: bats-unit-files-check
+	@$(MAKE) --file=$(ROOT_MAKEFILE) --no-print-directory --keep-going $(BATS_UNIT_TARGETS)
 
 bats-unit-files-check:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
@@ -182,9 +214,8 @@ bats-unit-files-check:
 		exit 1; \
 	fi
 
-# Each file is its own prerequisite so `make -jN` can schedule them, and the
-# trace switch main added for the serial loop rides along per target rather than
-# being lost with it.
+# Each file is its own target of the sub-make so `make -jN` can schedule them,
+# and the trace switch rides along per target.
 .PHONY: $(BATS_UNIT_TARGETS)
 $(BATS_UNIT_TARGETS): bats-unit-%: hack/%.bats
 	@echo "--- running $< ---"

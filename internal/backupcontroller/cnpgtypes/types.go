@@ -11,6 +11,7 @@
 package cnpgtypes
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -215,9 +216,10 @@ type ObjectStoreSpec struct {
 }
 
 // InstanceSidecarConfiguration is a minimal mirror of the barman-cloud
-// ObjectStore's spec.instanceSidecarConfiguration (only spec.env).
+// ObjectStore's spec.instanceSidecarConfiguration.
 type InstanceSidecarConfiguration struct {
-	Env []EnvVar `json:"env,omitempty"`
+	Env       []EnvVar                    `json:"env,omitempty"`
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // EnvVar is a minimal corev1.EnvVar (name/value only) — enough to pass a
@@ -239,4 +241,10 @@ type BackupStatus struct {
 	// destroys the source PVCs.
 	BeginWal string `json:"beginWal,omitempty"`
 	EndWal   string `json:"endWal,omitempty"`
+	// BackupID is barman's identifier for the base backup, the value
+	// bootstrap.recovery.recoveryTarget.backupID selects it by. StoppedAt is
+	// when it ended, truncated to the second where barman records the
+	// microsecond.
+	BackupID  string       `json:"backupId,omitempty"`
+	StoppedAt *metav1.Time `json:"stoppedAt,omitempty"`
 }

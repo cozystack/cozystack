@@ -73,9 +73,22 @@
       "schedule": ["before 6am on monday"]
     },
     {
+      "description": "The Harbor rebuilds reproduce one upstream release, so their build bases follow upstream's Makefile at that tag (GOBUILDIMAGE, NODEBUILDIMAGE) rather than the newest image. A golang tag bump builds Harbor with a toolchain upstream never shipped it with, and a node major breaks the Angular portal build. Tag bumps are disabled here; digest refreshes of the same tag still arrive through the digest group above. Move the tags by hand with HARBOR_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/harbor/images/**"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "enabled": false
+    },
+    {
+      "description": "k8s.io/apimachinery is replaced by the cozystack/apimachinery fork at a pseudo-version cut from a rebased branch that carries the ConvertToVersion patch. The fork's release tags are stale upstream mirrors, so Renovate proposes one of them as an 'update' that is in fact a downgrade dropping the patch. Advance the replace by hand whenever the fork is rebased onto a new Kubernetes line.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/cozystack/apimachinery"],
       "enabled": false
     }
   ]

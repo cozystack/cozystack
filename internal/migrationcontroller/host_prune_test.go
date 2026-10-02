@@ -47,7 +47,7 @@ func TestEditingASourceRemovesTheHostsItNoLongerLists(t *testing.T) {
 	src := vsphereSource("vcenter", "tenant-foo")
 	src.Spec.Hosts = []migrationv1alpha1.HostOverride{{
 		ID:      "host-10",
-		Address: "10.0.30.29",
+		Address: "192.0.2.29",
 		Credentials: migrationv1alpha1.ProviderCredentials{
 			Username: "root", Password: "x", InsecureSkipVerify: true,
 		},

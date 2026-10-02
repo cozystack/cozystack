@@ -189,6 +189,36 @@ YAML
     rm -rf "$tmp"
 }
 
+@test "validate sees a suite written as chainsaw-test.yml" {
+    # Chainsaw runs a chainsaw-test.yml suite, so the mapping check has to see
+    # one too, or an unmapped suite spelled that way passes validation.
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/suites/totally-unmapped-suite"
+    : > "$tmp/suites/totally-unmapped-suite/chainsaw-test.yml"
+    err=$(hack/select-install.sh --validate packages/core/platform/sources "$tmp/suites" 2>&1 1>/dev/null) && {
+        echo "expected validation to fail on an unmapped .yml suite" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "suite 'totally-unmapped-suite' has no PackageSource mapping"
+    rm -rf "$tmp"
+}
+
+@test "validate fails when the suite listing itself fails" {
+    # A failed find and an empty suites dir used to read the same: the error
+    # went to /dev/null and the pipeline reported sort's status, so the mapping
+    # check validated nothing and passed.
+    tmp=$(mktemp -d)
+    mkdir "$tmp/bin"
+    printf '#!/bin/sh\necho "find: broken fixture" >&2\nexit 1\n' > "$tmp/bin/find"
+    chmod +x "$tmp/bin/find"
+    err=$(PATH="$tmp/bin:$PATH" hack/select-install.sh --validate 2>&1 1>/dev/null) && {
+        echo "expected validate to fail when find fails" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "select-install: find failed listing the suites"
+    rm -rf "$tmp"
+}
+
 @test "validate detects a suite mapped to a source absent from the graph" {
     # suite_to_source() hardcodes securitygroup -> cozystack.securitygroup-controller;
     # a sources dir without that PackageSource must fail validation (fail closed),

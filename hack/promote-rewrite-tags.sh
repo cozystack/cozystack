@@ -19,10 +19,10 @@
 # observable by cutting a release. It is a script so that
 # hack/promote-rewrite-tags_test.bats can round-trip it against the real tree.
 #
-# Requires a POSIX shell plus GNU sed and GNU grep: `sed -i` and grep's
-# -r/--exclude/--exclude-dir are GNU extensions, not POSIX. Both are present on
-# the CI runners and in the build image; this is not portable to BSD userland
-# as written.
+# grep's -r/-I/--exclude/--exclude-dir are non-POSIX, but both GNU and BSD grep
+# implement them, so this runs unchanged on the CI runners, in the build image,
+# and on a macOS developer box. The edit is written through a temp file rather
+# than `sed -i`, whose argument handling differs between the two seds.
 set -eu
 
 RC_VERSION="${1:?usage: promote-rewrite-tags.sh <rc-version> <stable-version> [root]}"
@@ -71,7 +71,17 @@ while IFS= read -r f; do
     break
   fi
   if grep -q "$RC_ESC" "$f"; then
-    sed -i "s/${RC_ESC}/${STABLE_VERSION}/g" "$f"
+    # Written through a temp file rather than `sed -i`: the in-place flag takes
+    # the substitution as its backup suffix on BSD and edits nothing, so the
+    # rewrite would silently no-op on a macOS `make unit-tests`. cat back over the
+    # original to keep its inode and permissions. `cat` truncates before it
+    # writes, so an interrupt can leave a half-written file where `mv` would not;
+    # that is the lesser evil against `mv` stamping mktemp's 0600 onto a file in
+    # the release tree.
+    tmp_f=$(mktemp)
+    sed "s/${RC_ESC}/${STABLE_VERSION}/g" "$f" > "$tmp_f"
+    cat "$tmp_f" > "$f"
+    rm -f "$tmp_f"
     echo "  ~ $f"
     rewritten=$((rewritten + 1))
   else

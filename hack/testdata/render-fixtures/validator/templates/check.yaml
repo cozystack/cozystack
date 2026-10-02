@@ -1,0 +1,32 @@
+{{- /* Parse raw fixture YAML: merging values would silently remove null keys. */ -}}
+{{- $fixture := .Values.fixture | fromYaml -}}
+{{- if hasKey $fixture "Error" -}}
+  {{- fail (get $fixture "Error") -}}
+{{- end -}}
+{{- range $section := list "_cluster" "_namespace" -}}
+  {{- $values := get $fixture $section -}}
+  {{- if or (not (kindIs "map" $values)) (empty $values) -}}
+    {{- fail (printf "%s must be a non-empty map" $section) -}}
+  {{- end -}}
+  {{- range $key, $value := $values -}}
+    {{- if and (eq $section "_cluster") (has $key (list "scheduling" "branding")) -}}
+      {{- if not (kindIs "map" $value) -}}
+        {{- fail (printf "%s.%s must be a map" $section $key) -}}
+      {{- end -}}
+    {{- else if not (kindIs "string" $value) -}}
+      {{- fail (printf "%s.%s must be a string" $section $key) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $scheduling := get $fixture._cluster "scheduling" -}}
+{{- if not (kindIs "map" $scheduling) -}}
+  {{- fail "_cluster.scheduling must be a map" -}}
+{{- end -}}
+{{- range $key := list "globalAppTopologySpreadConstraints" "dedicatedNodesForWindowsVMs" -}}
+  {{- if not (hasKey $scheduling $key) -}}
+    {{- fail (printf "_cluster.scheduling.%s is missing" $key) -}}
+  {{- end -}}
+  {{- if not (kindIs "string" (get $scheduling $key)) -}}
+    {{- fail (printf "_cluster.scheduling.%s must be a string" $key) -}}
+  {{- end -}}
+{{- end -}}

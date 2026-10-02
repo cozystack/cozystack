@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # -----------------------------------------------------------------------------
 # Unit tests for the pure decision/parsing helpers in
 # hack/e2e-capture-dataplane.sh -- specifically the LoadBalancer-datapath
@@ -37,6 +36,9 @@
 # the LB heavy-capture path, which only runs when the probe reports the address
 # unreachable, so their stubs answer `nc -z` with a failure on purpose. A stub
 # that stops short leaves the test green against every implementation.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles delimited by ASCII double quotes; embedded quotes truncate.
@@ -205,7 +207,6 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
 @test "runtime checks LoadBalancers when there are no affected pods" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   calls="$tmp/kubectl.calls"
   mkdir -p "$tmp/bin"
   cat > "$tmp/bin/kubectl" <<'EOF'
@@ -221,6 +222,7 @@ EOF
   awk '$0 ~ /^get svc -A / { found = 1 } END { exit !found }' "$calls"
   awk 'index($0, "checking LoadBalancers independently") { found = 1 } END { exit !found }' "$tmp/stdout"
   awk 'index($0, "no Service type=LoadBalancer") { found = 1 } END { exit !found }' "$tmp/stdout"
+  rm -rf "$tmp"
 }
 
 @test "lb_filter_services keeps only LoadBalancer rows that have an ingress IP" {

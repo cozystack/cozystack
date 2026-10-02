@@ -1,0 +1,15 @@
+# Suites whose leaked pods hack/e2e-chainsaw-run.sh reports as a warning
+# instead of failing the suite. One line per suite directory:
+#
+#   <suite-dir> <issue-ref>
+#
+# Every entry has to name an existing suite directory, or the run stops before
+# the first suite. An entry exempts the whole suite, so any new leak in it is
+# hidden too until the line goes: the PR that fixes the issue deletes the line.
+#
+# A TenantControlPlane can sit on its finalizer after the Kubernetes application
+# is deleted, holding its apiserver pods. Both suites create one through
+# hack/e2e-chainsaw/_lib/run-kubernetes.sh; the stuck finalizer was seen in
+# kubernetes-latest only, but nothing in the defect is specific to that suite.
+kubernetes-latest cozystack/cozystack#4489
+kubernetes-previous cozystack/cozystack#4489

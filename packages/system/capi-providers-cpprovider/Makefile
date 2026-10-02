@@ -14,19 +14,20 @@ UPSTREAM_VERSION = $(shell awk -F= '/^ARG VERSION=/{print $$2}' images/cluster-a
 # than UPSTREAM_VERSION changes.
 COZYSTACK_REV = 0
 IMAGE_BASE = $(REGISTRY)/cluster-api-control-plane-provider-kamaji
-IMAGE_TAG = $(UPSTREAM_VERSION)-cozystack.$(COZYSTACK_REV)
+# The image is versioned by its upstream component, so the stamped refs carry
+# this tag. It is pushed like any package's versioned tag, only under
+# PUBLISH_VERSIONED=1; every build pushes the build-unique IMAGE_TAG.
+COMPONENT_VERSION = $(UPSTREAM_VERSION)-cozystack.$(COZYSTACK_REV)
 
 image:
 	docker buildx build images/cluster-api-control-plane-provider-kamaji \
-		--tag $(IMAGE_BASE):$(IMAGE_TAG) \
-		$(if $(strip $(OCI_EXPORT_DIR)),,--tag $(IMAGE_BASE):$(IMAGE_TAG)-$(TAG)) \
+		$(call image-tags,cluster-api-control-plane-provider-kamaji,$(COMPONENT_VERSION)) \
 		--cache-from type=registry,ref=$(IMAGE_BASE):latest \
 		$(if $(strip $(OCI_EXPORT_DIR)),,--cache-to type=inline) \
-		$(call oci-output,cluster-api-control-plane-provider-kamaji) \
 		--metadata-file images/cluster-api-control-plane-provider-kamaji.json \
 		$(BUILDX_ARGS)
 	digest=$$(yq e '."containerimage.digest"' images/cluster-api-control-plane-provider-kamaji.json -o json -r); \
-	IMG="$(IMAGE_BASE):$(IMAGE_TAG)@$$digest"; \
+	IMG="$(IMAGE_BASE):$(COMPONENT_VERSION)@$$digest"; \
 	echo "$$IMG" > images/cluster-api-control-plane-provider-kamaji.tag; \
 	sed -i.bak -E "s|image: ghcr\.io/.+/cluster-api-control-plane-provider-kamaji:[^[:space:]]+|image: $$IMG|" files/control-plane-components.yaml; \
 	rm files/control-plane-components.yaml.bak; \
@@ -49,7 +50,7 @@ update:
 			git apply --recount "$$p"; \
 		done
 	cd .update-tmp/config/manager && \
-		kustomize edit set image controller=$(IMAGE_BASE):$(IMAGE_TAG)
+		kustomize edit set image controller=$(IMAGE_BASE):$(COMPONENT_VERSION)
 	kustomize build .update-tmp/config/default > files/control-plane-components.yaml
 	gzip -nc files/control-plane-components.yaml > files/components.gz
 	rm -rf .update-tmp

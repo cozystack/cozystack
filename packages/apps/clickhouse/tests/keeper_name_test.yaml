@@ -1,0 +1,153 @@
+suite: keeper name budget
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  clusterDomain: cluster.local
+
+tests:
+  - it: "keeps <release>-keeper for a short release name"
+    release:
+      name: ch-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: ch-test-keeper
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+      - equal:
+          path: spec.configuration.zookeeper.nodes[0].host
+          value: chk-ch-test-keeper-cluster1-0-0.tenant-test.svc.cluster.local
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "keeps <release>-keeper when the confd volume name lands exactly on 63 characters"
+    release:
+      name: clickhouse-abcdefghijklmno
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-abcdefghijklmno-keeper
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+      - equal:
+          path: spec.configuration.zookeeper.nodes[2].host
+          value: chk-clickhouse-abcdefghijklmno-keeper-cluster1-0-2.tenant-test.svc.cluster.local
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "shortens the name one character past the budget and keeps the ClickHouse side in step"
+    release:
+      name: clickhouse-abcdefghijklmnop
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-abcdefgh-be3a98-keeper
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+      - matchRegex:
+          path: metadata.name
+          pattern: ^[a-z0-9-]{1,33}$
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+      - equal:
+          path: spec.configuration.zookeeper.nodes[0].host
+          value: chk-clickhouse-abcdefgh-be3a98-keeper-cluster1-0-0.tenant-test.svc.cluster.local
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - equal:
+          path: spec.configuration.zookeeper.nodes[2].host
+          value: chk-clickhouse-abcdefgh-be3a98-keeper-cluster1-0-2.tenant-test.svc.cluster.local
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+
+  - it: "leaves the pod label, the scrape and the monitor on <release>-keeper when the name is shortened"
+    release:
+      name: clickhouse-abcdefghijklmnop
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].metadata.labels.app
+          value: clickhouse-abcdefghijklmnop-keeper
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: clickhouse-abcdefghijklmnop-keeper
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: VMPodScrape
+      - equal:
+          path: spec.selector.app
+          value: clickhouse-abcdefghijklmnop-keeper
+        template: templates/workloadmonitor.yaml
+        documentSelector:
+          path: metadata.name
+          value: clickhouse-abcdefghijklmnop-keeper
+
+  - it: "does not end the truncated prefix with a dash"
+    release:
+      name: clickhouse-abcdefg-hijklmnop
+      namespace: tenant-test
+    templates:
+      - templates/chkeeper.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-abcdefg-0c8860-keeper
+
+  - it: "fits a very long release name into the same budget"
+    release:
+      name: clickhouse-very-long-application-name-here
+      namespace: tenant-test
+    templates:
+      - templates/chkeeper.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-very-lon-94e5b4-keeper
+
+  - it: "gives a two-digit replica index one more character of room"
+    release:
+      name: clickhouse-abcdefghijklmno
+      namespace: tenant-test
+    set:
+      clickhouseKeeper:
+        replicas: 11
+    templates:
+      - templates/chkeeper.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - equal:
+          path: metadata.name
+          value: clickhouse-abcdefg-8d42f8-keeper

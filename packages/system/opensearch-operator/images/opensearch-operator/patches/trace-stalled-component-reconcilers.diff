@@ -1,0 +1,307 @@
+diff --git a/opensearch-operator/controllers/opensearchController.go b/opensearch-operator/controllers/opensearchController.go
+index 6bf9f9c..5ef3e39 100644
+--- a/opensearch-operator/controllers/opensearchController.go
++++ b/opensearch-operator/controllers/opensearchController.go
+@@ -201,6 +201,10 @@ func (r *OpenSearchClusterReconciler) deleteExternalResources(ctx context.Contex
+ 		r.Instance,
+ 	)
+ 
++	// Not wrapped: every DeleteResources at this version returns immediately
++	// (tls.go:578, securityconfig.go:254, configuration.go:182, cluster.go:384,
++	// dashboards.go:188), so a watchdog here could only ever spawn goroutines
++	// for a call that cannot block.
+ 	componentReconcilers := []reconcilers.ComponentReconciler{
+ 		tls.DeleteResources,
+ 		securityconfig.DeleteResources,
+@@ -234,6 +238,15 @@ func (r *OpenSearchClusterReconciler) reconcilePhasePending(ctx context.Context)
+ 	return ctrl.Result{Requeue: true}, nil
+ }
+ 
++// A pass through the components takes seconds on a healthy cluster: the
++// controller requeues itself every 30s, and on the e2e runs that prompted this
++// the reconciles of a settled cluster came about 10s apart, driven by watch
++// events on top of that requeue. A minute is past anything normal and still
++// early enough to name a stall while whoever is watching is still watching,
++// and it is both how long a call may run before it is reported and how often
++// the report then repeats.
++const componentStallReportEvery = time.Minute
++
+ func (r *OpenSearchClusterReconciler) reconcilePhaseRunning(ctx context.Context) (ctrl.Result, error) {
+ 	// Update initialized status first
+ 	if !r.Instance.Status.Initialized {
+@@ -313,16 +326,19 @@ func (r *OpenSearchClusterReconciler) reconcilePhaseRunning(ctx context.Context)
+ 		r.Instance,
+ 	)
+ 
++	// Wrapped so a component that stops returning is named in the log. Without
++	// it the loop goes quiet mid-pass and the object is left unreconciled with
++	// nothing written about it.
+ 	componentReconcilers := []reconcilers.ComponentReconciler{
+-		tls.Reconcile,
+-		securityconfig.Reconcile,
+-		config.Reconcile,
+-		cluster.Reconcile,
+-		scaler.Reconcile,
+-		dashboards.Reconcile,
+-		upgrade.Reconcile,
+-		restart.Reconcile,
+-		snapshotrepository.Reconcile,
++		reconcilers.WithStallWatchdog(r.Logger, "tls", componentStallReportEvery, componentStallReportEvery, tls.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "securityconfig", componentStallReportEvery, componentStallReportEvery, securityconfig.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "config", componentStallReportEvery, componentStallReportEvery, config.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "cluster", componentStallReportEvery, componentStallReportEvery, cluster.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "scaler", componentStallReportEvery, componentStallReportEvery, scaler.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "dashboards", componentStallReportEvery, componentStallReportEvery, dashboards.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "upgrade", componentStallReportEvery, componentStallReportEvery, upgrade.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "restart", componentStallReportEvery, componentStallReportEvery, restart.Reconcile),
++		reconcilers.WithStallWatchdog(r.Logger, "snapshotrepository", componentStallReportEvery, componentStallReportEvery, snapshotrepository.Reconcile),
+ 	}
+ 	for _, rec := range componentReconcilers {
+ 		result, err := rec()
+diff --git a/opensearch-operator/pkg/reconcilers/stallwatchdog.go b/opensearch-operator/pkg/reconcilers/stallwatchdog.go
+new file mode 100644
+index 0000000..75e2e49
+--- /dev/null
++++ b/opensearch-operator/pkg/reconcilers/stallwatchdog.go
+@@ -0,0 +1,75 @@
++package reconcilers
++
++import (
++	"time"
++
++	"github.com/go-logr/logr"
++	"sigs.k8s.io/controller-runtime/pkg/reconcile"
++)
++
++// WithStallWatchdog wraps a component reconciler so a call that stops returning
++// keeps saying so, under the name of the component it is stuck in.
++//
++// None of the components the cluster controller runs in sequence logs
++// unconditionally when it is entered. The TLS one has a line above its work,
++// but it sits on the early return for a cluster with no security section, which
++// the chart in this repository never produces, and the rolling restart one
++// opens at V(1), off at the verbosity the operator ships with. So a call that
++// never comes back leaves nothing behind at all: the last line in the operator
++// log stays whatever was written before the stall, the object stops being
++// reconciled, and the two look identical from the outside. Logging every entry
++// instead would put nine lines per cluster into the log every reconcile, so
++// nothing is written while a component behaves.
++//
++// The report repeats rather than firing once, so a log read at any point during
++// a stall says which component is in flight and for how long. A single line
++// dated at the start of the stall does not answer the question a reader has
++// five minutes in, which is whether the call is still there.
++func WithStallWatchdog(logger logr.Logger, name string, warnAfter, repeatEvery time.Duration, rec ComponentReconciler) ComponentReconciler {
++	return func() (reconcile.Result, error) {
++		done := make(chan struct{})
++		defer close(done)
++
++		// Taken here rather than inside the goroutine: on a host loaded enough to
++		// be worth a stall report, the two differ by however long the scheduler
++		// took, which is measured into the one number the report carries.
++		started := time.Now()
++
++		go func() {
++			timer := time.NewTimer(warnAfter)
++			defer timer.Stop()
++			select {
++			case <-done:
++				return
++			case <-timer.C:
++			}
++
++			ticker := time.NewTicker(repeatEvery)
++			defer ticker.Stop()
++			for {
++				// Narrows the window on a false report, does not close it: a
++				// tick landing on the return would otherwise write its line
++				// half the time, because a select with both cases ready picks
++				// at random. A preemption between this check and the write
++				// still gets one line out.
++				select {
++				case <-done:
++					return
++				default:
++				}
++
++				logger.Info("component reconciler has not returned",
++					"component", name,
++					"elapsed", time.Since(started).String())
++
++				select {
++				case <-done:
++					return
++				case <-ticker.C:
++				}
++			}
++		}()
++
++		return rec()
++	}
++}
+diff --git a/opensearch-operator/pkg/reconcilers/stallwatchdog_test.go b/opensearch-operator/pkg/reconcilers/stallwatchdog_test.go
+new file mode 100644
+index 0000000..0092f4e
+--- /dev/null
++++ b/opensearch-operator/pkg/reconcilers/stallwatchdog_test.go
+@@ -0,0 +1,160 @@
++package reconcilers
++
++import (
++	"errors"
++	"regexp"
++	"sync"
++	"time"
++
++	"github.com/go-logr/logr/funcr"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"sigs.k8s.io/controller-runtime/pkg/reconcile"
++)
++
++type recordingSink struct {
++	mu    sync.Mutex
++	lines []string
++}
++
++func (r *recordingSink) write(prefix, args string) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.lines = append(r.lines, prefix+args)
++}
++
++func (r *recordingSink) snapshot() []string {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	out := make([]string, len(r.lines))
++	copy(out, r.lines)
++	return out
++}
++
++var errStallWatchdogTest = errors.New("component failed")
++
++var elapsedPattern = regexp.MustCompile(`"elapsed"="([^"]+)"`)
++
++var _ = Describe("component reconciler stall watchdog", func() {
++	var sink *recordingSink
++
++	BeforeEach(func() {
++		sink = &recordingSink{}
++	})
++
++	It("passes the wrapped result and error through untouched", func() {
++		want := reconcile.Result{Requeue: true, RequeueAfter: 7 * time.Second}
++		wrapped := WithStallWatchdog(funcr.New(sink.write, funcr.Options{}), "cluster", time.Hour, time.Hour, func() (reconcile.Result, error) {
++			return want, errStallWatchdogTest
++		})
++
++		got, err := wrapped()
++
++		Expect(got).To(Equal(want))
++		Expect(err).To(MatchError(errStallWatchdogTest))
++	})
++
++	It("stays silent while the component returns promptly", func() {
++		// The call takes long enough for a watchdog that ignored warnAfter to
++		// get its report out, and warnAfter is far enough away that a loaded CI
++		// host cannot reach it: what is pinned is the threshold, not the speed
++		// of the scheduler.
++		wrapped := WithStallWatchdog(funcr.New(sink.write, funcr.Options{}), "cluster", 10*time.Second, 10*time.Second, func() (reconcile.Result, error) {
++			time.Sleep(150 * time.Millisecond)
++			return reconcile.Result{}, nil
++		})
++
++		_, err := wrapped()
++		Expect(err).ToNot(HaveOccurred())
++
++		Consistently(sink.snapshot, 200*time.Millisecond, 20*time.Millisecond).Should(BeEmpty())
++	})
++
++	It("drops the watchdog when the call returns before the threshold", func() {
++		wrapped := WithStallWatchdog(funcr.New(sink.write, funcr.Options{}), "cluster", 120*time.Millisecond, 120*time.Millisecond, func() (reconcile.Result, error) {
++			return reconcile.Result{}, nil
++		})
++
++		_, err := wrapped()
++		Expect(err).ToNot(HaveOccurred())
++
++		// Well past the threshold: a watchdog that does not notice the call
++		// returned would report here, once per wrapped call on every reconcile
++		// of every cluster, which is the cost this design claims not to have.
++		Consistently(sink.snapshot, 400*time.Millisecond, 40*time.Millisecond).Should(BeEmpty())
++	})
++
++	It("keeps reporting while the call stays blocked", func() {
++		release := make(chan struct{})
++		returned := make(chan struct{})
++		wrapped := WithStallWatchdog(funcr.New(sink.write, funcr.Options{}), "restart", 10*time.Millisecond, 10*time.Millisecond, func() (reconcile.Result, error) {
++			<-release
++			return reconcile.Result{}, nil
++		})
++
++		go func() {
++			defer GinkgoRecover()
++			defer close(returned)
++			_, err := wrapped()
++			Expect(err).ToNot(HaveOccurred())
++		}()
++
++		// A single report would satisfy the spec above and say nothing about
++		// whether the call is still in flight by the time anyone reads the
++		// log: what a reader needs is a line dated now, not one dated at the
++		// moment the stall began.
++		Eventually(func() int { return len(sink.snapshot()) }).Should(BeNumerically(">=", 3))
++
++		// The report carries how long the call has been in flight, and that
++		// number has to move: a frozen or zero elapsed says nothing about
++		// whether the stall started a second or an hour ago. One snapshot
++		// feeds both halves of the assertion, since the ticker appends
++		// between two reads and they then disagree on the count.
++		lines := sink.snapshot()
++		var elapsed []string
++		for _, line := range lines {
++			if m := elapsedPattern.FindStringSubmatch(line); m != nil {
++				elapsed = append(elapsed, m[1])
++			}
++		}
++		Expect(elapsed).To(HaveLen(len(lines)))
++		Expect(elapsed[0]).ToNot(Equal("0s"))
++		Expect(elapsed[1]).ToNot(Equal(elapsed[0]))
++
++		close(release)
++		Eventually(returned).Should(BeClosed())
++	})
++
++	It("names the component while its call is still in flight", func() {
++		release := make(chan struct{})
++		returned := make(chan struct{})
++		wrapped := WithStallWatchdog(funcr.New(sink.write, funcr.Options{}), "securityconfig", 10*time.Millisecond, 10*time.Millisecond, func() (reconcile.Result, error) {
++			<-release
++			return reconcile.Result{}, nil
++		})
++
++		go func() {
++			defer GinkgoRecover()
++			defer close(returned)
++			_, err := wrapped()
++			Expect(err).ToNot(HaveOccurred())
++		}()
++
++		Eventually(sink.snapshot).Should(ContainElement(ContainSubstring("securityconfig")))
++
++		close(release)
++		Eventually(returned).Should(BeClosed())
++
++		// The goroutine has to stop with the call, or every stalled reconcile
++		// leaves one behind writing for the life of the process. A report
++		// already in flight when the call returned is allowed to land, so what
++		// is pinned is that the count settles at all rather than the moment it
++		// does: a goroutine still running adds a line every interval and never
++		// lets two readings five intervals apart agree.
++		Eventually(func() bool {
++			before := len(sink.snapshot())
++			time.Sleep(50 * time.Millisecond)
++			return len(sink.snapshot()) == before
++		}, 2*time.Second, 10*time.Millisecond).Should(BeTrue())
++	})
++})

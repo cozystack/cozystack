@@ -120,9 +120,19 @@ print_header "Step 02: Create the Rabbitmq strategy + BackupClass"
 # Pod needs no package install at run time. Its presence also confirms the
 # platform default backups stack (backupstrategy-controller + CRDs) is installed,
 # without which the BackupJob below cannot reconcile at all.
+# Wait for it rather than read it once. The strategy is rendered behind a lookup
+# of the platform bucket, so it exists only once a Helm upgrade has run after
+# that bucket was provisioned. The controller forces that upgrade, but helm-
+# controller holds it while any release in its dependsOn is not Ready, so a
+# platform change made just before this runs can keep it absent for minutes.
+# kubectl wait keeps polling through NotFound and fails on any other error.
+log_substep "Waiting for the platform's cozy-default-rabbitmq strategy..."
+kubectl wait --for=create rabbitmqs.strategy.backups.cozystack.io/cozy-default-rabbitmq \
+    --timeout=15m >/dev/null \
+    || { log_error "cozy-default-rabbitmq strategy did not appear: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
 CLIENT_IMAGE=$(kubectl get rabbitmqs.strategy.backups.cozystack.io cozy-default-rabbitmq \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="rabbitmq-backup")].image}' 2>/dev/null || true)
-[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-rabbitmq strategy not found: enable the platform default backups (backupstrategy-controller) before running this demo"; exit 1; }
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="rabbitmq-backup")].image}')
+[[ -n "$CLIENT_IMAGE" ]] || { log_error "cozy-default-rabbitmq strategy has no rabbitmq-backup container image"; exit 1; }
 log_substep "Reusing the platform strategy's client image: ${CLIENT_IMAGE}"
 subst 03-rabbitmq-strategy.yaml | kubectl apply -f -
 kubectl apply -f "$SCRIPT_DIR/04-backupclass.yaml"
@@ -130,7 +140,9 @@ kubectl apply -f "$SCRIPT_DIR/04-backupclass.yaml"
 # --- Source application + sentinel -------------------------------------------
 log_step "Provisioning source RabbitMQ '$RABBITMQ_SRC_NAME'"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/05-rabbitmq-src.yaml"
-wait_hr_ready "$RABBITMQ_SRC_CR" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "$RABBITMQ_SRC_CR" 660
 wait_rabbitmq_ready "$RABBITMQ_SRC_CR" 600
 
 SENTINEL="sentinel-$(date +%s)-$$"
@@ -176,7 +188,7 @@ log_success "in-place restore round-tripped the sentinel"
 # --- Restore-to-copy ---------------------------------------------------------
 log_step "Provisioning target RabbitMQ '$RABBITMQ_TARGET_NAME' and restoring the source's definitions into it"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/20-rabbitmq-target.yaml"
-wait_hr_ready "$RABBITMQ_TARGET_CR" 300
+wait_hr_ready "$RABBITMQ_TARGET_CR" 660
 wait_rabbitmq_ready "$RABBITMQ_TARGET_CR" 600
 rabbitmq_has_sentinel "$RABBITMQ_TARGET_CR" "$SENTINEL" \
     && { log_error "target already has the sentinel before restore — cannot prove the copy"; exit 1; }

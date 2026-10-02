@@ -1,7 +1,7 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 

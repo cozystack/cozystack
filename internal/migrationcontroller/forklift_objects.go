@@ -5,6 +5,7 @@ package migrationcontroller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,11 +23,11 @@ import (
 // owner reference is what makes deleting the task take the scaffolding with it.
 func taskOwnership(task *migrationv1alpha1.VMImportTask) (map[string]string, metav1.OwnerReference) {
 	return map[string]string{
-			migrationv1alpha1.ManagedByLabel:           migrationv1alpha1.ManagedByValue,
-			migrationv1alpha1.OwningTaskNameLabel:      task.Name,
-			migrationv1alpha1.OwningTaskNamespaceLabel: task.Namespace,
-		}, ownerRef(
-			migrationv1alpha1.GroupVersion.WithKind("VMImportTask"), task.Name, task.UID)
+		migrationv1alpha1.ManagedByLabel:           migrationv1alpha1.ManagedByValue,
+		migrationv1alpha1.OwningTaskNameLabel:      task.Name,
+		migrationv1alpha1.OwningTaskNamespaceLabel: task.Namespace,
+	}, ownerRef(
+		migrationv1alpha1.GroupVersion.WithKind("VMImportTask"), task.Name, task.UID)
 }
 
 // outputMarkers are the labels every object a task produces carries: which
@@ -46,9 +47,7 @@ func stampOutput(obj metav1.Object, task *migrationv1alpha1.VMImportTask, vmID s
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	for k, v := range outputMarkers(task, vmID) {
-		labels[k] = v
-	}
+	maps.Copy(labels, outputMarkers(task, vmID))
 	obj.SetLabels(labels)
 }
 
@@ -67,13 +66,13 @@ func isOwnOutput(obj metav1.Object, task *migrationv1alpha1.VMImportTask, vmID s
 
 // providerRefs is the source/destination pair every Forklift object in a task
 // points at. Both live in the task's namespace, because a Source does.
-func providerRefs(task *migrationv1alpha1.VMImportTask, src *migrationv1alpha1.VMImportSource) map[string]interface{} {
-	return map[string]interface{}{
-		"source": map[string]interface{}{
+func providerRefs(task *migrationv1alpha1.VMImportTask, src *migrationv1alpha1.VMImportSource) map[string]any {
+	return map[string]any{
+		"source": map[string]any{
 			"name":      sourceProviderName(src.Name),
 			"namespace": task.Namespace,
 		},
-		"destination": map[string]interface{}{
+		"destination": map[string]any{
 			"name":      destinationProviderName(src.Name),
 			"namespace": task.Namespace,
 		},
@@ -109,9 +108,9 @@ func (r *VMImportTaskReconciler) ensureMaps(
 		obj.SetNamespace(task.Namespace)
 		obj.SetLabels(labels)
 		obj.SetOwnerReferences([]metav1.OwnerReference{owner})
-		spec := map[string]interface{}{
+		spec := map[string]any{
 			"provider": providerRefs(task, src),
-			"map":      []interface{}{},
+			"map":      []any{},
 		}
 		if err := unstructured.SetNestedMap(obj.Object, spec, "spec"); err != nil {
 			return err
@@ -171,15 +170,15 @@ func (r *VMImportTaskReconciler) createPlan(
 	obj.SetLabels(labels)
 	obj.SetOwnerReferences([]metav1.OwnerReference{owner})
 
-	spec := map[string]interface{}{
+	spec := map[string]any{
 		"skipGuestConversion": true,
 		"provider":            providerRefs(task, src),
-		"map": map[string]interface{}{
-			"network": map[string]interface{}{
+		"map": map[string]any{
+			"network": map[string]any{
 				"name":      mapName(task.Name),
 				"namespace": task.Namespace,
 			},
-			"storage": map[string]interface{}{
+			"storage": map[string]any{
 				"name":      mapName(task.Name),
 				"namespace": task.Namespace,
 			},
@@ -189,8 +188,8 @@ func (r *VMImportTaskReconciler) createPlan(
 		// asked for it lives, which removes the whole class of
 		// cross-namespace coercion bugs.
 		"targetNamespace": task.Namespace,
-		"vms": []interface{}{
-			map[string]interface{}{
+		"vms": []any{
+			map[string]any{
 				"id": req.ID,
 				// Keep the machine Forklift builds powered off. Left unset,
 				// Forklift matches the source's pre-migration power state, so
@@ -235,8 +234,8 @@ func (r *VMImportTaskReconciler) ensureMigration(
 	obj.SetNamespace(task.Namespace)
 	obj.SetLabels(labels)
 	obj.SetOwnerReferences([]metav1.OwnerReference{owner})
-	spec := map[string]interface{}{
-		"plan": map[string]interface{}{
+	spec := map[string]any{
+		"plan": map[string]any{
 			"name":      plan,
 			"namespace": task.Namespace,
 		},
@@ -296,9 +295,9 @@ func (r *VMImportTaskReconciler) populateMaps(
 			if hasSourceID(entries, id) {
 				continue
 			}
-			entries = append(entries, map[string]interface{}{
-				"source":      map[string]interface{}{"id": id},
-				"destination": map[string]interface{}{"type": "pod"},
+			entries = append(entries, map[string]any{
+				"source":      map[string]any{"id": id},
+				"destination": map[string]any{"type": "pod"},
 			})
 			added = true
 		}
@@ -328,9 +327,9 @@ func (r *VMImportTaskReconciler) populateMaps(
 			if hasSourceID(entries, id) {
 				continue
 			}
-			entries = append(entries, map[string]interface{}{
-				"source":      map[string]interface{}{"id": id},
-				"destination": map[string]interface{}{"storageClass": storageClass},
+			entries = append(entries, map[string]any{
+				"source":      map[string]any{"id": id},
+				"destination": map[string]any{"storageClass": storageClass},
 			})
 			added = true
 		}
@@ -393,9 +392,9 @@ func (r *VMImportTaskReconciler) sourceTopology(
 	return vm.networkIDs(), vm.datastoreIDs(), nil
 }
 
-func hasSourceID(entries []interface{}, id string) bool {
+func hasSourceID(entries []any, id string) bool {
 	for _, raw := range entries {
-		entry, ok := raw.(map[string]interface{})
+		entry, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -418,7 +417,7 @@ func planCriticalCondition(plan *unstructured.Unstructured) string {
 	conditions, _, _ := unstructured.NestedSlice(plan.Object, "status", "conditions")
 	var critical []string
 	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
+		cond, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -444,7 +443,7 @@ func planCriticalCondition(plan *unstructured.Unstructured) string {
 func planReady(plan *unstructured.Unstructured) bool {
 	conditions, _, _ := unstructured.NestedSlice(plan.Object, "status", "conditions")
 	for _, raw := range conditions {
-		cond, ok := raw.(map[string]interface{})
+		cond, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -464,7 +463,7 @@ func migrationProgress(migration *unstructured.Unstructured) (done bool, progres
 	if len(vms) == 0 {
 		return false, 0, ""
 	}
-	vm, ok := vms[0].(map[string]interface{})
+	vm, ok := vms[0].(map[string]any)
 	if !ok {
 		return false, 0, ""
 	}
@@ -487,7 +486,7 @@ func migrationProgress(migration *unstructured.Unstructured) (done bool, progres
 	var namedCompleted, namedTotal int64
 	pipeline, _, _ := unstructured.NestedSlice(vm, "pipeline")
 	for _, raw := range pipeline {
-		step, ok := raw.(map[string]interface{})
+		step, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}

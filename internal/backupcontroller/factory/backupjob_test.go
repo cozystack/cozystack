@@ -11,10 +11,10 @@ import (
 
 func TestBackupJob(t *testing.T) {
 	tests := []struct {
-		name     string
-		plan     *backupsv1alpha1.Plan
+		name      string
+		plan      *backupsv1alpha1.Plan
 		scheduled time.Time
-		validate func(*testing.T, *backupsv1alpha1.BackupJob)
+		validate  func(*testing.T, *backupsv1alpha1.BackupJob)
 	}{
 		{
 			name: "creates BackupJob with BackupClassName",
@@ -97,7 +97,7 @@ func TestBackupJob(t *testing.T) {
 				},
 				Spec: backupsv1alpha1.PlanSpec{
 					ApplicationRef: corev1.TypedLocalObjectReference{
-						APIGroup: stringPtr("custom.api.group.io"),
+						APIGroup: new("custom.api.group.io"),
 						Kind:     "CustomApp",
 						Name:     "custom1",
 					},
@@ -160,8 +160,4 @@ func TestBackupJob(t *testing.T) {
 			tt.validate(t, job)
 		})
 	}
-}
-
-func stringPtr(s string) *string {
-	return &s
 }

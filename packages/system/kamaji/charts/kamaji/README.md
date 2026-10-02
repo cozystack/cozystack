@@ -22,7 +22,7 @@ Kubernetes: `>=1.21.0-0`
 
 | Repository | Name | Version |
 |------------|------|---------|
-| https://clastix.github.io/charts | kamaji-etcd | >=0.11.0 |
+| https://clastix.github.io/charts | kamaji-etcd | >=0.15.0 |
 
 [Kamaji](https://github.com/clastix/kamaji) requires a [multi-tenant `etcd`](https://github.com/clastix/kamaji-internal/blob/master/deploy/getting-started-with-kamaji.md#setup-internal-multi-tenant-etcd) cluster.
 This Helm Chart starting from v0.1.1 provides the installation of an internal `etcd` in order to streamline the local test. If you'd like to use an externally managed etcd instance, you can specify the overrides and by setting the value `etcd.deploy=false`.
@@ -74,6 +74,7 @@ Here the values you can override:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | affinity | object | `{}` | Kubernetes affinity rules to apply to Kamaji controller pods |
+| certManager.issuerRef | object | `{}` | Reference to an existing cert-manager issuer that signs the webhook serving certificate. When `name` is empty the chart creates a self-signed `Issuer` named `kamaji-selfsigned-issuer` and uses that. Set this to chain the webhook certificate to a certificate authority you own. `kind` defaults to `Issuer` and `group` to `cert-manager.io`. Note that the `kamaji-etcd` subchart has its own `kamaji-etcd.certManager.issuerRef`, which defaults to `kamaji-selfsigned-issuer` and has to be updated as well when the etcd certificates are issued by cert-manager. |
 | defaultDatastoreName | string | `"default"` | If specified, all the Kamaji instances with an unassigned DataStore will inherit this default value. |
 | extraArgs | list | `[]` | A list of extra arguments to add to the kamaji controller default ones |
 | fullnameOverride | string | `""` |  |
@@ -82,7 +83,7 @@ Here the values you can override:
 | image.repository | string | `"clastix/kamaji"` | The container image of the Kamaji controller. |
 | image.tag | string | `nil` | Overrides the image tag whose default is the chart appVersion. |
 | imagePullSecrets | list | `[]` |  |
-| kamaji-etcd | object | `{"clusterDomain":"cluster.local","datastore":{"enabled":true,"name":"default"},"deploy":true,"fullnameOverride":"kamaji-etcd"}` | Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml |
+| kamaji-etcd | object | `{"certManager":{"enabled":true,"issuerRef":{"group":"cert-manager.io","kind":"Issuer","name":"kamaji-selfsigned-issuer"}},"clusterDomain":"cluster.local","datastore":{"enabled":true,"name":"default"},"deploy":true,"fullnameOverride":"kamaji-etcd","selfSignedCertificates":{"enabled":false}}` | Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml |
 | kubeconfigGenerator.affinity | object | `{}` | Kubernetes affinity rules to apply to Kubeconfig Generator controller pods |
 | kubeconfigGenerator.enableLeaderElect | bool | `true` | Enables the leader election. |
 | kubeconfigGenerator.enabled | bool | `false` | Toggle to deploy the Kubeconfig Generator Deployment. |

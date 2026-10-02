@@ -91,7 +91,7 @@ func WaitForCRDsEstablished(ctx context.Context, k8sClient client.Client, crdNam
 
 			established := false
 			for _, c := range conditions {
-				cond, ok := c.(map[string]interface{})
+				cond, ok := c.(map[string]any)
 				if !ok {
 					continue
 				}

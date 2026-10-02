@@ -246,6 +246,10 @@
   color: 'bfd4f2'
   description: Issues or PRs related to Keycloak (SSO / identity)
 
+- name: area/openbao
+  color: 'bfd4f2'
+  description: Issues or PRs related to OpenBAO (secrets management, seals, auto-unseal)
+
 - name: area/tenant
   color: 'bfd4f2'
   description: Issues or PRs related to the tenant chart and multi-tenancy

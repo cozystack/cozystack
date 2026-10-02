@@ -93,7 +93,10 @@ run_one() {
         printf '┊[%02d:%02d] %s\n' $((now/60)) $((now%60)) "$out"
   done
 
-  rc=$(awk '/^__RC__/ {print substr($0,7)}' "$log" | tail -n1)
+  # LC_ALL=C so BSD awk scans the captured log byte-wise: a test whose trace or
+  # output carries a multibyte character would otherwise abort this scan ("towc:
+  # multibyte conversion failure") and leave the exit code unread.
+  rc=$(LC_ALL=C awk '/^__RC__/ {print substr($0,7)}' "$log" | tail -n1)
   [ -z "$rc" ] && rc=1
   now=$(( $(date +%s) - START ))
 
@@ -161,12 +164,12 @@ COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 # packages/core/testing/Makefile runs against a live cluster instead.
 #
 # That wildcard is not recursive, so it says nothing about subdirectories, and
-# hack/e2e-apps/ holds live-cluster suites whose own filenames carry no prefix.
-# Matching the directory too keeps them armed; matching only the basename would
-# take the captures away from suites that need them, which is the opposite of
-# the fix. Neither test is a claim that every future live-cluster suite will be
-# named this way -- it is the only signal the runner has, and a suite placed
-# outside both shapes gets no captures.
+# hack/e2e-apps/ historically held live-cluster suites whose own filenames
+# carried no prefix. Keep matching the directory so captures stay armed if that
+# layout returns; matching only the basename would silently disarm them. Neither
+# test claims every future live-cluster suite will be named this way -- these are
+# the only signals the runner has, and a suite outside both shapes gets no
+# captures.
 #
 # Deliberately not a reachability probe. Gating on "can I talk to an apiserver"
 # would disarm the captures in the case they exist for: a failing e2e run is
@@ -281,7 +284,14 @@ _cozy_on_exit() {
   rm -f "$TMP_SH"
 }
 trap '_cozy_on_exit' EXIT
-awk '
+# LC_ALL=C pins a single-byte ctype for the title scan below. It walks each title
+# one character at a time with substr(), and BSD awk aborts that walk on the first
+# multibyte byte ("towc: multibyte conversion failure") instead of returning it,
+# so a file with a non-ASCII @test title never parses and none of its tests run.
+# Under C every byte is its own character, which is all the scan needs: the title
+# is preserved verbatim for display and only the derived function name is mangled.
+# The run-selection pass below is pinned the same way so the two agree on names.
+LC_ALL=C awk '
   /^@test[[:space:]]+"/ {
     line  = substr($0, index($0, "\"") + 1)
     title = substr(line, 1, index(line, "\"") - 1)
@@ -310,7 +320,7 @@ awk '
 ###############################################################################
 # run selected tests                                                          #
 ###############################################################################
-awk -v pat="$PATTERN" '
+LC_ALL=C awk -v pat="$PATTERN" '
   /^### / {
     title = substr($0, 5)
     name = "test_"

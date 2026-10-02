@@ -1,0 +1,87 @@
+suite: init-script removes users dropped from values
+
+# The delete-users pass revokes a user that left .Values.users. Reading the managed
+# users by parsing `\du+` and matching the description in column 4 breaks on
+# PostgreSQL 16 and later, which dropped the "Member of" column, so the description
+# sits in column 3 and nothing matches: a removed user keeps its LOGIN and old
+# password. Query the catalog instead, as the database and role passes do.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: reads the managed users from the catalog, not from the \du+ layout
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "MANAGED_USERS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm'\"\\)"
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'du\+'
+
+  # CREATE ROLE keeps only the first 63 bytes of a longer name, so the catalog holds
+  # a long user under its truncated name. Comparing it against the declared full
+  # name would call it undeclared and drop it on every run, so the declared names
+  # are compared truncated the same way.
+  - it: compares declared users truncated to 63 bytes
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pg-test-credentials
+            namespace: tenant-test
+          data:
+            uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu: ZXhpc3RpbmdwYXNzd29yZA==
+    set:
+      users:
+        app: {}
+        uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DEFINED_USERS="app uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"'
+
+  # A removed user may own objects in any database, and REASSIGN OWNED / DROP OWNED
+  # act only on the database they run in; run in the postgres database alone, DROP
+  # USER then fails on the objects elsewhere and wedges every later init-job run.
+  # Run them in every connectable database before dropping the user.
+  - it: reassigns and drops a removed user's objects in every database
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "ALL_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate\"\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'for db in \$ALL_DBS; do\npsql -v ON_ERROR_STOP=1 --echo-all --dbname "\$db" <<EOT\nREASSIGN OWNED BY "\$user" TO postgres;\nDROP OWNED BY "\$user";\nEOT\ndone\npsql -v ON_ERROR_STOP=1 --echo-all -c "DROP USER \\"\$user\\";"'

@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -67,7 +66,7 @@ func TestWatchIntegration_WorkloadMonitorTriggersModifiedEvent(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 
@@ -136,7 +135,7 @@ func TestWatchIntegration_MonitorDeletionDropsWorkloadsReady(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 

@@ -10,10 +10,12 @@ spec:
     name: cozystack-monitoring-application-default-monitoring-system
     namespace: cozy-system
   interval: 5m
-  # Aligned with the outer cozyrds `release.cozystack.io/helm-install-timeout: "15m"`
-  # (packages/system/monitoring-rd/cozyrds/monitoring.yaml) so the inner HR does
-  # not fail at 10m while the OIDC users-Job is still inside its
-  # activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
+  {{- /*
+    Aligned with the outer cozyrds `release.cozystack.io/helm-install-timeout: "15m"`
+    (packages/system/monitoring-rd/cozyrds/monitoring.yaml) so the inner HR does
+    not fail at 10m while the OIDC users-Job is still inside its
+    activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
+  */}}
   timeout: 15m
   install:
     remediation:
@@ -21,36 +23,59 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  # `poller` waitStrategy is required for healthCheckExprs to be evaluated.
-  # Without it the HR flips Ready as soon as helm applies the VLCluster CR,
-  # before the victoria-metrics-operator has stood up the log store — which is
-  # exactly how a missing/broken VictoriaLogs stayed invisible (issue #3181:
-  # fluent-bit drops logs at a dead-end vlinsert-generic while the release is
-  # Ready). Gating on the VLCluster's own status makes that failure loud.
+  {{- /*
+    `poller` waitStrategy is required for healthCheckExprs to be evaluated.
+    Without it the HR flips Ready as soon as helm applies the VLCluster CR,
+    before the victoria-metrics-operator has stood up the log store, which is
+    exactly how a missing/broken VictoriaLogs stayed invisible (issue #3181:
+    fluent-bit drops logs at a dead-end vlinsert-generic while the release is
+    Ready). Gating on the VLCluster's own status makes that failure loud.
+  */}}
   waitStrategy:
     name: poller
-  # VLCluster's status.conditions carry no stable Ready-type contract for this
-  # operator version, so key on status.updateStatus instead. The CRD types it
-  # as a free-form string; the operator's known values are operational,
-  # expanding, failed and paused. Map `operational` -> current and `expanding`
-  # -> in-progress; the `failed` predicate is a catch-all for everything else
-  # (the operator's `failed` and `paused`, plus any future/unknown value), so
-  # an unexpected status can never be silently read as Ready. A paused or
-  # failed log store is not ingesting, so the release must not report Ready;
-  # cozystack never sets spec.paused on these VLClusters, so `paused` is not
-  # reachable in normal operation. Before the operator writes any updateStatus
-  # (fresh apply) all three predicates are false, so the poller holds the
-  # release not-ready until it becomes operational or hits `timeout:` — the
-  # real backstop. Matching by kind covers every logsStorages entry. (CEL
-  # evaluation is exercised live, not in helm-unittest, which cannot run it.)
-  #
-  # The gate keys on a VLCluster existing, so an empty logsStorages would leave
-  # nothing to match. That configuration is rejected at render time by the
-  # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
-  # logsStorages), so the "Ready with no log store" hole cannot be reached.
+  {{- /*
+    VLCluster's status.conditions carry no stable Ready-type contract for this
+    operator version, so key on status.updateStatus instead. The CRD types it
+    as a free-form string; the operator's known values are operational,
+    expanding, failed and paused. `operational` maps to current and `expanding`
+    to in-progress; the `failed` predicate is a catch-all for everything else
+    (the operator's `failed` and `paused`, plus any future/unknown value), so
+    an unexpected status can never be silently read as Ready. A paused or
+    failed log store is not ingesting, so the release must not report Ready;
+    cozystack never sets spec.paused on these VLClusters, so `paused` is not
+    reachable in normal operation. Before the operator writes any updateStatus
+    (fresh apply) all three predicates are false, so the poller holds the
+    release not-ready until it becomes operational or hits `timeout:`, the
+    real backstop. Matching by kind covers every logsStorages entry. (CEL
+    evaluation is exercised live, not in helm-unittest, which cannot run it.)
+
+    The gate keys on a VLCluster existing, so an empty logsStorages would leave
+    nothing to match. That configuration is rejected at render time by the
+    system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
+    logsStorages), so the "Ready with no log store" hole cannot be reached.
+
+    The traces backend (VTCluster / VTSingle) shares this operator and the same
+    status.updateStatus contract, so it is gated identically below. Unlike logs,
+    tracingStorages is EMPTY by default (tracing off), so usually nothing renders
+    and these exprs are inert: Flux evaluates them only against CRs in the
+    release inventory. "Ready with no trace store" is intentional and harmless:
+    nothing produces spans until the collector ships, so no data is dropped
+    (hence no fail-on-empty guard yet, unlike the logs #3181 guard which fires
+    because fluent-bit ships logs unconditionally).
+  */}}
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1
+      kind: VTCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1
+      kind: VTSingle
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'

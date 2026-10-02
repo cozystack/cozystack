@@ -11,3 +11,6 @@ lineageControllerWebhook:
   # performance work obviates the locality motivation. Leave disabled.
   localK8sAPIEndpoint:
     enabled: false
+  # Empty by default: no resources block is rendered, so requests and limits are
+  # opt-in. Idle usage (measured) is ~35Mi — keep a limit above that.
+  resources: {}

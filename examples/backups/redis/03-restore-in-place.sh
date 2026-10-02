@@ -12,10 +12,9 @@ print_header "Step 03: In-place restore from '${BACKUPJOB_NAME}'"
 
 log_substep "Corrupting the marker to simulate data loss..."
 redis_cmd "$REDIS_NAME" SET "$MARKER_KEY" "corrupted-do-not-keep" >/dev/null
-# Read the corruption back and assert it: redis_cmd swallows stderr, so a write
-# that silently failed (wrong password, sentinel not answering) would leave the
-# marker at its backed-up value and the final check would pass without a restore
-# having done anything.
+# Read the corruption back and assert it: a SET that did not land would leave
+# the marker at its backed-up value, and the final check would then pass
+# without the restore having done anything.
 corrupted=$(redis_cmd "$REDIS_NAME" GET "$MARKER_KEY")
 [[ "$corrupted" == "corrupted-do-not-keep" ]] || { log_error "corruption step did not take (got '${corrupted}'); aborting so the restore assertion cannot false-pass"; exit 1; }
 

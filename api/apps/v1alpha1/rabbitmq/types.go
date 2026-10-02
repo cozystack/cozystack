@@ -20,11 +20,11 @@ type ConfigSpec struct {
 	// Number of RabbitMQ replicas.
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas"`
-	// Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.
+	// Explicit CPU and memory configuration for each RabbitMQ replica. Every resource left unset here is taken from `resourcesPreset`.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
-	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="t1.nano"
+	// Default sizing preset. It supplies every resource `resources` does not set, not only a `resources` left empty entirely.
+	// +kubebuilder:default:="s1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"

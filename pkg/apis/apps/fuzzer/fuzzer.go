@@ -24,8 +24,8 @@ import (
 )
 
 // Funcs returns the fuzzer functions for the apps api group.
-var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
-	return []interface{}{
+var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
+	return []any{
 		func(s *v1alpha1.Application, c randfill.Continue) {
 			c.FillNoCustom(s) // fill self without calling this function again
 		},

@@ -32,7 +32,9 @@ func (e *ProjectionError) Error() string { return e.Message }
 // read-only at every access level), so a credentialsSecretRef field would be
 // unsatisfiable for the audience this API is for: the credentials arrive on the
 // Source's spec and the controller materializes them. The exposure class is the
-// same one every managed database already accepts for `users[].password`.
+// same one the managed databases that still take a values-supplied credential
+// carry (the postgres and mariadb apps take no `users[].password`; the other
+// engines still do).
 //
 // The projected Secret is labelled as ours and the projector refuses to write a
 // pre-existing Secret that is not, so a name collision can never clobber a

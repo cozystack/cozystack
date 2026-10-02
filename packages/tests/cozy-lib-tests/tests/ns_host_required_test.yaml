@@ -1,0 +1,67 @@
+# ./tests/ns_host_required_test.yaml
+suite: cozy-lib.ns-host-required fails only on an empty apex without a host override
+
+templates:
+  - templates/tests/ns-host-required.yaml
+
+# ns-host-required returns the same apex as ns-host, but turns the one case that
+# used to compose a malformed "<sub>." hostname silently — apex empty and no
+# per-app host override — into an explicit render failure. Every other case must
+# behave exactly like ns-host, so the helper stays a drop-in for the apex source
+# at a hostname-emitting site.
+
+tests:
+  - it: returns the apex when _namespace.host is set
+    set:
+      _namespace:
+        host: tenant.example.com
+    asserts:
+      - equal: {path: 'data["host"]', value: "tenant.example.com"}
+
+  - it: returns the apex unchanged even when a host override is also set
+    # The override does not alter what the helper returns; callers apply the
+    # override themselves via `.Values.host | default (...)`.
+    set:
+      host: custom.example.com
+      _namespace:
+        host: tenant.example.com
+    asserts:
+      - equal: {path: 'data["host"]', value: "tenant.example.com"}
+
+  - it: does not fail on an empty apex when a host override is set
+    # Override present means the caller will not use the apex, so an empty apex
+    # is not a malformed-hostname risk and must not fail. _namespace is injected
+    # (empty host) so this case actually reaches the override check rather than
+    # passing through the absent-_namespace branch.
+    set:
+      host: custom.example.com
+      _namespace:
+        etcd: etcd-ns
+    asserts:
+      - equal: {path: 'data["host"]', value: ""}
+
+  - it: stays silent for a standalone render with no _namespace injected
+    # helm lint / helm template with no platform values: _namespace is absent by
+    # design, so the guard must not fire and the helper returns the empty apex.
+    asserts:
+      - equal: {path: 'data["host"]', value: ""}
+
+  - it: stays silent for a standalone render with an empty _namespace map
+    # Charts that declare `_namespace: {}` in values.yaml (e.g. system/monitoring,
+    # system/bucket) render standalone with an empty map, not an absent key. An
+    # empty map is falsy, so the guard must not fire there either.
+    set:
+      _namespace: {}
+    asserts:
+      - equal: {path: 'data["host"]', value: ""}
+
+  - it: fails when _namespace is injected but its host is empty and no override
+    # The real in-cluster misconfig: the platform injected _namespace (here with
+    # a sibling key present, no host), which previously composed a trailing-dot
+    # hostname silently; now it must fail with a clear message.
+    set:
+      _namespace:
+        etcd: etcd-ns
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -971,12 +972,7 @@ func TestReconcile_ReadsRouteToCacheExceptSourceAndCollision(t *testing.T) {
 }
 
 func sliceHas(s []string, v string) bool {
-	for _, e := range s {
-		if e == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }
 
 // edgeTenantGateway builds the TenantGateway a tenant on an edge-terminated

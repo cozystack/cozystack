@@ -23,15 +23,7 @@ Files are numbered so that `kubectl apply -f` order matches the dependency graph
 
 ## How MongoDB backups differ from the other drivers
 
-The psmdb operator only services on-demand `PerconaServerMongoDBBackup` CRs when
-the cluster has the pbm agents running and a storage declared — which is what
-`backup.enabled: true` on the MongoDB application wires up. Unlike the MariaDB /
-CNPG drivers, the strategy does **not** inject the storage into the cluster; it
-only names it (`storageName: s3-storage`, the storage the chart declares) via
-the platform's `cozy-default-mongodb` Strategy. So the application must opt into
-backups (`backup.enabled: true`) with the bucket coordinates in its `backup.*`
-values. The driver surfaces a clear `Ready=False` precondition (rather than a
-silent hang) when the target cluster has backups disabled.
+The psmdb operator runs the pbm agents when the cluster has `backup.enabled: true`, and services an on-demand `PerconaServerMongoDBBackup` only once the storage the CR names is declared on the cluster. Where that storage comes from depends on the flow the application picked. On the default flow (this example) the chart declares it from the application's own `backup.*` values, and the `cozy-default-mongodb` Strategy only names it (`storageName: s3-storage`); the driver injects nothing. With `backup.useSystemBucket: true` the chart leaves the storage out and the driver injects the platform bucket's coordinates onto the cluster before each backup. Either way the driver surfaces a clear `Ready=False` precondition (rather than a silent hang) when the target cluster has backups disabled; see `docs/operations/backup-classes.md` for both flows.
 
 Restores use `PerconaServerMongoDBRestore.spec.backupSource`, carrying the S3
 destination read back from the source backup, so the same artifact restores

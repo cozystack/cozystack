@@ -324,3 +324,73 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "postgres: bootstrap.enabled=true requires S3 credentials: set backup.s3AccessKey+backup.s3SecretKey, backup.s3CredentialsSecret.name, or backup.useSystemBucket=true (with a backups.cozystack.io/RestoreJob)."
+
+  - it: "bootstrap recovery with backupID and recoveryTime: both reach recoveryTarget"
+    # Without backupID the barman-cloud plugin picks the newest backup ending by
+    # targetTime, on any timeline, rather than the one the restore asked for.
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        backupID: "20260921T062713"
+        recoveryTime: "2026-09-22T10:00:00Z"
+    asserts:
+      - equal:
+          path: spec.bootstrap.recovery.recoveryTarget.backupID
+          value: "20260921T062713"
+      # targetTime renders unquoted, so both sides read as a YAML timestamp.
+      - equal:
+          path: spec.bootstrap.recovery.recoveryTarget.targetTime
+          value: 2026-09-22T10:00:00Z
+
+  - it: "bootstrap recovery with backupID only: recovery starts from it and replays to the end of the log"
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        backupID: "20260921T062713"
+    asserts:
+      - equal:
+          path: spec.bootstrap.recovery.recoveryTarget.backupID
+          value: "20260921T062713"
+      - notExists:
+          path: spec.bootstrap.recovery.recoveryTarget.targetTime
+
+  - it: "bootstrap recovery with neither: no recoveryTarget, the plugin restores the newest backup"
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+    asserts:
+      - notExists:
+          path: spec.bootstrap.recovery.recoveryTarget

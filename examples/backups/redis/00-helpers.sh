@@ -47,13 +47,10 @@ export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
 export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
 export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 export MARKER_KEY="${MARKER_KEY:-sentinel:marker}"
-# Single-token value: the redis_cmd helper word-splits REDIS_ARGS, so a value
-# with spaces would break. A UUID-shaped token is enough to prove the exact
-# bytes round-tripped through object storage.
+# Single-token value: redis_cmd strips all whitespace from the reply, so a
+# value with spaces would not compare equal. A UUID-shaped token is enough to
+# prove the exact bytes round-tripped through object storage.
 export MARKER_VALUE="${MARKER_VALUE:-roundtrip-4f1c9a2b}"
-# redis:*-alpine ships redis-cli (SENTINEL discovery + data ops); the seed /
-# verify helpers run it as a throwaway Pod via `kubectl run`.
-export REDIS_CLI_IMAGE="${REDIS_CLI_IMAGE:-redis:7.4-alpine}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}OK${NC} $*" >&2; }
@@ -67,74 +64,48 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $title ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string. An
-# optional 7th arg is a TERMINAL failure value: once the field reaches it the
-# wait returns 1 immediately instead of polling to the timeout (a BackupJob /
-# RestoreJob settles on phase=Failed that never becomes Succeeded).
-wait_for_field() {
-    local resource_type="$1" resource_name="$2" jsonpath="$3" desired="$4"
-    local namespace="${5:-}" timeout="${6:-300}" fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0 ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" 2>/dev/null || true)
-        [[ "$current" == "$desired" ]] && { log_success "$resource_type/$resource_name reached '$desired'"; return 0; }
-        [[ -n "$fail_value" && "$current" == "$fail_value" ]] && { log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"; return 1; }
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop (the apps
-# controller creates the HR asynchronously) and a fail-fast on Stalled=True.
-wait_hr_ready() {
-    local name="$1" timeout="${2:-300}" elapsed=0
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-            [[ "$ready" == "True" ]] && { log_success "HelmRelease/$name is Ready"; return 0; }
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
-            [[ "$stalled" == "True" ]] && { log_error "HelmRelease/$name is Stalled (terminal)"; return 1; }
-        fi
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for HelmRelease/$name to become Ready"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # The cozystack redis chart names its RedisFailover (hence the operator's rfr-/
 # rfs- Services and the -auth Secret) redis-<app>, mirroring the strategy driver
 # that derives the same base from .Release.Name. So app X's password lives in
-# redis-X-auth. Empty when auth is disabled.
+# redis-X-auth. The chart renders that Secret only with authEnabled, so its
+# absence reads as no password; any other error still fails the read.
 redis_pw() {
-    kubectl -n "$NAMESPACE" get secret "redis-$1-auth" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d
+    kubectl -n "$NAMESPACE" get secret "redis-$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
 }
 
 # Run a redis-cli command against an application's CURRENT master. Master
-# discovery goes through the operator's sentinel Service (rfs-redis-<app>, master
-# name "mymaster"), so a write always lands on the writable node even after a
-# failover. Args after the app name are passed verbatim to redis-cli.
+# discovery asks a sentinel of the operator's rfs-redis-<app> Deployment
+# (master name "mymaster"), so a write always lands on the writable node even
+# after a failover. Args after the app name are passed verbatim to redis-cli.
 #   redis_cmd redis-test SET sentinel:marker hello
+#
+# The command runs by `kubectl exec` in a sentinel Pod, whose image carries
+# redis-cli. A throwaway `kubectl run -i` Pod is not usable here: its stdout
+# comes back over an attach, which only carries what the container writes after
+# the attach is established, and kubectl falls back to the Pod log only when
+# the attach fails. A redis-cli that finishes in between comes back as an
+# empty reply with exit 0. An exec'd process writes into pipes of its own, so
+# its output cannot be missed that way.
+#
+# The password travels on stdin rather than in argv, which the exec request
+# URL carries into the API server's audit log. kubectl's and redis-cli's
+# stderr stay attached, so a failed read says why instead of reading as ''.
 redis_cmd() {
-    local app="$1"; shift
-    kubectl -n "$NAMESPACE" run "redis-cli-$RANDOM" \
-        --image="$REDIS_CLI_IMAGE" --restart=Never --rm -i --quiet \
-        --env="REDIS_PW=$(redis_pw "$app")" \
-        --env="APP=redis-$app" \
-        --env="REDIS_ARGS=$*" \
-        --command -- sh -c '
-            addr=$(redis-cli -h "rfs-$APP" -p 26379 sentinel get-master-addr-by-name mymaster)
+    local app="$1" pw; shift
+    pw=$(redis_pw "$app")
+    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "deploy/rfs-redis-$app" -c sentinel -- sh -c '
+            IFS= read -r pw || true
+            addr=$(redis-cli -p 26379 sentinel get-master-addr-by-name mymaster) || exit 1
             h=$(echo "$addr" | sed -n 1p); p=$(echo "$addr" | sed -n 2p)
-            [ -n "$h" ] && [ -n "$p" ] || { echo "no master from sentinel rfs-$APP" >&2; exit 1; }
-            auth=""; [ -n "$REDIS_PW" ] && auth="-a $REDIS_PW --no-auth-warning"
-            exec redis-cli -h "$h" -p "$p" $auth $REDIS_ARGS
-        ' 2>/dev/null | tr -d '[:space:]'
+            [ -n "$h" ] && [ -n "$p" ] || { echo "sentinel knows no master for mymaster" >&2; exit 1; }
+            [ -z "$pw" ] || export REDISCLI_AUTH="$pw"
+            exec redis-cli -h "$h" -p "$p" "$@"
+        ' sh "$@" | tr -d '[:space:]'
 }
 
 # Block until the RedisFailover has an elected master reachable through sentinel.
@@ -143,7 +114,7 @@ wait_redis_master() {
     log_substep "Waiting for '$app' master election via sentinel..."
     while true; do
         local h
-        h=$(redis_cmd "$app" PING 2>/dev/null || true)
+        h=$(redis_cmd "$app" PING || true)
         [[ "$h" == "PONG" ]] && { log_success "'$app' master is reachable"; return 0; }
         (( elapsed >= timeout )) && { log_error "Timeout waiting for '$app' master"; return 1; }
         sleep 5

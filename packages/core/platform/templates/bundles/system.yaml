@@ -1,7 +1,7 @@
 {{- if .Values.bundles.system.enabled }}
 
 # Networking
-{{- if eq .Values.bundles.system.variant "isp-full" }}
+{{- if has .Values.bundles.system.variant (list "isp-full" "isp-slim") }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
 {{- $kubeovnIpv4 := dict
@@ -24,7 +24,7 @@
 {{- end -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
-{{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
+{{- /* For Talos (isp-full, isp-slim): use KubePrism endpoint and disable cgroup autoMount */ -}}
 {{- /* gateway.http2 is threaded explicitly in BOTH states: inline HelmRelease
        values override the system/cilium valuesFiles default (enableAlpn: true),
        so an operator's http2: false actually reaches the dataplane. */ -}}
@@ -35,7 +35,7 @@
   "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2)) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
-{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
+{{include "cozystack.platform.package.networking" (list $ $networkingComponents "kubeovn-cilium" "cilium") }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{- /* Talos bundles only bridge, firewall, flannel, host-local, loopback and
        portmap in /opt/cni/bin from its own node image; the other ten this
@@ -50,17 +50,17 @@
        manages that directory. The value is always emitted rather than left to
        the chart default, so the rendered Package states which way it went. */ -}}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
-{{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
+{{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
-{{- if eq .Values.bundles.system.variant "isp-hosted" }}
+{{- if has .Values.bundles.system.variant (list "isp-hosted" "isp-hosted-slim") }}
 {{include "cozystack.platform.package" (list "cozystack.networking" "noop" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-scheduler" $) }}
 {{- end }}
 
-{{- if eq .Values.bundles.system.variant "isp-full-generic" }}
+{{- if has .Values.bundles.system.variant (list "isp-full-generic" "isp-slim-generic") }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
 {{- /* Parse apiServerEndpoint URL for generic k8s (used by both Cilium and KubeOVN) */ -}}
@@ -123,8 +123,8 @@
   "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2)) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
-{{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
-{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium-generic" $ $networkingComponents) }}
+{{- /* Use kubeovn-cilium-generic / cilium-generic (no values-talos.yaml) */ -}}
+{{include "cozystack.platform.package.networking" (list $ $networkingComponents "kubeovn-cilium-generic" "cilium-generic") }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{- /* multus staging: same default as the isp-full branch above, and here the
        gap is wider -- generic Linux has no guarantee that /opt/cni/bin holds
@@ -135,7 +135,7 @@
        node, so installing only when absent would pin each node to whichever
        version arrived there first. */ -}}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
-{{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
+{{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
 {{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
@@ -145,7 +145,7 @@
 # Cozystack Engine
 {{- $cozystackEngineComponents := dict -}}
 {{- /* For generic k8s, DaemonSets with control-plane nodeSelector need value "true" */ -}}
-{{- if eq .Values.bundles.system.variant "isp-full-generic" -}}
+{{- if has .Values.bundles.system.variant (list "isp-full-generic" "isp-slim-generic") -}}
 {{- $genericNodeSelector := dict "node-role.kubernetes.io/control-plane" "true" -}}
 {{- /* cozystack-api DaemonSet */ -}}
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
@@ -240,7 +240,10 @@
 {{- $tenantComponents := dict -}}
 {{- $tenantClusterValues := dict "_cluster" (dict "oidc-enabled" (ternary "true" "false" .Values.authentication.oidc.enabled)) -}}
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
-{{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
+{{- /* The default variant waits on monitoring, etcd and seaweedfs applications,
+       which the slim variants do not emit. */ -}}
+{{- $tenantVariant := ternary "slim" "default" (eq (include "cozystack.platform.slim" $) "true") }}
+{{include "cozystack.platform.package" (list "cozystack.tenant-application" $tenantVariant $ $tenantComponents) }}
 {{- /* PROXY-protocol on the host ingress-nginx is delivered via
        _cluster.proxy-protocol in the cozystack-values Secret (see
        templates/apps.yaml) and applied by the extra/ingress chart to the
@@ -250,7 +253,7 @@
        consumes their values. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{- /* Variant selection mirrors cozystack-engine above: `oidc` when
        platform-level OIDC is on (extra dependsOn on
@@ -270,11 +273,11 @@
        promotion is out of scope for Phase 1; see
        docs/oidc-grafana.md. */}}
 {{- if .Values.authentication.oidc.enabled }}
-{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "oidc" $) }}
+{{include "cozystack.platform.package.full" (list "cozystack.monitoring-application" "oidc" $) }}
 {{- else }}
-{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "default" $) }}
+{{include "cozystack.platform.package.full" (list "cozystack.monitoring-application" "default" $) }}
 {{- end }}
-{{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{- /*
   Forward admin backupStorage overrides (endpoint, region, systemSecretName, …)
@@ -297,22 +300,31 @@
 {{- if $backupStrategyValues -}}
 {{- $_ := set $backupStrategyComponents "backupstrategy-controller" (dict "values" $backupStrategyValues) -}}
 {{- end -}}
-{{include "cozystack.platform.package" (list "cozystack.backupstrategy-controller" "default" $ $backupStrategyComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
-{{- /* velero must be a default package: backupstrategy-controller (default)
-hard-depends on cozystack.velero, so an optional velero leaves the
+{{include "cozystack.platform.package.full" (list "cozystack.backupstrategy-controller" "default" $ $backupStrategyComponents) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.backup-controller" $) }}
+{{- /* velero must be emitted wherever backupstrategy-controller is: the latter
+hard-depends on cozystack.velero, so a missing velero leaves the
 backupstrategy-controller Package permanently DependenciesNotReady and the
-cozystack-platform HelmRelease never becomes Ready. */}}
-{{include "cozystack.platform.package.default" (list "cozystack.velero" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
+cozystack-platform HelmRelease never becomes Ready. Both are default on the full
+variants and opt-in on the slim ones. */}}
+{{include "cozystack.platform.package.full.default" (list "cozystack.velero" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.vertical-pod-autoscaler" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
-{{include "cozystack.platform.package" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.goldpinger" $) }}
+{{include "cozystack.platform.package.full" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.goldpinger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.grafana-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.etcd-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.grafana-operator" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.etcd-operator" $) }}
+{{- /* keycloak depends on postgres-operator, so OIDC keeps it on the slim variants too. */ -}}
+{{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package.default" (list "cozystack.postgres-operator" $) }}
+{{- else }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.postgres-operator" $) }}
+{{- end }}
+{{/* Always on, the slim variants included: cozystack-controller watches
+       BucketClaim unconditionally, and without this CRD its manager never
+       finishes syncing caches and crash-loops. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.objectstorage-controller" $) }}
 {{- /* bucket-application belongs to the system bundle, not iaas: its own
        dependsOn closure is cozystack.networking + cozystack.objectstorage-controller
@@ -324,7 +336,7 @@ cozystack-platform HelmRelease never becomes Ready. */}}
        presets masked that by enabling iaas. Same reasoning as the velero comment
        above: a hard dependency of a default package must itself be emitted
        wherever that default package is. */ -}}
-{{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.bucket-application" $) }}
 
 # Optional System Packages (controlled via bundles.enabledPackages)
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
@@ -340,5 +352,6 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
 
 {{- end }}
