@@ -24,6 +24,32 @@ case "$linstor_drbd_enabled" in
     ;;
 esac
 
+# Packages left out of this install. The container lane always drops the two it
+# replaces below; COZY_DISABLED_PACKAGES adds the complement computed by
+# hack/select-install.sh for the selected suites. Both land under one
+# disabledPackages key, so the list is merged here rather than emitted twice.
+disabled=""
+if [ "$linstor_drbd_enabled" = false ]; then
+  disabled="cozystack.linstor cozystack.kubevirt-cdi"
+fi
+for pkg in ${COZY_DISABLED_PACKAGES:-}; do
+  case "$pkg" in
+    cozystack.*[!a-z0-9.-]* | cozystack.)
+      echo "COZY_DISABLED_PACKAGES: invalid package name: $pkg" >&2
+      exit 2
+      ;;
+    cozystack.?*) ;;
+    *)
+      echo "COZY_DISABLED_PACKAGES: invalid package name: $pkg" >&2
+      exit 2
+      ;;
+  esac
+  case " $disabled " in
+    *" $pkg "*) ;;
+    *) disabled="${disabled:+$disabled }$pkg" ;;
+  esac
+done
+
 cat <<EOF
 apiVersion: cozystack.io/v1alpha1
 kind: Package
@@ -47,11 +73,15 @@ spec:
             - cozystack.external-dns-application
 EOF
 
+if [ -n "$disabled" ]; then
+  echo "          disabledPackages:"
+  for pkg in $disabled; do
+    echo "            - $pkg"
+  done
+fi
+
 if [ "$linstor_drbd_enabled" = false ]; then
   cat <<'EOF'
-          disabledPackages:
-            - cozystack.linstor
-            - cozystack.kubevirt-cdi
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: Package
