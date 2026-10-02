@@ -1,0 +1,37 @@
+suite: apps.yaml monitoring.tracingCentralTenantBytesPerSecond → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The rate each shared-central tracing tenant may write reaches every tenant's
+# collector through _cluster in the cozystack-values Secret. A change there
+# changes the values every monitoring HelmRelease reads, so Flux upgrades each
+# of them; a rate read with lookup at render time never would.
+
+tests:
+  - it: writes the rate when monitoring.tracingCentralTenantBytesPerSecond is set
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 500000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"500000"$'
+
+  # Every release in every tenant reads this Secret, so a key written while
+  # nobody set a rate would upgrade all of them on the platform upgrade.
+  - it: writes no rate by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
+
+  - it: writes no rate for an explicit zero
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 0
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"

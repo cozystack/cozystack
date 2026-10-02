@@ -662,6 +662,14 @@ monitoring:
   # here is true only to preserve the historical always-create behaviour;
   # operators MUST set it to match their actual Tenant/root spec.monitoring.
   rootEnabled: true
+  # The rate, in bytes per second counted uncompressed, at which each tenant
+  # using shared-central tracing may write into the traces store tenant-root
+  # hosts; each tenant's collector refuses data above it. 0 keeps the default
+  # of about 97 KiB/s, at which one tenant alone cannot fill the disk cap of a
+  # default 10Gi store within the two days VictoriaTraces always keeps. Raise
+  # it with the store's size. A change upgrades every release in every tenant
+  # once, since it travels in the cozystack-values Secret they all read.
+  tracingCentralTenantBytesPerSecond: 0
 # Backup storage overrides for the platform-managed cozy-default BackupClass.
 # Everything set here is forwarded verbatim into the emitted
 # cozystack.backupstrategy-controller Package CR as

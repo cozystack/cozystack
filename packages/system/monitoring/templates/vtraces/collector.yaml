@@ -43,8 +43,26 @@
 {{- end -}}
 {{- $central := eq (include "monitoring.tracingCentral" .) "true" -}}
 {{- $endpoint := "" -}}
+{{- $rate := 0 -}}
+{{- $burst := 0 -}}
 {{- if $central -}}
 {{- $endpoint = "http://vmauth-traces-central.tenant-root.svc:8427/insert/opentelemetry/v1/traces" -}}
+{{- /* The platform sets the tenant's rate in _cluster, which reaches this
+       release through the cozystack-values Secret, so a change upgrades it.
+       Without one, or on a value that is not a positive number, the default
+       holds: floor(2 vtstorage replicas * 80% of a 10Gi volume / 172800 s),
+       at which one tenant alone cannot fill a default store within the two
+       days VictoriaTraces always keeps. The rate is split across the replicas
+       the Service spreads its senders over. burst is at least the largest
+       request vtinsert accepts (-opentelemetry.traces.maxRequestSize, 64 MiB),
+       since a request larger than burst never passes the limiter, and at
+       least one second of rate. */ -}}
+{{- $tenantRate := int64 99420 -}}
+{{- $configured := toString (index (.Values._cluster | default dict) "tracing-central-tenant-bytes-per-second" | default "") -}}
+{{- if regexMatch "^[1-9][0-9]*$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
+{{- $replicas := int64 $c.replicas -}}
+{{- $rate = div (add $tenantRate (sub $replicas 1)) $replicas -}}
+{{- $burst = max 67108864 $rate -}}
 {{- else -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
@@ -75,6 +93,15 @@ processors:
       - key: cozystack.tenant
         value: {{ .Release.Namespace }}
         action: upsert
+  # Holds the tenant to the rate the platform sets, so no tenant fills the
+  # shared store's disk cap faster than its retention frees it. A refused
+  # request gets a 429 over OTLP/HTTP, which senders retry; over gRPC it gets
+  # RESOURCE_EXHAUSTED without RetryInfo, which senders treat as final.
+  ratelimit/tenant:
+    strategy: bytes
+    rate: {{ $rate }}
+    burst: {{ $burst }}
+    throttle_behavior: error
 {{- end }}
 {{- if $redact }}
   attributes/redact:
@@ -116,7 +143,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, {{ if $central }}resource/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}batch]
+      processors: [memory_limiter, {{ if $central }}resource/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}{{ if $central }}ratelimit/tenant, {{ end }}batch]
       exporters: [otlphttp/victoriatraces]
 {{- end -}}
 {{- if and .Values.tracingCollector.enabled (or (include "monitoring.tracingCentral" .) (not (empty .Values.tracingStorages))) }}
