@@ -10,7 +10,7 @@ import {
   findImmutablePaths,
   type ImmutablePath,
 } from "../lib/immutable-paths.ts"
-import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
+import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
@@ -27,7 +27,7 @@ import "./schema-form.css"
 function addAdditionalPropertiesWidgets(schema: RJSFSchema, uiSchema: UiSchema = {}): UiSchema {
   if (!schema || typeof schema !== "object") return uiSchema
 
-  const properties = (schema as any).properties
+  const properties = schema.properties
   if (!properties || typeof properties !== "object") return uiSchema
 
   const result = { ...uiSchema }
@@ -299,7 +299,9 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
     // Override resourceQuotas field with structured quota editor.
     // Scoped to schemas where resourceQuotas has additionalProperties: {type: "string"}
     // (the cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
-    const rqSchema = (schema as any).properties?.resourceQuotas
+    const rqSchema = schema.properties?.resourceQuotas as
+      | { additionalProperties?: { type?: unknown } }
+      | undefined
     if (rqSchema && rqSchema.additionalProperties?.type === "string") {
       withSensitive.resourceQuotas = {
         ...withSensitive.resourceQuotas,

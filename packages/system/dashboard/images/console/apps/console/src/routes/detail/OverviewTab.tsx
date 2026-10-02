@@ -11,7 +11,7 @@ interface OverviewTabProps {
   instance: ApplicationInstance
 }
 
-export function OverviewTab({ ad: _ad, instance }: OverviewTabProps) {
+export function OverviewTab({ instance }: OverviewTabProps) {
   const ready = readyCondition(instance)
   return (
     <div className="grid gap-4 p-6 md:grid-cols-3">

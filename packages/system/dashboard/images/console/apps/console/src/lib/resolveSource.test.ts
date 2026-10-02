@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolveSource } from "./DynamicOptionsWidget.tsx"
+import { resolveSource } from "./dynamic-options.ts"
 
 describe("resolveSource", () => {
   it("leaves a plain source alone", () => {

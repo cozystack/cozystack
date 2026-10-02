@@ -1,3 +1,9 @@
+export interface BackupFormRef {
+  apiGroup?: string
+  kind?: string
+  name?: string
+}
+
 export function enrichSchemaWithEnums(
   schema: unknown,
   path: string[],

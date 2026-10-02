@@ -3,7 +3,7 @@ import { screen, within } from "@testing-library/react"
 import { Route, Routes } from "react-router"
 import { K8sClient, type K8sList } from "@cozystack/k8s-client"
 import { StorageClassUsagePage } from "./StorageClassUsagePage.tsx"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
 let seq = 0

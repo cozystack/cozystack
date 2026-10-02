@@ -7,7 +7,7 @@ import {
   type APIGroupList,
 } from "@cozystack/k8s-client"
 import { TenantsPage } from "./TenantsPage.tsx"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { SELECTED_TENANT_KEY } from "../lib/constants.ts"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 

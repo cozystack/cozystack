@@ -6,7 +6,7 @@ import { ClusterUsageResourcePage } from "./ClusterUsageResourcePage.tsx"
 import { aggregateNodeResources } from "../lib/cluster-usage/aggregate.ts"
 import { humanizeCpu } from "../lib/k8s-quantity.ts"
 import type { Node, Pod } from "../lib/cluster-usage/types.ts"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
 interface PodOpts {

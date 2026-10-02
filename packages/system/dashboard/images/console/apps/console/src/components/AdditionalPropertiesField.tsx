@@ -2,7 +2,7 @@ import { useState, useMemo } from "react"
 import type { FieldProps, RJSFSchema, TemplatesType } from "@rjsf/utils"
 import Form from "@rjsf/core"
 import validator from "@rjsf/validator-ajv8"
-import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
+import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 
 export function AdditionalPropertiesField(props: FieldProps) {

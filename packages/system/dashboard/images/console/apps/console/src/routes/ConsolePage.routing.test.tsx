@@ -6,7 +6,7 @@ import {
   type APIGroupList,
 } from "@cozystack/k8s-client"
 import { ConsolePage } from "./ConsolePage.tsx"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
 function makeClient(): K8sClient {

@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react"
 import type { WidgetProps } from "@rjsf/utils"
 import { useK8sGet, useK8sList } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
+import { resolveSource } from "../lib/dynamic-options.ts"
 
 /**
  * Generic dropdown widget driven by the `x-cozystack-options` schema keyword.
@@ -30,40 +31,6 @@ interface OptionObject {
   kind: string
   metadata: { name: string }
   spec?: { items?: OptionItem[] }
-}
-
-/**
- * Resolves `{path.to.field}` placeholders in an option source against the whole
- * form, so a dropdown can be scoped by a choice made elsewhere in it.
- *
- * Returns null when a placeholder has no value yet — the field it depends on is
- * still empty, and asking the server for `vmimportvm.` would only 404.
- */
-export function resolveSource(
-  source: string | undefined,
-  root: unknown,
-): { name: string | null; parameterised: boolean } {
-  if (!source) return { name: null, parameterised: false }
-  if (!source.includes("{")) return { name: source, parameterised: false }
-
-  let missing = false
-  const name = source.replace(/\{([^}]+)\}/g, (_, path: string) => {
-    const resolved = path
-      .split(".")
-      .reduce<unknown>(
-        (acc, key) =>
-          acc && typeof acc === "object"
-            ? (acc as Record<string, unknown>)[key]
-            : undefined,
-        root,
-      )
-    if (typeof resolved !== "string" || resolved === "") {
-      missing = true
-      return ""
-    }
-    return resolved
-  })
-  return { name: missing ? null : name, parameterised: true }
 }
 
 export function DynamicOptionsWidget(props: WidgetProps) {

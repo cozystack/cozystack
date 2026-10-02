@@ -2,7 +2,7 @@ import { useState } from "react"
 import type { WidgetProps, RJSFSchema } from "@rjsf/utils"
 import Form from "@rjsf/core"
 import validator from "@rjsf/validator-ajv8"
-import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
+import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 
 export function AdditionalPropertiesWidget(props: WidgetProps) {
   const { schema, value, onChange, readonly, disabled, label, required } = props

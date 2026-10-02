@@ -6,12 +6,12 @@ import type {
   FormContextType,
 } from "@rjsf/utils"
 
-function isSimpleField(schema: any): boolean {
+function isSimpleField(schema: RJSFSchema | undefined): boolean {
   if (!schema) return true
   const type = schema.type
   if (type === "object") return false
   if (type === "array") {
-    const itemType = schema.items?.type
+    const itemType = (schema.items as RJSFSchema | undefined)?.type
     return itemType === "integer" || itemType === "string" || itemType === "number"
   }
   if (schema.anyOf || schema.oneOf || schema.allOf) {
@@ -23,14 +23,14 @@ function isSimpleField(schema: any): boolean {
 
 function groupByComplexity(
   properties: ObjectFieldTemplatePropertyType[],
-  parentSchema: any,
+  parentSchema: StrictRJSFSchema,
 ) {
   type Group = { simple: boolean; items: ObjectFieldTemplatePropertyType[] }
   const groups: Group[] = []
   let current: Group | null = null
 
   for (const prop of properties) {
-    const fieldSchema = parentSchema?.properties?.[prop.name]
+    const fieldSchema = parentSchema?.properties?.[prop.name] as RJSFSchema | undefined
     const simple = isSimpleField(fieldSchema)
     if (!current || current.simple !== simple) {
       current = { simple, items: [] }
@@ -42,9 +42,9 @@ function groupByComplexity(
 }
 
 export function CustomObjectFieldTemplate<
-  T = any,
+  T = unknown,
   S extends StrictRJSFSchema = RJSFSchema,
-  F extends FormContextType = any,
+  F extends FormContextType = FormContextType,
 >(props: ObjectFieldTemplateProps<T, S, F>) {
   const { formData } = props
 
@@ -54,7 +54,7 @@ export function CustomObjectFieldTemplate<
   const isAddon = hasEnabledField && hasOtherFields
 
   if (isAddon) {
-    const isEnabled = (formData as any)?.enabled === true
+    const isEnabled = (formData as { enabled?: unknown } | undefined)?.enabled === true
     const enabledProp = props.properties.find((p) => p.name === "enabled")
     const otherProps = props.properties.filter((p) => p.name !== "enabled")
     const groups = groupByComplexity(otherProps, props.schema)

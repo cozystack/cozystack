@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router"
 import { Archive, Save } from "lucide-react"
 import { Button, Section, Spinner } from "@cozystack/ui"
 import { useK8sGet, useK8sUpdate } from "@cozystack/k8s-client"
+import type { K8sResource } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
 import { useCRDSchema } from "../lib/use-crd-schema.ts"
 import { prepareUpdateSpec } from "../lib/prepare-update.ts"
@@ -22,7 +23,7 @@ export function BackupResourceEditPage({
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const { tenantNamespace } = useTenantContext()
-  const [formData, setFormData] = useState<any>({})
+  const [formData, setFormData] = useState<unknown>({})
   const initializedRef = useRef(false)
   // Snapshot of resource.spec at the moment the form initialised. Used as
   // the source for the immutable-field overlay so the value the user saw
@@ -45,7 +46,7 @@ export function BackupResourceEditPage({
   const schema = overrideSchema || crdSchema
 
   // Fetch existing resource
-  const { data: resource, isLoading: resourceLoading, error } = useK8sGet<any>(
+  const { data: resource, isLoading: resourceLoading, error } = useK8sGet<K8sResource>(
     {
       apiGroup: "backups.cozystack.io",
       apiVersion: "v1alpha1",
