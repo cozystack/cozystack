@@ -1,4 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check rd-presets-check migrations-target-check test test-controllers test-controllers-envtest preflight
 
 # Before any include, the last file make has read is this one: MAKEFILES and
 # -f files given before it are earlier in the list, -f files after it are not
@@ -166,6 +166,29 @@ go-module-tests:
 # unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
+
+# Controller suites that need a real apiserver (build tag `envtest`): server-side
+# apply ownership, apply preconditions and finalizer handling, which a fake client
+# does not implement. setup-envtest fetches a kube-apiserver and etcd matching
+# the k8s.io/api minor in go.mod into _out/envtest; the HelmRelease CRD comes from
+# the in-tree Flux manifests (envtest skips their non-CRD objects). CI runs it
+# next to test-controllers. Only the packages listed below are compiled, so a
+# package that gains an envtest suite has to be added here.
+#
+# setup-envtest itself is built into _out/envtest too, and binaries already there
+# are used without asking the release index, so a warm _out/envtest (CI caches
+# it) needs no network at all.
+ENVTEST_K8S_VERSION ?= 1.35.0
+SETUP_ENVTEST_VERSION ?= v0.0.0-20260305142021-f9589b9f2b9d
+ENVTEST_DIR = $(CURDIR)/_out/envtest
+SETUP_ENVTEST = $(ENVTEST_DIR)/bin/setup-envtest-$(SETUP_ENVTEST_VERSION)
+$(SETUP_ENVTEST):
+	GOBIN=$(ENVTEST_DIR)/bin go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+	mv $(ENVTEST_DIR)/bin/setup-envtest $@
+test-controllers-envtest: $(SETUP_ENVTEST)
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --installed-only --bin-dir $(ENVTEST_DIR) --print path 2>/dev/null || $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) --print path)" \
+		HELMRELEASE_CRD_DIR=$(CURDIR)/internal/fluxinstall/manifests \
+		go test -tags envtest -run '^TestEnvtest' ./internal/controller/fluxplunger/... -count=1
 
 # Black-box golden test for cmd/check-readiness. Builds the binary and runs it
 # against a mock kubectl (fixtures under test/check-readiness/testdata),
