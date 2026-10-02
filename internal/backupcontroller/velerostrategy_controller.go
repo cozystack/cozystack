@@ -97,7 +97,8 @@ type CommonRestoreOptions struct {
 // KeepOriginalIpAndMac) are only effective when the application kind is VMInstance.
 type RestoreOptions struct {
 	CommonRestoreOptions `json:",inline"`
-	// KeepOriginalPVC renames the original PVC to <name>-orig-<hash> before restore.
+	// KeepOriginalPVC renames the original PVC to <name>-orig-<hash> before restore;
+	// when false, the original PVC is deleted so that Velero recreates it.
 	// Only effective for in-place VMInstance restore (no targetNamespace). Defaults to true when omitted.
 	KeepOriginalPVC *bool `json:"keepOriginalPVC,omitempty"`
 	// KeepOriginalIpAndMac preserves the original IP and MAC address via OVN
@@ -1182,6 +1183,31 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 		}
 	}
 
+	// --- Step 5: Delete the PVCs a restore without keepOriginalPVC replaces ---
+	// Velero restores a PVC only by creating it: its CSI restore action skips the
+	// data mover for a PVC that already exists, and existingResourcePolicy=update
+	// cannot patch the immutable spec of a bound claim. A PVC left in place keeps
+	// its old data, and, orphaned from its DataVolume in step 4 and without the
+	// cdi.kubevirt.io/storage.populatedFor the backed-up copy carries, it makes
+	// CDI refuse the DataVolume the resumed HelmRelease creates.
+	if !opts.GetKeepOriginalPVC() && vmRes != nil {
+		var terminating []string
+		for _, dv := range vmRes.DataVolumes {
+			gone, err := r.deletePVC(ctx, ns, dv.DataVolumeName)
+			if err != nil {
+				return false, ctrl.Result{}, fmt.Errorf("failed to delete PVC %s: %w", dv.DataVolumeName, err)
+			}
+			if !gone {
+				terminating = append(terminating, dv.DataVolumeName)
+			}
+		}
+		if len(terminating) > 0 {
+			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+				fmt.Sprintf("Waiting for PVCs %s to be deleted", strings.Join(terminating, ", ")))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+	}
+
 	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore", "Pre-restore preparation complete")
 	return true, ctrl.Result{}, nil
 }
@@ -1240,9 +1266,9 @@ func (r *RestoreJobReconciler) haltVirtualMachine(ctx context.Context, ns, vmNam
 }
 
 // deleteDataVolume deletes a DataVolume so CDI doesn't recreate the PVC after rename.
-// Uses Orphan propagation to avoid cascade-deleting the PVC that the DV owns via
-// ownerReference. Without this, keepOriginalPVC=false would silently destroy the
-// original PVC through garbage collection instead of leaving it for Velero to overwrite.
+// Uses Orphan propagation so that the PVC the DV owns via ownerReference is
+// removed by prepareForRestore, which waits for it, rather than by background
+// garbage collection, which nothing waits for before the Velero Restore starts.
 func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name string) error {
 	orphan := metav1.DeletePropagationOrphan
 	err := r.Resource(dataVolumeGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{
@@ -1252,6 +1278,32 @@ func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name st
 		return err
 	}
 	return nil
+}
+
+// deletePVC deletes a PVC and reports whether it is gone. A claim still mounted
+// stays Terminating behind kubernetes.io/pvc-protection, and Velero would find
+// it still there.
+func (r *RestoreJobReconciler) deletePVC(ctx context.Context, ns, name string) (bool, error) {
+	key := client.ObjectKey{Namespace: ns, Name: name}
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if pvc.DeletionTimestamp == nil {
+		if err := r.Delete(ctx, pvc); err != nil && !errors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 // renamePVC preserves an existing PVC by rebinding it under a new name.
