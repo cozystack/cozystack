@@ -39,7 +39,7 @@ tests:
             resources: ["tenantmodules", "tenantsecrets", "options", "taps"]
             verbs: ["get", "list", "watch"]
 
-  - it: cozy:tenant:base grants full access on sdn.cozystack.io securitygroups
+  - it: cozy:tenant:base grants full access on the sdn.cozystack.io kinds
     documentSelector:
       path: metadata.name
       value: cozy:tenant:base
@@ -48,10 +48,10 @@ tests:
           path: rules
           content:
             apiGroups: ["sdn.cozystack.io"]
-            resources: ["securitygroups"]
+            resources: ["securitygroups", "vpcs", "vpcbindings", "vpcgateways", "vpcpeerings", "floatingips"]
             verbs: ['*']
 
-  - it: cozy:tenant:view:base grants read on sdn.cozystack.io securitygroups
+  - it: cozy:tenant:view:base grants read on the sdn.cozystack.io kinds
     documentSelector:
       path: metadata.name
       value: cozy:tenant:view:base
@@ -60,7 +60,7 @@ tests:
           path: rules
           content:
             apiGroups: ["sdn.cozystack.io"]
-            resources: ["securitygroups"]
+            resources: ["securitygroups", "vpcs", "vpcbindings", "vpcgateways", "vpcpeerings", "floatingips"]
             verbs: ["get", "list", "watch"]
 
   # A tenant must be able to READ the ScaledObject + keda-hpa-<release> HPA that
@@ -95,7 +95,7 @@ tests:
   # human admin/super-admin tiers need their own securitygroups write grant —
   # mirroring how apps.cozystack.io is granted at admin:base — or a tenant admin
   # could read but never manage their own SecurityGroups.
-  - it: cozy:tenant:admin:base grants write on sdn.cozystack.io securitygroups
+  - it: cozy:tenant:admin:base grants write on the sdn.cozystack.io kinds
     documentSelector:
       path: metadata.name
       value: cozy:tenant:admin:base
@@ -104,5 +104,5 @@ tests:
           path: rules
           content:
             apiGroups: ["sdn.cozystack.io"]
-            resources: ["securitygroups"]
+            resources: ["securitygroups", "vpcs", "vpcbindings", "vpcgateways", "vpcpeerings", "floatingips"]
             verbs: ["create", "update", "patch", "delete"]
