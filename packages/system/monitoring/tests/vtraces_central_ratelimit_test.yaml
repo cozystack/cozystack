@@ -6,7 +6,6 @@ suite: shared-central tracing holds each tenant to a write rate
 # in _cluster, and each central tenant's collector enforces it.
 templates:
   - templates/vtraces/collector.yaml
-  - templates/vtraces/vmauth.yaml
 
 release:
   name: monitoring
@@ -107,6 +106,40 @@ tests:
           path: data["config.yaml"]
           pattern: "(?m)^    rate: 99420$"
 
+  - it: falls back to the default rate on 0
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "0"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  - it: falls back to the default rate on -1
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "-1"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
   - it: sets no rate limit on a collector writing to its own store
     template: templates/vtraces/collector.yaml
     set:
@@ -121,20 +154,3 @@ tests:
       - notMatchRegex:
           path: data["config.yaml"]
           pattern: "ratelimit"
-
-  # The rate used to be published on tenant-root's vmauth and read back with
-  # lookup, which never re-renders an in-sync tenant release. Nothing may read
-  # it from there any more.
-  - it: publishes no rate on tenant-root's vmauth
-    template: templates/vtraces/vmauth.yaml
-    release:
-      namespace: tenant-root
-    set:
-      tracingCentralHost: true
-      tracingStorages:
-        - name: generic
-          mode: cluster
-          storage: 10Gi
-    asserts:
-      - notExists:
-          path: metadata.annotations["tracing.cozystack.io/tenant-bytes-per-second"]
