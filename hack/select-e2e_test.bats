@@ -31,8 +31,8 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
-      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' \
+    find hack/e2e-chainsaw -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
+      | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
       | sort -u | paste -sd ' ' -
 }
 
@@ -285,6 +285,32 @@ assert_full_suite() {
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "examples/backups/no-such-app/run.sh" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
+    [ -z "$output" ]
+    rm -rf "$tmp"
+}
+
+@test "a file directly under examples/backups escalates instead of selecting nothing" {
+    # A file beside the per-app directories rather than inside one belongs to
+    # no single walkthrough, so it is treated as shared by all of them. It
+    # matched neither backup rule and fell to examples/ in
+    # inert_config_pattern, so an edit to it selected nothing.
+    # README.md stays inert through the *.md rule, which runs first.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for diff in "examples/backups/common.sh" \
+        "examples/backups/common.sh examples/backups/postgres/run-all.sh"; do
+        printf '%s\n' $diff > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+        assert_selection "a loose backup file was not escalated for: $diff" \
+            "$output" "$(full_suite_list)"
+        if ! grep -q "select-e2e: 'examples/backups/common.sh' belongs to no single backup walkthrough" "$tmp/err"; then
+            echo "the escalation must name the file; stderr was:" >&2
+            cat "$tmp/err" >&2
+            exit 1
+        fi
+    done
+    echo examples/backups/README.md > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ -z "$output" ]
     rm -rf "$tmp"
 }
@@ -789,6 +815,65 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "a suite made only of numbered step files is discovered" {
+    # With no chainsaw-test.* in a directory, Chainsaw builds a Test from files
+    # named like 01-install.yaml (TryFindStepFiles), so that directory runs as a
+    # suite whenever the whole tree is handed to chainsaw. Listed by the
+    # chainsaw-test name alone, it was never selected.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/gamma" \
+        "$tmp/tree/hack/e2e-chainsaw/delta"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/gamma/01-install.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/gamma/01-assert.yml"
+    # Not a step file: the number has to lead the name.
+    : > "$tmp/tree/hack/e2e-chainsaw/delta/install-01.yaml"
+    # Nor is a name with no number at all.
+    : > "$tmp/tree/hack/e2e-chainsaw/delta/-install.yaml"
+    # Not a step file either: Chainsaw skips directories. It keeps a symlink,
+    # though, because a symlink's directory entry is not a directory.
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/theta/01-x.yaml" "$tmp/tree/hack/e2e-chainsaw/iota" \
+        "$tmp/tree/hack/e2e-chainsaw/kappa"
+    ln -s ../alpha/chainsaw-test.yaml "$tmp/tree/hack/e2e-chainsaw/iota/01-link.yaml"
+    # Step files spelled .yml alone make a suite too.
+    : > "$tmp/tree/hack/e2e-chainsaw/kappa/01-install.yml"
+    # A directory named chainsaw-test.yaml is still read by Chainsaw, which
+    # then fails loudly, so its suite stays listed.
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/lambda/chainsaw-test.yaml" \
+        "$tmp/tree/hack/e2e-chainsaw/mu/chainsaw-test.yml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a step-file suite" "$output" "alpha gamma iota kappa lambda mu"
+    echo hack/e2e-chainsaw/gamma/01-install.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "a per-suite edit must select a step-file suite" "$output" "gamma"
+    rm -rf "$tmp"
+}
+
+@test "a suite nested below a top-level directory is discovered" {
+    # Chainsaw walks every directory under the path it is given, so a test in
+    # hack/e2e-chainsaw/<dir>/<sub>/ runs whenever <dir> is handed to chainsaw,
+    # with or without a test of its own at the top. Read off the top level
+    # alone, <dir> was never listed, so even the full suite left it out.
+    tmp=$(mktemp -d)
+    script="$PWD/hack/select-e2e.sh"
+    cp -r packages/core/platform/sources "$tmp/sources"
+    mkdir -p "$tmp/tree/hack/e2e-chainsaw/alpha" "$tmp/tree/hack/e2e-chainsaw/epsilon/cases" \
+        "$tmp/tree/hack/e2e-chainsaw/eta/cases/deep"
+    : > "$tmp/tree/hack/e2e-chainsaw/alpha/chainsaw-test.yaml"
+    : > "$tmp/tree/hack/e2e-chainsaw/epsilon/cases/chainsaw-test.yml"
+    : > "$tmp/tree/hack/e2e-chainsaw/eta/cases/deep/02-apply.yaml"
+    echo go.mod > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_selection "the full suite must include a nested suite" "$output" "alpha epsilon eta"
+    echo hack/e2e-chainsaw/eta/cases/deep/02-apply.yaml > "$tmp/diff"
+    output=$(cd "$tmp/tree" && "$script" "$tmp/diff" "$tmp/sources")
+    assert_selection "an edit to a nested suite must select its top-level directory" "$output" "eta"
+    rm -rf "$tmp"
+}
+
 @test "an unterminated last line is still classified" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -1018,9 +1103,9 @@ assert_full_suite() {
 }
 
 @test "an edit to a non-suite directory under e2e-chainsaw escalates on its own account" {
-    # Only a switched-off suite is ignorable. Shared material next to _lib/, or
-    # a suite nested deeper than the depth-2 scan looks, is invisible to
-    # all_apps, and selecting nothing for it would skip E2E outright.
+    # Only a switched-off suite is ignorable. Shared material next to _lib/ is
+    # invisible to all_apps, and selecting nothing for it would skip E2E
+    # outright.
     #
     # The mixed diff is the regression pin. When the name was left for the final
     # intersection to drop, the path escalated alone, through the empty-selection

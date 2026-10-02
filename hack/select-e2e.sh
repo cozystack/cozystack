@@ -114,9 +114,10 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 # the fall-through at the bottom of the loop can escalate safely: the cost of
 # forgetting an inert path is a wasted full run, the cost of forgetting a live
 # one used to be a green gate with nothing tested.
-#   - examples/       demo manifests; examples/backups/<app>/ and
-#                     examples/backups/_lib/ are handled above as real test
-#                     harness before this check is reached
+#   - examples/       demo manifests; examples/backups/<app>/,
+#                     examples/backups/_lib/ and any file directly in
+#                     examples/backups/ are handled above as real test harness
+#                     before this check is reached
 #   - .github/        templates, CODEOWNERS, labels, renovate, linter config —
 #                     minus the e2e workflows escalated above
 #   - .claude/ .gemini/  agent config, never shipped
@@ -161,22 +162,30 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|pkg/|
 #                     fall-through — both of which fail safe
 inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testdata/|packages/tests/|hack/[^/]+\.bats$|hack/boilerplate\.go\.txt$|hack/dcgm-default-counters\.csv$|LICENSE$|\.gitignore$|\.pre-commit-config\.yaml$|\.coderabbit\.yaml$|packages/system/\.gitattributes$|packages/system/(backup-controller|backupstrategy-controller)/definitions/\.gitattributes$)'
 
-# All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
-# chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
-# chainsaw-test.yml counts too, because Chainsaw loads it when the .yaml is
-# absent, and a suite that runs but is never listed is never selected.
+# All known Chainsaw suites: every dir directly under hack/e2e-chainsaw/ in
+# which Chainsaw v0.2.15 would find a Test (pkg/discovery/load.go and step.go).
+# A Test is a chainsaw-test.yaml, or chainsaw-test.yml when the .yaml is absent,
+# or, with neither, files named like 01-install.yaml, which Chainsaw turns into
+# a Test on its own. Chainsaw walks every subdirectory of the dir it is handed
+# (pkg/utils/fs/discover.go), so a Test in a top-level dir or anywhere below it
+# belongs to that dir. A suite that runs but is never listed is never selected.
+# A parked chainsaw-test.yaml.disabled matches none of these. A step-file name
+# counts unless the entry is a directory (TryFindStepFiles), so a symlink counts
+# and `-type f` would be too narrow. A chainsaw-test.y*ml counts whatever its
+# type: Chainsaw stats it and fails loudly on a directory, and leaving that
+# suite out would hide the failure instead.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
 # sort's success whatever find did — the same blindness handled for yq below,
 # and worse here, because this list is what every escalation prints. Errors go
 # to stderr rather than /dev/null for the same reason.
-if ! chainsaw_tests=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
+if ! suite_files=$(find hack/e2e-chainsaw -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
   echo "select-e2e: find failed listing the Chainsaw suites under hack/e2e-chainsaw — nothing can be decided without that list" >&2
   exit 1
 fi
-all_apps=$(printf '%s\n' "$chainsaw_tests" \
-  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' | sort -u)
+all_apps=$(printf '%s\n' "$suite_files" \
+  | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' | sort -u)
 
 # An empty list here is a broken enumeration — a moved directory, a wrong
 # working directory — not a project without tests, and it silently corrupts
@@ -198,7 +207,7 @@ all_apps=$(printf '%s\n' "$chainsaw_tests" \
 # Both lanes run this step under `bash -e`, so the non-zero exit fails the job
 # instead of falling through to the empty selection.
 if [ -z "$all_apps" ]; then
-  echo "select-e2e: found no chainsaw-test.yaml or chainsaw-test.yml under hack/e2e-chainsaw — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
+  echo "select-e2e: found no Chainsaw suite under hack/e2e-chainsaw (no chainsaw-test.yaml, chainsaw-test.yml or numbered step file in any directory below it) — the suite enumeration is broken (wrong working directory?), refusing to decide anything from an empty suite list" >&2
   exit 1
 fi
 
@@ -365,8 +374,8 @@ while IFS= read -r file || [ -n "$file" ]; do
     hack/e2e-chainsaw/*/*)
       # Membership-tested here rather than left to the final intersection, for
       # the reason given on the hack/e2e-apps/ arm below: a directory holding no
-      # suite (shared material beside _lib/, a suite nested deeper than the
-      # depth-2 scan) must escalate whatever else the diff selected.
+      # suite (shared material beside _lib/) must escalate whatever else the
+      # diff selected.
       app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
       if echo "$all_apps" | grep -Fxq "$app"; then
         selected_apps="$selected_apps $app"
@@ -441,6 +450,15 @@ while IFS= read -r file || [ -n "$file" ]; do
         selected_apps="$selected_apps $app"
         trigger_any=1
       fi
+      continue ;;
+    examples/backups/*)
+      # A file beside the per-app dirs rather than in one (POSIX case lets `*`
+      # match `/`, so the arm above has already taken every nested path)
+      # belongs to no single walkthrough, so it is treated as shared by all of
+      # them. Otherwise it would fall to examples/ in inert_config_pattern and
+      # select nothing.
+      echo "select-e2e: '$file' belongs to no single backup walkthrough — escalating to the full suite" >&2
+      trigger_full=1
       continue ;;
   esac
 

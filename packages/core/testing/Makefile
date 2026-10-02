@@ -163,7 +163,7 @@ test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
 # Run the Chainsaw E2E app suite. Chainsaw loads .chainsaw.yaml from the cwd,
-# discovers every chainsaw-test.yaml under hack/e2e-chainsaw/, polls each
+# discovers each Test in or below a suite dir of hack/e2e-chainsaw/, polls each
 # assertion to its own timeout, and writes a JUnit chainsaw-report.xml the CI
 # job uploads. CHAINSAW_SUITES restricts the run to the named suite dirs
 # (space-separated, e.g. "postgres bucket"); empty runs the whole suite. The

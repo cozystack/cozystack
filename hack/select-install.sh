@@ -101,13 +101,16 @@ deps_of() {
   echo "$FORWARD" | awk -v s="$1" -F'\t' '$1==s {print $2}'
 }
 
-# all Chainsaw suite names under a suites-dir (dirs holding chainsaw-test.yaml
-# or chainsaw-test.yml), discovered exactly like select-e2e.sh. find is
-# captured on its own because a pipeline reports sort's status, and a failed
-# listing must not read as an empty suites dir.
+# all Chainsaw suite names under a suites-dir (top-level dirs holding, in them or
+# below, chainsaw-test.yaml, chainsaw-test.yml or numbered step files such as
+# 01-install.yaml), discovered exactly like select-e2e.sh. find runs from inside
+# the dir so the suite name is the first path component however the dir is
+# spelled. It is captured on its own because a pipeline reports sort's status,
+# and a failed listing must not read as an empty suites dir.
 discover_suites() {
-  found=$(find "$1" -mindepth 2 -maxdepth 2 \( -name chainsaw-test.yaml -o -name chainsaw-test.yml \)) || return 1
-  printf '%s\n' "$found" | sed -e 's,/chainsaw-test\.yaml$,,' -e 's,/chainsaw-test\.yml$,,' -e 's,.*/,,' -e '/^$/d' | sort -u
+  found=$(cd "$1" && find . -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \)) || return 1
+  printf '%s\n' "$found" \
+    | sed -nE 's,^\./([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' | sort -u
 }
 
 if [ "$MODE" = "validate" ]; then
