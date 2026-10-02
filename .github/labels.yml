@@ -80,6 +80,19 @@
 
 # kind/backport-previous has no upstream Kubernetes equivalent (k8s has no
 # two-release-line model); it stays under kind/ per the file convention.
+#
+# The aliases below outlive the rename on purpose, and what they buy is narrower
+# than it looks. backport.yaml reads only the namespaced spellings, so a legacy
+# label applied by hand triggers nothing — and the rename does not fix that
+# either: this sync writes as the default GITHUB_TOKEN, and GitHub does not let
+# an event created by that token start a workflow run, so no `labeled` run
+# follows it. A stray legacy label is a backport nobody delivered, before the
+# sync and after it.
+#
+# What the aliases do is keep the stray findable. docs/release.md's audit
+# queries search `label:kind/backport`, so a PR left carrying `backport` is
+# invisible to them; renamed, it shows up and someone can act on it. Removing
+# the aliases costs that, not the delivery.
 - name: kind/backport
   color: 'fbca04'
   description: Categorizes issue or PR as requiring a backport to the current release line
