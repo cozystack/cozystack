@@ -51,18 +51,20 @@
        release through the cozystack-values Secret, so a change upgrades it.
        Without one, or on a value that is not a positive number, the default
        holds: floor(2 vtstorage replicas * 80% of a 10Gi volume / 172800 s),
-       at which one tenant alone cannot fill a default store within the two
-       days VictoriaTraces always keeps. The rate is split across the replicas
-       the Service spreads its senders over. burst is at least the largest
-       request vtinsert accepts (-opentelemetry.traces.maxRequestSize, 64 MiB),
-       since a request larger than burst never passes the limiter, and at
-       least one second of rate. */ -}}
+       at which one tenant writes at most a default store's disk cap,
+       uncompressed, over the two days VictoriaTraces always keeps. The rate is split across the replicas
+       the Service spreads its senders over. The limiter sees the requests the
+       receiver admits, so the receiver caps them at 4 MiB (decompressed for
+       HTTP) and burst is at least that, since a larger request would never
+       pass, and at least one second of rate. Each pod starts with a full
+       bucket, so the cap is also what a pod start lets through above the
+       rate. */ -}}
 {{- $tenantRate := int64 99420 -}}
 {{- $configured := toString (index (.Values._cluster | default dict) "tracing-central-tenant-bytes-per-second" | default "") -}}
 {{- if regexMatch "^[1-9][0-9]*$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
 {{- $replicas := int64 $c.replicas -}}
 {{- $rate = div (add $tenantRate (sub $replicas 1)) $replicas -}}
-{{- $burst = max 67108864 $rate -}}
+{{- $burst = max 4194304 $rate -}}
 {{- else -}}
 {{- $backend := index .Values.tracingStorages 0 -}}
 {{- $mode := $backend.mode | default "cluster" -}}
@@ -73,8 +75,14 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+{{- if $central }}
+        max_recv_msg_size_mib: 4
+{{- end }}
       http:
         endpoint: 0.0.0.0:4318
+{{- if $central }}
+        max_request_body_size: 4194304
+{{- end }}
 processors:
   memory_limiter:
     check_interval: 5s

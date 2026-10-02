@@ -95,7 +95,5 @@ spec:
          a central tenant's collector enforces the platform's rate on it, so its
          image stays the platform's. */}}
   {{- $values := deepCopy .Values }}
-  {{- if kindIs "map" $values.tracingCollector }}
-  {{-   $_ := unset $values.tracingCollector "image" }}
-  {{- end }}
+  {{- $_ := unset $values.tracingCollector "image" }}
   values: {{- $values | toYaml | nindent 4 }}

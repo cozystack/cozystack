@@ -27,7 +27,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["config.yaml"]
-          pattern: "(?m)^  ratelimit/tenant:\\n    strategy: bytes\\n    rate: 100000\\n    burst: 67108864\\n    throttle_behavior: error$"
+          pattern: "(?m)^  ratelimit/tenant:\\n    strategy: bytes\\n    rate: 100000\\n    burst: 4194304\\n    throttle_behavior: error$"
       # Before batch: the batch processor sends asynchronously, so a refusal
       # behind it would never reach the application and its spans would be
       # dropped without the sender knowing.
@@ -54,7 +54,7 @@ tests:
 
   # A request larger than burst can never pass the limiter, so burst never
   # drops below what one second of the rate needs.
-  - it: raises burst to one second of a rate above 64 MiB per second
+  - it: raises burst to one second of a rate above 4 MiB per second
     template: templates/vtraces/collector.yaml
     set:
       _cluster:
@@ -139,6 +139,43 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: "(?m)^    rate: 99420$"
+
+  # The limiter sees requests the receiver admits, so the receiver caps them at
+  # the 4 MiB burst floor, decompressed for HTTP; a larger request would never
+  # pass the limiter, and a larger floor would be what each new pod lets
+  # through above the rate.
+  - it: caps a central collector's requests at the burst floor
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^      grpc:\\n        endpoint: 0\\.0\\.0\\.0:4317\\n        max_recv_msg_size_mib: 4$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^      http:\\n        endpoint: 0\\.0\\.0\\.0:4318\\n        max_request_body_size: 4194304$"
+
+  - it: leaves a local collector's request size at the receiver defaults
+    template: templates/vtraces/collector.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "max_recv_msg_size_mib|max_request_body_size"
 
   - it: sets no rate limit on a collector writing to its own store
     template: templates/vtraces/collector.yaml
