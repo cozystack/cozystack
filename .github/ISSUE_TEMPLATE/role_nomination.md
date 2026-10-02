@@ -7,11 +7,13 @@ assignees: ''
 ---
 
 <!--
-Read CONTRIBUTOR_LADDER.md before filing: it defines both roles, their requirements and the privileges that come with them.
+Read CONTRIBUTOR_LADDER.md before filing: it defines both roles, their requirements, the privileges that come with them, and how each promotion is approved.
 
-Anyone may open a nomination, including a self-nomination. Only maintainers vote.
+Who may open this issue:
+- Reviewer: anyone, including a self-nomination.
+- Maintainer: a current Maintainer, and the nominee must be a current Reviewer.
 
-This issue collects the discussion and the votes. The formal step is a separate pull request — CODEOWNERS for a Reviewer, MAINTAINERS.md for a Maintainer — opened after the vote passes.
+This issue collects the discussion. The formal step is a separate pull request, opened once there is support for it. Delete the sections that do not apply to the proposed role.
 -->
 
 ## Nominee
@@ -21,6 +23,7 @@ This issue collects the discussion and the votes. The formal step is a separate 
 - **Affiliation:**
 - **Proposed role:** Reviewer / Maintainer
 - **Area** (Reviewer only — the directories or component this covers):
+- **Sponsors** (Reviewer only — two current Reviewers or Maintainers): @, @
 
 ## Why
 
@@ -34,20 +37,40 @@ This issue collects the discussion and the votes. The formal step is a separate 
 
 <!-- Tick what the nominee meets per CONTRIBUTOR_LADDER.md. If something is not met, say so and explain why the nomination still stands — an honest gap is fine, an unticked box that nobody mentions is not. -->
 
-- [ ] Contributing for the period the ladder requires
-- [ ] Sustained contribution record (PRs, reviews, issues, or an equivalent)
-- [ ] Two sponsors, at least one from a different employer
-- [ ] Demonstrated depth in the area they would own
+Reviewer:
+
+- [ ] Contributing for at least 6 months, and actively contributing to at least one project area
+- [ ] Successful contributions: 10 accepted PRs, 20 reviewed PRs, 20 resolved issues, ownership of a key project management area, or an equivalent combination
+- [ ] Has reviewed, or helped review, at least 20 pull requests
+- [ ] Two sponsors who are themselves Reviewers or Maintainers, at least one of whom does not work for the same employer
+- [ ] In-depth knowledge of the area, including having analysed and resolved test failures there
 - [ ] Supportive of new and occasional contributors
 
-## Voting
+Maintainer (in addition to the Reviewer requirements):
 
-Voting is open to current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md). Vote in a comment with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed.
+- [ ] Reviewer for at least 6 months
+- [ ] Broad knowledge of the project across multiple areas
+- [ ] Exercises judgement for the good of the project, independent of employer, friends or team
+- [ ] Mentors other contributors
+- [ ] Can commit at least 10 hours per month to the project
 
-The vote closes after **5 calendar days**, or once a majority of current maintainers have voted — whichever comes first. Passing requires a majority of current maintainers, per GOVERNANCE.md.
+## Approval
 
-## Next steps if it passes
+**Reviewer.** The promotion is approved on the pull request: at least two members of the team that owns the repository or directory, who are already Approvers, approve it (`CONTRIBUTOR_LADDER.md`).
 
-1. The nominee confirms in a comment that they accept the responsibilities of the role.
-2. Open the pull request — add them to `.github/CODEOWNERS` for a Reviewer, or to `MAINTAINERS.md` for a Maintainer. Nominations are recorded through a PR, not a direct push to `main`.
-3. Grant the GitHub permissions the role requires, and link the merged PR here before closing this issue.
+**Maintainer.** Current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md), vote in a comment with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed. Passing requires a majority of the current maintainers (`CONTRIBUTOR_LADDER.md`). By established practice (#2343, #2344) the vote stays open for **5 calendar days**, or until a majority of current maintainers have voted, whichever comes first.
+
+## Next steps once approved
+
+Reviewer:
+
+1. Open the pull request adding the nominee to `.github/CODEOWNERS` for their area and to the Reviewers section of `MAINTAINERS.md`, and link it here.
+2. Once it is merged, grant the GitHub permissions the role requires and close this issue.
+
+Maintainer:
+
+1. Open the pull request adding the nominee to the Active Maintainers section of `MAINTAINERS.md`, and link it here.
+2. The nominee comments on that pull request that they agree to all requirements of becoming a Maintainer.
+3. Merge once a majority of current maintainers have approved, grant the GitHub permissions the role requires, and close this issue.
+
+Roles are recorded through a pull request, not a direct push to `main`.
