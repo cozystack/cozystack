@@ -1,0 +1,45 @@
+{{- /*
+  KubeVirt exports the resource usage of every VirtualMachineInstance
+  (kubevirt_vmi_*) from virt-handler in cozy-kubevirt, not from the VMI's
+  own pod, so no per-application scrape object can collect it and no
+  Monitoring application saw VM metrics at all: virt-operator creates its
+  ServiceMonitor only when the monitorAccount ServiceAccount exists in the
+  monitorNamespace, which Cozystack never creates.
+
+  Every Monitoring scrapes virt-handler itself. The tenant chart already
+  opens that path (<tenant>-egress-virt-handler lets the tenant vmagent
+  reach virt-handler:8443). A tenant Monitoring keeps only the series of
+  the namespaces it collects: its own namespace and the sub-tenants below
+  it (tenant-a collects tenant-a-b), which is how the
+  namespace.cozystack.io/monitoring label resolves for a sub-tenant with
+  no Monitoring of its own. The root Monitoring keeps everything, as the
+  cluster-wide vmagent in cozy-monitoring does for every other target.
+*/ -}}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: kubevirt-virt-handler
+spec:
+  namespaceSelector:
+    matchNames:
+    - cozy-kubevirt
+  selector:
+    matchLabels:
+      kubevirt.io: virt-handler
+  podMetricsEndpoints:
+  - port: metrics
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    # kubevirt_vmi_* carry the VMI's namespace, name and node; without
+    # honorLabels the scrape would overwrite namespace with cozy-kubevirt.
+    honorLabels: true
+    relabelConfigs:
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    {{- if ne .Release.Namespace "tenant-root" }}
+    metricRelabelConfigs:
+    - action: keep
+      sourceLabels: [namespace]
+      regex: {{ printf "%s(-.*)?" .Release.Namespace | quote }}
+    {{- end }}
