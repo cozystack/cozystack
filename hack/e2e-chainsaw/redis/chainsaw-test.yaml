@@ -270,14 +270,13 @@ spec:
     # No retry around this script. The replica link it reads is settled by
     # none of the asserts above and carries its own bounded wait below. The
     # whole step measured 3.0s on run 34711755303, so link_wait is wide
-    # against what it costs today. That wait draws link_wait plus one poll
-    # interval plus a read pair at the k() cap worst case, since the deadline
-    # is tested before the sleep and never after, and the op ceiling covers
-    # that on top of reads ahead of it at the cost that measurement shows,
-    # not at their caps, whose sum exceeds any ceiling this step could carry.
-    # Sized generously on purpose: unused margin costs a passing run nothing,
-    # while a ceiling that expires first kills the shell and takes the wait's
-    # own failure message with it.
+    # against what it costs today. The reads' 30s caps sum past the 5m op,
+    # so they share step_budget instead: no read starts after it, one
+    # already running ends within its 5s kill grace of it, and the op sits
+    # above both, so a read or the budget is what fails and names itself
+    # rather than a ceiling that kills the shell and takes the script's own
+    # message with it. hack/chainsaw-op-budgets.bats holds the budget under
+    # the op.
     #
     # Every redis-cli below runs under the container's own `timeout`. That
     # inner cap, not the op timeout, is what keeps a dial that never answers
@@ -288,17 +287,41 @@ spec:
     # failing. Both engine images carry /usr/bin/timeout; expiry reports 143
     # on the sentinel's busybox and 124 on the data pods' coreutils, and
     # neither is zero, which is all these checks read.
+    #
+    # bash for pipefail: base64 -d exits 0 on empty input, so without it a
+    # failed Secret read below takes the decoder's status and is reported as
+    # the emptiness it left behind. The sandbox's /bin/sh is dash, which
+    # rejects `set -o pipefail`; `shell:` is a Script field in the Chainsaw
+    # v0.2.15 the sandbox image installs.
     - script:
         timeout: 5m
+        shell: bash
         content: |
-          set -eu
+          set -euo pipefail
 
           # Every kubectl below runs under a wall-clock bound. The inner
           # `timeout` on a redis-cli cannot fire if the exec stream itself
           # never establishes, and a kubectl still running holds this script's
           # stdout open, which is what turns a stuck call into a silent run to
-          # the job ceiling instead of a failure.
-          k() { timeout 30 kubectl "$@"; }
+          # the job ceiling instead of a failure. A call gets 30s at most and
+          # never more than step_budget has left.
+          step_budget=240
+          step_deadline=$(( $(date +%s) + step_budget ))
+          k() {
+            k_left=$(( step_deadline - $(date +%s) ))
+            if [ "$k_left" -le 0 ]; then
+              echo "the ${step_budget}s step budget is spent, so this read did not run: $*" >&2
+              return 124
+            fi
+            [ "$k_left" -le 30 ] || k_left=30
+            k_start=$(date +%s)
+            k_rc=0
+            timeout -k 5 "$k_left" kubectl "$@" || k_rc=$?
+            if [ "$k_rc" -ne 0 ] && [ $(( $(date +%s) - k_start )) -ge "$k_left" ]; then
+              echo "this read ran into its ${k_left}s bound: $*" >&2
+            fi
+            return "$k_rc"
+          }
 
           # Exactly one key, and it is ca.crt. The source carries the CA
           # private key, so any second key is a leak in the making.
@@ -332,14 +355,15 @@ spec:
           fi
 
           # The source really does hold the private key, or the leak check
-          # below would pass while proving nothing.
+          # below would pass while proving nothing. grep reads to EOF here
+          # rather than quitting at the match under -q: with pipefail, a
+          # kubectl still writing would take SIGPIPE and fail the pipeline.
           if ! k -n "$NAMESPACE" get secret redis-secure.ca-tls \
-            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'tls.key'; then
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -x 'tls.key' >/dev/null; then
             echo "redis-secure.ca-tls no longer carries tls.key: this check has stopped proving anything" >&2
             exit 1
           fi
-          if k -n "$NAMESPACE" get secret redis-secure.tenant-ca \
-            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+          if grep -qi 'BEGIN .*PRIVATE KEY' <<<"$proj"; then
             echo "projection carries PEM private key material" >&2
             exit 1
           fi
@@ -455,9 +479,11 @@ spec:
             linked=0
             seen=
             for i in 0 1; do
-              if ! info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
-                sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication'); then
-                echo "rfr-redis-secure-$i did not answer INFO replication within the 15s cap" >&2
+              rc=0
+              info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
+                sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication' 2>&1) || rc=$?
+              if [ "$rc" -ne 0 ]; then
+                echo "INFO replication on rfr-redis-secure-$i failed (exit $rc): $info" >&2
                 exit 1
               fi
               case "$info" in
@@ -487,10 +513,14 @@ spec:
           sentinel=$(k -n "$NAMESPACE" get pod \
             -l app.kubernetes.io/component=sentinel,app.kubernetes.io/name=redis-secure \
             -o jsonpath='{.items[0].metadata.name}')
-          if ! addr=$(k -n "$NAMESPACE" exec "$sentinel" -c sentinel -- \
+          rc=0
+          addr=$(k -n "$NAMESPACE" exec "$sentinel" -c sentinel -- \
             timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 26379 \
-            sentinel get-master-addr-by-name mymaster); then
-            echo "the sentinel did not answer get-master-addr-by-name within the 15s cap" >&2
+            sentinel get-master-addr-by-name mymaster) || rc=$?
+          # stderr stays out of $addr, whose first line is parsed below; what
+          # the exec wrote there is already in the log above this line.
+          if [ "$rc" -ne 0 ]; then
+            echo "get-master-addr-by-name on $sentinel failed (exit $rc): $addr" >&2
             exit 1
           fi
           addr=$(echo "$addr" | head -n 1 | tr -d '\r')

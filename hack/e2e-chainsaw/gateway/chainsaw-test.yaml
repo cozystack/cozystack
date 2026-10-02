@@ -977,16 +977,40 @@ spec:
   steps:
   - name: parent-child-and-route-drive-listener-set
     try:
+    # Above the 660s of polls plus the 675s the trap's deletes may take with
+    # their kill grace, so a poll or a delete is what fires and the trap still
+    # runs: a kill at the op ceiling would skip cleanup and leave both tenants
+    # behind for every later suite. hack/chainsaw-op-budgets.bats holds the op
+    # to that sum.
     - script:
-        timeout: 6m
+        timeout: 24m
         content: |
           set -eu
           ns="$NAMESPACE"
 
+          # Each delete waits, child before parent, because a parent deleted
+          # while its child is still uninstalling wedges the parent's cleanup.
+          # Each delete is bounded as a whole by an outer timeout, because the
+          # trap runs inside the op ceiling and kubectl's --timeout covers only
+          # the wait after the request, not discovery or a stalled request. A
+          # tenant delete gets the 5m that .chainsaw.yaml gives a delete op,
+          # because its child namespaces take minutes to drain. A child still
+          # uninstalling at its bound leaves the parent in place: a leaked
+          # tenant rather than a wedged one. A failed tenant delete fails the
+          # step with kubectl's own error and exit status (124 is the bound),
+          # so the leak is reported here rather than in whichever suite trips
+          # on it.
           cleanup() {
-            kubectl -n tenant-test-rparent-rchild delete httproute inherit-probe --ignore-not-found >/dev/null 2>&1 || true
-            kubectl -n tenant-test-rparent delete tenant rchild --ignore-not-found >/dev/null 2>&1 || true
-            kubectl -n "$ns" delete tenant rparent --ignore-not-found >/dev/null 2>&1 || true
+            timeout -k 5 60 kubectl -n tenant-test-rparent-rchild delete httproute inherit-probe --ignore-not-found >/dev/null 2>&1 || true
+            if timeout -k 5 300 kubectl -n tenant-test-rparent delete tenant rchild --ignore-not-found >/dev/null; then
+              timeout -k 5 300 kubectl -n "$ns" delete tenant rparent --ignore-not-found >/dev/null || {
+                echo "the tenant rparent delete exited $?, so tenant rparent is left in $ns" >&2
+                exit 1
+              }
+            else
+              echo "the tenant rchild delete exited $?, so tenant rparent is left in $ns" >&2
+              exit 1
+            fi
           }
           trap cleanup EXIT
 
