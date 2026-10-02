@@ -2,6 +2,7 @@ NAME=info
 
 include ../../../hack/package.mk
 
+.PHONY: test
 test:
 	helm unittest .
 
