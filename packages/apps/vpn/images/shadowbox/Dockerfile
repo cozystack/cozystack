@@ -23,10 +23,12 @@ RUN SB_VERSION=${VERSION} npx webpack --config=src/shadowbox/webpack.config.js \
     && cp src/shadowbox/package.json /out/opt/outline-server/
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS ss-server
+ARG GOPROXY
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=source /src /src
 WORKDIR /src
+RUN for attempt in 1 2 3; do go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -trimpath \
       -ldflags='-s -w -X main.version=embedded' \
       -o /out/opt/outline-server/bin/ github.com/Jigsaw-Code/outline-ss-server/cmd/outline-ss-server

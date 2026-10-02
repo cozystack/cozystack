@@ -62,6 +62,7 @@
 # come after it. A rename that reorders them fails the build rather than
 # producing a wrong binary.
 FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
 
 # Keep in step with the chart version pulled by `make update`: the chart's
 # appVersion is what picks the operator image upstream, so a mismatch here would

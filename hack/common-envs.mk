@@ -144,3 +144,15 @@ ifeq ($(COZYSTACK_VERSION),)
     $(shell git fetch upstream --tags)
     COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 endif
+
+# Go module fetches in image builds. IMAGE_GOPROXY reaches every Go builder
+# stage as the GOPROXY build arg, which a stage sees only once it declares
+# `ARG GOPROXY`. The pipe falls back to direct on any proxy error; Go's default
+# comma does so only on a 404 or 410, so an HTTP/2 stream reset from
+# proxy.golang.org fails the build. A module hosted in git can only be fetched
+# directly where the stage has git, which the alpine golang images lack; there
+# the retry around `go mod download` is the only cover. The value is not read
+# from the host's GOPROXY: a mirror on localhost or a file:// proxy is
+# unreachable from inside buildkit.
+IMAGE_GOPROXY ?= https://proxy.golang.org|direct
+BUILDX_ARGS += --build-arg 'GOPROXY=$(IMAGE_GOPROXY)'

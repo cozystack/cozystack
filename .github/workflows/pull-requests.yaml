@@ -298,6 +298,9 @@ jobs:
     name: Unit & controller tests
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: read
     needs: ["plan"]
@@ -312,6 +315,23 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      # The module cache is restored from the key build-main.yaml writes on
+      # main, which every PR run can read, so a PR's first run starts warm. The
+      # download fetches whatever the cache lacks, the whole set on a miss.
+      - name: Locate Go module cache
+        id: gomodcache
+        run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Download Go modules
+        run: |
+          for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
+            (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
+          done
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. Install if absent (idempotent).
       - name: Set up test toolchain

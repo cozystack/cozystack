@@ -1,4 +1,5 @@
 FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
 
 ARG VERSION=v1.11.2
 ARG LINSTOR_WAIT_UNTIL_VERSION=v0.3.1
@@ -12,7 +13,7 @@ RUN curl -sSL https://github.com/piraeusdatastore/linstor-csi/archive/refs/tags/
 COPY patches /patches
 RUN git apply /patches/*.diff
 
-RUN go mod download
+RUN for attempt in 1 2 3; do go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
 
 # Upstream pins grpc v1.81.0, which uses http2.TrailerPrefix; on Go 1.27
 # golang.org/x/net builds http2 on top of net/http and no longer defines it.

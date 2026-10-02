@@ -3,6 +3,7 @@ ARG builder_image=docker.io/library/golang:1.27@sha256:3680233e3204827fbdc660885
 ARG BASEIMAGE=gcr.io/distroless/static:nonroot-${TARGETARCH}
 
 FROM --platform=$BUILDPLATFORM ${builder_image} AS builder
+ARG GOPROXY
 
 ARG TARGETOS
 ARG TARGETARCH

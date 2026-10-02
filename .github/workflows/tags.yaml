@@ -147,6 +147,9 @@ jobs:
     # The budget prepare-release had while it also built; the stitch and the
     # uploads it no longer runs moved to prepare-release with their own.
     timeout-minutes: 120
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     outputs:
       # A release (draft or published) already exists for this tag, so the
       # build/draft/branch/PR steps are no-ops. Downstream jobs that still need

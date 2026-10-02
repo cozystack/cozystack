@@ -251,6 +251,9 @@ jobs:
     needs: parse
     runs-on: [oracle-vm-4cpu-16gb-x86-64]
     timeout-minutes: 45
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: write # push the release-X.Y.Z staging branch, stage the draft release
       packages: write # publish the temporary stable-candidate packages artifact

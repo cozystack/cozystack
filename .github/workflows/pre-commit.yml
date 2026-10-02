@@ -16,6 +16,9 @@ permissions:
 jobs:
   pre-commit:
     runs-on: ubuntu-22.04
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: read
     steps:

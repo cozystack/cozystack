@@ -26,6 +26,7 @@ ARG SWAGGER_VERSION=v0.33.1
 # Every Go stage uses this golang image; the source stage checks it against
 # upstream's GOBUILDIMAGE.
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS source
+ARG GOPROXY
 ARG VERSION
 ARG COMMIT
 ARG DISTRIBUTION_VERSION
@@ -54,6 +55,7 @@ RUN printf 'VERSION_TAG: %s\nREGISTRY_VERSION: %s\nTRIVY_VERSION: %s\nTRIVY_ADAP
       "${VERSION}" "${REGISTRY_VERSION}" "${TRIVY_VERSION}" "${TRIVY_ADAPTER_VERSION}" > make/photon/prepare/versions
 
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS core-bin
+ARG GOPROXY
 ARG VERSION
 ARG COMMIT
 ARG TARGETOS
@@ -66,6 +68,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       -o /out/harbor_core
 
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS jobservice-bin
+ARG GOPROXY
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=source /harbor/src /harbor/src
@@ -74,6 +77,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -buildvcs=false -o /out/harbor_jobservice
 
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS registryctl-bin
+ARG GOPROXY
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=source /harbor/src /harbor/src
@@ -82,6 +86,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -buildvcs=false -o /out/harbor_registryctl
 
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS exporter-bin
+ARG GOPROXY
 ARG VERSION
 ARG COMMIT
 ARG TARGETOS
@@ -96,6 +101,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # Harbor's fork of distribution predates Go modules: it builds in GOPATH mode
 # against its vendor/ tree, as upstream's make/photon/registry/Dockerfile.binary.
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS registry-bin
+ARG GOPROXY
 ARG DISTRIBUTION_VERSION
 ARG DISTRIBUTION_COMMIT
 ARG TARGETOS
@@ -110,6 +116,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
       -o /out/registry ./cmd/registry
 
 FROM --platform=$BUILDPLATFORM golang:1.25.9@sha256:8a7adc288b77e9b787cd2695029eb54d10ae80571b21d44fed68d067ad0a9c96 AS trivy-bin
+ARG GOPROXY
 ARG TRIVY_ADAPTER_VERSION
 ARG TRIVY_ADAPTER_COMMIT
 ARG TRIVY_VERSION

@@ -37,6 +37,8 @@ jobs:
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     steps:
       - name: Checkout head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -45,6 +45,9 @@ jobs:
     # background main-push job, latency is not critical.
     runs-on: oracle-vm-24cpu-96gb-x86-64
     timeout-minutes: 120
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: read
       packages: write
@@ -59,6 +62,40 @@ jobs:
           # it never pushes git, so don't leave the checkout's GITHUB_TOKEN in
           # .git/config where a later build step could read it.
           persist-credentials: false
+
+      # Writes the Go module cache pull-requests.yaml's unit test job restores:
+      # an entry saved on main is readable from every PR, while one a PR run
+      # saves is visible to that PR alone. It is saved before the image build so
+      # a cancelled or failed build still leaves it, and none of these steps may
+      # stop the build, which does not use it. Only an exact key is restored: a
+      # partial match saved under the new key would carry every superseded
+      # module version forward forever.
+      - name: Locate Go module cache
+        id: gomodcache
+        continue-on-error: true
+        run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go module cache
+        id: gomod-restore
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+      - name: Download Go modules
+        id: gomod-download
+        if: steps.gomod-restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
+            (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
+          done
+      - name: Save Go module cache
+        if: steps.gomod-download.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
 
       # Ephemeral runners lack the flux CLI the installer's image-packages step
       # shells out to; install the pinned version when it is not already present.
