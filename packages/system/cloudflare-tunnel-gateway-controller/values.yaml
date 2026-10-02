@@ -15,27 +15,25 @@
 #      (the Package exists only after enabling, so the first install always
 #      fails this way); setting it changes the values and the install retries.
 #
-# A Gateway joins the class with `gatewayClassName: cloudflare-tunnel`.
-# Moving a tenant publishing Gateway onto it is not a drop-in: emptying
-# extra/gateway's `tlsPassthroughServices` clears the TLS-passthrough
-# listeners the tunnel cannot carry, but the remaining port-443 listeners
-# are still rendered mode: Terminate with cert-manager certificateRefs,
-# and the port-443 allowedRoutes.kinds stay HTTPRoute + TLSRoute, so a
-# GRPCRoute cannot attach. Cloudflare Universal SSL covers one label below
-# the zone apex, so `<svc>.<tenant>.<zone>` hostnames need Advanced
-# Certificate Manager or a zone per tenant apex.
+# A Gateway joins the class with `gatewayClassName: cloudflare-tunnel`. A
+# tenant's own Gateway joins it through the Tenant's `gatewayClass`, once
+# the platform lists the class in both gateway.tenantSelectableClasses and
+# gateway.edgeTerminatedClasses; the second is what drops the certificates
+# and TLS-passthrough listeners the tunnel cannot carry. Nothing here
+# declares either list, because both are operator claims about the class.
+# Cloudflare Universal SSL covers one label below the zone apex, so
+# `<svc>.<tenant>.<zone>` hostnames need Advanced Certificate Manager or a
+# zone per tenant apex.
 #
 # Every Gateway of the class shares one tunnel, so the proxy routes by
-# hostname alone across all tenants. cozystack-basics' route-hostname policy
-# binds HTTPRoute/TLSRoute hostnames in tenant namespaces to the tenant apex
-# at admission but does not see GRPCRoute and admits routes with no
-# hostnames; behind a per-tenant Cilium address both are inert, on the
-# shared tunnel either one would answer for other tenants' hosts. The
-# chart's controller-side ownership layer closes both: in every namespace
-# carrying namespace.cozystack.io/host it rejects a route whose hostnames
-# are missing or fall outside that label, on this class only. Its admission
-# layer stays off, since that one would also police routes bound to the
-# Cilium Gateway in the same namespaces.
+# hostname alone across all tenants. cozystack-basics' route-hostname
+# policy binds route hostnames to the tenant apex at admission, but only in
+# tenant-* namespaces. The chart's controller-side ownership layer applies
+# the same rule on this class in every namespace carrying
+# namespace.cozystack.io/host, rejecting a route whose hostnames are
+# missing or fall outside that label. Its admission layer stays off, since
+# that one would also police routes bound to the Cilium Gateway in the
+# same namespaces.
 cloudflare-tunnel-gateway-controller:
   # Both images are pulled straight from the upstream lexfrei registry and
   # are not mirrored under ghcr.io/cozystack/*; air-gapped operators mirror
