@@ -1,0 +1,32 @@
+# Container image for the driver.
+image: ghcr.io/lllamnyp/metallb-iad:main
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Namespace MetalLB is installed in (where the rendered IPAddressPool /
+# L2Advertisement objects go).
+metallbNamespace: metallb-system
+
+# Namespace the reservation placeholder Services live in. Empty means the
+# release namespace. Tenants must have no write access to it: a Service
+# carrying the placeholder label is exempt from conflict detection only
+# inside this namespace, so whoever can create Services there can hold
+# addresses. Setting it to anything other than the release namespace renders
+# a Namespace object as part of the chart.
+placeholderNamespace: ""
+
+controller:
+  replicas: 1
+  # Leader election matters once replicas > 1, but is on by default so scaling
+  # up is safe without a config change.
+  leaderElect: true
+  # ":8443" (HTTPS) or ":8080" (HTTP) to expose controller-runtime metrics;
+  # "0" disables the endpoint.
+  metricsBindAddress: "0"
+  priorityClassName: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi

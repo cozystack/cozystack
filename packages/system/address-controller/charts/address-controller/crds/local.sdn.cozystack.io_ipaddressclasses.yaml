@@ -1,0 +1,89 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.1
+  name: ipaddressclasses.local.sdn.cozystack.io
+spec:
+  group: local.sdn.cozystack.io
+  names:
+    kind: IPAddressClass
+    listKind: IPAddressClassList
+    plural: ipaddressclasses
+    singular: ipaddressclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provisioner
+      name: Provisioner
+      type: string
+    - jsonPath: .spec.reclaimPolicy
+      name: ReclaimPolicy
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          IPAddressClass describes an address source: which pool, which driver.
+          It is the StorageClass of the address model. Marking a class with the
+          annotation ipaddressclass.local.sdn.cozystack.io/is-default-class: "true"
+          makes it the class for claims that do not name one.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: IPAddressClassSpec defines the desired state of IPAddressClass.
+            properties:
+              parameters:
+                description: |-
+                  parameters is an opaque, driver-specific configuration blob (for
+                  example the address ranges to carve from). The core controller never
+                  interprets it.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              provisioner:
+                description: |-
+                  provisioner names the per-class driver that fulfils claims of this
+                  class, exactly as StorageClass.provisioner names a CSI driver. The
+                  core controller never provisions addresses itself; it stamps this
+                  value onto pending claims so the named driver can pick them up.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: provisioner is immutable
+                  rule: self == oldSelf
+              reclaimPolicy:
+                default: Retain
+                description: |-
+                  reclaimPolicy is copied to IPAddress objects provisioned for this
+                  class and governs what happens to them when their claim is deleted.
+                enum:
+                - Retain
+                - Delete
+                type: string
+            required:
+            - provisioner
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

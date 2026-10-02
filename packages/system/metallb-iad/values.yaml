@@ -1,0 +1,8 @@
+metallb-iad:
+  # Cozystack runs MetalLB in cozy-metallb, not the chart's upstream default of
+  # metallb-system; the driver renders its IPAddressPool and L2Advertisement
+  # into whatever this names.
+  metallbNamespace: cozy-metallb
+  # Same digest pin as packages/system/address-controller; bump in lockstep
+  # with METALLB_IAD_REF in the Makefile.
+  image: ghcr.io/lllamnyp/metallb-iad:0.1.0@sha256:b8ca2b53b9d30004e2460b26b9f300e899dce20ac14b3afccef9151b70b83ff7
