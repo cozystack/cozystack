@@ -2,3 +2,4 @@
 # One repository per line, no tag or digest, each with a `# reason`: why the
 # image cannot be built for both architectures, not that it has not been yet.
 ghcr.io/cozystack/cozystack/e2e-sandbox  # CI harness only, an x86 KVM sandbox (packages/core/testing pins linux/amd64); never runs on a user cluster
+ghcr.io/aenix-io/barerouter/kubevirt-disk  # amd64 guest disk for the site-router gateway VM, imported by CDI as data rather than run as a container; the VM is pinned to amd64 nodes (packages/apps/site-router/templates/vm.yaml)

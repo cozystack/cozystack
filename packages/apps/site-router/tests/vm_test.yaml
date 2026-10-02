@@ -66,6 +66,17 @@ tests:
           path: spec.template.metadata.annotations["ovn.kubernetes.io/port_security"]
           value: "false"
 
+  # The boot disk is an amd64 guest; an arm64 node pulls it fine through CDI but
+  # cannot boot it.
+  - it: keeps the gateway VM on amd64 nodes
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector["kubernetes.io/arch"]
+          value: amd64
+
   - it: places the gateway on the default pod network via a bridge NIC
     documentSelector:
       path: kind

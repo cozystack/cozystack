@@ -80,6 +80,10 @@ spec:
           {{- end }}
         machine:
           type: ""
+      {{- /* The barerouter disk is an amd64 guest, so on a mixed-arch cluster the
+            VM must not land on an arm64 node it cannot boot on. */}}
+      nodeSelector:
+        kubernetes.io/arch: amd64
       terminationGracePeriodSeconds: 30
       volumes:
       - name: boot
