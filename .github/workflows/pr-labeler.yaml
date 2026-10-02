@@ -41,6 +41,7 @@ jobs:
               // area/api
               'api':                 'area/api',
               'cozystack-api':       'area/api',
+              'registry':            'area/api',
 
               // area/ai
               'agents':              'area/ai',
@@ -51,14 +52,24 @@ jobs:
 
               // area/ci
               'ci':                  'area/ci',
+              'workflows':           'area/ci',
+              'labeler':             'area/ci',
 
               // area/dependencies — Renovate uses scope `deps` (see .github/renovate.json)
               'deps':                'area/dependencies',
+              'dependencies':        'area/dependencies',
+              'renovate':            'area/dependencies',
+
+              // area/dx — developer tooling: hack/, package Makefiles, cozypkg
+              'dx':                  'area/dx',
+              'hack':                'area/dx',
+              'cozypkg':             'area/dx',
 
               // area/dashboard
               'dashboard':           'area/dashboard',
               'cozystack-ui':        'area/dashboard',
               'console':             'area/dashboard',
+              'dashboard-controller': 'area/dashboard',
 
               // area/database
               'postgres':            'area/database',
@@ -75,6 +86,10 @@ jobs:
               'nats':                'area/database',
               'qdrant':              'area/database',
               'foundationdb':        'area/database',
+              'database':            'area/database',
+              'etcd-operator':       'area/database',
+              'opensearch':          'area/database',
+              'opensearch-operator': 'area/database',
 
               // area/extra
               'extra':               'area/extra',
@@ -84,6 +99,7 @@ jobs:
 
               // area/keycloak
               'keycloak':            'area/keycloak',
+              'keycloak-configure':  'area/keycloak',
 
               // area/kubernetes
               'kubernetes':          'area/kubernetes',
@@ -97,6 +113,7 @@ jobs:
               'vmstack':             'area/monitoring',
               'grafana':             'area/monitoring',
               'workloadmonitor':     'area/monitoring',
+              'monitoring-agents':   'area/monitoring',
 
               // area/networking
               'ingress':             'area/networking',
@@ -110,6 +127,12 @@ jobs:
               'tcp-balancer':        'area/networking',
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
+              'networking':          'area/networking',
+              'kubeovn':             'area/networking',
+              'multus':              'area/networking',
+              'kilo':                'area/networking',
+              'hetzner-robotlb':     'area/networking',
+              'ouroboros':           'area/networking',
 
               // area/cilium
               'cilium':              'area/cilium',
@@ -131,10 +154,24 @@ jobs:
               'cozyctl':             'area/platform',
               'cozystack-engine':    'area/platform',
               'cozy-lib':            'area/platform',
+              'operator':            'area/platform',
+              'cozystack-operator':  'area/platform',
+              'controller':          'area/platform',
+              'cozystack-controller': 'area/platform',
+              'cozystack-basics':    'area/platform',
+              'flux-shard-operator': 'area/platform',
+              'lineage':             'area/platform',
+              'migrations':          'area/platform',
+              'scheduler':           'area/platform',
+              'cozystack-scheduler': 'area/platform',
+              'reloader':            'area/platform',
+              'bootbox':             'area/platform',
 
               // area/release
               'backport':            'area/release',
               'release':             'area/release',
+              'changelog':           'area/release',
+              'changelogs':          'area/release',
 
               // area/storage
               'seaweedfs':           'area/storage',
@@ -146,6 +183,9 @@ jobs:
               'harbor':              'area/storage',
               'backups':             'area/storage',
               'csi':                 'area/storage',
+              'storage':             'area/storage',
+              'piraeus-operator':    'area/storage',
+              'backupstrategy-controller': 'area/storage',
 
               // area/tenant
               'tenant':              'area/tenant',
@@ -153,6 +193,7 @@ jobs:
               // area/testing
               'tests':               'area/testing',
               'e2e':                 'area/testing',
+              'testing':             'area/testing',
 
               // area/virtualization
               'kubevirt':            'area/virtualization',
@@ -165,6 +206,11 @@ jobs:
               'virtual-machine':     'area/virtualization',
               'hami':                'area/virtualization',
               'gpu-operator':        'area/virtualization',
+              'virtualization':      'area/virtualization',
+              'vm':                  'area/virtualization',
+              'kubevirt-operator':   'area/virtualization',
+              'kubevirt-cdi':        'area/virtualization',
+              'kubevirt-instancetypes': 'area/virtualization',
             };
 
             const pr = context.payload.pull_request;
@@ -173,10 +219,10 @@ jobs:
             const existing = new Set((pr.labels || []).map(l => l.name));
             const toAdd = new Set();
 
-            // 1. Strip "[Backport release-1.x]" prefix if present.
-            const backportMatch = title.match(/^\[Backport ([^\]]+)\]\s+(.+)$/);
-            const cleanTitle = backportMatch ? backportMatch[2] : title;
-            if (backportMatch) {
+            // 1. Strip every leading "[Backport release-1.x]" prefix: a backport of
+            // a backport carries two, and a leftover one would be parsed as the scope.
+            const cleanTitle = title.replace(/^(?:\[Backport [^\]]+\]\s+)+/, '');
+            if (cleanTitle !== title) {
               toAdd.add('area/release');
             }
 
@@ -202,7 +248,9 @@ jobs:
 
             // 5. Apply kind/* from type.
             if (type) {
-              if (typeToKind[type]) {
+              // Object.hasOwn: a title typed or scoped `constructor` would otherwise
+              // resolve to an Object.prototype member instead of to nothing.
+              if (Object.hasOwn(typeToKind, type)) {
                 toAdd.add(typeToKind[type]);
               } else {
                 core.warning(`type "${type}" has no kind/* mapping — typo or new type? See .github/workflows/pr-labeler.yaml typeToKind`);
@@ -215,7 +263,7 @@ jobs:
               .map(s => s.trim())
               .filter(Boolean);
             for (const s of scopes) {
-              if (scopeToArea[s]) {
+              if (Object.hasOwn(scopeToArea, s)) {
                 toAdd.add(scopeToArea[s]);
               } else {
                 core.warning(`scope "${s}" has no area/* mapping — consider extending scopeToArea in .github/workflows/pr-labeler.yaml if it recurs`);

@@ -190,6 +190,10 @@
   color: 'bfd4f2'
   description: Dependency bumps (Renovate, go.mod); scope `deps`
 
+- name: area/dx
+  color: 'bfd4f2'
+  description: Issues or PRs related to developer tooling (hack/ scripts, package Makefiles, cozypkg)
+
 - name: area/dashboard
   color: 'bfd4f2'
   description: Issues or PRs related to the dashboard / UI
