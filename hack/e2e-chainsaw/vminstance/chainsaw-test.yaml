@@ -1,8 +1,8 @@
 # Chainsaw port of hack/e2e-apps/vminstance.bats. Scenarios: a standalone
-# VMDisk, a VMDisk whose import can never finish, and a VMInstance booting from
-# its own VMDisk. The first and the last download the Ubuntu noble cloud image,
-# so the readiness timeouts are generous. Chainsaw deletes the VMDisk/VMInstance
-# CRs it applied at cleanup.
+# VMDisk, a VMDisk whose import can never finish, VMDisks cloned from a golden
+# image and from another disk, and a VMInstance booting from its own VMDisk. The
+# first and the last download the Ubuntu noble cloud image, so the readiness
+# timeouts are generous. Chainsaw deletes the CRs it applied at cleanup.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -91,6 +91,129 @@ spec:
             (conditions[?type == 'WorkloadsReady']):
             - status: "False"
               reason: DataVolumeNotReady
+---
+# VMDisk clone paths: source.image clones a golden image from cozy-public, and
+# source.disk clones that disk in turn, so only the golden image downloads.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: vmdisk-clone
+spec:
+  catch:
+  - events: {}
+  - events:
+      namespace: cozy-public
+  - describe:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+  - describe:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      namespace: cozy-public
+      name: vm-default-images-e2e-alpine-3.21
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+  steps:
+  - name: create-golden-image
+    try:
+    - apply:
+        file: golden-image.yaml
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-default-images-e2e-alpine-3.21
+            namespace: cozy-public
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+  - name: clone-from-image
+    try:
+    - apply:
+        file: vmdisk-image-clone.yaml
+    # The vm-disk release goes Ready as soon as the DataVolume exists, so this
+    # assert is the one that waits for the clone itself.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-image-clone
+          spec:
+            source:
+              pvc:
+                name: vm-default-images-e2e-alpine-3.21
+                namespace: cozy-public
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # CDI derives Ready from the DataVolume phase alone, and can reach
+    # Succeeded from the PVC's annotations before the claim itself binds.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-image-clone
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: image-clone
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (conditions[?type == 'WorkloadsReady']):
+            - status: "True"
+  - name: clone-from-disk
+    try:
+    - apply:
+        file: vmdisk-disk-clone.yaml
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-disk-clone
+          spec:
+            source:
+              pvc:
+                name: vm-disk-image-clone
+                namespace: ($namespace)
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-disk-clone
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: disk-clone
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (conditions[?type == 'WorkloadsReady']):
+            - status: "True"
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test

@@ -1,0 +1,11 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: disk-clone
+spec:
+  source:
+    disk:
+      name: image-clone
+  optical: false
+  storage: 1Gi
+  storageClass: ($values.storageClass)
