@@ -256,9 +256,20 @@ stringData:
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
-      {{- $tracingRate := dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) | int64 }}
-      {{- if gt $tracingRate 0 }}
-      tracing-central-tenant-bytes-per-second: {{ $tracingRate | quote }}
+      {{- /* Helm reads a number from values as a float64, so a whole number
+             is checked as one and written back as int64 digits. */}}
+      {{- $tracingRaw := dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) }}
+      {{- $tracingRate := -1 }}
+      {{- if kindIs "string" $tracingRaw }}
+      {{-   if regexMatch "^[0-9]+$" $tracingRaw }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{- else if or (kindIs "float64" $tracingRaw) (kindIs "int64" $tracingRaw) (kindIs "int" $tracingRaw) }}
+      {{-   if eq (floor (float64 $tracingRaw)) (float64 $tracingRaw) }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{- end }}
+      {{- if lt (int64 $tracingRate) 0 }}
+      {{-   fail (printf "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, or 0 for the default; got %v" $tracingRaw) }}
+      {{- end }}
+      {{- if gt (int64 $tracingRate) 0 }}
+      tracing-central-tenant-bytes-per-second: {{ int64 $tracingRate | quote }}
       {{- end }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
