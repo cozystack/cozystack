@@ -42,6 +42,9 @@ PACKAGES_IGNORE_PATHS := .git/,.gitignore,.gitmodules,.gitattributes,*.jpg,*.jpe
 image-packages:
 	mkdir -p ../../../_out/assets images
 	echo $$(git rev-parse HEAD; git diff HEAD; git ls-files --others --exclude-standard) | shasum -a 256 > ../platform/.build-revision
+# The stamped digest is what the operator hands Flux to pull from the registry,
+# so a build that pushes nothing keeps the committed ref instead.
+ifeq ($(PUSH),1)
 	flux push artifact \
 		oci://$(REGISTRY)/cozystack-packages:$(IMAGE_TAG) \
 		--path=../../../packages \
@@ -55,6 +58,9 @@ image-packages:
 		test -n "$$DIGEST" && \
 		yq -i '.cozystackOperator.platformSourceUrl = strenv(REPO)' values.yaml && \
 		yq -i '.cozystackOperator.platformSourceRef = "digest=" + strenv(DIGEST)' values.yaml
+else
+	@echo "PUSH=$(PUSH): cozystack-packages not pushed; values.yaml keeps its committed platformSourceRef"
+endif
 
 chart:
 	set -e; \
