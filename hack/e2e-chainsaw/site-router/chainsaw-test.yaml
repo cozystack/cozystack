@@ -425,11 +425,10 @@ spec:
         Wire the two ends (A responder ⇄ B initiator) and wait for the IPsec SA to
         come up. A's peer is controller-pushed from spec.values; B is a plain VM,
         so its initiator IPsec is pushed live over B's mgmt API here (it needs A's
-        runtime VIP + B's runtime pod IP). The controller metric
-        site_router_tunnel_up is the intended tunnel-state surface (no CR status
-        subresource in Phase 1) but under-reports on the current VyOS 1.5 image
-        (see step 3), so this polls A's authoritative SA state over the mgmt API —
-        an event-driven backstop before any reachability script.
+        runtime VIP + B's runtime pod IP). It polls A's SA state over the mgmt
+        API, the same `show vpn ipsec sa` output the controller's
+        site_router_tunnel_up gauge is parsed from, as the backstop before any
+        reachability script.
       try:
         - script:
             timeout: 16m
@@ -519,12 +518,8 @@ spec:
                 sleep 5
               done
 
-              # 3. Wait for the IPsec SA to come up. Read A's authoritative
-              #    `show vpn ipsec sa` over the mgmt API (State column == "up")
-              #    rather than the controller's site_router_tunnel_up gauge, which
-              #    under-reports on VyOS 1.5 (its SA parser expects the swanctl
-              #    statusall format, not the table `show vpn ipsec sa` returns).
-              #    Budget covers A's guest boot + the controller's IPsec push
+              # 3. Wait for the IPsec SA to come up: A's `show vpn ipsec sa` over
+              #    the mgmt API, State column == "up". Budget covers A's guest boot + the controller's IPsec push
               #    (which only lands once A's mgmt API is up) + IKE negotiation.
               end=$(( $(date +%s) + 420 ))
               while :; do
