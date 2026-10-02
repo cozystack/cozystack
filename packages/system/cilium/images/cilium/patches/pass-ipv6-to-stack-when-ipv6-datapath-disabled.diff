@@ -1,9 +1,10 @@
 Pass IPv6 to the kernel stack when the IPv6 datapath is disabled.
 
-Generated against cilium v1.19.5 bpf/bpf_host.c (refreshed from the v1.19.3
-original; identical changes, only context lines re-synced). With ENABLE_HOST_FIREWALL
-defined but ENABLE_IPV6 not compiled in, the protocol-switch default case
-drops all IPv6 as DROP_UNKNOWN_L3 ("Unsupported L3 protocol") before any
+Generated against cilium v1.20.2 bpf/bpf_host.c (first written for v1.19.3).
+v1.20 moved the ARP case of do_netdev under ENABLE_IPV4, so the do_netdev
+case sits directly before `default:`, where it does not depend on IPv4 being
+compiled in; the behaviour is unchanged. With ENABLE_HOST_FIREWALL defined
+but ENABLE_IPV6 not compiled in, the protocol-switch default case drops all IPv6 as DROP_UNKNOWN_L3 ("Unsupported L3 protocol") before any
 policy evaluation, in both directions. That breaks ICMPv6 Neighbor Discovery
 and BGP unnumbered over link-local addresses on IPv6/L3 fabrics, and no
 CiliumClusterwideNetworkPolicy can allow the traffic back. Upstream report:
@@ -20,9 +21,9 @@ running `make update`, which dry-runs this patch against the new tag.
 
 --- a/bpf_host.c
 +++ b/bpf_host.c
-@@ -1132,6 +1132,18 @@
- 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
- 								CTX_ACT_OK, METRIC_INGRESS);
+@@ -1277,6 +1277,18 @@
+ 
+ 		break;
  #endif /* ENABLE_IPV4 */
 +#ifndef ENABLE_IPV6
 +	/* cozystack-ipv6-passthrough: the IPv6 datapath is not compiled in, but
@@ -36,10 +37,10 @@ running `make update`, which dry-runs this patch against the new tag.
 +		ret = CTX_ACT_OK;
 +		break;
 +#endif /* !ENABLE_IPV6 */
- 	case bpf_htons(ETH_P_ARP):
- 		if (is_defined(ENABLE_ARP_PASSTHROUGH) ||
- 		    is_defined(ENABLE_ARP_RESPONDER) ||
-@@ -1412,6 +1424,14 @@
+ 	default:
+ 		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
+ 				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
+@@ -1523,6 +1535,14 @@
  					    src_sec_identity, &trace, &ext_err);
  		break;
  # endif
@@ -54,7 +55,7 @@ running `make update`, which dry-runs this patch against the new tag.
  # ifdef ENABLE_IPV4
  	case bpf_htons(ETH_P_IP): {
  		ret = handle_to_netdev_ipv4(ctx, magic == MARK_MAGIC_PROXY_EGRESS,
-@@ -1635,6 +1655,14 @@
+@@ -1748,6 +1768,14 @@
  
  		break;
  # endif

@@ -1,4 +1,4 @@
-{{- if and (or .Values.clustermesh.mcsapi.enabled .Values.clustermesh.enableMCSAPISupport) .Values.clustermesh.mcsapi.corednsAutoConfigure.enabled }}
+{{- if and .Values.clustermesh.mcsapi.enabled .Values.clustermesh.mcsapi.corednsAutoConfigure.enabled }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -11,6 +11,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     {{- with .Values.clustermesh.annotations }}

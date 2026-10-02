@@ -14,6 +14,7 @@ metadata:
   {{- end }}
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -40,7 +41,6 @@ rules:
   - namespaces
   - services
   - pods
-  - endpoints
   - nodes
 {{- if $readSecretsOnlyFromSecretsNamespace }}
   - secrets
@@ -94,7 +94,6 @@ rules:
   - cilium.io
   resources:
   - ciliumloadbalancerippools
-  - ciliumbgppeeringpolicies
   - ciliumbgpnodeconfigs
   - ciliumbgpadvertisements
   - ciliumbgppeerconfigs
@@ -112,6 +111,7 @@ rules:
   - ciliumcidrgroups
   - ciliuml2announcementpolicies
   - ciliumpodippools
+  - ciliumdatapathplugins
   verbs:
   - list
   - watch
@@ -154,4 +154,14 @@ rules:
   - ciliumbgpnodeconfigs/status
   verbs:
   - patch
+{{- if .Values.k8sClusterNetworkPolicy.enabled }}
+- apiGroups:
+  - policy.networking.k8s.io
+  resources:
+  - clusternetworkpolicies
+  verbs:
+  - get
+  - list
+  - watch
+{{- end }}
 {{- end }}

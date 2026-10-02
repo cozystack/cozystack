@@ -24,7 +24,7 @@ update:
 	rm -rf charts
 	helm repo add cilium https://helm.cilium.io/
 	helm repo update cilium
-	helm pull cilium/cilium --untar --untardir charts --version 1.19
+	helm pull cilium/cilium --untar --untardir charts --version 1.20
 	$(SED_INPLACE) -e '/Used in iptables/d' -e '/SYS_MODULE/d' charts/cilium/values.yaml
 	# Drop the whole k8s<1.30 AppArmor annotations block from the cilium-agent
 	# DaemonSet. Cozystack manages these annotations through cilium.podAnnotations

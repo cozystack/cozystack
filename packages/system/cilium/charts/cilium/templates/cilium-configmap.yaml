@@ -8,8 +8,6 @@
 {{- $defaultOperatorApiServeAddr := "localhost:9234" -}}
 {{- $defaultBpfCtTcpMax := 524288 -}}
 {{- $defaultBpfCtAnyMax := 262144 -}}
-{{- $enableIdentityMark := "true" -}}
-{{- $fragmentTracking := "true" -}}
 {{- $defaultKubeProxyReplacement := "false" -}}
 {{- $azureUsePrimaryAddress := "true" -}}
 {{- $defaultK8sClientQPS := 5 -}}
@@ -285,12 +283,17 @@ data:
   ingress-lb-annotation-prefixes: {{ .Values.ingressController.ingressLBAnnotationPrefixes | join " " | quote }}
   ingress-default-lb-mode: {{ .Values.ingressController.loadbalancerMode }}
   ingress-shared-lb-service-name: {{ .Values.ingressController.service.name }}
+  ingress-default-xff-num-trusted-hops: {{ .Values.ingressController.xffNumTrustedHops | quote }}
+  ingress-use-remote-address: {{ .Values.ingressController.useRemoteAddress | quote }}
   {{- if and .Values.ingressController.defaultSecretNamespace .Values.ingressController.defaultSecretName }}
   ingress-default-secret-namespace: {{ .Values.ingressController.defaultSecretNamespace | quote }}
   ingress-default-secret-name: {{ .Values.ingressController.defaultSecretName | quote }}
   {{- end }}
   ingress-hostnetwork-enabled: {{ .Values.ingressController.hostNetwork.enabled | quote }}
   ingress-hostnetwork-shared-listener-port: {{ .Values.ingressController.hostNetwork.sharedListenerPort | quote }}
+  ingress-hostnetwork-http-listener-port: {{ .Values.ingressController.hostNetwork.httpPort | quote }}
+  ingress-hostnetwork-https-listener-port: {{ .Values.ingressController.hostNetwork.httpsPort | quote }}
+  ingress-hostnetwork-tls-passthrough-listener-port: {{ .Values.ingressController.hostNetwork.tlsPassthroughPort | quote }}
   ingress-hostnetwork-nodelabelselector: {{ include "mapToString" .Values.ingressController.hostNetwork.nodes.matchLabels | quote }}
 {{- end }}
 
@@ -301,6 +304,7 @@ data:
   enable-gateway-api-app-protocol: {{ or .Values.gatewayAPI.enableAppProtocol .Values.gatewayAPI.enableAlpn | quote }}
   enable-gateway-api-alpn: {{ .Values.gatewayAPI.enableAlpn | quote }}
   gateway-api-xff-num-trusted-hops: {{ .Values.gatewayAPI.xffNumTrustedHops | quote }}
+  gateway-api-use-remote-address: {{ .Values.gatewayAPI.useRemoteAddress | quote }}
   gateway-api-service-externaltrafficpolicy: {{ .Values.gatewayAPI.externalTrafficPolicy | quote }}
   gateway-api-secrets-namespace: {{ .Values.gatewayAPI.secretsNamespace.name | quote }}
   gateway-api-hostnetwork-enabled: {{ .Values.gatewayAPI.hostNetwork.enabled | quote }}
@@ -331,6 +335,10 @@ data:
   # Enable IPv6 addressing. If enabled, all endpoints are allocated an IPv6
   # address.
   enable-ipv6: {{ .Values.ipv6.enabled | quote }}
+
+{{- if eq .Values.preferIpv6 true }}
+  prefer-ipv6: "true"
+{{- end }}
 
 {{- if .Values.cleanState }}
   # If a serious issue occurs during Cilium startup, this
@@ -483,8 +491,16 @@ data:
 {{- if hasKey .Values.bpf "lbSourceRangeAllTypes" }}
   bpf-lb-source-range-all-types: {{ .Values.bpf.lbSourceRangeAllTypes | quote }}
 {{- end }}
-{{- if hasKey .Values.bpf "lbAlgorithmAnnotation" }}
+{{- if or (hasKey .Values.bpf "lbAlgorithmAnnotation") .Values.gatewayAPI.enabled }}
+# When Gateway API is enabled this is forced to "true" so per-backend weights
+# on TCPRoute/UDPRoute take effect (Maglev honors the LB algorithm annotation only
+# when enabled). Paired with `bpf-lb-sock-hostns-only`, which is forced "true"
+# for the same reason.
+{{- if .Values.gatewayAPI.enabled }}
+  bpf-lb-algorithm-annotation: "true"
+{{- else }}
   bpf-lb-algorithm-annotation: {{ .Values.bpf.lbAlgorithmAnnotation | quote }}
+{{- end }}
 {{- end }}
 {{- if hasKey .Values.bpf "lbModeAnnotation" }}
   bpf-lb-mode-annotation: {{ .Values.bpf.lbModeAnnotation | quote }}
@@ -543,13 +559,13 @@ data:
 {{- if eq .Values.routingMode "native" }}
   {{- if and .Values.ipv4.enabled .Values.enableIPv4Masquerade (not .Values.ipMasqAgent.enabled) }}
     {{- if and (ne $ipam "eni") (ne $ipam "alibabacloud") }}
-      {{- if not .Values.ipv4NativeRoutingCIDR }}
+      {{- if and (not .Values.ipv4NativeRoutingCIDR) (not (and (eq $ipam "cluster-pool") .Values.nativeRoutingCIDRFromClusterPool)) }}
         {{- fail " ipv4NativeRoutingCIDR must be set when routingMode is native"}}
       {{- end }}
     {{- end }}
   {{- end }}
   {{- if and .Values.ipv6.enabled .Values.enableIPv6Masquerade (not .Values.ipMasqAgent.enabled) }}
-    {{- if not .Values.ipv6NativeRoutingCIDR }}
+    {{- if and (not .Values.ipv6NativeRoutingCIDR) (not (and (eq $ipam "cluster-pool") .Values.nativeRoutingCIDRFromClusterPool)) }}
       {{- fail "ipv6NativeRoutingCIDR must be set when routingMode is native"  }}
     {{- end }}
   {{- end }}
@@ -688,17 +704,16 @@ data:
   #  - portmap (Enables HostPort support for Cilium)
   cni-chaining-mode: {{ $cniChainingMode }}
 
-{{- if hasKey .Values "enableIdentityMark" }}
-  enable-identity-mark: {{ .Values.enableIdentityMark | quote }}
-{{- else if (ne $enableIdentityMark "true") }}
-  enable-identity-mark: "false"
-{{- end }}
 {{- if ne $cniChainingMode "portmap" }}
   # Disable the PodCIDR route to the cilium_host interface as it is not
   # required. While chaining, it is the responsibility of the underlying plugin
   # to enable routing.
   enable-local-node-route: "false"
 {{- end }}
+{{- end }}
+
+{{- if hasKey .Values "enableIdentityMark" }}
+  enable-identity-mark: {{ .Values.enableIdentityMark | quote }}
 {{- end }}
 
 {{- if (not (kindIs "invalid" .Values.enableIPv4Masquerade)) }}
@@ -738,16 +753,12 @@ data:
     {{- if and .Values.encryption.ipsec.mountPath .Values.encryption.ipsec.keyFile }}
   ipsec-key-file: {{ .Values.encryption.ipsec.mountPath }}/{{ .Values.encryption.ipsec.keyFile }}
     {{- end }}
-    {{- if .Values.encryption.ipsec.interface }}
-  encrypt-interface: {{ .Values.encryption.ipsec.interface }}
-    {{- end }}
     {{- if hasKey .Values.encryption.ipsec "keyWatcher" }}
   enable-ipsec-key-watcher: {{ .Values.encryption.ipsec.keyWatcher | quote }}
     {{- end }}
     {{- if .Values.encryption.ipsec.keyRotationDuration }}
   ipsec-key-rotation-duration: {{ include "validateDuration" .Values.encryption.ipsec.keyRotationDuration | quote }}
     {{- end }}
-  enable-ipsec-encrypted-overlay: {{ .Values.encryption.ipsec.encryptedOverlay | quote }}
   {{- else if eq .Values.encryption.type "wireguard" }}
   enable-wireguard: {{ .Values.encryption.enabled | quote }}
     {{- if .Values.encryption.wireguard.persistentKeepalive }}
@@ -755,17 +766,11 @@ data:
     {{- end }}
   {{- else if eq .Values.encryption.type "ztunnel" }}
   enable-ztunnel: {{ .Values.encryption.enabled | quote }}
+  ztunnel-ca-type: {{ .Values.encryption.ztunnel.ca.type | quote }}
   {{- end }}
   {{- if .Values.encryption.nodeEncryption }}
   encrypt-node: {{ .Values.encryption.nodeEncryption | quote }}
   {{- end }}
-{{- end }}
-
-{{- if .Values.encryption.strictMode.enabled }}
-  # --- DEPRECATED: Please use encryption.strictMode.egress.enabled instead
-  enable-encryption-strict-mode-egress: {{ .Values.encryption.strictMode.enabled | quote }}
-  encryption-strict-egress-cidr: {{ .Values.encryption.strictMode.cidr | quote }}
-  encryption-strict-egress-allow-remote-node-identities: {{ .Values.encryption.strictMode.allowRemoteNodeIdentities | quote }}
 {{- end }}
 
 {{- if .Values.encryption.strictMode.ingress.enabled }}
@@ -822,17 +827,13 @@ data:
 
 {{- if hasKey .Values "fragmentTracking" }}
   enable-ipv4-fragment-tracking: {{ .Values.fragmentTracking | quote }}
-{{- else if (ne $fragmentTracking "true") }}
-  enable-ipv4-fragment-tracking: "false"
 {{- end }}
 
 {{- if .Values.nat46x64Gateway.enabled }}
   enable-nat46x64-gateway: {{ .Values.nat46x64Gateway.enabled | quote }}
 {{- end }}
 
-{{- if and .Values.hostFirewall .Values.hostFirewall.enabled }}
   enable-host-firewall: {{ .Values.hostFirewall.enabled | quote }}
-{{- end}}
 
 {{- if hasKey .Values "devices" }}
   # List of devices used to attach bpf_host.o (implements BPF NodePort,
@@ -858,8 +859,16 @@ data:
 {{- if hasKey $socketLB "enabled" }}
   bpf-lb-sock: {{ $socketLB.enabled | quote }}
 {{- end }}
-{{- if hasKey $socketLB "hostNamespaceOnly" }}
+{{- if or (hasKey $socketLB "hostNamespaceOnly") .Values.gatewayAPI.enabled }}
+# When Gateway API is enabled this is forced to "true" so per-backend weights
+# on TCPRoute/UDPRoute take effect (socket LB stays in the host namespace,
+# letting the Maglev LB mode apply). Paired with `bpf-lb-mode-annotation`,
+# which is forced "true" for the same reason.
+{{- if .Values.gatewayAPI.enabled }}
+  bpf-lb-sock-hostns-only: "true"
+{{- else }}
   bpf-lb-sock-hostns-only: {{ $socketLB.hostNamespaceOnly | quote }}
+{{- end }}
 {{- end }}
 {{- if hasKey $socketLB "terminatePodConnections" }}
   bpf-lb-sock-terminate-pod-connections: {{ $socketLB.terminatePodConnections | quote }}
@@ -881,6 +890,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.nodePort "enableHealthCheck" }}
   enable-health-check-nodeport: {{ .Values.nodePort.enableHealthCheck | quote}}
+{{- end }}
+{{- if hasKey .Values.nodePort "enableDynamicSourceLookup" }}
+  enable-dynamic-source-lookup-nodeport: {{ .Values.nodePort.enableDynamicSourceLookup | quote}}
 {{- end }}
 {{- if .Values.gke.enabled }}
   enable-health-check-loadbalancer-ip: "true"
@@ -905,6 +917,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.loadBalancer "serviceTopology" }}
   enable-service-topology: {{ .Values.loadBalancer.serviceTopology | quote }}
+{{- end }}
+{{- if hasKey .Values.loadBalancer "reflectorWaitTime" }}
+  lb-reflector-wait-time: {{ .Values.loadBalancer.reflectorWaitTime | quote }}
 {{- end }}
 {{- end }}
 
@@ -953,7 +968,7 @@ data:
 {{- if hasKey .Values.k8s "requireIPv6PodCIDR" }}
   k8s-require-ipv6-pod-cidr: {{ .Values.k8s.requireIPv6PodCIDR | quote }}
 {{- end }}
-{{- if hasKey .Values.k8s "apiServerURLs" }}
+{{- if (not (kindIs "invalid" .Values.k8s.apiServerURLs)) }}
   k8s-api-server-urls: {{ .Values.k8s.apiServerURLs | quote }}
 {{- end }}
 {{- if and .Values.endpointRoutes .Values.endpointRoutes.enabled }}
@@ -964,6 +979,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.k8sNetworkPolicy "enabled" }}
   enable-k8s-networkpolicy: {{ .Values.k8sNetworkPolicy.enabled | quote }}
+{{- end }}
+{{- if .Values.k8sClusterNetworkPolicy.enabled }}
+  enable-k8s-cluster-network-policy: "true"
 {{- end }}
   enable-endpoint-lockdown-on-policy-overflow: {{ .Values.endpointLockdownOnMapOverflow | quote }}
 {{- if .Values.cni.configMap }}
@@ -1104,10 +1122,6 @@ data:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if .Values.hubble.redact.kafka }}
-  # Enables redaction of the Kafka API key part in flows
-  hubble-redact-kafka-apikey: {{ .Values.hubble.redact.kafka.apiKey | quote }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.hubble.export }}
@@ -1117,7 +1131,7 @@ data:
   hubble-export-file-max-size-mb: {{ .Values.hubble.export.fileMaxSizeMb | default .Values.hubble.export.static.fileMaxSizeMb | quote }}
   hubble-export-file-max-backups: {{ .Values.hubble.export.fileMaxBackups | default .Values.hubble.export.static.fileMaxBackups | quote }}
   hubble-export-file-compress: {{ .Values.hubble.export.fileCompress | default .Values.hubble.export.static.fileCompress | quote }}
-  hubble-export-aggregation-interval: {{ include "validateDuration" .Values.hubble.export.aggregationInterval | default .Values.hubble.export.static.aggregationInterval | quote }}
+  hubble-export-aggregation-interval: {{ include "validateDuration" (.Values.hubble.export.aggregationInterval | default .Values.hubble.export.static.aggregationInterval) | quote }}
   hubble-export-file-path: {{ .Values.hubble.export.static.filePath | quote }}
   hubble-export-fieldmask: {{ .Values.hubble.export.static.fieldMask | join " " | quote }}
   hubble-export-fieldaggregate: {{ .Values.hubble.export.static.fieldAggregate | join " " | quote }}
@@ -1145,7 +1159,7 @@ data:
   hubble-drop-events-interval: {{ .Values.hubble.dropEventEmitter.interval | quote }}
   hubble-drop-events-reasons: {{ .Values.hubble.dropEventEmitter.reasons | join " " | quote }}
 {{- end }}
-{{- if or (eq .Values.hubble.preferIpv6 true) (eq .Values.ipv4.enabled false) }}
+{{- if or (eq .Values.hubble.preferIpv6 true) (eq .Values.preferIpv6 true) (eq .Values.ipv4.enabled false) }}
   hubble-prefer-ipv6: "true"
 {{- end }}
 {{- if (not (kindIs "invalid" .Values.hubble.skipUnknownCGroupIDs)) }}
@@ -1191,10 +1205,26 @@ data:
 {{- if .Values.ipv4.enabled }}
   cluster-pool-ipv4-cidr: {{ .Values.ipam.operator.clusterPoolIPv4PodCIDRList | join " " | quote }}
   cluster-pool-ipv4-mask-size: {{ .Values.ipam.operator.clusterPoolIPv4MaskSize | quote }}
+{{- if and .Values.nativeRoutingCIDRFromClusterPool (not .Values.ipv4NativeRoutingCIDR) }}
+{{- $v4Pools := .Values.ipam.operator.clusterPoolIPv4PodCIDRList }}
+{{- if kindIs "string" $v4Pools }}{{- $v4Pools = splitList " " $v4Pools }}{{- end }}
+{{- if ne (len $v4Pools) 1 }}
+{{- fail "nativeRoutingCIDRFromClusterPool requires exactly one CIDR in ipam.operator.clusterPoolIPv4PodCIDRList; set ipv4NativeRoutingCIDR explicitly instead" }}
+{{- end }}
+  ipv4-native-routing-cidr: {{ first $v4Pools | quote }}
+{{- end }}
 {{- end }}
 {{- if .Values.ipv6.enabled }}
   cluster-pool-ipv6-cidr: {{ .Values.ipam.operator.clusterPoolIPv6PodCIDRList | join " " | quote }}
   cluster-pool-ipv6-mask-size: {{ .Values.ipam.operator.clusterPoolIPv6MaskSize | quote }}
+{{- if and .Values.nativeRoutingCIDRFromClusterPool (not .Values.ipv6NativeRoutingCIDR) }}
+{{- $v6Pools := .Values.ipam.operator.clusterPoolIPv6PodCIDRList }}
+{{- if kindIs "string" $v6Pools }}{{- $v6Pools = splitList " " $v6Pools }}{{- end }}
+{{- if ne (len $v6Pools) 1 }}
+{{- fail "nativeRoutingCIDRFromClusterPool requires exactly one CIDR in ipam.operator.clusterPoolIPv6PodCIDRList; set ipv6NativeRoutingCIDR explicitly instead" }}
+{{- end }}
+  ipv6-native-routing-cidr: {{ first $v6Pools | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if (eq $ipam "multi-pool") }}
@@ -1208,6 +1238,12 @@ data:
     {{- if hasKey $spec "ipv6" }}
     {{- $attrs = append $attrs (printf "ipv6-cidrs:%s" (join "," $spec.ipv6.cidrs)) }}
     {{- $attrs = append $attrs (printf "ipv6-mask-size:%s" (toString $spec.ipv6.maskSize)) }}
+    {{- end }}
+    {{- if hasKey $spec "allowFirstIP" }}
+    {{- $attrs = append $attrs (printf "allow-first-ip:%s" (toString $spec.allowFirstIP)) }}
+    {{- end }}
+    {{- if hasKey $spec "allowLastIP" }}
+    {{- $attrs = append $attrs (printf "allow-last-ip:%s" (toString $spec.allowLastIP)) }}
     {{- end }}
     {{- $pools = append $pools (printf "%s=%s" $pool (join ";" $attrs)) }}
   {{- end }}
@@ -1462,14 +1498,16 @@ data:
   proxy-max-concurrent-retries: {{ .Values.envoy.maxConcurrentRetries | quote }}
   proxy-use-original-source-address: {{ .Values.envoy.useOriginalSourceAddress | quote }}
   proxy-cluster-max-connections: {{ .Values.envoy.clusterMaxConnections | quote }}
+  proxy-cluster-max-pending-requests: {{ .Values.envoy.clusterMaxPendingRequests | quote }}
   proxy-cluster-max-requests: {{ .Values.envoy.clusterMaxRequests | quote }}
   http-retry-count: {{ .Values.envoy.httpRetryCount | quote }}
   http-stream-idle-timeout: {{ .Values.envoy.streamIdleTimeoutDurationSeconds | quote }}
+  envoy-node-locality-enabled: {{ .Values.envoy.nodeLocality.enabled | quote }}
 
   external-envoy-proxy: {{ include "envoyDaemonSetEnabled" . | quote }}
   envoy-base-id: {{ .Values.envoy.baseID | quote }}
 
-{{- if .Values.envoy.httpUpstreamLingerTimeout }}
+{{- if ne .Values.envoy.httpUpstreamLingerTimeout nil }}
   envoy-http-upstream-linger-timeout: {{ .Values.envoy.httpUpstreamLingerTimeout | quote }}
 {{- end }}
 
@@ -1483,18 +1521,25 @@ data:
 {{- if .Values.envoy.log.defaultLevel }}
   envoy-default-log-level: {{ .Values.envoy.log.defaultLevel | quote }}
 {{- end }}
+  envoy-access-log-enabled: {{ .Values.envoy.log.accessLogEnabled | quote }}
 {{- if .Values.envoy.log.accessLogBufferSize }}
   envoy-access-log-buffer-size: {{ .Values.envoy.log.accessLogBufferSize | quote }}
 {{- end }}
   envoy-keep-cap-netbindservice: {{ .Values.envoy.securityContext.capabilities.keepCapNetBindService | quote }}
+
+{{- $envoyXdsMode := include "envoyXdsMode" . }}
+{{- if ne $envoyXdsMode "" }}
+  envoy-xds-mode: {{ $envoyXdsMode | quote }}
+{{- end }}
 
 {{- if hasKey .Values.clustermesh "maxConnectedClusters" }}
   max-connected-clusters: {{ .Values.clustermesh.maxConnectedClusters | quote }}
 {{- end }}
   clustermesh-cache-ttl: {{ .Values.clustermesh.cacheTTL | quote }}
   clustermesh-enable-endpoint-sync: {{ .Values.clustermesh.enableEndpointSliceSynchronization | quote }}
-  clustermesh-enable-mcs-api: {{ (or .Values.clustermesh.mcsapi.enabled .Values.clustermesh.enableMCSAPISupport) | quote }}
+  clustermesh-enable-mcs-api: {{ .Values.clustermesh.mcsapi.enabled | quote }}
   clustermesh-mcs-api-install-crds: {{ .Values.clustermesh.mcsapi.installCRDs | quote }}
+  clustermesh-default-global-namespace: {{ .Values.clustermesh.defaultGlobalNamespace | quote }}
   policy-default-local-cluster: {{ .Values.clustermesh.policyDefaultLocalCluster | quote }}
 
   nat-map-stats-entries: {{ .Values.nat.mapStatsEntries | quote }}
@@ -1517,6 +1562,9 @@ data:
   ignore-flags-drift-checker: {{ join "," .Values.configDriftDetection.ignoredKeys | quote }}
   {{- end }}
 {{- end }}
+
+  enable-datapath-plugins: {{ .Values.datapathPlugins.enabled | quote }}
+  datapath-plugins-state-dir: {{ .Values.datapathPlugins.stateDir | quote }}
 
 # Extra config allows adding arbitrary properties to the cilium config.
 # By putting it at the end of the ConfigMap, it's also possible to override existing properties.

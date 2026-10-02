@@ -13,10 +13,14 @@ metadata:
     app: cilium-node-init
     app.kubernetes.io/part-of: cilium
     app.kubernetes.io/name: cilium-node-init
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
+  {{- if .Values.nodeinit.minReadySeconds }}
+  minReadySeconds: {{ .Values.nodeinit.minReadySeconds }}
+  {{- end }}
   selector:
     matchLabels:
       app: cilium-node-init
@@ -42,6 +46,7 @@ spec:
         app: cilium-node-init
         app.kubernetes.io/part-of: cilium
         app.kubernetes.io/name: cilium-node-init
+        helm.sh/chart: {{ include "cilium.chart" . }}
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -117,6 +122,9 @@ spec:
         {{- toYaml . | trim | nindent 8 }}
       {{- end }}
       hostPID: true
+      {{- if (semverCompare ">= 1.33-0" .Capabilities.KubeVersion.Version) }}
+      hostUsers: true
+      {{- end }}
       hostNetwork: true
       priorityClassName: {{ include "cilium.priorityClass" (list $ .Values.nodeinit.priorityClassName "system-node-critical") }}
       {{- if .Values.serviceAccounts.nodeinit.enabled }}
