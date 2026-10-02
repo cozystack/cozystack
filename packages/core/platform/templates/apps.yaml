@@ -256,8 +256,9 @@ stringData:
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
-      {{- with dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) | int64 }}
-      tracing-central-tenant-bytes-per-second: {{ . | quote }}
+      {{- $tracingRate := dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) | int64 }}
+      {{- if gt $tracingRate 0 }}
+      tracing-central-tenant-bytes-per-second: {{ $tracingRate | quote }}
       {{- end }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}

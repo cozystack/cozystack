@@ -35,3 +35,13 @@ tests:
       - notMatchRegex:
           path: stringData["values.yaml"]
           pattern: "tracing-central-tenant-bytes-per-second"
+
+  # Only a positive rate is a rate: a negative one would reach every tenant's
+  # Secret, and every release in every tenant would upgrade for nothing.
+  - it: writes no rate for a negative value
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: -1
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
