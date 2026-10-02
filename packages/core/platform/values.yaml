@@ -664,7 +664,9 @@ monitoring:
   rootEnabled: true
   # The rate, in bytes per second counted uncompressed, at which each tenant
   # using shared-central tracing may write into the traces store tenant-root
-  # hosts; each tenant's collector refuses data above it. 0 keeps the default
+  # hosts; each tenant's collector refuses data above it, with a 429 an
+  # OTLP/HTTP sender retries and a RESOURCE_EXHAUSTED an OTLP/gRPC sender
+  # drops, so central tenants should export over HTTP. 0 keeps the default
   # of about 97 KiB/s, at which one tenant alone cannot fill the disk cap of a
   # default 10Gi store within the two days VictoriaTraces always keeps. Raise
   # it with the store's size. A change upgrades every release in every tenant

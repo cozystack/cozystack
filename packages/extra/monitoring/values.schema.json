@@ -387,7 +387,7 @@
       "default": false
     },
     "tracingCollector": {
-      "description": "OpenTelemetry Collector for trace ingestion.",
+      "description": "OpenTelemetry Collector for trace ingestion. With shared-central tracing it refuses spans above the platform's per-tenant write rate: OTLP/HTTP senders retry them, OTLP/gRPC senders drop them, so export over HTTP.",
       "type": "object",
       "default": {},
       "required": [

@@ -26,7 +26,7 @@ type ConfigSpec struct {
 	// Deploy own Monitoring Stack.
 	// +kubebuilder:default:=false
 	Monitoring bool `json:"monitoring"`
-	// Send this tenant's traces to the shared VictoriaTraces store in tenant-root instead of a per-tenant backend; its Grafana reads them through a vmauth there that pins the tenant's own account, so tenants sharing the store cannot read each other's traces. It needs the tenant's own Monitoring (`monitoring: true`) and tenant-root hosting the store (`tracingCentralHost: true` on its Monitoring, with a `cluster`-mode tracingStorages entry named `generic`); without that the tenant's monitoring render fails rather than dropping spans. tenant-root, and whoever it admits to its Grafana, are inside the store's trust boundary.
+	// Send this tenant's traces to the shared VictoriaTraces store in tenant-root instead of a per-tenant backend; its Grafana reads them through a vmauth there that pins the tenant's own account, so tenants sharing the store cannot read each other's traces. It needs the tenant's own Monitoring (`monitoring: true`) and tenant-root hosting the store (`tracingCentralHost: true` on its Monitoring, with a `cluster`-mode tracingStorages entry named `generic`); without that the tenant's monitoring render fails rather than dropping spans. tenant-root, and whoever it admits to its Grafana, are inside the store's trust boundary. Applications should export over OTLP/HTTP: spans above the platform's per-tenant write rate are retried over HTTP but dropped over gRPC.
 	// +kubebuilder:default:=false
 	TracingCentral bool `json:"tracingCentral"`
 	// Deploy own Ingress Controller.

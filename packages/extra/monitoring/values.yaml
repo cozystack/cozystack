@@ -119,7 +119,7 @@ tracingCentralHost: false
 ## @section Traces collector configuration
 ##
 
-## @typedef {struct} TracingCollector - Per-tenant OpenTelemetry Collector that fronts the traces backend, the tenant's own or, with shared-central tracing, the shared store in tenant-root. It is the app-facing OTLP ingest gateway and the point where sampling/redaction are enforced. Tenant isolation does not come from this workload: for a local backend it comes from the tenant NetworkPolicies, and with shared-central tracing from the vmauth in tenant-root, which pins the tenant's account to its credentials whatever the collector sends.
+## @typedef {struct} TracingCollector - Per-tenant OpenTelemetry Collector that fronts the traces backend, the tenant's own or, with shared-central tracing, the shared store in tenant-root. It is the app-facing OTLP ingest gateway and the point where sampling/redaction are enforced. Tenant isolation does not come from this workload: for a local backend it comes from the tenant NetworkPolicies, and with shared-central tracing from the vmauth in tenant-root, which pins the tenant's account to its credentials whatever the collector sends. With shared-central tracing it also holds the tenant to the platform's write rate (monitoring.tracingCentralTenantBytesPerSecond) and refuses data above it: an OTLP/HTTP sender gets a 429 and retries, while an OTLP/gRPC sender gets RESOURCE_EXHAUSTED without RetryInfo and drops those spans, so applications of central tenants should export over HTTP.
 ## @field {bool} enabled=true - Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction); with shared-central tracing they have no path to it, so no new spans arrive, while the traces already stored stay readable. The collector fronts a single backend, and the limit holds with shared-central tracing too, since turning that off makes it export to the local entry again: while it is enabled, tracingStorages must hold at most one entry, and adding a second one fails the whole Monitoring render until the extra entry is removed or the collector is disabled.
 ## @field {int} replicas=1 - Number of collector replicas. Head sampling is trace-id-deterministic, so replicas>1 are safe and remove the single-ingest-path SPOF. With shared-central tracing each replica sends up to two requests at a time against this tenant's limit of four per vmauth replica, which its Grafana reads share, so more replicas do not raise the tenant's throughput and can slow its reads; the tenant's write rate (the platform's monitoring.tracingCentralTenantBytesPerSecond) is split across them as well.
 ## @minimum 1
@@ -129,7 +129,7 @@ tracingCentralHost: false
 ## @field {[]string} [redactAttributes] - Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).
 ## @field {Resources} [resources] - Resource configuration for the collector.
 
-## @param {TracingCollector} tracingCollector - OpenTelemetry Collector for trace ingestion.
+## @param {TracingCollector} tracingCollector - OpenTelemetry Collector for trace ingestion. With shared-central tracing it refuses spans above the platform's per-tenant write rate: OTLP/HTTP senders retry them, OTLP/gRPC senders drop them, so export over HTTP.
 tracingCollector:
   enabled: true
   replicas: 1
