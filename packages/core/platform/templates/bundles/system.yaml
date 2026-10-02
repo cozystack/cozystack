@@ -257,7 +257,13 @@
        the tenant kinds have no CRDs at all. The CNI package ships only the LOCAL
        group's CRDs (local.sdn.cozystack.io — underlay IPAM, which must work
        before cert-manager, etcd and this server, all of which are pods). */ -}}
-{{include "cozystack.platform.package.default" (list "cozystack.cozyplane-apiserver" $) }}
+{{- /* local, not the chart's replicated default: a 3-member etcd already
+       replicates at the application level, and the local class exists before
+       any replication pool is configured. The EtcdCluster's storageClassName
+       is immutable post-create, so the default has to be right on the first
+       render. */ -}}
+{{- $cozyplaneApiserverComponents := dict "cozyplane-apiserver" (dict "values" (dict "etcd" (dict "operator" (dict "storageClass" "local")))) -}}
+{{include "cozystack.platform.package" (list "cozystack.cozyplane-apiserver" "default" $ $cozyplaneApiserverComponents) }}
 {{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
