@@ -1,7 +1,7 @@
-suite: vm-disk refuses to clone a golden image whose import failed
-# A golden whose import Failed is never populated, and CDI holds a clone of it
-# forever, so a new disk on it would sit pending with nothing pointing at the
-# image. Only Failed is refused: a golden still importing is safe to clone
+suite: vm-disk refuses to clone a golden image that is missing or failed
+# A golden that is missing or whose import Failed is never populated, and CDI
+# holds a clone of it forever, so a new disk on it would sit pending with
+# nothing pointing at the image. A golden still importing is safe to clone
 # because CDI waits for it, and helm template has no cluster to look it up in.
 release:
   name: test-vm-disk
@@ -16,6 +16,12 @@ tests:
       scheme: &scheme
         "cdi.kubevirt.io/v1beta1/DataVolume":
           gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "v1/Namespace":
+          gvr: {group: "", version: v1, resource: namespaces}
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
           namespaced: true
       objects:
         - kind: DataVolume
@@ -32,10 +38,16 @@ tests:
     kubernetesProvider:
       scheme: *scheme
       objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
         - kind: DataVolume
           apiVersion: cdi.kubevirt.io/v1beta1
           metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
           status: {phase: Succeeded}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
     asserts:
       - equal:
           path: spec.source.pvc
@@ -47,10 +59,16 @@ tests:
     kubernetesProvider:
       scheme: *scheme
       objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
         - kind: DataVolume
           apiVersion: cdi.kubevirt.io/v1beta1
           metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
           status: {phase: ImportInProgress}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
     asserts:
       - equal:
           path: spec.source.pvc
@@ -87,3 +105,83 @@ tests:
             storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
     asserts:
       - notFailedTemplate: {}
+
+  - it: refuses a new disk on a golden that does not exist
+    set:
+      source: {image: {name: nosuch}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects: &releaseNamespace
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'source.image "nosuch": golden image "vm-default-images-nosuch" not found in cozy-public'
+
+  - it: clones a golden PVC that has no DataVolume
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+    asserts:
+      - equal:
+          path: spec.source.pvc
+          value: {name: vm-default-images-ubuntu, namespace: cozy-public}
+
+  - it: leaves an existing disk alone when its golden was later removed
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not look the golden up for a source other than an image
+    set:
+      source: {http: {url: "https://example.com/disk.img"}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *releaseNamespace
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones a golden whose DataVolume exists before CDI created its PVC
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: {phase: ImportScheduled}
+    asserts:
+      - equal:
+          path: spec.source.pvc
+          value: {name: vm-default-images-ubuntu, namespace: cozy-public}

@@ -11,15 +11,21 @@
   {{- end }}
   {{- if hasKey .Values.source "image" }}
     {{- $desiredSource = dict "pvc" (dict "name" (printf "vm-default-images-%s" (required "A valid .Values.source.image.name entry required!" .Values.source.image.name)) "namespace" "cozy-public") }}
-    {{- /* Refuse only a golden whose import Failed: CDI never populates it, so the
-           clone would wait forever. A golden still importing is left alone because
-           CDI holds the clone until the source is populated. An existing disk is
-           exempt: its DataVolume spec is immutable, so failing the render cannot
-           rescue it and would only block this release's upgrades. */}}
+    {{- /* Refuse a golden that is missing or whose import Failed: CDI never
+           populates it, so the clone would wait forever. A golden still importing
+           is left alone because CDI holds the clone until the source is populated.
+           Missing means neither the DataVolume nor the PVC CDI clones exists, as
+           the DataVolume can precede its PVC, and counts only when the release
+           namespace is visible: helm template has no cluster and every lookup
+           comes back empty. An existing disk is exempt: its DataVolume spec is
+           immutable, so failing the render cannot rescue it and would only block
+           this release's upgrades. */}}
     {{- if not $existingDV }}
       {{- $golden := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $desiredSource.pvc.name }}
       {{- if eq (dig "status" "phase" "" $golden | toString) "Failed" }}
         {{- fail (printf "source.image %q: golden DataVolume %q in cozy-public failed to import (phase Failed), so a clone of it would never complete. Ask the platform administrator to check the importer pod in cozy-public, then delete that DataVolume to retry the import." .Values.source.image.name $desiredSource.pvc.name) }}
+      {{- else if and (not $golden) (not (lookup "v1" "PersistentVolumeClaim" "cozy-public" $desiredSource.pvc.name)) (lookup "v1" "Namespace" "" .Release.Namespace) }}
+        {{- fail (printf "source.image %q: golden image %q not found in cozy-public, so a clone of it would never start. Check the image name, or ask the platform administrator to add cozystack.vm-default-images to bundles.enabledPackages." .Values.source.image.name $desiredSource.pvc.name) }}
       {{- end }}
     {{- end }}
   {{- else if hasKey .Values.source "http" }}
