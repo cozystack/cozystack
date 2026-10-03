@@ -551,7 +551,7 @@ spec:
           cd ../../..
           . hack/e2e-chainsaw/_lib/remediation-guard.sh
           statuses=$(kubectl -n "$NAMESPACE" get helmrelease opensearch-test \
-            -o jsonpath='{range .status.history[*]}{.status}{"\n"}{end}')
+            -o "jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")
           # Always emit the raw value so a silent future-Flux field rename shows
           # up as "empty history on a Ready HR" in CI logs rather than vanishing.
           # The helper reads empty input as "no cycle observed", so without this
