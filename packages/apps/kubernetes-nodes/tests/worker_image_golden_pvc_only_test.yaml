@@ -1,0 +1,116 @@
+suite: osImage.builtin accepts a golden that exists only as a PVC
+
+# CDI clones the golden's PVC, not its DataVolume, so a golden whose DataVolume
+# is gone -- garbage-collected under dataVolumeTTLSeconds, or a PVC restored on
+# its own -- is still a valid clone source. vm-disk accepts it; a worker pool
+# has to as well. The StorageClass and size guards read the PVC in that case,
+# so a PVC-only golden is not a way around them.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated}
+    # Registers the DataVolume LIST kind; no golden DataVolume exists in this file.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: unrelated, namespace: tenant-test}
+    - kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata: {name: talos-worker-pvconly-v1.13.6, namespace: cozy-public}
+      spec:
+        storageClassName: replicated
+        resources: {requests: {storage: 6Gi}}
+
+tests:
+  - it: clones a golden that has a PVC and no DataVolume
+    set:
+      osImage:
+        builtin:
+          schematicID: pvconly
+          version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-pvconly-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: still refuses a golden that has neither a DataVolume nor a PVC
+    set:
+      osImage:
+        builtin:
+          schematicID: missing
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden image "talos-worker-missing-v1\.13\.6" not found in cozy-public'
+
+  - it: compares the pool storageClass against the PVC-only golden's
+    set:
+      storageClass: local
+      osImage:
+        builtin:
+          schematicID: pvconly
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "local" differs from golden image "talos-worker-pvconly-v1\.13\.6" storageClass "replicated"'
+
+  - it: compares the pool diskSize against the PVC-only golden's size
+    set:
+      diskSize: 4Gi
+      osImage:
+        builtin:
+          schematicID: pvconly
+          version: v1.13.6
+    asserts:
+      - failedTemplate:
+          errorPattern: 'diskSize 4Gi is smaller than golden image "talos-worker-pvconly-v1\.13\.6" storage 6Gi'

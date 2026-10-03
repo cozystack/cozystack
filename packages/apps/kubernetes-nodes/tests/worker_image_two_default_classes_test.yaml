@@ -113,4 +113,4 @@ tests:
           version: v1.0.0
     asserts:
       - failedTemplate:
-          errorPattern: 'requested golden DataVolume "talos-worker-elsewhere-v1\.0\.0" not found'
+          errorPattern: 'requested golden image "talos-worker-elsewhere-v1\.0\.0" not found'

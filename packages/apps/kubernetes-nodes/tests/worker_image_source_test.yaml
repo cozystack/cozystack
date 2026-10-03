@@ -223,7 +223,7 @@ tests:
           version: v9.9.9
     asserts:
       - failedTemplate:
-          errorPattern: 'osImage\.builtin requested golden DataVolume "talos-worker-doesnotexist-v9\.9\.9" not found in cozy-public'
+          errorPattern: 'osImage\.builtin requested golden image "talos-worker-doesnotexist-v9\.9\.9" not found in cozy-public'
 
   - it: setting both osImage.builtin and osImage.factory fails the render
     set:

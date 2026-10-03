@@ -335,10 +335,14 @@ spec:
       {{-     $cloneWorkerSC = $cloneDefaultSC }}
       {{-     $cloneWorkerSCFromDefault = true }}
       {{-   end }}
+      {{- /* CDI clones the golden's PVC, so a golden whose DataVolume is gone
+             (CDI garbage collection, a PVC restored on its own) is still a
+             source, and only the absence of both is refused. With no DataVolume
+             the guards below read an empty spec and fall through to that PVC. */}}
       {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
-      {{-   if not $goldenDV }}
+      {{-   if and (not $goldenDV) (not (lookup "v1" "PersistentVolumeClaim" "cozy-public" $goldenName)) }}
       {{-     if not $poolCloned }}
-      {{-       fail (printf "nodeGroup %q: osImage.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to osImage.factory." .groupName $goldenName) }}
+      {{-       fail (printf "nodeGroup %q: osImage.builtin requested golden image %q not found in cozy-public, neither as a DataVolume nor as a PVC — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to osImage.factory." .groupName $goldenName) }}
       {{-     end }}
       {{-   else }}
       {{- /* Fail only on the golden's terminal failure phase, not on "not yet
