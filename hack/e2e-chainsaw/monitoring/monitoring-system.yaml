@@ -1,0 +1,33 @@
+# The extra/monitoring chart refuses any release name but `monitoring`
+# (templates/check-release-name.yaml), so this is a singleton per tenant and
+# every OIDC identifier the inner chart derives is built off the inner release
+# `monitoring-system`. storageClassName "" takes the cluster default: the
+# logs default is `replicated`, which the container lane does not have.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Monitoring
+metadata:
+  name: monitoring
+spec:
+  host: ""
+  metricsStorages:
+  - name: shortterm
+    retentionPeriod: "3d"
+    deduplicationInterval: "15s"
+    storage: 10Gi
+    storageClassName: ""
+  # Only the shortterm store exists here, so vmagent writes only there; its
+  # default list also names the longterm one.
+  vmagent:
+    remoteWrite:
+      urls:
+      - http://vminsert-shortterm:8480/insert/0/prometheus
+  logsStorages:
+  - name: generic
+    retentionPeriod: "1"
+    storage: 10Gi
+    storageClassName: ""
+  oidc:
+    mode: System
+    users:
+    - email: e2e-admin@example.com
+      role: Admin

@@ -257,6 +257,11 @@ src_to_suites() {
     # serves. etcd's round-trip is left out because CI gates it off. A test
     # derives this set from the suites.
     seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs" ;;
+    # Both suites create a KeycloakClient and wait for the operator's finalizer
+    # to remove it. kubernetes-application has no dependsOn on keycloak-operator
+    # (#4680), so the graph reaches only monitoring and would drop the tenant
+    # Kubernetes OIDC lifecycle in kubernetes-latest.
+    keycloak|keycloak-operator) echo "kubernetes-latest monitoring" ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
   esac
@@ -463,9 +468,9 @@ while IFS= read -r file || [ -n "$file" ]; do
     if [ -n "$src" ]; then
       # Keep this path's owning sources together as one comma-joined group. The
       # unit coverage is decided over is the changed PATH, not the single
-      # source: system/postgres-operator belongs to two PackageSources, one of
-      # which reaches no suite, and deciding per source would escalate on that
-      # half and run everything for every change to it.
+      # source: a path can belong to several PackageSources, some of which
+      # reach no suite, and deciding per source would escalate on that half
+      # and run everything for every change to it.
       selected_groups="$selected_groups $(echo "$src" | paste -sd , -)"
       trigger_any=1
     else
