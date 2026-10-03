@@ -265,7 +265,7 @@ _cozy_on_exit() {
     if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-dataplane.sh" ]; then
       echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
       _dp_rc=0
-      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
+      COZY_DATAPLANE_BUDGET=570 timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
       # Read, not propagated: the status still cannot change the job's outcome,
       # it only gets a line. The collector names every read of its own that it
       # could not finish, which leaves this backstop as the one remaining way

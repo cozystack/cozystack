@@ -204,10 +204,10 @@ spec:
           # script's cwd is the failing test's suite dir, so ../../ is hack/.
           # 300s rather than the 600s used from cozytest.sh: this call site sits
           # inside a Chainsaw op alongside the snapshot leg above and has to
-          # share that envelope, and the script self-bounds every kubectl exec at
-          # ≤30s behind fixed MAX_PODS/MAX_LBS fan-out caps that it logs when it
-          # hits them. cozytest.sh runs from a bats EXIT trap with no containing
-          # op, so it keeps the wider budget.
+          # share that envelope, and the script keeps its own 270s wall-clock
+          # budget (COZY_DATAPLANE_BUDGET) under it. cozytest.sh has no
+          # containing op, so it passes a wider budget to match its 600s
+          # backstop.
           if [ -x ../../e2e-capture-dataplane.sh ]; then
             echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
             timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1
@@ -216,9 +216,9 @@ spec:
             # collector names every read of its own it could not finish, so this
             # backstop is the last way its leg can die without a word, and a
             # truncated dataplane/ then reads exactly like a complete one that
-            # found little. The 300s here cuts sooner than the 600s the
-            # cozytest.sh call site allows, so this is the likelier of the two
-            # to fire, and the previous-logs leg above already reports its own.
+            # found little. The collector's own budget ends inside this
+            # backstop, so it fires only when that budget fails to hold, and the
+            # previous-logs leg above already reports its own.
             if [ "${dp_rc}" -ne 0 ]; then
               echo "» data-plane capture INCOMPLETE (exit ${dp_rc}); kept what landed in ${snap}/dataplane"
             fi
