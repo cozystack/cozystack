@@ -81,7 +81,13 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create temp mount dir: %v", err)
 	}
-	defer os.Remove(tmpMount)
+	// Logged, not returned: a leftover temp dir does not make the volume
+	// unusable, and failing an otherwise good publish only makes kubelet retry.
+	defer func() {
+		if err := os.Remove(tmpMount); err != nil {
+			klog.Warningf("Failed to remove temp dir %s: %v", tmpMount, err)
+		}
+	}()
 
 	rootSource := fmt.Sprintf("%s:%s", host, path)
 	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port)}
