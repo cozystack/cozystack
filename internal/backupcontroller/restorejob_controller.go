@@ -49,6 +49,10 @@ type RestoreJobReconciler struct {
 	// (missing pods/log RBAC) branch - is unit-testable without a live cluster.
 	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader. The keepOriginalPVC rename
+	// reads back objects it has just written, which the cache may not have
+	// seen yet. Wired in SetupWithManager.
+	APIReader client.Reader
 }
 
 func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -174,6 +178,7 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
@@ -192,6 +197,16 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.RestoreJob{}).
 		Complete(r)
+}
+
+// apiReader returns the uncached reader. Reconcilers built by hand in unit
+// tests have none and fall back to their fake Client, which has no cache to
+// bypass.
+func (r *RestoreJobReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // handleProjectionError classifies a credentials-projection error as

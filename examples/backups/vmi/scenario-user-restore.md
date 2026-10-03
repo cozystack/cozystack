@@ -39,6 +39,22 @@ The backup controller performs the following steps automatically:
 After the Velero Restore completes, the HelmReleases resume and the VM boots
 with the restored disk data while retaining its original IP and MAC addresses.
 
+### Reclaiming the kept disks
+
+With `keepOriginalPVC: true`, the default, step 3 switches each disk's PV to the `Retain` reclaim policy so that it outlives the PVC it is renamed from. Nothing removes the `-orig` PVCs or sets the policy back afterwards: they stay until an operator deletes them.
+
+The policy the PV had before the restore is recorded in the `backups.cozystack.io/original-reclaim-policy` annotation, on the PV and on the `-orig` PVC. Set it back on the PV before deleting the `-orig` PVC, or a PV that was `Delete` stays `Retain` once released and its volume is never reclaimed. A PVC renamed by an older controller carries no annotation; the snippet then leaves the PV on `Retain` for you to decide.
+
+```bash
+PVC=vm-disk-ubuntu-source-orig-1a2b
+PV=$(kubectl -n "$NAMESPACE" get pvc "$PVC" -o jsonpath='{.spec.volumeName}')
+POLICY=$(kubectl get pv "$PV" -o jsonpath='{.metadata.annotations.backups\.cozystack\.io/original-reclaim-policy}')
+kubectl patch pv "$PV" --type=merge -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${POLICY:-Retain}\"}}"
+kubectl -n "$NAMESPACE" delete pvc "$PVC"
+```
+
+The `<hash>` is derived from the RestoreJob name, so an `-orig` PVC left behind by a deleted RestoreJob takes the name a new RestoreJob of the same name would use. That RestoreJob fails before it halts the VM, naming the PVC, rather than restoring without keeping the current disk. Reclaim the leftover PVC as above, or give the new RestoreJob another name.
+
 ## Method 2: Cross-Namespace Restore (Copy)
 
 ```bash
