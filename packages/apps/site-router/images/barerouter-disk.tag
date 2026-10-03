@@ -1,0 +1,1 @@
+ghcr.io/aenix-io/barerouter/kubevirt-disk:0.1.1@sha256:9c88d087d2754adb25ae5e719a91c3886e571b5279b0d9715296889fa8456462

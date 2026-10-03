@@ -88,7 +88,9 @@
 #     - Probe the LB IP:port a few times from a host netns (the kube-ovn
 #       cni-server, so the probe traverses the same host-sourced datapath the
 #       flake breaks). Only an LB whose every probe FAILS gets the heavy capture
-#       below, and that same probe is the traffic the tcpdumps observe.
+#       below, and that same probe is the traffic the tcpdumps observe. The probe
+#       is a TCP connect, so a Service whose first port is not TCP is unprobed
+#       rather than probed with something that cannot answer for it.
 #     - For a FAILING LB, on BOTH the announcer node and the endpoint node
 #       (reusing pod_on_node), labelled by node + role (ANNOUNCER vs ENDPOINT):
 #         * `cilium-dbg bpf lb list` grepped for the LB IP + nodePort -- did the
@@ -132,16 +134,21 @@ set -u
 # any runtime state.                                                           #
 # --------------------------------------------------------------------------- #
 
-# lb_filter_services: stdin = `ns|name|type|lbip|port|nodePort|extPolicy` rows
-# (one Service per line, as emitted by the kubectl jsonpath in main). Emits only
-# the rows that are type=LoadBalancer AND carry a status ingress IP -- i.e. the
-# Services that actually have an external datapath to characterise.
+# lb_filter_services: stdin = `ns|name|type|lbip|port|protocol|nodePort|extPolicy`
+# rows (one Service per line, as emitted by the kubectl jsonpath in main). Emits
+# only the rows that are type=LoadBalancer AND carry a status ingress IP -- i.e.
+# the Services that actually have an external datapath to characterise.
 #
-# NF == 7 first, because a truncated list is exactly what a bounded or
+# The protocol sits before the two display-only columns rather than at the end,
+# because it decides whether a probe runs at all and the field-count check below
+# cannot see a cut inside the LAST value. Keeping a decision column away from
+# that blind spot is the whole reason for the position.
+#
+# NF == 8 first, because a truncated list is exactly what a bounded or
 # interrupted read leaves behind and a fragment passes a value-only test: an IP
 # cut mid-octet still looks like an IP, and the row it sits in would be probed
 # and written up as a Service that has no such address. The jsonpath emits a
-# fixed seven fields per record, so anything shorter is a cut rather than a
+# fixed eight fields per record, so anything shorter is a cut rather than a
 # Service. Dropping it loses nothing a reader needs -- the read's own note
 # already says the list did not finish.
 #
@@ -164,7 +171,37 @@ set -u
 # marker after it can. Either way the read's own cut-off note is what tells
 # the reader the list ended early.
 lb_filter_services() {
-  awk -F'|' 'NF == 7 && $3 == "LoadBalancer" && $4 != "" { print }'
+  awk -F'|' 'NF == 8 && $3 == "LoadBalancer" && $4 != "" { print }'
+}
+
+# lb_probe_blocker <probenode> <port> <protocol>: emits the reason no probe can
+# be attempted against this Service, or nothing when one should run. Kept here
+# rather than inline at the call site so each reason is testable, and because the
+# set of them is what decides whether an LB is written up as unreachable or as
+# unprobed -- the one distinction this section exists to keep honest.
+#
+# A non-TCP port is in that set. The probe is a TCP connect (nc -z), so against a
+# UDP Service every attempt fails for a reason that says nothing about the
+# datapath, and the old code wrote that down as "UNREACHABLE -- capturing
+# announcer/endpoint datapath". cozystack/cozystack#3426's tunnel LB (500/UDP,
+# 4500/UDP) took the heavy capture on every failed run and the conntrack dump in
+# the artifact shows what was actually measured: `tcp SYN_SENT dport=500
+# [UNREPLIED]`. Probing UDP is not the alternative -- an unanswered UDP datagram
+# and a delivered one are the same observation without an application reply, so
+# there is nothing to tell them apart from here. Unprobed is the honest verdict.
+#
+# An empty protocol defaults to TCP rather than to a third outcome: the Service
+# object always carries one, so the only way to arrive here without it is a read
+# that stopped short, and that read files its own note.
+lb_probe_blocker() {
+  _pb_node=$1; _pb_port=$2; _pb_proto=${3:-TCP}
+  if [ -z "$_pb_node" ]; then
+    echo "nowhere to probe from -- neither an announcer nor an endpoint node is known"
+  elif [ "$_pb_port" = "0" ] || [ -z "$_pb_port" ]; then
+    echo "the Service names no port to probe"
+  elif [ "$_pb_proto" != "TCP" ]; then
+    echo "its first port is $_pb_proto, and the probe here is a TCP connect -- nothing it could observe would be about this datapath"
+  fi
 }
 
 # lb_first_ready_endpoint: stdin = `ip|node|targetNs|targetName|ready` rows (one
@@ -1166,7 +1203,7 @@ capture_lb_node() {
 capture_lb_datapath() {
   # shellcheck disable=SC2086  # empty DP_LIST_BOUND must vanish, not become ""
   _raw=$($DP_LIST_BOUND kubectl get svc -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].protocol}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
     2>"${DP_ERR:-/dev/null}")
   _raw_rc=$?
   # Unconditional, like every other read's note: a list can fail AFTER emitting
@@ -1232,9 +1269,10 @@ capture_lb_datapath() {
   # captured. The gate lives on the capture branch (lb_budget_ok), not here.
   _captured=0
   printf '%s\n' "$_lbs" | {
-    while IFS='|' read -r _ns _name _type _lbip _port _np _etp; do
+    while IFS='|' read -r _ns _name _type _lbip _port _proto _np _etp; do
       [ -n "$_lbip" ] || continue
       _lbport="${_port:-0}"
+      _lbproto="${_proto:-TCP}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
       # The status is kept beside the value, as the per-node pod lookups do:
@@ -1297,7 +1335,7 @@ capture_lb_datapath() {
       _of="$OUT/lb-$_ns-$_name.txt"
       {
         echo "################################################################"
-        echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
+        echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport/$_lbproto nodePort=${_np:-<none>} etp=${_etp:-<default>}"
         echo "# backend: ip=${_epip:-$_ep_absent} node=${_epnode:-$_ep_absent} pod=${_eptns:-$_ep_absent}/${_eptname:-$_ep_absent} targetPort=${_eptport:-$_eptport_absent}"
         echo "# announcer node: ${_annode:-<unknown>}"
         echo "################################################################"
@@ -1318,13 +1356,12 @@ capture_lb_datapath() {
       # unattempted probe is what this section must never write down -- an image
       # without nc/curl/wget alone would stamp every LB in the cluster reachable
       # and skip the entire heavy capture, which reads as a healthy datapath.
+      # lb_probe_blocker holds the reasons that are decidable before a probe
+      # runs; the two below need the probe's own outcome set to tell apart.
       _probenode="${_annode:-$_epnode}"
       _decision=unknown
-      if [ -z "$_probenode" ]; then
-        _why="nowhere to probe from -- neither an announcer nor an endpoint node is known"
-      elif [ "$_lbport" = "0" ]; then
-        _why="the Service names no port to probe"
-      else
+      _why=$(lb_probe_blocker "$_probenode" "$_lbport" "$_lbproto")
+      if [ -z "$_why" ]; then
         # Held in a variable rather than piped straight in, because the SHAPE of
         # the outcome set is the only place the two routes to an unknown verdict
         # stay apart, and the reason line has to name a cause that was actually
