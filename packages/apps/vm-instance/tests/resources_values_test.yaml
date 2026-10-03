@@ -4,8 +4,9 @@ suite: vm-instance resources values
 # domain.cpu.cores and domain.cpu.sockets, which KubeVirt declares as uint32.
 # Only a whole number has a meaning there, so anything else has to stop the
 # render rather than truncate to 0 and leave KubeVirt to boot one core. Memory
-# is a quantity on the KubeVirt side too, but a zero or negative amount sizes
-# nothing, so it stops the render as well.
+# is a quantity on the KubeVirt side too, but KubeVirt admission refuses a
+# non-zero amount below 1M and a zero or negative amount sizes nothing, so
+# both stop the render as well.
 
 templates:
   - templates/vm.yaml
@@ -133,7 +134,7 @@ tests:
         memory: 8Gi
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.cpu \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
+          errorPattern: '^resources\.cpu \(read as 0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.cores,'
 
   - it: refuses a quoted zero cpu
     set:
@@ -236,7 +237,7 @@ tests:
         memory: 8Gi
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.sockets \(0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
+          errorPattern: '^resources\.sockets \(read as 0\) must be a positive whole number, such as 2\. It becomes the VM''s domain\.cpu\.sockets,'
 
   - it: refuses a sockets with a leading zero
     set:
@@ -319,7 +320,7 @@ tests:
         memory: "0"
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.memory \(0\) must be a positive quantity'
+          errorPattern: '^resources\.memory \(0\) must be at least 1M'
 
   - it: refuses an unquoted zero memory instead of treating it as unset
     set:
@@ -329,7 +330,7 @@ tests:
         memory: 0
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.memory \(0\) must be a positive quantity'
+          errorPattern: '^resources\.memory \(read as 0\) must be at least 1M'
 
   - it: refuses a zero memory written with a suffix
     set:
@@ -339,7 +340,7 @@ tests:
         memory: 0Gi
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.memory \(0Gi\) must be a positive quantity'
+          errorPattern: '^resources\.memory \(0Gi\) must be at least 1M'
 
   - it: refuses a negative memory
     set:
@@ -349,7 +350,83 @@ tests:
         memory: "-1Gi"
     asserts:
       - failedTemplate:
-          errorPattern: '^resources\.memory \(-1Gi\) must be a positive quantity'
+          errorPattern: '^resources\.memory \(-1Gi\) must be at least 1M'
+
+  - it: refuses a millibyte memory that KubeVirt admission would refuse
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 500m
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(500m\) must be at least 1M, such as 8Gi\. KubeVirt refuses a non-zero amount below 1M,'
+
+  - it: refuses a binary-suffixed memory below 1M
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 976Ki
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(976Ki\) must be at least 1M'
+
+  - it: refuses an unquoted byte count one below 1M
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 999999
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.memory \(read as 999999\) must be at least 1M'
+
+  - it: renders memory of exactly 1M
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 1M
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 1M
+
+  - it: renders a binary-suffixed memory of exactly 1M
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 976.5625Ki
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 976.5625Ki
+
+  - it: renders an unquoted byte count of exactly 1M
+    set:
+      resources:
+        cpu: 4
+        sockets: 1
+        memory: 1000000
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.resources.requests.memory
+          value: 1000000
+
+  # An unquoted number reaches the chart already decoded, so its spelling is
+  # gone. The error says so, and prints the number in plain digits rather than
+  # the exponent form a large float formats to.
+  - it: prints a large unquoted cpu in plain digits
+    set:
+      resources:
+        cpu: 4294967296
+        sockets: 1
+        memory: 8Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^resources\.cpu \(read as 4294967296\) must be a positive whole number'
 
   # A cpu or sockets on its own emits no domain.cpu, so beside an instance type
   # it used to be ignored whatever it held. A value that cannot be a count is

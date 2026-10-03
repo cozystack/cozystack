@@ -167,7 +167,7 @@
       "default": {},
       "properties": {
         "cpu": {
-          "description": "Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.",
+          "description": "Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -180,7 +180,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Amount of memory allocated, as a positive quantity such as `8Gi`.",
+          "description": "Amount of memory allocated, as a quantity of at least `1M` such as `8Gi`. Less than 1M is rejected at render time, because KubeVirt refuses a non-zero amount below 1M and a zero or negative amount sizes nothing.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -193,7 +193,7 @@
           "x-kubernetes-int-or-string": true
         },
         "sockets": {
-          "description": "Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.",
+          "description": "Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.sockets`.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

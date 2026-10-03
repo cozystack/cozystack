@@ -20,9 +20,9 @@
 ## @x-cozystack-options {source: gpu}
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
-## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
-## @field {quantity} [memory] - Amount of memory allocated, as a positive quantity such as `8Gi`.
-## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.
+## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
+## @field {quantity} [memory] - Amount of memory allocated, as a quantity of at least `1M` such as `8Gi`. Less than 1M is rejected at render time, because KubeVirt refuses a non-zero amount below 1M and a zero or negative amount sizes nothing.
+## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.sockets`.
 
 ## @typedef {struct} Firmware - Firmware and boot configuration. When left empty, the boot mode is inherited from the instanceProfile.
 ## @field {string} [bootloader] - Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
