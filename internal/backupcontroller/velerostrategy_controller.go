@@ -336,7 +336,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	// Step 5: On failure
-	if phase == "Failed" || phase == "PartiallyFailed" {
+	if phase == "Failed" || phase == "PartiallyFailed" || phase == "FailedValidation" {
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
 		return r.markBackupJobFailed(ctx, j, message)
 	}
@@ -750,11 +750,14 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	}
 
 	// Step 5: On failure
-	if phase == "Failed" || phase == "PartiallyFailed" {
+	if phase == "Failed" || phase == "PartiallyFailed" || phase == "FailedValidation" {
 		r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
 		message := fmt.Sprintf("Velero Restore failed with phase: %s", phase)
 		if veleroRestore.Status.FailureReason != "" {
 			message = fmt.Sprintf("%s: %s", message, veleroRestore.Status.FailureReason)
+		}
+		if len(veleroRestore.Status.ValidationErrors) > 0 {
+			message = fmt.Sprintf("%s; validation: %v", message, veleroRestore.Status.ValidationErrors)
 		}
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 	}
