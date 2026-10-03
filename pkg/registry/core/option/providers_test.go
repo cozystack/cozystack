@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -37,6 +38,7 @@ func listKinds() map[schema.GroupVersionResource]string {
 		gvrVMDisks:      "VMDiskList",
 		gvrImportSource: "VMImportSourceList",
 		gvrConfigMaps:   "ConfigMapList",
+		gvrDataVolumes:  "DataVolumeList",
 	}
 }
 
@@ -311,6 +313,58 @@ func TestImageProviderStripsPrefixAndFilters(t *testing.T) {
 	}
 	if got := values(items); len(got) != 2 || got[0] != "fedora" || got[1] != "ubuntu" {
 		t.Fatalf("image: got %v, want [fedora ubuntu] (prefix stripped, non-prefixed dropped)", got)
+	}
+}
+
+func TestImageProviderSkipsGoldensWhoseImportFailed(t *testing.T) {
+	pvcGVK := gvrPVCs.GroupVersion().WithKind("PersistentVolumeClaim")
+	dvGVK := gvrDataVolumes.GroupVersion().WithKind("DataVolume")
+	dv := func(name, phase string) *unstructured.Unstructured {
+		o := newObj(dvGVK, publicImagesNamespace, name, nil)
+		_ = unstructured.SetNestedField(o.Object, phase, "status", "phase")
+		return o
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-ubuntu", nil),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-fedora", nil),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-alpine", nil),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-debian", nil),
+		dv("vm-default-images-ubuntu", "Failed"),
+		dv("vm-default-images-fedora", "Succeeded"),
+		dv("vm-default-images-alpine", "ImportInProgress"),
+		dv("vm-default-images-centos", "Failed"),
+	)
+	items, err := DefaultProviders(dyn)["image"](context.Background(), "")
+	if err != nil {
+		t.Fatalf("image provider: %v", err)
+	}
+	// debian has a PVC and no DataVolume, which is not a failed import.
+	if got := values(items); len(got) != 3 || got[0] != "alpine" || got[1] != "debian" || got[2] != "fedora" {
+		t.Fatalf("image: got %v, want [alpine debian fedora] (Failed golden dropped)", got)
+	}
+}
+
+func TestImageProviderListsGoldensWhenDataVolumesCannotBeRead(t *testing.T) {
+	for name, listErr := range map[string]error{
+		"no CDI":    apierrors.NewNotFound(gvrDataVolumes.GroupResource(), ""),
+		"forbidden": apierrors.NewForbidden(gvrDataVolumes.GroupResource(), "", errors.New("denied")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			pvcGVK := gvrPVCs.GroupVersion().WithKind("PersistentVolumeClaim")
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+				newObj(pvcGVK, publicImagesNamespace, "vm-default-images-ubuntu", nil),
+			)
+			dyn.PrependReactor("list", "datavolumes", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, listErr
+			})
+			items, err := DefaultProviders(dyn)["image"](context.Background(), "")
+			if err != nil {
+				t.Fatalf("image provider: %v", err)
+			}
+			if got := values(items); len(got) != 1 || got[0] != "ubuntu" {
+				t.Fatalf("image: got %v, want [ubuntu]", got)
+			}
+		})
 	}
 }
 

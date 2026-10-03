@@ -46,6 +46,7 @@ type paramProviderFunc func(ctx context.Context, namespace, arg string) ([]corev
 var (
 	gvrNodes        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
 	gvrPVCs         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrDataVolumes  = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 	gvrKubevirts    = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "kubevirts"}
 	gvrInstancetype = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterinstancetypes"}
 	gvrPreference   = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterpreferences"}
@@ -333,16 +334,34 @@ func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
 
 // imageProvider lists the default image PVCs in cozy-public and strips the
 // vm-default-images- prefix to get the catalog name used by the vm-disk chart.
+//
+// A golden whose DataVolume is in phase Failed is left out: CDI never
+// populates it, so a disk cloned from it never becomes usable. One still
+// importing stays, because CDI holds a clone until the source is populated.
 func imageProvider(dyn dynamic.Interface) providerFunc {
 	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
 		list, err := dyn.Resource(gvrPVCs).Namespace(publicImagesNamespace).List(ctx, listOpts())
 		if err != nil {
 			return nil, err
 		}
+		// The filter is advisory: when the DataVolumes cannot be read the
+		// goldens go out unfiltered, because the Option list drops a source
+		// whose provider errors and an empty picker is the worse outcome.
+		failed := map[string]bool{}
+		dvs, err := dyn.Resource(gvrDataVolumes).Namespace(publicImagesNamespace).List(ctx, listOpts())
+		if err != nil {
+			logProviderError("image", err)
+		} else {
+			for i := range dvs.Items {
+				if phase, _, _ := unstructured.NestedString(dvs.Items[i].Object, "status", "phase"); phase == "Failed" {
+					failed[dvs.Items[i].GetName()] = true
+				}
+			}
+		}
 		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
 		for i := range list.Items {
 			name := list.Items[i].GetName()
-			if !strings.HasPrefix(name, imagePVCPrefix) {
+			if !strings.HasPrefix(name, imagePVCPrefix) || failed[name] {
 				continue
 			}
 			items = append(items, corev1alpha1.OptionItem{Value: strings.TrimPrefix(name, imagePVCPrefix)})

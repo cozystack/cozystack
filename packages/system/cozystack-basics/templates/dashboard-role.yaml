@@ -13,11 +13,3 @@ rules:
 - apiGroups: ["source.toolkit.fluxcd.io"]
   resources: ["helmcharts"]
   verbs: ["get", "list"]
-# The console lists PVCs in cozy-public (the vm-default-images-* golden images)
-# to populate the source image dropdown when creating a vm-disk. The browser
-# issues this list as the tenant identity, so without a read grant here it gets
-# 403 and the dropdown is empty. cozy-public is a shared public namespace, so
-# read on its PVCs is safe to expose to every tenant dashboard subject.
-- apiGroups: [""]
-  resources: ["persistentvolumeclaims"]
-  verbs: ["get", "list", "watch"]

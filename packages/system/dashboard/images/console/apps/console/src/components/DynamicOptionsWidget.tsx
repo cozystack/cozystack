@@ -25,7 +25,7 @@ interface OptionItem {
   default?: boolean
 }
 
-interface OptionObject {
+export interface OptionObject {
   apiVersion: string
   kind: string
   metadata: { name: string }

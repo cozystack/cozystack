@@ -3,20 +3,13 @@ import type { FieldProps } from "@rjsf/utils"
 import { useK8sList } from "@cozystack/k8s-client"
 import { APPS_GROUP, APPS_VERSION } from "@cozystack/types"
 import { useTenantContext } from "../lib/tenant-context.tsx"
-
-const IMAGE_PVC_PREFIX = "vm-default-images-"
+import type { OptionObject } from "./DynamicOptionsWidget.tsx"
 
 interface VMDisk {
   apiVersion: string
   kind: string
   metadata: { name: string; namespace: string }
   spec: { storage: string }
-}
-
-interface PVC {
-  apiVersion: string
-  kind: string
-  metadata: { name: string; namespace: string }
 }
 
 function useVMDiskOptions(tenantNamespace: string | null | undefined) {
@@ -29,16 +22,20 @@ function useVMDiskOptions(tenantNamespace: string | null | undefined) {
   return { disks: data?.items ?? [], isLoading }
 }
 
-function useImageOptions() {
-  const { data, isLoading } = useK8sList<PVC>({
-    apiGroup: "",
-    apiVersion: "v1",
-    plural: "persistentvolumeclaims",
-    namespace: "cozy-public",
-  })
-  const images = (data?.items ?? [])
-    .filter((pvc) => pvc.metadata.name.startsWith(IMAGE_PVC_PREFIX))
-    .map((pvc) => pvc.metadata.name.slice(IMAGE_PVC_PREFIX.length))
+// Not a raw PVC listing: a golden whose import failed still has its PVC.
+function useImageOptions(tenantNamespace: string | null | undefined) {
+  const { data, isLoading } = useK8sList<OptionObject>(
+    {
+      apiGroup: "core.cozystack.io",
+      apiVersion: "v1alpha1",
+      plural: "options",
+      namespace: tenantNamespace ?? undefined,
+    },
+    { enabled: !!tenantNamespace },
+  )
+  const images = (
+    data?.items?.find((o) => o.metadata.name === "image")?.spec?.items ?? []
+  ).map((it) => it.value)
   return { images, isLoading }
 }
 
@@ -48,7 +45,7 @@ export function SourceField(props: FieldProps) {
   const options = Object.keys(properties)
   const { tenantNamespace } = useTenantContext()
   const { disks, isLoading: disksLoading } = useVMDiskOptions(tenantNamespace)
-  const { images, isLoading: imagesLoading } = useImageOptions()
+  const { images, isLoading: imagesLoading } = useImageOptions(tenantNamespace)
 
   // Determine which option is currently selected
   const currentOption = formData
