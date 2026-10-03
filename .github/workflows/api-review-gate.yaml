@@ -5,35 +5,90 @@ name: API Review Gate
 # API group, a new resource, or a breaking change to an existing resource's
 # schema. Detection is deterministic (cmd/api-gate); no LLM or network calls.
 #
-# The job runs on every PR (no path filter) so it can always report a status
-# and therefore be marked as a required check in branch protection without
-# leaving PRs that touch no API stuck in "pending". When nothing sizeable
-# changed it passes immediately.
+# The job runs on every PR (no path filter) so it can always reach a verdict
+# without leaving PRs that touch no API stuck in "pending". When nothing
+# sizeable changed it passes immediately.
+#
+# The merge gate is the COMMIT STATUS named "API Review Gate", posted by the
+# `api-gate-report` job for same-repo PRs and by api-review-gate-fork.yaml for
+# fork PRs — NOT by the evaluating job below. Same reasoning as the "E2E Tests"
+# gate (docs/agents/e2e-testing.md §10), and it is what makes the
+# `commented`-review skip below safe:
+#   - A required *job* that skips counts as PASSED by branch protection, so any
+#     path that skips the evaluating job would hand out a free pass (#3257). A
+#     status is "success" only when a report step posts it, and a never-posted
+#     required status stays "Expected", which blocks the merge.
+#   - Check runs are NOT deduplicated per name: every workflow run gets its own
+#     check suite, so `GET /commits/{sha}/check-runs?filter=latest` returns the
+#     same set as `filter=all` and the rollup is worst-of. Two runs on one head
+#     SHA leave two verdicts standing for the same name, and a cancelled run
+#     then poisons the context for good. Commit statuses ARE deduplicated per
+#     context, newest wins.
+#
+# Consequence, and the invariant every change here must preserve: declining to
+# post can only preserve a verdict some real run reached, never invent one. So
+# skipped and cancelled runs post nothing.
+#
+# For the gate to actually block a merge, main branch protection must require
+# the "API Review Gate" status CONTEXT; without that it is advisory. Never wire
+# branch protection to a job name.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
   # Re-evaluate when a review is submitted or dismissed so an approval by an
-  # API owner flips the check from failing to passing without a new push.
+  # API owner flips the status from failing to passing without a new push. The
+  # job-level `if` below drops the review-bot noise (plain `commented` reviews);
+  # only reviews that can move the gate — approved, changes_requested,
+  # dismissed — actually re-run it.
   pull_request_review:
     types: [submitted, dismissed]
 
+# A run that computes a verdict must never be cancelled by a run that does not.
+# A plain `commented` review skips the evaluation (see the job `if`), so it gets
+# its own group and can only cancel other no-op runs, while pushes and
+# actionable reviews share the `eval` group and legitimately supersede each
+# other. Under a single shared group a review bot commenting during the ~30s
+# evaluation cancelled it and then contributed nothing — observed on real PRs
+# (41d1153c, 4b1966c5), leaving a cancelled run as that SHA's only verdict.
 concurrency:
-  group: api-review-gate-${{ github.event.pull_request.number }}
+  group: >-
+    api-review-gate-${{ github.event.pull_request.number }}-${{
+    github.event_name == 'pull_request_review'
+    && github.event.review.state == 'commented' && 'noop' || 'eval' }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: read
 
+env:
+  # Space-separated GitHub logins allowed to satisfy the gate. Edit here to
+  # change who can approve sizeable API changes. Workflow-level so the
+  # evaluating job and the published status description cannot drift apart.
+  API_OWNERS: "lllamnyp kvaps"
+
 jobs:
   api-review-gate:
-    name: Require API owner review for sizeable API changes
+    # Deliberately NOT named after the gate: the merge gate is the "API Review
+    # Gate" commit status, and a required context that is also a job name
+    # inherits the skip-to-green and no-dedup problems in the header.
+    name: API review gate (evaluate)
+    # A push always evaluates the gate. A review event re-runs it only when the
+    # review can move the verdict: an approval can flip fail->pass, a dismissal
+    # or changes_requested can flip pass->fail. Plain `commented` reviews — all
+    # that the review bots (CodeRabbit, dosubot) ever post — cannot, so they skip
+    # here instead of rebuilding the detector on every bot comment. Safe because
+    # `api-gate-report` skips in lockstep and posts nothing, which leaves the
+    # last real verdict standing.
+    if: >-
+      github.event_name != 'pull_request_review' ||
+      github.event.review.state != 'commented'
     runs-on: ubuntu-22.04
+    outputs:
+      sizeable: ${{ steps.detect.outputs.sizeable }}
+      verdict: ${{ steps.approve.outputs.verdict }}
     env:
-      # Space-separated GitHub logins allowed to satisfy the gate. Edit here to
-      # change who can approve sizeable API changes.
-      API_OWNERS: "lllamnyp kvaps"
       BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -119,6 +174,7 @@ jobs:
           esac
 
       - name: Check for an API owner approval
+        id: approve
         if: steps.detect.outputs.sizeable == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,12 +206,105 @@ jobs:
             '
           )"
 
+          # The verdict is recorded as a step output so `api-gate-report` can tell
+          # "sizeable change, no owner approval" apart from "the evaluation itself
+          # broke" — both of which fail this job. Written before the exit in each
+          # branch, since a step output set after exiting is never emitted.
           for owner in ${API_OWNERS}; do
             if grep -qxi "${owner}" <<<"${approvals}"; then
               echo "Sizeable API change approved by @${owner}."
+              echo "verdict=pass-approved" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           done
 
+          echo "verdict=fail-needs-approval" >> "$GITHUB_OUTPUT"
           echo "::error::This PR makes a sizeable API change (new group, new resource, or breaking change) and needs an approving review from one of: ${API_OWNERS}. See the job summary for details."
           exit 1
+
+  # Publish the required "API Review Gate" commit status. Separate from the
+  # evaluating job for the reasons in the header: the gate must not be a job
+  # name, and a run that reached no verdict must post nothing.
+  #
+  # The `if` guard stays in LOCKSTEP with the evaluating job's — this job runs if
+  # and only if that one does. A `commented` review skips both, so the previous
+  # real status stands untouched. `!cancelled()` rather than `always()`: a run
+  # killed by the concurrency group has no verdict, and posting one anyway would
+  # overwrite a green status with red — the exact failure #3262 hit twice with
+  # "E2E Tests" (see its `e2e-report`).
+  #
+  # Fork PRs skip this job. Their GITHUB_TOKEN is read-only on BOTH the
+  # `pull_request` and `pull_request_review` triggers, so no run of this workflow
+  # can post a status for a fork; api-review-gate-fork.yaml concludes the context
+  # for them from a privileged workflow_run. Until it does, the required status is
+  # unposted and the fork PR is not mergeable — fail-closed by construction.
+  api-gate-report:
+    name: Report API review gate status
+    needs: [api-review-gate]
+    if: >-
+      ${{ !cancelled()
+      && !github.event.pull_request.head.repo.fork
+      && (github.event_name != 'pull_request_review'
+      || github.event.review.state != 'commented') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Report "API Review Gate" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          GATE_RESULT: ${{ needs.api-review-gate.result }}
+          SIZEABLE: ${{ needs.api-review-gate.outputs.sizeable }}
+          VERDICT: ${{ needs.api-review-gate.outputs.verdict }}
+          # Inherited from the workflow-level env; passed explicitly so the
+          # script's use of it is visible at the call site.
+          API_OWNERS: ${{ env.API_OWNERS }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { GATE_RESULT, SIZEABLE, VERDICT, API_OWNERS, HEAD_SHA, RUN_URL } = process.env;
+            const { owner, repo } = context.repo;
+
+            // No verdict to publish — say nothing and let the last real status
+            // stand. Reachable when the evaluating job was skipped despite the
+            // lockstep guard (a `needs` short-circuit), and defensive against a
+            // future guard drift.
+            if (GATE_RESULT !== 'success' && GATE_RESULT !== 'failure') {
+              core.info(`evaluation result '${GATE_RESULT}' — posting nothing, previous status stands`);
+              return;
+            }
+
+            let state, description;
+            if (GATE_RESULT === 'success') {
+              state = 'success';
+              description = SIZEABLE === 'true'
+                ? 'sizeable API change approved by an API owner'
+                : 'no sizeable API change';
+            } else if (VERDICT === 'fail-needs-approval') {
+              state = 'failure';
+              description = `sizeable API change needs an approving review from: ${API_OWNERS}`;
+            } else {
+              // Either the job failed before reaching a verdict (checkout, build or
+              // the detector), or it reached `fail-needs-approval` but the output did
+              // not survive the failing job — whether a failed job propagates its
+              // outputs is not something the docs pin down. Only the description
+              // degrades: the state is `failure` down both paths, so the gate itself
+              // is unaffected. Fail-closed either way — an unverifiable gate is red.
+              state = 'failure';
+              description = 'gate evaluation did not complete — see the run for details';
+            }
+
+            try {
+              await github.rest.repos.createCommitStatus({
+                owner, repo, sha: HEAD_SHA, state,
+                context: 'API Review Gate', description, target_url: RUN_URL,
+              });
+            } catch (err) {
+              // Fail loudly and fail-closed: setFailed keeps this job red and the
+              // required status unposted ("Expected"), so the PR stays unmergeable.
+              core.setFailed(`Failed to report API Review Gate status: ${err}`);
+              return;
+            }
+            core.info(`API Review Gate → ${state}: ${description}`);
