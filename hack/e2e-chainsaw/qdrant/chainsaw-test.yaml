@@ -128,6 +128,204 @@ spec:
           status:
             phase: Bound
 
+  # The trust-anchor chain from the sentinel to the tenantsecrets read path:
+  # the chart renders a TenantProjection beside its cert-manager CA, the
+  # cacert controller lifts ca.crt into the key-free <release>.tenant-ca, and
+  # the lineage webhook marks it tenantresource=true because the
+  # ApplicationDefinition selects the tenant-ca label. That last verdict is
+  # computed from spec.secrets, and nothing short of a cluster proves it.
+  - name: verify-tenant-anchor-published
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: internal.cozystack.io/v1alpha1
+          kind: TenantProjection
+          metadata:
+            name: qdrant-test-ca
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+              reason: Projected
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: qdrant-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # Deterministic once the asserts above pass, so no retry.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+
+          secret_keys() {
+            kubectl -n "$NAMESPACE" get secret "$1" \
+              -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}'
+          }
+
+          # Exactly one key, and it is ca.crt. The source holds the CA private
+          # key under tls.key, so a second key here is that key leaving.
+          keys=$(secret_keys qdrant-test.tenant-ca | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate. Compared by fingerprint, because
+          # the controller re-encodes ca.crt from the DER it parsed.
+          src=$(kubectl -n "$NAMESPACE" get secret qdrant-test-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          proj=$(kubectl -n "$NAMESPACE" get secret qdrant-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$src" ]; then
+            echo "qdrant-test-ca has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
+            echo "projection does not carry the chart's CA certificate" >&2
+            exit 1
+          fi
+          if echo "$proj" | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path a tenant uses. Everything above reads raw
+          # Secrets, which only an admin can do.
+          anchor=$(kubectl -n "$NAMESPACE" get tenantsecret qdrant-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # The negative that gives the positive its meaning: the key-bearing
+          # cert-manager Secrets must not be served the same way. Each must
+          # hold tls.key first, so a renamed or emptied Secret cannot 404 for
+          # the wrong reason and pass. NotFound is the only acceptable
+          # failure: an RBAC denial or an unavailable aggregated apiserver also
+          # fails the read, and that is not "safely absent".
+          for s in qdrant-test-ca qdrant-test-tls; do
+            if ! secret_keys "$s" | grep -qx 'tls.key'; then
+              echo "$s no longer carries tls.key — this check has stopped proving anything" >&2
+              exit 1
+            fi
+            if err=$(kubectl -n "$NAMESPACE" get tenantsecret "$s" 2>&1 >/dev/null); then
+              echo "key-bearing $s is being served as a tenant secret" >&2
+              exit 1
+            fi
+            case "$err" in
+              *NotFound*) echo "ok $s: key-bearing and not served" ;;
+              *)
+                echo "tenantsecret $s did not answer NotFound, so this check proved nothing: $err" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+  # What the anchor is for: a client that trusts only what the tenant was
+  # handed reaches qdrant over TLS, and the same client fails closed when the
+  # anchor is wrong or missing, or when it falls back to plaintext.
+  - name: verify-endpoint-trusts-only-the-anchor
+    try:
+    - script:
+        # Inner budgets: the port-forward wait (30s) plus four handshakes and
+        # one plaintext request at 20s each, about 130s at worst, so an inner
+        # timeout fires before this ceiling does.
+        timeout: 3m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          # Read through tenantsecrets, the tenant's own path, not the raw
+          # Secret an admin would read.
+          kubectl -n "$NAMESPACE" get tenantsecret qdrant-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d > "$workdir/anchor.crt"
+
+          # A wrong anchor with the real CA's subject and a different key, so
+          # a pass here cannot come from matching on the name.
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout "$workdir/wrong.key" -out "$workdir/wrong.crt" \
+            -subj /CN=qdrant-test-ca -days 1 >/dev/null 2>&1
+
+          kubectl -n "$NAMESPACE" port-forward service/qdrant-test 6333:6333 >/dev/null 2>&1 &
+          pf_pid=$!
+          # TODO(e2e-replace-fixed-timeouts): nothing models a port-forward
+          # becoming ready; the socket opening is the only signal.
+          timeout 30 sh -ec 'until nc -z localhost 6333; do sleep 1; done'
+
+          # -verify_return_error turns a chain that does not build into a
+          # non-zero exit, and -verify_hostname checks the SAN the chart
+          # issues for the in-cluster Service name.
+          handshake() {
+            timeout 20 openssl s_client -connect 127.0.0.1:6333 \
+              -servername qdrant-test -verify_hostname qdrant-test \
+              -verify_return_error "$@" </dev/null >"$workdir/handshake.log" 2>&1
+          }
+          # A negative counts only when verification is what failed. A refused
+          # connection or a hang also exits non-zero, and reading that as
+          # "rejected" would pass while proving nothing.
+          expect_verify_failure() {
+            what=$1
+            shift
+            if handshake "$@"; then
+              echo "qdrant verified against $what; the anchor is not what decides trust" >&2
+              cat "$workdir/handshake.log" >&2
+              exit 1
+            fi
+            if ! grep -q 'verify error' "$workdir/handshake.log"; then
+              echo "the handshake against $what failed, but not on verification:" >&2
+              cat "$workdir/handshake.log" >&2
+              exit 1
+            fi
+            echo "ok: $what is rejected"
+          }
+
+          if ! handshake -CAfile "$workdir/anchor.crt"; then
+            echo "qdrant does not verify against the anchor published to the tenant" >&2
+            cat "$workdir/handshake.log" >&2
+            exit 1
+          fi
+          echo "ok: the published anchor verifies qdrant-test:6333"
+
+          expect_verify_failure "a CA with the same subject and another key" -CAfile "$workdir/wrong.crt"
+          # No anchor at all: the runner's default trust store only.
+          expect_verify_failure "the default trust store"
+
+          # Last, because it is the one request that is not TLS: the listener
+          # must not answer plaintext HTTP, or a client without the anchor
+          # could skip verification entirely. 000 means no HTTP response, but
+          # curl also prints it when nothing is listening, so a refused
+          # connection (7) or a timeout (28) proves nothing and fails here.
+          rc=0
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 20 \
+            http://127.0.0.1:6333/readyz) || rc=$?
+          case "$rc" in
+            7|28)
+              echo "plaintext request never reached qdrant (curl exit $rc), so this check proved nothing" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$code" != "000" ]; then
+            echo "qdrant answered plaintext HTTP with status $code" >&2
+            exit 1
+          fi
+          # And the listener was still there to refuse it: the same forward
+          # still carries a verified handshake afterwards.
+          if ! handshake -CAfile "$workdir/anchor.crt"; then
+            echo "the port-forward died around the plaintext request, so its rejection proves nothing" >&2
+            cat "$workdir/handshake.log" >&2
+            exit 1
+          fi
+          echo "ok: plaintext HTTP gets no response (curl exit $rc)"
+
   - name: verify-pvc-reclaim-on-delete
     try:
     # Issue #3059: Kubernetes never GCs StatefulSet-templated PVCs; the
