@@ -1477,3 +1477,297 @@ func TestReconcileArtifactGeneratorsLayersValuesFiles(t *testing.T) {
 		t.Errorf("Copy =\n%+v\nwant\n%+v", got, want)
 	}
 }
+
+// builtAG returns a PackageSource and an ArtifactGenerator on the given
+// generation whose Ready condition reports a finished build.
+func builtAG(gen int64, readyStatus metav1.ConditionStatus, readyGen int64, annotations map[string]string) (*cozyv1alpha1.PackageSource, *sourcewatcherv1beta1.ArtifactGenerator) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: gen,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations:       annotations,
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             readyStatus,
+				Reason:             "Succeeded",
+				ObservedGeneration: readyGen,
+				LastTransitionTime: metav1.NewTime(referenceTime.Add(-time.Second)),
+			}},
+		},
+	}
+	return ps, ag
+}
+
+// TestUpdateStatus_ReadyOnUnverifiedGeneration_ForcesRebuild pins the guard
+// against the source-watcher race where a build started on generation N-1
+// finishes after the spec moved to N and still records N as observed: the
+// first Ready=True on a spec generation the operator changed forces one
+// rebuild and records that generation as verified.
+func TestUpdateStatus_ReadyOnUnverifiedGeneration_ForcesRebuild(t *testing.T) {
+	cases := []struct {
+		name        string
+		gen         int64
+		annotations map[string]string
+	}{
+		{"first spec change", 2, nil},
+		{"later spec change", 3, map[string]string{annotationVerifiedGeneration: "2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			testReadyOnUnverifiedGenerationForcesRebuild(t, tc.gen, tc.annotations)
+		})
+	}
+}
+
+func testReadyOnUnverifiedGenerationForcesRebuild(t *testing.T, gen int64, annotations map[string]string) {
+	ps, ag := builtAG(gen, metav1.ConditionTrue, gen, annotations)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter != backoffFor(1) {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, backoffFor(1))
+	}
+
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	agReady := meta.FindStatusCondition(persistedAG.Status.Conditions, "Ready")
+	if agReady == nil || agReady.Status != metav1.ConditionFalse || agReady.Reason != reasonRecoveryForced {
+		t.Errorf("AG Ready = %+v, want False/%s", agReady, reasonRecoveryForced)
+	}
+	if persistedAG.Annotations[annotationFluxRequestedAt] == "" {
+		t.Errorf("requestedAt not bumped: %v", persistedAG.Annotations)
+	}
+	if got, want := persistedAG.Annotations[annotationVerifiedGeneration], strconv.FormatInt(gen, 10); got != want {
+		t.Errorf("verified generation = %q, want %q", got, want)
+	}
+
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionUnknown || psReady.Reason != reasonAwaitingRecovery {
+		t.Errorf("PS Ready = %+v, want Unknown/%s", psReady, reasonAwaitingRecovery)
+	}
+}
+
+// TestUpdateStatus_VerificationSkipped covers every state where the forced
+// rebuild must not happen, so a verified or never-changed generator is not
+// rebuilt on every reconcile and a failed or in-flight build is left to
+// source-watcher.
+func TestUpdateStatus_VerificationSkipped(t *testing.T) {
+	cases := []struct {
+		name        string
+		gen         int64
+		status      metav1.ConditionStatus
+		readyGen    int64
+		annotations map[string]string
+	}{
+		{"generation already verified", 2, metav1.ConditionTrue, 2, map[string]string{annotationVerifiedGeneration: "2"}},
+		{"spec never changed after creation", 1, metav1.ConditionTrue, 1, nil},
+		{"build failed", 2, metav1.ConditionFalse, 2, nil},
+		{"source-watcher has not caught up with the spec", 3, metav1.ConditionTrue, 2, map[string]string{annotationVerifiedGeneration: "2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ps, ag := builtAG(tc.gen, tc.status, tc.readyGen, tc.annotations)
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+			r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+			if _, err := r.updateStatus(context.Background(), ps, referenceTime); err != nil {
+				t.Fatalf("updateStatus: %v", err)
+			}
+			persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+				t.Fatalf("Get AG: %v", err)
+			}
+			if _, ok := persistedAG.Annotations[annotationFluxRequestedAt]; ok {
+				t.Errorf("rebuild forced: %v", persistedAG.Annotations)
+			}
+			persistedPS := &cozyv1alpha1.PackageSource{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+				t.Fatalf("Get PS: %v", err)
+			}
+			psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+			if psReady == nil || psReady.Status != tc.status {
+				t.Errorf("PS Ready = %+v, want %s copied through", psReady, tc.status)
+			}
+		})
+	}
+}
+
+// TestUpdateStatus_VerifiedRebuildSettles walks the forced rebuild to its end:
+// once source-watcher reports Ready=True again, the recovery bookkeeping is
+// cleared and the condition is copied through without another rebuild.
+func TestUpdateStatus_VerifiedRebuildSettles(t *testing.T) {
+	forcedAt := referenceTime.Add(-10 * time.Second).UTC().Format(time.RFC3339Nano)
+	ps, ag := builtAG(2, metav1.ConditionTrue, 2, map[string]string{
+		annotationVerifiedGeneration: "2",
+		annotationRecoveryAttempts:   "1",
+		annotationLastRecoveryAt:     forcedAt,
+		annotationFluxRequestedAt:    forcedAt,
+	})
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want none", res.RequeueAfter)
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if _, ok := persistedAG.Annotations[annotationRecoveryAttempts]; ok {
+		t.Errorf("recovery tracking not cleared: %v", persistedAG.Annotations)
+	}
+	if got := persistedAG.Annotations[annotationFluxRequestedAt]; got != forcedAt {
+		t.Errorf("requestedAt = %q, want %q (no second rebuild)", got, forcedAt)
+	}
+}
+
+// TestUpdateStatus_VerificationForceFailure_LeavesGenerationUnverified pins
+// the ordering the verification relies on: a generation is marked verified
+// only after the rebuild was forced, so a failed force is retried instead of
+// being recorded as done.
+func TestUpdateStatus_VerificationForceFailure_LeavesGenerationUnverified(t *testing.T) {
+	ps, ag := builtAG(2, metav1.ConditionTrue, 2, nil)
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
+		SubResourcePatch: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+			return errors.New("simulated status patch failure")
+		},
+	})
+	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
+
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime); err == nil {
+		t.Fatal("updateStatus succeeded, want error from the forced rebuild")
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := baseClient.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if _, ok := persistedAG.Annotations[annotationVerifiedGeneration]; ok {
+		t.Errorf("generation marked verified although the rebuild was never forced: %v", persistedAG.Annotations)
+	}
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := baseClient.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	if psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready"); psReady != nil {
+		t.Errorf("PS Ready = %+v, want unset: the unverified Ready=True must not be copied through", psReady)
+	}
+}
+
+// TestUpdateStatus_VerificationIgnoresStaleRecoveryCounter pins that the
+// verification rebuild starts its own attempt budget: clearing a counter left
+// by an earlier stall is best-effort, and inheriting it could leave the
+// verification a single backoff window before SourceWatcherStalled.
+func TestUpdateStatus_VerificationIgnoresStaleRecoveryCounter(t *testing.T) {
+	ps, ag := builtAG(2, metav1.ConditionTrue, 2, map[string]string{
+		annotationRecoveryAttempts: "4",
+		annotationLastRecoveryAt:   referenceTime.Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	})
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	patches := 0
+	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			patches++
+			if patches == 1 {
+				return errors.New("simulated failure clearing recovery tracking")
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter != backoffFor(1) {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, backoffFor(1))
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := baseClient.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if got := persistedAG.Annotations[annotationRecoveryAttempts]; got != "1" {
+		t.Errorf("recovery attempts = %q, want \"1\"", got)
+	}
+}
+
+// TestUpdateStatus_VerificationMarkFailure_RebuildsAgain covers the other
+// half of that ordering: when the rebuild was forced but recording the
+// generation failed, the next Ready=True forces the rebuild again.
+func TestUpdateStatus_VerificationMarkFailure_RebuildsAgain(t *testing.T) {
+	ps, ag := builtAG(2, metav1.ConditionTrue, 2, nil)
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	failMark := true
+	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, marking := obj.GetAnnotations()[annotationVerifiedGeneration]; marking && failMark {
+				return errors.New("simulated metadata patch failure")
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
+
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime); err == nil {
+		t.Fatal("updateStatus succeeded, want error from recording the verified generation")
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := baseClient.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if _, ok := persistedAG.Annotations[annotationVerifiedGeneration]; ok {
+		t.Fatalf("verified generation persisted despite the failed patch: %v", persistedAG.Annotations)
+	}
+	firstForce := persistedAG.Annotations[annotationFluxRequestedAt]
+	if firstForce == "" {
+		t.Fatalf("rebuild was not forced before the mark: %v", persistedAG.Annotations)
+	}
+
+	// source-watcher finishes the forced rebuild and reports Ready=True again.
+	meta.SetStatusCondition(&persistedAG.Status.Conditions, metav1.Condition{
+		Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", ObservedGeneration: 2,
+	})
+	if err := baseClient.Status().Update(context.Background(), persistedAG); err != nil {
+		t.Fatalf("Update AG status: %v", err)
+	}
+	failMark = false
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime.Add(time.Minute)); err != nil {
+		t.Fatalf("second updateStatus: %v", err)
+	}
+	if err := baseClient.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if got := persistedAG.Annotations[annotationFluxRequestedAt]; got == firstForce {
+		t.Errorf("requestedAt = %q unchanged, want a second forced rebuild", got)
+	}
+	if got := persistedAG.Annotations[annotationVerifiedGeneration]; got != "2" {
+		t.Errorf("verified generation = %q, want \"2\"", got)
+	}
+}
