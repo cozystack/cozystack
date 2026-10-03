@@ -384,6 +384,11 @@ ALLOW
   printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\n  sidecar:\n    repository: someone-elses/inner\n    tag: "v1@sha256:%s"\nunrelated:\n  image:\n    repository: someone-elses/thing\n    tag: "v1@sha256:%s"\n' "$D" "$D" "$D" > "$tmp/s4.yaml"
   printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
   printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
+  # The upstream ingress-nginx layout: the repository lives in `image`, not
+  # `repository`, and the digest has its own key without an `@`, so neither
+  # shape 1 nor shape 2 sees it. The non-string digest ahead of it would abort
+  # the rule's test() for the whole file without a type guard.
+  printf 'odd:\n  image: x\n  digest: 5\ncontroller:\n  image:\n    registry: ghcr.io\n    image: cozystack/cozystack/seven\n    tag: v1\n    digest: sha256:%s\n' "$D" > "$tmp/s7.yaml"
 
   # Assert the EXACT canonical repo@digest, not a repository substring. A
   # substring match leaves the digest untested, and since the completeness
@@ -392,14 +397,14 @@ ALLOW
   # digest previously left the rewrite, retag and mirror suites entirely green.
   # The digest is the only part that decides which bytes get retagged, so it is
   # the part most worth pinning.
-  for n in one onebare two three threeb four five six; do
+  for n in one onebare two three threeb four five six seven; do
     want_d="$D"
     case "$n" in one) f=s1.yaml ;; onebare) f=s1b.yaml ;; two) f=s2.yaml ;;
                  three) f=s3.yaml ;; threeb) f=s3.yaml; want_d="$D2" ;;
                  four) f=s4.yaml ;; five) f=s5.yaml ;;
-                 six) f=s6.tag ;; esac
+                 six) f=s6.tag ;; seven) f=s7.yaml ;; esac
     want="ghcr.io/cozystack/cozystack/${n}@sha256:${want_d}"
-    # Canonicalize away the cosmetic :tag that shapes 1 and 6 carry through.
+    # Canonicalize away the cosmetic :tag that fixtures s1 and s6 carry through.
     got=$(collect_refs_from_file "$tmp/$f" | sed -E 's|:[^/@]*@|@|' | grep "cozystack/${n}@" || true)
     if [ "$got" != "$want" ]; then
       echo "shape for '$n' ($f):" >&2
@@ -416,6 +421,18 @@ ALLOW
   if collect_refs_from_file "$tmp/s4.yaml" | grep -q 'cozystack/someone-elses'; then
     echo "shape 4 stapled the global registry onto a map outside global.images:" >&2
     collect_refs_from_file "$tmp/s4.yaml" >&2
+    rm -rf "$tmp"; return 1
+  fi
+
+  # Negative for the image/digest split map: an `image` key is not enough. A
+  # map with no digest, an empty digest (the upstream default for an unpinned
+  # image) or a digest but no `image` must yield nothing, or a bare
+  # "<image>@" or "@sha256:..." fragment reaches every consumer.
+  printf 'a:\n  registry: ghcr.io\n  image: cozystack/cozystack/nodigest\n  tag: v1\nb:\n  registry: ghcr.io\n  image: cozystack/cozystack/emptydigest\n  tag: v1\n  digest: ""\nc:\n  registry: ghcr.io\n  tag: v1\n  digest: sha256:%s\n' "$D" > "$tmp/near.yaml"
+  near=$(collect_refs_from_file "$tmp/near.yaml")
+  if [ -n "$near" ]; then
+    echo "the image/digest split-map rule matched a near-miss:" >&2
+    printf '%s\n' "$near" >&2
     rm -rf "$tmp"; return 1
   fi
   rm -rf "$tmp"
