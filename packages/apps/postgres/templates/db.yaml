@@ -204,6 +204,29 @@ spec:
   postgresql:
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
+      {{- /*
+        PostgreSQL sizes shared_buffers at 128MB whatever the container gets.
+        The pool is shared memory, which the kernel cannot reclaim without
+        swap, so every page that fills stays charged against the memory limit.
+        A full pool is the whole limit on t1.nano and half of it on t1.micro,
+        the default preset. A small or idle database never fills it, but a
+        dump, index scans over a large table or a replica catching up after a
+        failover can, and then the OOM killer takes the instance. Below 512Mi
+        the default is therefore a quarter of the memory limit, never under
+        16MB. From 512Mi up a quarter is at least 128MB, so nothing is
+        rendered and PostgreSQL keeps its own default as before. An explicit
+        shared_buffers in postgresql.parameters still wins. The limit is read
+        through the same cozy-lib helper that fills spec.resources, so presets
+        and resources overrides resolve exactly as they do there.
+      */}}
+      {{- $resources := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
+      {{- with $resources.limits.memory }}
+      {{- /* 4194304 is 4Mi, so bytes divided by it is a quarter of the limit in MiB. PostgreSQL reads MB as MiB. */}}
+      {{- $quarterMi := div (include "cozy-lib.resources.toFloat" . | float64 | int64) 4194304 }}
+      {{- if lt $quarterMi 128 }}
+      {{- $_ := set $defaults "shared_buffers" (printf "%dMB" (max 16 $quarterMi)) }}
+      {{- end }}
+      {{- end }}
       {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
       {{- /* Security: Block parameters that enable arbitrary code execution (shell commands or .so loading) */ -}}
       {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "archive_cleanup_command" "recovery_end_command" "dynamic_library_path" "local_preload_libraries" "session_preload_libraries" "shared_preload_libraries" }}
