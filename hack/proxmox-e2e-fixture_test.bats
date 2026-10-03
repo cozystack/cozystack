@@ -11,12 +11,12 @@ FIXTURE="$REPO_ROOT/hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml"
 RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
 
 @test "the fixture carries no shell-style default that envsubst would leave in place" {
-  ! grep -qE '\$\{[A-Za-z_]+:[-=?+]' "$FIXTURE"
+  if grep -qE '\$\{[A-Za-z_]+:[-=?+]' "$FIXTURE"; then echo "FAIL: the fixture must not carry a shell-style default envsubst leaves in place"; false; fi
 }
 
 @test "render-tenant expands every variable with the runner's defaults" {
   out="$(COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=teststore "$RUNNER" render-tenant)"
-  ! printf '%s' "$out" | grep -q '\${'
+  if printf '%s' "$out" | grep -q '\${'; then echo "FAIL: the rendered tenant must not keep an unexpanded variable"; false; fi
   printf '%s' "$out" | grep -qE '^ +prefix: 24$'
   printf '%s' "$out" | grep -qE '^ +storage: "teststore"$'
   printf '%s' "$out" | grep -qE '^ +bridge: "vmbr50"$'

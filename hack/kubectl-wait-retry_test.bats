@@ -55,7 +55,7 @@ prep() {
   # A real failure still aborts, is not retried, and the error is visible.
   [ "$rc" -ne 0 ]
   echo "$out" | grep -q 'NotFound'
-  ! echo "$out" | grep -q 'SCRIPT-REACHED-END'
+  if echo "$out" | grep -q 'SCRIPT-REACHED-END'; then echo "FAIL: the script must not have run on past a NotFound"; false; fi
   [ "$(grep -c . "$FAKE_CMDLOG")" -eq 1 ]
   rm -rf "$WORK"
 }

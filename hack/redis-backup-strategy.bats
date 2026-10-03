@@ -107,9 +107,9 @@ s3_env() {
   grep -q 'tenant-x/myapp/bkp-42.rdb' "$tmp/curl.log"
   # The destructive branch must be unreachable in cleanup: no FLUSHALL, no
   # --pipe, and in fact no Redis contact at all. This is the assertion the
-  # round's cleanup arm exists to hold; it must not be the last line.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
-  ! grep -q -- '--pipe' "$tmp/rc.log"
+  # round's cleanup arm exists to hold.
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: cleanup must not flush the master"; false; fi
+  if grep -q -- '--pipe' "$tmp/rc.log"; then echo "FAIL: cleanup must not pipe a restore into the master"; false; fi
   [ ! -s "$tmp/rc.log" ]
 }
 
@@ -127,7 +127,7 @@ s3_env() {
   grep -q -- '-X PUT' "$tmp/curl.log"
   grep -q 'tenant-x/myapp/bkp-42.rdb' "$tmp/curl.log"
   # Backup must never wipe the source.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: backup must not flush the source"; false; fi
 }
 
 @test "an unrecognised mode exits non-zero without touching the master" {
@@ -141,6 +141,6 @@ s3_env() {
     false
   fi
   # The unknown mode must fail closed, never reaching the restore FLUSHALL.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: an unrecognised mode must not reach the restore flush"; false; fi
   [ -f "$tmp/rc.log" ]
 }
