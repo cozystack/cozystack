@@ -1,0 +1,352 @@
+suite: upgrade preflight hook renders correctly and only on a version-advancing upgrade
+templates:
+  - templates/preflight-hook.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+# The Job only renders when the cozystack-version ConfigMap reports a version
+# BELOW migrations.targetVersion. Under plain `helm template` lookup returns nil
+# and the hook is skipped, so the ConfigMap is mocked here (same approach as
+# migration_hook_skip_backup_test.yaml).
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        version: "v1"
+        resource: "configmaps"
+      namespaced: true
+    "v1/Namespace":
+      gvr:
+        version: "v1"
+        resource: "namespaces"
+      namespaced: false
+  objects:
+    - kind: ConfigMap
+      apiVersion: v1
+      metadata:
+        name: cozystack-version
+        namespace: cozy-system
+      data:
+        version: "52"
+    # Present so the namespaced pods/exec Role (gated on this namespace's
+    # existence) renders and can be asserted.
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: cozy-linstor
+tests:
+  - it: renders the preflight Job as a pre-upgrade hook at weight 0 (before migrations at weight 1)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-preflight-hook
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /preflight/run-preflight.sh
+      # A failed preflight must not retry — it is a verdict, not a flake.
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      # Backstop so a hung check cannot wedge the pre-upgrade hook forever.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      # Read-only probe: no privilege escalation, no Linux capabilities.
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: passes override=false and empty skip by default
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: PREFLIGHT_OVERRIDE
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "false"
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: PREFLIGHT_SKIP
+      - equal:
+          path: spec.template.spec.containers[0].env[1].value
+          value: ""
+      # linstor is advisory by default until its live -m semantics are e2e-verified.
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: PREFLIGHT_ADVISORY
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: linstor
+
+  - it: renders override=true only for an affirmative value
+    set:
+      preflight:
+        override: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  - it: accepts a stringified true from the Package CR Values JSON
+    set:
+      preflight:
+        override: "true"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  - it: treats an unrecognised override value as OFF, never as an accidental bypass
+    set:
+      preflight:
+        override: "banana"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "false"
+
+  - it: joins skipChecks into a comma list the runner parses
+    set:
+      preflight:
+        skipChecks: [linstor, nodes-ready]
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[1].value
+          value: linstor,nodes-ready
+
+  - it: keeps only read verbs in the ClusterRole (no pods/exec, no cluster-admin)
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes"]
+            verbs: ["get", "list"]
+      # The privileged verb must NOT be cluster-wide.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["create"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["*"]
+
+  # Pins the document count so a new hook object cannot slip in unreviewed and
+  # so the without-LINSTOR suite's count of 6 stays meaningful.
+  - it: renders exactly the eight hook objects when LINSTOR is present
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  - it: scopes pods/exec to a namespaced Role in cozy-linstor
+    # Selected by the rule it carries: there are two Roles now (this one and
+    # the status-ConfigMap Role in the release namespace), so `kind: Role`
+    # alone is ambiguous.
+    documentSelector:
+      path: rules[0].resources[0]
+      value: pods/exec
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["create"]
+
+  - it: emits nothing when preflight is disabled
+    set:
+      preflight:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits nothing when the cluster is already at the target version (no upgrade)
+    set:
+      migrations:
+        targetVersion: 52
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The master toggle takes the same shapes as the override hatch below it.
+  # Values reach this chart as JSON from the Package CR
+  # (spec.components.platform.values), where a quoted boolean is an easy
+  # mistake and a bare `if` on a non-empty string is always truthy: an
+  # operator switching the gate off would be silently ignored, at the exact
+  # moment their upgrade is already blocked.
+  - it: disables the gate for a bool false
+    set:
+      preflight:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a stringified false from the Package CR Values JSON
+    set:
+      preflight:
+        enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a numeric 0
+    set:
+      preflight:
+        enabled: 0
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: disables the gate for a stringified "0"
+    set:
+      preflight:
+        enabled: "0"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: keeps the gate on for an unrecognised enabled value, never silently off
+    set:
+      preflight:
+        enabled: "banana"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-preflight-hook
+
+  # The two safety valves in this values file must accept the same spellings.
+  # migrations.etcdAdoptSkipBackup already takes 1/true/yes; an operator
+  # reaching for the second hatch after using the first must not be told "no"
+  # by a narrower parser.
+  - it: accepts a numeric 1 as an affirmative override
+    set:
+      preflight:
+        override: 1
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  - it: accepts yes as an affirmative override
+    set:
+      preflight:
+        override: "yes"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "true"
+
+  # preflight: null must land on the shipped defaults, not on a different set.
+  # The template carries its own inline fallbacks for the case where the whole
+  # key is nil; this pins them to what values.yaml documents.
+  - it: falls back to the shipped defaults when the whole preflight key is null
+    set:
+      preflight: null
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: "false"
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: linstor
+
+  # The verdict has to outlive the Job: helm-controller retries a failed
+  # upgrade every 30s by default and helm deletes the previous hook Job at the
+  # top of each attempt, so the Job log is not where an operator can read why
+  # their upgrade is blocked.
+  - it: tells the runner where to publish its verdict
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: NAMESPACE
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: cozy-system
+      - equal:
+          path: spec.template.spec.containers[0].env[4].name
+          value: PREFLIGHT_STATUS_CONFIGMAP
+      - equal:
+          path: spec.template.spec.containers[0].env[4].value
+          value: cozystack-preflight-status
+
+  # The one write grant in the whole gate. `create` cannot carry resourceNames
+  # in RBAC, so the other verbs must, or the gate could rewrite the
+  # cozystack-version ConfigMap that decides which migrations run.
+  - it: confines the status write to its own ConfigMap
+    documentSelector:
+      path: rules[1].resourceNames[0]
+      value: cozystack-preflight-status
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - equal:
+          path: rules[0].verbs
+          value: ["create"]
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "update", "patch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["update", "patch"]
