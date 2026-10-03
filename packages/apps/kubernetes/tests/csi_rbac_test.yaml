@@ -1,0 +1,24 @@
+suite: kubevirt-csi infra-cluster Role
+
+templates:
+  - templates/csi/infra-cluster-service-account.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+
+tests:
+  - it: grants only the VM hotplug subresources and VMI-level removevolume
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "subresources.kubevirt.io")]
+          value:
+            apiGroups: ["subresources.kubevirt.io"]
+            resources: ["virtualmachines/addvolume", "virtualmachines/removevolume", "virtualmachineinstances/removevolume"]
+            verbs: ["update"]
