@@ -282,6 +282,14 @@ GUEST_DEMAND_AWK='
       if printf '%s\n' "$sandbox_jobs" | grep -qF "$wf "; then
         continue
       fi
+      # Named exemption: the isp-hosted lane starts the sandbox container but
+      # no guests -- its cluster is kind, sized by the runner itself -- so it
+      # has no guest demand to compare. It is checked after the job match, so
+      # the day that lane calls prepare-env or prepare-cluster it is sized
+      # like any other.
+      case "$wf" in
+        "$workflow_dir"/e2e-isp-hosted.yaml) continue ;;
+      esac
       echo "$wf runs the packages/core/testing make targets but no job in it matched the sandbox marker" >&2
       echo "the job parser reads job names at two-space indent and runs-on at four; a reindent or a renamed target breaks it silently." >&2
       return 1

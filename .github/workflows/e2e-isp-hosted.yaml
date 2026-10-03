@@ -1,0 +1,191 @@
+name: E2E isp-hosted
+
+# Installs the isp-hosted platform variant, through the hosted installer
+# variant, on a kind cluster, and checks that every HelmRelease goes Ready. No
+# other lane installs either variant: the PR, nightly and tag lanes all run
+# isp-full on Talos, where Cozystack itself provides the CNI and the storage.
+# kind is the managed-cluster shape isp-hosted is for: its CNI, kube-proxy and
+# default StorageClass come from the cluster, and there is no Cilium, no
+# LINSTOR and no `replicated` class. That absence is the thing under test.
+#
+# It installs the latest nightly rather than building anything: the GHCR
+# nightly closure is complete and public. A pull request trigger is
+# deliberately absent, because a run here would install the nightly images,
+# not the pull request's, and report on code the pull request did not change.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC, after nightly.yaml's 02:00 mirror has published
+  workflow_dispatch: {}
+
+env:
+  PACKAGES_REPO: ghcr.io/cozystack/cozystack/cozystack-packages
+  # Release notes of kind v0.32.0 are the source of both pins: the binary's
+  # published kind-linux-amd64.sha256sum, and the node image digest listed for
+  # it. v1.33.12 matches the Kubernetes version hack/e2e-container-up.sh gives
+  # the Talos lanes, so the variant is the only thing that differs.
+  KIND_VERSION: v0.32.0
+  KIND_SHA256: 50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
+  KIND_NODE_IMAGE: kindest/node:v1.33.12@sha256:3f5c8443c620245e4d355cfe09e96a91ead32ceaa569d3f1ca9edf0cb2fe2ff4
+  KIND_CLUSTER: cozy-hosted
+
+concurrency:
+  group: e2e-isp-hosted
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (isp-hosted on kind)
+    # The whole platform lands on one kind node with nothing pre-pulled. The
+    # smaller 4-vCPU class was not tried; sizing down is left to a measured run.
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    # Above the failing path's sum, so the job ceiling never cuts off the
+    # report: three prepare attempts at kind's 5m wait, the install's 30m
+    # readiness gate plus its setup, and the 30m collect step.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Set up toolchain (flux, oras)
+        env:
+          FLUX_VERSION: "2.8.6"
+        run: |
+          if ! flux version --client 2>/dev/null | grep -Fqx "flux: v${FLUX_VERSION}"; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
+            rm -f "$install_script"
+          fi
+          command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
+
+      - name: Login to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | oras login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      # One manifest fetch gives both the digest and the revision, so a nightly
+      # published between two reads cannot pair one commit's name with another
+      # tree in the log.
+      - name: Resolve the latest nightly
+        id: resolve
+        run: |
+          set -eu
+          manifest="${RUNNER_TEMP}/cozystack-packages-nightly.json"
+          oras manifest fetch "${PACKAGES_REPO}:nightly" > "$manifest"
+          digest="sha256:$(sha256sum "$manifest" | cut -d' ' -f1)"
+          rev="$(yq -r '.annotations["org.opencontainers.image.revision"] // ""' -p json "$manifest")"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Installing nightly ${rev:-<no revision annotation>}, packages ${digest}"
+
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # The product under test is the nightly's packages tree, overlaid as
+      # nightly.yaml does. The harness (hack/ and the testing Makefile's
+      # recipes) stays at the commit that triggered the run, so a change to the
+      # lane can be tried on a branch before any nightly carries it; on the
+      # schedule that commit is main a few hours past the nightly's.
+      - name: Stage the nightly install tree
+        env:
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -eu
+          rm -rf _rw && mkdir -p _rw
+          flux pull artifact "oci://${PACKAGES_REPO}@${DIGEST}" --output _rw
+          cp -r _rw/. packages/
+          rm -rf _rw
+          git checkout HEAD -- packages/core/testing/Makefile
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${PACKAGES_REPO}\"" packages/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"digest=${DIGEST}\"" packages/core/installer/values.yaml
+
+      - name: Install kind
+        run: |
+          set -eu
+          curl -fsSLo "${RUNNER_TEMP}/kind" "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  ${RUNNER_TEMP}/kind" | sha256sum --check
+          sudo install -m 0755 "${RUNNER_TEMP}/kind" /usr/local/bin/kind
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      # Pure infrastructure, so it may be retried; the cluster and the sandbox are
+      # both removed between attempts so no attempt adopts a half-built one.
+      # `kubeconfig` at the checkout root is what `apply` copies to
+      # /workspace/kubeconfig, the sandbox's KUBECONFIG; --internal addresses
+      # the control plane by container name, which the sandbox resolves once
+      # it is on the kind network.
+      - name: Prepare environment
+        run: |
+          # Many controllers on one node exhaust the stock inotify limits, which
+          # kind documents as a cause of pods failing with "too many open files".
+          sudo sysctl -w fs.inotify.max_user_instances=8192 fs.inotify.max_user_watches=524288
+          attempt=0
+          until kind create cluster --name "$KIND_CLUSTER" --image "$KIND_NODE_IMAGE" --config hack/e2e-isp-hosted-kind.yaml --wait 5m \
+            && kind get kubeconfig --internal --name "$KIND_CLUSTER" > ./kubeconfig \
+            && make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" apply \
+            && docker network connect kind "$SANDBOX_NAME"; do
+            attempt=$((attempt + 1))
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
+            kind delete cluster --name "$KIND_CLUSTER" || true
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+
+      - name: Install Cozystack into sandbox
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" install-cozystack-hosted; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Pods not Running"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded -o wide 2>&1 | tail -60' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      # Same bound and the same tolerance as the collect step in nightly.yaml,
+      # for the reasons written there.
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" collect-report || true
+
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport-isp-hosted
+          path: _out/cozyreport.tgz
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
+          kind delete cluster --name "$KIND_CLUSTER" || true

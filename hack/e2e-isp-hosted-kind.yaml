@@ -1,0 +1,25 @@
+# kind cluster for the isp-hosted lane. One node, kind's own CNI (kindnet),
+# kube-proxy and local-path StorageClass: the managed-cluster shape the variant
+# is for, with no Cilium, no LINSTOR and no `replicated` or `local` class.
+#
+# The DNS domain follows the platform's networking.clusterDomain, because some
+# system packages still carry that domain as a literal and would fail here for
+# a reason unrelated to the variant. hack/isp-hosted-lane_test.bats holds the
+# two in step.
+#
+# maxPods is raised from the kubelet default of 110 because every platform pod
+# lands on this one node; 110 was not measured to be too small, the headroom
+# keeps a pod count nobody tracks from becoming the reason a run goes red.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+kubeadmConfigPatches:
+- |
+  kind: ClusterConfiguration
+  networking:
+    dnsDomain: cozy.local
+- |
+  kind: KubeletConfiguration
+  clusterDomain: cozy.local
+  maxPods: 250
+nodes:
+- role: control-plane

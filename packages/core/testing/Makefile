@@ -187,6 +187,13 @@ collect-images: ## Collect the list of images used in the sandbox.
 	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
 	docker cp "${SANDBOX_NAME}":/workspace/image-refs.txt ../../../_out/image-refs.txt
 
+# Install for the isp-hosted lane (.github/workflows/e2e-isp-hosted.yaml): the
+# hosted installer variant and the isp-hosted platform variant, on a kind
+# cluster the workflow attaches the sandbox to. Nothing to pass in, unlike
+# install-cozystack: the endpoint and storage belong to the cluster.
+install-cozystack-hosted:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack-hosted.bats'
+
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
 
