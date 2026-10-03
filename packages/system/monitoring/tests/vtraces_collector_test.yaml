@@ -147,7 +147,7 @@ tests:
           pattern: "key: cozystack.tenant\\n        value: tenant-foo\\n"
       - matchRegex:
           path: data["config.yaml"]
-          pattern: "processors: \\[memory_limiter, resource/tenant, probabilistic_sampler, batch\\]"
+          pattern: "processors: \\[memory_limiter, resource/tenant, probabilistic_sampler, ratelimit/tenant, batch\\]"
 
   - it: stamps each tenant with its own namespace
     release:

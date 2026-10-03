@@ -1,0 +1,85 @@
+suite: apps.yaml monitoring.tracingCentralTenantBytesPerSecond → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The rate each shared-central tracing tenant may write reaches every tenant's
+# collector through _cluster in the cozystack-values Secret. A change there
+# changes the values every monitoring HelmRelease reads, so Flux upgrades each
+# of them; a rate read with lookup at render time never would.
+
+tests:
+  # Helm reads a number from values as a float64, which prints a million as
+  # 1e+06: the rate must still come out as plain digits for the collector.
+  - it: writes a rate of a million as plain digits
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1000000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"1000000"$'
+
+  - it: writes a rate given as a string of digits
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "500000"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"500000"$'
+
+  - it: writes the rate when monitoring.tracingCentralTenantBytesPerSecond is set
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 500000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"500000"$'
+
+  # Every release in every tenant reads this Secret, so a key written while
+  # nobody set a rate would upgrade all of them on the platform upgrade.
+  - it: writes no rate by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
+
+  - it: writes no rate for an explicit zero
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 0
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
+
+  # Anything but a whole number of bytes per second is refused rather than read
+  # as the default, which would leave the operator's limit silently unapplied.
+  - it: refuses a negative value
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a quantity with a unit
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "1Mi"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a string in exponent notation
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "1e6"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a fractional value
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1.5
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
