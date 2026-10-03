@@ -1,0 +1,17 @@
+apiVersion: v2
+name: cozyplane-kpr
+description: cozyplane kube-proxy replacement — socket-LB service load balancing (replaces Cilium/kube-proxy KPR)
+type: application
+# Placeholder; the real version is stamped by the build/release pipeline.
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - kube-proxy
+  - service
+  - load-balancer
+  - ebpf
+  - cozystack
+home: https://github.com/lllamnyp/cozyplane
+sources:
+  - https://github.com/lllamnyp/cozyplane

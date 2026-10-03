@@ -1,0 +1,56 @@
+suite: cozyplane-kpr renders with the Talos overlay
+# Cozystack-side suite over the vendored chart: assert the contract the
+# platform relies on (the bootstrap endpoint, the node identity, the DSR
+# default), not chart internals.
+templates:
+  - templates/daemonset.yaml
+release:
+  name: cozyplane-kpr
+  namespace: cozy-cozyplane
+tests:
+  # Same chicken-and-egg as the agent: kpr IS the ClusterIP proxy, so it
+  # cannot reach the apiserver through the ClusterIP it has not programmed
+  # yet. On Talos it dials KubePrism.
+  - it: dials KubePrism on Talos
+    values:
+      - ../values-talos.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--k8s-api-server-urls=https://localhost:7445"
+
+  - it: uses the in-cluster config when no endpoint is set
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      # No apiServerURL renders an empty args list — kpr then reads the
+      # in-cluster config, valid only where some other proxy already serves
+      # the ClusterIP.
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: null
+
+  # Without NODE_NAME kpr cannot tell which endpoints are node-local and
+  # serves no external address; DSR is strictly opt-in (the fleet-wide LB-IP
+  # spoof permission it needs is an underlay property).
+  - it: carries the node identity and keeps DSR off by default
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DSR
+            value: "false"

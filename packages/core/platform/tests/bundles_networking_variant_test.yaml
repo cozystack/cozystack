@@ -1,0 +1,273 @@
+suite: networkingVariant bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: defaults to kubeovn-cilium with the stock package set
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - containsDocument: &pkg
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.multus
+          any: true
+      - containsDocument:
+          <<: *pkg
+          name: cozystack.securitygroup-controller
+      - containsDocument:
+          <<: *pkg
+          name: cozystack.kubeovn-webhook
+      - containsDocument:
+          <<: *pkg
+          name: cozystack.cozyplane-apiserver
+        not: true
+      - containsDocument:
+          <<: *pkg
+          name: cozystack.cozyplane-cilium-crds
+        not: true
+
+  - it: cozyplane swaps the CNI and drops the Cilium/kube-ovn-coupled packages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.variant
+          value: cozyplane
+      - containsDocument: &pkg2
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozyplane-apiserver
+          any: true
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.cozyplane-cilium-crds
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.cozy-proxy
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.etcd-operator
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.multus
+        not: true
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.securitygroup-controller
+        not: true
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.kubeovn-webhook
+        not: true
+      - containsDocument:
+          <<: *pkg2
+          name: cozystack.kubeovn-plunger
+        not: true
+
+  # cozyplane owns sdn.cozystack.io; a second APIService from cozystack-api
+  # would hijack the group and 404 every non-SecurityGroup kind.
+  - it: cozyplane turns off sdn aggregation in cozystack-api
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.cozystack-engine
+        equal:
+          path: spec.components.cozystack-api.values.cozystackAPI.serveSDN
+          value: false
+
+  - it: refuses an unknown networkingVariant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: nonesuch
+    asserts:
+      - failedTemplate:
+          errorPattern: 'networkingVariant must be'
+
+  # Accepted off isp-full, the selector would half-apply: strip the kube-ovn
+  # control plane, securitygroup-controller and the sdn APIService while
+  # cozystack.networking keeps installing the Cilium variant.
+  - it: refuses cozyplane on a bundle variant other than isp-full
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+          networkingVariant: cozyplane
+    asserts:
+      - failedTemplate:
+          errorPattern: 'only supported on the isp-full bundle variant'
+
+  # The default gateway class is Cilium's, and no Cilium runs on cozyplane —
+  # every tenant Gateway would sit unserved with nothing reporting why.
+  - it: refuses the cilium gateway class on cozyplane
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      gateway:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nothing serves the "cilium" class'
+
+  - it: accepts a non-cilium gateway class on cozyplane
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      gateway:
+        enabled: true
+        className: some-other-class
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozyplane-apiserver
+          any: true
+
+  - it: refuses cozyplane on a slim variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+          networkingVariant: cozyplane
+    asserts:
+      - failedTemplate:
+          errorPattern: 'only supported on the isp-full bundle variant'
+
+  # Left unset, cozyplane would run on its chart-default CIDRs: the masquerade
+  # matches the wrong pod supernet and the VPC gateways' one DNS opening points
+  # at an address with no DNS behind it.
+  - it: threads the cluster CIDRs and derived DNS into cozyplane
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        podCIDR: "192.168.0.0/17"
+        serviceCIDR: "172.20.0.0/16"
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.components.cozyplane.values.egress
+          value:
+            clusterCIDR: "192.168.0.0/17"
+            serviceCIDR: "172.20.0.0/16"
+            clusterDNS: "172.20.0.10"
+
+  - it: honours an explicit networking.clusterDNS
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "172.20.0.0/16"
+        clusterDNS: "10.43.0.53"
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.components.cozyplane.values.egress.clusterDNS
+          value: "10.43.0.53"
+
+  - it: refuses cozyplane without the networking CIDRs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        podCIDR: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'requires networking.podCIDR and networking.serviceCIDR'
+
+  - it: refuses to derive clusterDNS from a non-IPv4 service CIDR
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "fd00:10:96::/112"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'set networking.clusterDNS explicitly'
+
+  - it: accepts a non-IPv4 service CIDR with an explicit clusterDNS
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "fd00:10:96::/112"
+        clusterDNS: "fd00:10:96::a"
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.components.cozyplane.values.egress.clusterDNS
+          value: "fd00:10:96::a"
+
+  # storageClassName is immutable on the EtcdCluster, so the platform must set
+  # the right class on the first render; local, because a 3-member etcd already
+  # replicates at the application level and local exists before any pool setup.
+  - it: pins the apiserver etcd to the local storage class
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.cozyplane-apiserver
+        equal:
+          path: spec.components.cozyplane-apiserver.values.etcd.operator.storageClass
+          value: local

@@ -1,3 +1,20 @@
+{{- /* networkingVariant is an isp-full-only selector, but the packages it
+       gates render on every bundle variant. Accepted elsewhere it would
+       half-apply: drop kube-ovn-webhook/-plunger, securitygroup-controller,
+       the VPC app and the sdn APIService while the real CNI keeps running.
+       Refuse the render outright instead — and validated here, outside the
+       enabled/variant branches, so no combination of bundle values slips a
+       half-applied variant through. */ -}}
+{{- $nv := .Values.bundles.system.networkingVariant | default "kubeovn-cilium" -}}
+{{- if and (ne $nv "kubeovn-cilium") (ne .Values.bundles.system.variant "isp-full") -}}
+{{- fail (printf "bundles.system.networkingVariant %q is only supported on the isp-full bundle variant, got %q" $nv .Values.bundles.system.variant) -}}
+{{- end -}}
+{{- /* The default gateway.className is the Cilium class, and no Cilium runs on
+       the cozyplane variant — every tenant Gateway would sit unserved with
+       nothing reporting why. */ -}}
+{{- if and (eq $nv "cozyplane") .Values.gateway.enabled (eq .Values.gateway.className "cilium") -}}
+{{- fail "gateway.enabled needs a gateway.className another implementation serves on the cozyplane networking variant: nothing serves the \"cilium\" class there" -}}
+{{- end -}}
 {{- if .Values.bundles.system.enabled }}
 
 # Networking
@@ -35,7 +52,43 @@
   "gatewayAPI" (dict "enableAlpn" .Values.gateway.http2)) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
+{{- /* Networking variant selector. Defaults to kubeovn-cilium (backward compatible);
+       cozyplane swaps kube-ovn AND Cilium for the cozyplane eBPF CNI +
+       cozyplane-kpr (socket-LB kube-proxy replacement) — no Cilium, no kube-proxy.
+       The top-of-file guard keeps cozyplane off the slim variants, so the
+       full/slim choice below only ever sees kubeovn-cilium. */ -}}
+{{- $networkingVariant := .Values.bundles.system.networkingVariant | default "kubeovn-cilium" -}}
+{{- if not (or (eq $networkingVariant "kubeovn-cilium") (eq $networkingVariant "cozyplane")) -}}
+{{- fail (printf "bundles.system.networkingVariant must be \"kubeovn-cilium\" or \"cozyplane\", got %q" $networkingVariant) -}}
+{{- end -}}
+{{- if eq $networkingVariant "cozyplane" }}
+{{- /* cozyplane takes the cluster's networking facts as chart values; left
+       unset it would run on the chart defaults, masquerading the wrong pod
+       supernet, denying the wrong internal ranges at VPC gateways, and
+       pointing their one DNS opening at an address with no DNS behind it.
+       clusterDNS follows the kubeadm convention (the service CIDR's .10)
+       unless networking.clusterDNS says otherwise. */ -}}
+{{- $net := .Values.networking | default dict -}}
+{{- /* Validated loudly: an empty podCIDR would silently drop the agent's
+       masquerade and the controller's internal denies, and the clusterDNS
+       derivation below reads IPv4 octets. */ -}}
+{{- if not (and (dig "podCIDR" "" $net) (dig "serviceCIDR" "" $net)) -}}
+{{- fail "networkingVariant cozyplane requires networking.podCIDR and networking.serviceCIDR" -}}
+{{- end -}}
+{{- $clusterDNS := dig "clusterDNS" "" $net -}}
+{{- if not $clusterDNS -}}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$" $net.serviceCIDR) -}}
+{{- fail (printf "cannot derive networking.clusterDNS from serviceCIDR %q (not an IPv4 CIDR); set networking.clusterDNS explicitly" $net.serviceCIDR) -}}
+{{- end -}}
+{{- $octets := splitList "." (splitList "/" $net.serviceCIDR | first) -}}
+{{- $clusterDNS = printf "%s.%s.%s.10" (index $octets 0) (index $octets 1) (index $octets 2) -}}
+{{- end -}}
+{{- $egress := dict "clusterCIDR" $net.podCIDR "serviceCIDR" $net.serviceCIDR "clusterDNS" $clusterDNS -}}
+{{- $cozyplaneComponents := dict "cozyplane" (dict "values" (dict "egress" $egress)) -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" "cozyplane" $ $cozyplaneComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.networking" (list $ $networkingComponents "kubeovn-cilium" "cilium") }}
+{{- end }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{- /* Talos bundles only bridge, firewall, flannel, host-local, loopback and
        portmap in /opt/cni/bin from its own node image; the other ten this
@@ -49,8 +102,13 @@
        networking.stageCniPlugins turns it off, for nodes whose operator
        manages that directory. The value is always emitted rather than left to
        the chart default, so the rendered Package states which way it went. */ -}}
+{{- /* multus delegates to the Cilium primary conflist (05-cilium.conflist),
+       which cozyplane never writes (it writes 00-cozyplane) → CrashLoopBackOff,
+       so the cozyplane variant runs without it. */ -}}
+{{- if ne $networkingVariant "cozyplane" }}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
@@ -163,6 +221,18 @@
 {{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
 {{- end -}}
+{{- /* cozyplane owns the sdn.cozystack.io group — served ONLY by the
+       cozyplane-apiserver aggregated server, with no CRDs (why one group must
+       never have two servers: the header of cozyplane's templates/crds.yaml).
+       So cozystack-api must not aggregate it: a second APIService for the group
+       would hijack it and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}
+{{- $apiValues := index $cozystackEngineComponents "cozystack-api" | default (dict "values" (dict)) -}}
+{{- $apiInner := index $apiValues "values" | default (dict) -}}
+{{- $_ := set $apiInner "cozystackAPI" (dict "serveSDN" false) -}}
+{{- $_ := set $apiValues "values" $apiInner -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" $apiValues -}}
+{{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}
@@ -173,6 +243,28 @@
 
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
+{{- /* The cozyplane variant runs no Cilium, but many stock components (linstor,
+       tenant, monitoring-agents, fluxcd-operator, ...) embed CiliumNetworkPolicy /
+       CiliumClusterwideNetworkPolicy objects and fail to install without the CRDs.
+       Ship them inert so those manifests apply (cozyplane doesn't enforce them yet
+       — host-firewall / default-network NetworkPolicy is a follow-up). On the
+       Cilium variants the cilium chart provides the CRDs, so skip it there. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozyplane-cilium-crds" $) }}
+{{- /* The aggregated sdn.cozystack.io apiserver: a separate component precisely
+       so the CNI slot stays cert-manager-free — this one dependsOn cert-manager,
+       etcd-operator and (for its PVC-backed etcd) storage. There is no takeover:
+       the tenant kinds have no CRDs at all. The CNI package ships only the LOCAL
+       group's CRDs (local.sdn.cozystack.io — underlay IPAM, which must work
+       before cert-manager, etcd and this server, all of which are pods). */ -}}
+{{- /* local, not the chart's replicated default: a 3-member etcd already
+       replicates at the application level, and the local class exists before
+       any replication pool is configured. The EtcdCluster's storageClassName
+       is immutable post-create, so the default has to be right on the first
+       render. */ -}}
+{{- $cozyplaneApiserverComponents := dict "cozyplane-apiserver" (dict "values" (dict "etcd" (dict "operator" (dict "storageClass" "local")))) -}}
+{{include "cozystack.platform.package" (list "cozystack.cozyplane-apiserver" "default" $ $cozyplaneApiserverComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END

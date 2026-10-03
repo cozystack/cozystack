@@ -8,3 +8,7 @@ cozystackAPI:
   # Empty by default: no resources block is rendered, so requests and limits are
   # opt-in. Idle usage (measured) is ~130-143Mi — keep a limit above that.
   resources: {}
+  # Aggregate the sdn.cozystack.io group (Cozystack-native SecurityGroup over
+  # CiliumNetworkPolicy) through cozystack-api. The platform bundle turns this
+  # off for the cozyplane networking variant, where cozyplane owns the group.
+  serveSDN: true
