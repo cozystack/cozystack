@@ -27,6 +27,15 @@
     },
     {
       "customType": "regex",
+      "description": "Track the four pins of the cloudflare-tunnel-gateway-controller package: the upstream chart's version and OCI digest in its Makefile, and the tag@digest of the two images its vendored chart runs, in the wrapper values.yaml. None of the four is reachable by a built-in manager — the chart is vendored rather than fetched, the helm-values manager is disabled repo-wide (see enabledManagers above), and the wrapper carries the image tag without its repository, so the depName cannot be read off the line. The marker comments supply it. All four have to move in lockstep, which the packageRule below gets by grouping them into one PR. Renovate rewrites the pins but does not re-vendor `charts/`, so such a PR is incomplete until someone runs the package's `make update`, which is also what refuses a chart whose version disagrees with CHART_VERSION. Every renovate PR here carries `do-not-merge/hold`, so that step has a human in front of it.",
+      "managerFilePatterns": ["/^packages/system/cloudflare-tunnel-gateway-controller/(Makefile|values\\.yaml)$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+tag: (?<currentValue>[0-9][^@\\s]*)@(?<currentDigest>sha256:[a-f0-9]+)",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+CHART_VERSION \\?= (?<currentValue>[0-9][^\\s]*)\\s+CHART_DIGEST \\?= (?<currentDigest>sha256:[a-f0-9]+)"
+      ]
+    },
+    {
+      "customType": "regex",
       "description": "Track and keep fresh the clastix/kubectl image digest-pinned in the post-delete cleanup hooks. The ref is assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so it is neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see it. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest — a supply-chain pin — would silently age.",
       "managerFilePatterns": ["/^packages/.+/templates/hooks/.+\\.yaml$/"],
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
@@ -35,6 +44,15 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Keep the cloudflare-tunnel-gateway-controller chart and its two images in one PR. The chart carries the templates and the images are what those templates run, so a split bump can land a chart passing a flag the older image does not accept. The custom manager above reads them as three separate deps, which without this rule means three PRs that each look complete on their own.",
+      "matchPackageNames": [
+        "ghcr.io/lexfrei/charts/cloudflare-tunnel-gateway-controller",
+        "ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller",
+        "ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy"
+      ],
+      "groupName": "cloudflare-tunnel-gateway-controller"
+    },
     {
       "description": "Force chore(deps) for all Go module bumps. config:recommended pulls in :semanticPrefixFixDepsChoreOthers, whose packageRule re-sets semanticCommitType=fix for direct deps (depType require), overriding the top-level chore. packageRules override top-level config, so a user rule evaluated last is required to win it back; without this, direct-dep PRs land as fix(deps) and get auto-labeled kind/bug.",
       "matchManagers": ["gomod"],

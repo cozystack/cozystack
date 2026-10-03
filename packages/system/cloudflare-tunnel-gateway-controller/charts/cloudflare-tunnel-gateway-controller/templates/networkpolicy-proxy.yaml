@@ -1,0 +1,74 @@
+{{- if .Values.proxy.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.proxyFullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.proxyLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cf-tunnel-gw-ctrl.proxySelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.proxy.networkPolicy.egressRestricted }}
+    - Egress
+    {{- end }}
+  ingress:
+    # Lock the config-API port (8081, also serves /metrics) to the controller
+    # (the config pusher). The release namespace — where the controller runs —
+    # is ALWAYS admitted so a config push can never be locked out; ingress.from
+    # is ADDITIVE on top of it, so add your monitoring namespace there for
+    # Prometheus scraping (locking 8081 also restricts /metrics). The proxy port
+    # (8080) takes NO in-cluster ingress — traffic arrives through the outbound
+    # tunnel.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+        {{- with .Values.proxy.networkPolicy.ingress.from }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.proxy.configAPIPort }}
+  {{- if .Values.proxy.networkPolicy.egressRestricted }}
+  {{- $cfRanges := .Values.networkPolicy.cloudflareIpRanges | default dict }}
+  {{- if and (not $cfRanges.ipv4) (not $cfRanges.ipv6) }}
+  {{- fail "proxy.networkPolicy.egressRestricted is true but networkPolicy.cloudflareIpRanges is empty: the edge-egress rule would render an empty 'to:', which NetworkPolicy reads as allow-all on 443/7844 (the opposite of restriction). Populate networkPolicy.cloudflareIpRanges (keep it current from https://www.cloudflare.com/ips/) or set proxy.networkPolicy.egressRestricted to false." }}
+  {{- end }}
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Cloudflare edge (tunnel transport)
+    - to:
+        {{- range .Values.networkPolicy.cloudflareIpRanges.ipv4 }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- range .Values.networkPolicy.cloudflareIpRanges.ipv6 }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 7844
+    # Cluster services (backend routing). The empty namespaceSelector is
+    # deliberately all-namespaces and the port set is deliberately all-TCP: an
+    # HTTPRoute may name a backend Service in any namespace (subject to
+    # ReferenceGrant) on any port, so this rule intentionally permits TCP to
+    # every namespace's pod network. Egress restriction here bounds the proxy
+    # to TCP within the cluster (plus the DNS and Cloudflare-edge rules above),
+    # not to a specific destination or port.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+  {{- end }}
+{{- end }}

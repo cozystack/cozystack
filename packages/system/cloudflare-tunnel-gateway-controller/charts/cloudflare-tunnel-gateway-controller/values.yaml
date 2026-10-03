@@ -1,0 +1,556 @@
+# Default values for cloudflare-tunnel-gateway-controller.
+
+# -- GatewayClassConfig configuration
+# This section drives the optional GatewayClassConfig CRD rendered by the chart.
+# The in-process L7 proxy embeds cloudflared transport and is deployed by the
+# chart itself; the tunnel token is supplied directly to the proxy via
+# `proxy.tunnelTokenSecretRef` (see below).
+gatewayClassConfig:
+  # -- Create GatewayClassConfig resource
+  create: false
+  # -- Name of the GatewayClassConfig (defaults to release fullname)
+  name: ""
+
+  # -- Reference to Secret containing Cloudflare API credentials (REQUIRED)
+  # The Secret must contain an "api-token" key with a valid Cloudflare API token.
+  # Optionally, it can contain an "account-id" key; if not present, account ID is auto-detected.
+  cloudflareCredentialsSecretRef:
+    # -- Name of the Secret containing API credentials
+    name: ""
+    # -- Namespace of the Secret (defaults to release namespace)
+    namespace: ""
+    # -- Key in the Secret containing the API token (defaults to "api-token")
+    key: ""
+
+  # -- Cloudflare account ID. Optional - auto-detected when the API token has access to a single account.
+  accountId: ""
+
+  # -- Cloudflare Tunnel ID (REQUIRED)
+  # Get from: Zero Trust Dashboard > Networks > Tunnels
+  # Example: "550e8400-e29b-41d4-a716-446655440000"
+  tunnelID: ""
+
+# -- Controller configuration
+controller:
+  # -- Name of the GatewayClass resource to create
+  gatewayClassName: "cloudflare-tunnel"
+  # -- Value for GatewayClass spec.controllerName — this is how the controller discovers its GatewayClasses (must be unique per controller instance)
+  controllerName: "cf.k8s.lex.la/tunnel-controller"
+  # -- Kubernetes cluster domain for service DNS resolution
+  # @default -- auto-detected from /etc/resolv.conf, fallback: cluster.local
+  clusterDomain: ""
+  # -- Log level (debug, info, warn, error)
+  logLevel: "info"
+  # -- Log format (json, text)
+  logFormat: "json"
+  # -- Distributed tracing (OpenTelemetry) for the controller. Off by
+  # default. When enabled, the controller instruments its outbound
+  # Cloudflare API and proxy config-push clients and exports spans over
+  # OTLP/gRPC. This is independent of proxy.tracing (the data-plane knob).
+  tracing:
+    # -- Enable distributed tracing on the controller. Defaults to false.
+    enabled: false
+    # -- OTLP/gRPC collector endpoint. A bare host:port uses plaintext
+    # gRPC; prefix with http:// or https:// to choose plaintext vs TLS.
+    # Empty defers to the standard OTEL_EXPORTER_OTLP_ENDPOINT /
+    # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT environment variables.
+    endpoint: ""
+    # -- Head-sampling probability in [0, 1], applied at the trace root
+    # via ParentBased(TraceIDRatioBased). 1.0 samples every trace.
+    sampleRate: 1.0
+
+# -- Leader election configuration for high availability
+leaderElection:
+  # -- Enable leader election (required for running multiple replicas)
+  enabled: false
+  # -- Namespace for leader election lease (defaults to release namespace)
+  namespace: ""
+  # -- Name of the leader election lease
+  leaseName: "cloudflare-tunnel-gateway-controller-leader"
+
+# -- Container image configuration
+image:
+  # -- Image repository
+  repository: ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to appVersion)
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the chart name
+nameOverride: ""
+
+# -- Override the full release name
+fullnameOverride: ""
+
+# -- Service account configuration
+serviceAccount:
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use
+  # If empty, uses the fullname template (release-name-chart-name)
+  # Override this if you want to use a pre-existing service account
+  name: ""
+
+# -- Annotations to add to pods
+podAnnotations: {}
+
+# -- Additional labels to add to pods
+podLabels: {}
+
+# -- Pod security context (secure defaults)
+# @default -- See values.yaml
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context (secure defaults)
+# @default -- See values.yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# -- Container resource requests and limits
+# @default -- See values.yaml for recommended production defaults
+# When resources is empty ({}), the chart will use recommended defaults.
+# Specify explicit values to override defaults.
+resources:
+  # Recommended resource limits for production
+  # Can be overridden for specific environments
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# -- Node selector for pod scheduling
+nodeSelector: {}
+
+# -- Tolerations for pod scheduling
+tolerations: []
+
+# -- Affinity rules for pod scheduling
+affinity: {}
+
+# -- Topology spread constraints for pod distribution
+topologySpreadConstraints: []
+
+# -- Priority class name for pod scheduling priority
+priorityClassName: ""
+
+# -- Termination grace period in seconds for graceful shutdown
+terminationGracePeriodSeconds: 30
+
+# -- Health probes configuration
+healthProbes:
+  # -- Startup probe configuration
+  # Gives controller time to initialize before liveness probe starts
+  startupProbe:
+    enabled: true
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 12
+  # -- Liveness probe configuration
+  # Restarts container if probe fails
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  # -- Readiness probe configuration
+  # Removes pod from service endpoints if probe fails
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# -- DNS policy for pod (ClusterFirst, Default, ClusterFirstWithHostNet, None)
+# Use "None" with dnsConfig for custom DNS configuration
+dnsPolicy: ""
+
+# -- Custom DNS configuration for pod
+# Example for custom DNS servers:
+#   nameservers:
+#     - 1.1.1.1
+#     - 8.8.8.8
+#   searches:
+#     - cloudflare-tunnel-system.svc.cluster.local
+#     - svc.cluster.local
+#     - cluster.local
+#   options:
+#     - name: ndots
+#       value: "2"
+dnsConfig: {}
+
+# -- Number of controller replicas
+replicaCount: 1
+
+# -- PodDisruptionBudget configuration for high availability
+podDisruptionBudget:
+  # -- Enable PodDisruptionBudget
+  enabled: false
+  # -- Minimum number of available pods during disruptions
+  # Must not be used together with maxUnavailable
+  minAvailable: 1
+  # -- Maximum number of unavailable pods during disruptions
+  # Must not be used together with minAvailable
+  maxUnavailable: null
+  # -- Policy for evicting unhealthy pods (IfHealthyBudget, AlwaysAllow)
+  # Requires Kubernetes 1.26+
+  unhealthyPodEvictionPolicy: "IfHealthyBudget"
+
+# -- Service configuration
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Metrics endpoint port
+  metricsPort: 8080
+  # -- Health check endpoint port
+  healthPort: 8081
+  # -- Service annotations
+  # Example: Prometheus scraping annotations
+  #   prometheus.io/scrape: "true"
+  #   prometheus.io/port: "8080"
+  #   prometheus.io/path: "/metrics"
+  annotations: {}
+
+# -- ServiceMonitor configuration for Prometheus Operator
+serviceMonitor:
+  # -- Enable ServiceMonitor creation
+  enabled: false
+  # -- Scrape interval (uses Prometheus default if empty)
+  interval: ""
+  # -- Additional labels for ServiceMonitor (for Prometheus selector)
+  labels: {}
+
+# -- NetworkPolicy configuration
+networkPolicy:
+  # -- Enable NetworkPolicy for controller pods
+  enabled: false
+  # -- Ingress source configuration
+  ingress:
+    # -- Allow ingress from specific namespaces/pods
+    # Example for monitoring namespace:
+    #   from:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           name: monitoring
+    #     - podSelector:
+    #         matchLabels:
+    #           app: prometheus
+    from: []
+  # -- Cloudflare IP ranges for egress NetworkPolicy
+  # Source: https://www.cloudflare.com/ips/
+  # Last updated: 2025-11-25
+  # To update: curl https://www.cloudflare.com/ips-v4 && curl https://www.cloudflare.com/ips-v6
+  cloudflareIpRanges:
+    ipv4:
+      - 173.245.48.0/20
+      - 103.21.244.0/22
+      - 103.22.200.0/22
+      - 103.31.4.0/22
+      - 141.101.64.0/18
+      - 108.162.192.0/18
+      - 190.93.240.0/20
+      - 188.114.96.0/20
+      - 197.234.240.0/22
+      - 198.41.128.0/17
+      - 162.158.0.0/15
+      - 104.16.0.0/13
+      - 104.24.0.0/14
+      - 172.64.0.0/13
+      - 131.0.72.0/22
+    ipv6:
+      - 2606:4700::/32
+      - 2803:f800::/32
+      - 2405:b500::/32
+      - 2405:8100::/32
+      - 2a06:98c0::/29
+      - 2c0f:f248::/32
+
+# -- GatewayClass configuration
+gatewayClass:
+  # -- Create GatewayClass resource
+  create: true
+
+# -- Optional ValidatingAdmissionPolicy that rejects HTTPRoutes/GRPCRoutes whose
+# rules carry duplicate `name` values, enforcing the Gateway API uniqueness MUST
+# at admission (the Standard-channel CRDs omit the experimental CEL that does
+# this). Disabled by default because it is cluster-scoped and a deliberate
+# operator choice: the policy matches ALL HTTPRoutes/GRPCRoutes in the cluster
+# (a Route carries no controllerName at admission, so it cannot be limited to
+# this controller's routes) and can block updates to routes that already have
+# duplicate rule names. Requires a cluster with admissionregistration.k8s.io/v1
+# ValidatingAdmissionPolicy (Kubernetes >= 1.30).
+ruleNameUniquenessPolicy:
+  # -- Install the rule-name uniqueness ValidatingAdmissionPolicy and its binding
+  enabled: false
+
+# -- Per-namespace hostname-ownership policy (multi-tenant isolation). When
+# enabled, a namespace is bound to ONE allowed hostname suffix via the
+# labelKey namespace label, and routes claiming hostnames outside it are
+# blocked TWICE (defence in depth): fail-fast by a ValidatingAdmissionPolicy
+# (Kubernetes 1.30+) and authoritatively by the controller at binding time
+# (never programmed into the proxy or the Cloudflare ingress document).
+# Fail-closed inside the policed scope: unlabelled policed namespaces and
+# routes without explicit hostnames are rejected. Label values cannot contain
+# '*' or ',' — one lowercase suffix per namespace.
+hostnameOwnershipPolicy:
+  # -- Master switch: installs the admission policy AND enables the
+  # controller-side enforcement flags.
+  enabled: false
+  # -- Namespace label carrying the tenant's allowed hostname suffix
+  # (lowercase, e.g. "team-a.example.com").
+  labelKey: cf.k8s.lex.la/hostname-suffix
+  # -- LabelSelector scoping which namespaces are policed. Applied to BOTH
+  # layers (the admission binding's namespaceSelector and the controller
+  # flag, derived from this same value). Empty polices EVERY namespace —
+  # fail-closed everywhere; scope it to tenant namespaces, e.g.
+  # matchExpressions excluding kube-system and the controller namespace.
+  # NOTE: the admission layer matches ALL HTTPRoute/GRPCRoute writes in
+  # policed namespaces, including routes for OTHER Gateway implementations
+  # (admission cannot resolve parentRefs); the controller layer polices only
+  # routes binding to this controller's Gateways. On multi-implementation
+  # clusters scope the selector accordingly or set admissionPolicy: false.
+  namespaceSelector: {}
+  # -- Render the ValidatingAdmissionPolicy (requires Kubernetes 1.30+). Set
+  # false on older clusters to keep only the controller-side layer.
+  admissionPolicy: true
+
+# -- L7 Proxy configuration (enhanced-cloudflared data plane).
+# The L7 proxy is the only data plane; the chart always renders the proxy
+# Deployment + Service + (optional) NetworkPolicy and ServiceMonitor.
+# `proxy.tunnelTokenSecretRef` is required.
+proxy:
+  # -- Number of proxy replicas
+  replicas: 2
+  # -- Proxy container image
+  image:
+    # -- Proxy image repository
+    repository: ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+    # -- Image tag (defaults to appVersion)
+    tag: ""
+  # -- Config API port (controller pushes config here)
+  configAPIPort: 8081
+  # -- Proxy port (internal, traffic arrives through tunnel)
+  proxyPort: 8080
+  # -- Connector drain window in seconds (the proxy's PROXY_GRACE_PERIOD). On
+  # SIGTERM the proxy unregisters its tunnel connectors from the Cloudflare edge
+  # (stopping new requests) and gives in-flight requests this long to finish
+  # before exiting. This MUST stay below the pod's terminationGracePeriodSeconds
+  # or kubelet SIGKILLs mid-drain; the chart guarantees that by deriving
+  # terminationGracePeriodSeconds as this value plus 15s of headroom — do not
+  # override the pod field independently. Capped at 180 (3m) by cloudflared.
+  gracePeriodSeconds: 30
+  # -- Data-plane Prometheus metrics, served at /metrics on the config API
+  # port (no auth — the endpoint carries no secrets and the port is
+  # cluster-internal). The endpoint also exposes the embedded cloudflared
+  # connector metrics (cloudflared_tunnel_*).
+  metrics:
+    # -- Expose request-level metrics (in-flight, duration, status classes,
+    # bytes, backend errors) on the config API port. Disabling this also
+    # suppresses the proxy ServiceMonitor (its template is gated on BOTH
+    # toggles) — a scrape against a metrics-less proxy would 404.
+    enabled: true
+  # -- Tunnel transport settings.
+  tunnel:
+    # -- Edge transport protocol: "auto" (QUIC with HTTP/2 fallback), "http2",
+    # or "quic". gRPC needs http2 (cloudflared drops HTTP trailers over QUIC, so
+    # grpc-status is lost). With "auto" (or unset) the proxy upgrades to http2 at
+    # startup when a GRPCRoute is present, so gRPC works without changing this;
+    # a GRPCRoute added after startup needs a proxy restart. An explicit "quic"
+    # is never upgraded and cannot serve gRPC. Tradeoff: "auto" waits for the
+    # controller's first config push before dialing (bounded ~30s), so on a
+    # route-less cluster a proxy can take up to ~30s to establish its tunnel on
+    # each start; pin "http2" or "quic" to dial immediately.
+    protocol: auto
+  # -- Reference to Secret containing the config API Bearer token. The config
+  # API is ALWAYS authenticated -- when name is empty (the default) the
+  # CONTROLLER (not chart templating) generates a random token into a Secret
+  # named "<fullname>-proxy-auth-token" (<fullname> is the Helm release
+  # fullname, typically "<release>-cloudflare-tunnel-gateway-controller", or
+  # just "<release>" when the release name already contains the chart name)
+  # as one of its first startup actions and reuses it on every subsequent
+  # start, so the token never rotates and upgrading never rolls the proxy on
+  # its own. Generating it via a live API call rather than at template time
+  # means this also works correctly under GitOps controllers that render
+  # client-side with no cluster access (e.g. ArgoCD's default
+  # `helm template`), where a template-time `lookup` cannot see prior state.
+  # Set name to bring your own Secret/token instead, e.g. for external
+  # rotation.
+  authTokenSecretRef:
+    # -- Name of the Secret containing the auth token. Leave empty to let the
+    # controller generate and manage the token automatically (recommended).
+    name: ""
+    # -- Key in the Secret containing the auth token
+    key: "auth-token"
+  # -- Reference to Secret containing tunnel token (REQUIRED)
+  tunnelTokenSecretRef:
+    # -- Name of the Secret containing tunnel token
+    name: ""
+    # -- Key in the Secret containing the tunnel token
+    key: "tunnel-token"
+  # -- WebSocket upgrade-path knobs. Both bound only the pre-upgrade
+  # phase: dialTimeout caps the TCP/TLS connect to the backend;
+  # handshakeTimeout caps the wait for the backend's 101 Switching
+  # Protocols response. Once the upgrade completes, neither bounds the
+  # long-lived post-101 bidirectional stream. Empty (the default)
+  # leaves both at the proxy binary's built-in 30s.
+  websocket:
+    # -- Backend TCP/TLS dial timeout (Go duration, e.g. "10s", "1m").
+    # Empty preserves the 30s default. Use a deliberately large value
+    # to effectively disable the bound rather than setting "0".
+    dialTimeout: ""
+    # -- 101-Switching-Protocols read deadline (Go duration).
+    # Empty preserves the 30s default.
+    handshakeTimeout: ""
+  # -- Structured per-request access logging on the in-process proxy.
+  # Off by default (zero allocation on the hot path). When enabled,
+  # emits one JSON line per request via the proxy's stdout slog
+  # (method, host, path, query, status, bytes_written, duration_ms,
+  # user_agent). Cluster logging stack scrapes stdout already, so no
+  # additional sink wiring is needed.
+  accessLog:
+    # -- Enable per-request access logging. Defaults to false; setting
+    # it true on a high-traffic gateway will materially increase log
+    # volume -- pair with samplingRate < 1.0.
+    enabled: false
+    # -- Fraction of non-5xx requests to log when enabled, in [0, 1].
+    # 1.0 logs everything; 0.0 logs only 5xx (server-side failures
+    # are always recorded regardless of rate so the operator never
+    # loses error signal). The proxy clamps out-of-range values:
+    # a typo like `samplingRate: 50` degrades to "always log" rather
+    # than "silently log nothing".
+    samplingRate: 1.0
+    # -- Zero the `query` field in every emitted line. For
+    # applications that ride tokens, signed-URL credentials, or PII
+    # in query parameters (?token=..., ?sid=..., ?email=...). The
+    # `path` field is unaffected -- operators still see WHICH endpoint
+    # was hit, just not WHICH parameters carried sensitive values.
+    # Defaults to false (verbatim query for triage signal); turn on
+    # when the application surface makes query-string privacy a real
+    # concern and route-level (headers vs query) / sink-level (log
+    # pipeline scrubbing) mitigations aren't viable.
+    stripQuery: false
+  # -- Distributed tracing (OpenTelemetry) on the in-process proxy.
+  # Off by default (zero cost on the hot path). When enabled, each
+  # request gets a server span, backend calls get a linked client span,
+  # and W3C traceparent / tracestate are propagated to backends. Spans
+  # export over OTLP/gRPC; the existing log enrichment then surfaces
+  # trace_id / span_id on structured log lines.
+  tracing:
+    # -- Enable distributed tracing on the proxy. Defaults to false.
+    enabled: false
+    # -- OTLP/gRPC collector endpoint. A bare host:port (e.g.
+    # "otel-collector.observability:4317") uses plaintext gRPC; prefix
+    # with http:// or https:// to choose plaintext vs TLS explicitly.
+    # Empty defers to the standard OTEL_EXPORTER_OTLP_ENDPOINT /
+    # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT environment variables.
+    endpoint: ""
+    # -- Head-sampling probability in [0, 1], applied at the trace root
+    # via ParentBased(TraceIDRatioBased). 1.0 samples every trace; 0.1
+    # samples a tenth. An upstream sampling decision is respected, so
+    # partial traces stay intact when the proxy sits behind the edge.
+    sampleRate: 1.0
+  # -- Container resource requests and limits
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  # -- Pod security context
+  # @default -- See values.yaml
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Container security context
+  # @default -- See values.yaml
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+  # -- Health probes configuration
+  healthProbes:
+    # -- Startup probe (hits /healthz; gives the process time to start serving — waiting for the tunnel is the readiness probe's job)
+    startupProbe:
+      enabled: true
+      initialDelaySeconds: 0
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 30
+    # -- Liveness probe
+    livenessProbe:
+      enabled: true
+      initialDelaySeconds: 15
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    # -- Readiness probe (ready when config is loaded and, in tunnel mode, the tunnel has connected to the edge)
+    readinessProbe:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+  # -- Service configuration for proxy metrics/health
+  service:
+    # -- Service annotations
+    annotations: {}
+  # -- NetworkPolicy configuration for proxy pods. On by default: it locks the
+  # config-API port (which can hijack routing via PUT /config) to the
+  # controller namespace. No-op where the CNI does not enforce NetworkPolicy.
+  networkPolicy:
+    # -- Render the proxy NetworkPolicy (ingress-only; locks the config-API
+    # port to the controller namespace by default)
+    enabled: true
+    # -- Also restrict EGRESS to DNS + the Cloudflare edge + cluster services.
+    # Off by default: the static Cloudflare CIDR list can drift and break the
+    # tunnel. Enable only if you keep cloudflareIpRanges current.
+    egressRestricted: false
+    # -- Ingress source configuration
+    ingress:
+      # -- EXTRA namespaces/pods allowed to reach the config-API port, ADDED to
+      # the release (controller) namespace — which is always admitted so a
+      # config push is never locked out. Add your monitoring namespace here to
+      # let Prometheus scrape /metrics (locking the config-API port also
+      # restricts the /metrics it co-serves).
+      from: []
+    # -- Label selector for namespaces additionally allowed to reach the
+    # config-API/metrics port in the PER-GATEWAY (tenant) NetworkPolicies the
+    # controller renders (passed to --monitoring-namespace-selector). Empty =
+    # controller namespace only. For the SHARED proxy's policy, use
+    # `ingress.from` above instead.
+    monitoringNamespaceSelector: {}
+  # -- Node selector for pod scheduling
+  nodeSelector: {}
+  # -- Tolerations for pod scheduling
+  tolerations: []
+  # -- Affinity rules for pod scheduling
+  affinity: {}
+  # -- Topology spread constraints for pod distribution
+  topologySpreadConstraints: []
+  # -- Annotations to add to proxy pods
+  podAnnotations: {}
+  # -- Additional labels to add to proxy pods
+  podLabels: {}
