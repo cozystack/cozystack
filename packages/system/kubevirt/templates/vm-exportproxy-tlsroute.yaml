@@ -18,6 +18,6 @@ spec:
   - {{ printf "vm-exportproxy.%s" $host | quote }}
   rules:
   - backendRefs:
-    - name: vm-exportproxy
+    - name: virt-exportproxy
       port: 443
 {{- end }}
