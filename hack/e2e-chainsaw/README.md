@@ -36,6 +36,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 - **openbao** — `bao operator init`/`unseal` via `kubectl exec`.
 - **kuberture** — `jq` on Service annotations + external-dns split-horizon log assertions.
+- **vminstance** — a server-side dry-run eviction of the VM's launcher pod, checked against the VMI's `LiveMigratable` condition.
 - **gateway** — admission-rejection cases that need `kubectl --as` impersonation or error-message greps; the tenant apex is read from the namespace `namespace.cozystack.io/host` label at runtime so they pass on any host.
 - **kubernetes-latest/previous** — wrap `_lib/run-kubernetes.sh` (Kamaji bringup, port-forward, LB/NFS/ouroboros). The script `cd`s to the repo root (the test dir is `hack/e2e-chainsaw/<suite>`, so repo root is `../../..`).
 
@@ -54,7 +55,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor`/`vminstance` need `jq`.
 
 ```bash
 # install chainsaw

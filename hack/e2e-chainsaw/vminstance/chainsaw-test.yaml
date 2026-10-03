@@ -172,3 +172,94 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+  - name: dry-run-evict-launcher
+    try:
+    # virt-api stamps the cluster evictionStrategy into the VMI spec at
+    # creation, and the eviction webhook reads it from there. virt-handler
+    # publishes LiveMigratable once it has synced the domain; under
+    # LiveMigrateIfPossible that condition is what splits the webhook's answer.
+    - assert:
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstance
+          metadata:
+            name: vm-instance-test
+          spec:
+            evictionStrategy: LiveMigrateIfPossible
+          status:
+            (conditions[?type == 'LiveMigratable']):
+            - type: LiveMigratable
+    # dryRun=All still runs the eviction webhook (sideEffects NoneOnDryRun) and
+    # deletes nothing. Under LiveMigrateIfPossible a migratable VMI is refused
+    # with 429 and the webhook's evacuation message, which a drain retries while
+    # the VM migrates away; a non-migratable one is let through. On the PR
+    # lane post-install prep pins StorageProfile/local to RWO, so there the
+    # VMI is not migratable.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          vmi=vm-instance-test
+          vmi_json=$(kubectl -n "$NAMESPACE" get vmi "$vmi" -o json)
+          uid=$(printf '%s\n' "$vmi_json" | jq -r '.metadata.uid')
+          migratable=$(printf '%s\n' "$vmi_json" | jq -r '[.status.conditions[] | select(.type == "LiveMigratable") | .status] | if length == 1 then .[0] else "ambiguous" end')
+          pods=$(kubectl -n "$NAMESPACE" get pods -l "kubevirt.io=virt-launcher,kubevirt.io/created-by=$uid" --field-selector status.phase=Running -o json)
+          if [ "$(printf '%s\n' "$pods" | jq '.items | length')" != 1 ]; then
+            echo "FAIL: expected exactly one Running launcher pod for VMI $vmi" >&2
+            printf '%s\n' "$pods" | jq -r '.items[] | .metadata.name + " " + .status.phase' >&2
+            exit 1
+          fi
+          pod=$(printf '%s\n' "$pods" | jq -r '.items[0].metadata.name')
+          pod_uid=$(printf '%s\n' "$pods" | jq -r '.items[0].metadata.uid')
+
+          eviction=$(jq -cn --arg name "$pod" --arg ns "$NAMESPACE" \
+            '{apiVersion: "policy/v1", kind: "Eviction", metadata: {name: $name, namespace: $ns}}')
+          err_file=$(mktemp)
+          trap 'rm -f "$err_file"' EXIT
+          if out=$(printf '%s\n' "$eviction" | kubectl create --raw "/api/v1/namespaces/$NAMESPACE/pods/$pod/eviction?dryRun=All" -f - 2>"$err_file"); then
+            allowed=true
+          else
+            allowed=false
+          fi
+          err=$(cat "$err_file")
+          echo "LiveMigratable=$migratable eviction-allowed=$allowed"
+          printf '%s\n' "response: $out"
+          printf '%s\n' "stderr: $err"
+
+          case "$migratable" in
+          True)
+            if [ "$allowed" = true ]; then
+              echo "FAIL: dry-run eviction of migratable VMI $vmi was allowed; the webhook should refuse it and start an evacuation" >&2
+              exit 1
+            fi
+            if ! printf '%s\n' "$err" | grep -Fq "Eviction triggered evacuation of VMI \"$NAMESPACE/$vmi\""; then
+              echo "FAIL: the refusal did not come from the KubeVirt evacuation path" >&2
+              exit 1
+            fi
+            ;;
+          False)
+            if [ "$allowed" != true ]; then
+              echo "FAIL: dry-run eviction of non-migratable VMI $vmi was refused; LiveMigrateIfPossible should let it through" >&2
+              exit 1
+            fi
+            if ! printf '%s\n' "$out" | jq -e '.kind == "Status" and .status == "Success"' >/dev/null 2>&1; then
+              echo "FAIL: the eviction returned without a Success status" >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "FAIL: VMI $vmi LiveMigratable condition is '$migratable', expected True or False" >&2
+            exit 1
+            ;;
+          esac
+
+          if ! kubectl -n "$NAMESPACE" get pod "$pod" -o json |
+            jq -e --arg uid "$pod_uid" '.metadata.uid == $uid and .metadata.deletionTimestamp == null' >/dev/null; then
+            echo "FAIL: launcher pod $pod was deleted or replaced by a dry-run eviction" >&2
+            exit 1
+          fi
+          if ! kubectl -n "$NAMESPACE" get vmi "$vmi" -o json |
+            jq -e '(.status.evacuationNodeName // "") == ""' >/dev/null; then
+            echo "FAIL: a dry-run eviction recorded an evacuation on VMI $vmi" >&2
+            exit 1
+          fi
