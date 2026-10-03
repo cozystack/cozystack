@@ -338,6 +338,9 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "my-redis.example.com"
+      - contains:
+          path: spec.dnsNames
+          content: "my-redis.redis.example.com"
 
   - it: "redisfailover.yaml passes TLS settings to the operator when TLS is enabled"
     templates:
@@ -559,6 +562,9 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "my-redis.example.com"
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis.redis.example.com"
 
   # ------------------------------------------------------------------
   # authClients propagation
@@ -688,6 +694,9 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "my-redis."
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis.redis."
 
   - it: "leaf Certificate still renders with no external SAN when no namespace map is injected"
     templates:
