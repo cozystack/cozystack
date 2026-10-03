@@ -61,7 +61,7 @@
 # skip-unusable-drain-exclusion both adds and quotes as context, so it has to
 # come after it. A rename that reorders them fails the build rather than
 # producing a wrong binary.
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:e0174e51e81218523251d85d248a90d24c3d5e81543b4f07a5d66229397db190 AS builder
 
 # Keep in step with the chart version pulled by `make update`: the chart's
 # appVersion is what picks the operator image upstream, so a mismatch here would
