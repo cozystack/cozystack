@@ -38,6 +38,8 @@ var (
 	runNodeService       = flag.Bool("run-node-service", true, "Specifies rather or not to run the node service, the default is true")
 	runControllerService = flag.Bool("run-controller-service", true, "Specifies rather or not to run the controller service, the default is true")
 
+	enableVMIHotplugFallback = flag.Bool("enable-vmi-hotplug-fallback", true, "Specifies whether or not to hot-unplug a volume from a VM-owned VMI when it is not in the VM spec. Requires the KubeVirt HotplugVolumes feature gate; set to false when that gate is off. The default is true")
+
 	kubeAPIQPS   = flag.Float64("kube-api-qps", defaultKubeAPIQPS, "QPS limit for the infra- and tenant-cluster Kubernetes API clients. client-go defaults to 5, which starves the once-per-second infra PVC-bound poll in the NFS ControllerPublishVolume path under a burst of concurrent attaches.")
 	kubeAPIBurst = flag.Int("kube-api-burst", defaultKubeAPIBurst, "Burst limit for the infra- and tenant-cluster Kubernetes API clients (client-go default is 10).")
 )
@@ -153,14 +155,6 @@ func handle() {
 	// Create upstream driver (provides Identity, Controller, Node services)
 	upstreamDriver := service.NewKubevirtCSIDriver().
 		WithIdentityService(identityClientset)
-	if *runControllerService {
-		upstreamDriver = upstreamDriver.WithControllerService(
-			virtClient,
-			*infraClusterNamespace,
-			infraClusterLabelsMap,
-			storageClassEnforcement,
-		)
-	}
 	if *runNodeService {
 		upstreamDriver = upstreamDriver.WithNodeService(nodeID)
 	}
@@ -176,15 +170,7 @@ func handle() {
 		if err != nil {
 			klog.Fatalf("Failed to build infra dynamic client: %v", err)
 		}
-		cs = &WrappedControllerService{
-			ControllerService:       upstreamDriver.ControllerService,
-			infraClient:             infraKubernetesClient,
-			dynamicClient:           infraDynamicClient,
-			virtClient:              virtClient,
-			infraNamespace:          *infraClusterNamespace,
-			infraClusterLabels:      infraClusterLabelsMap,
-			storageClassEnforcement: storageClassEnforcement,
-		}
+		cs = newWrappedControllerService(upstreamDriver, virtClient, infraKubernetesClient, infraDynamicClient, infraClusterLabelsMap, storageClassEnforcement)
 	}
 
 	var ns csi.NodeServer
@@ -199,6 +185,34 @@ func handle() {
 	s := service.NewNonBlockingGRPCServer()
 	s.Start(*endpoint, upstreamDriver.IdentityService, cs, ns)
 	s.Wait()
+}
+
+// newWrappedControllerService reads the controller flags itself, so both the
+// upstream service and the wrapper get them without an in-cluster config.
+func newWrappedControllerService(
+	driver *service.KubevirtCSIDriver,
+	virtClient kubevirt.Client,
+	infraClient kubernetes.Interface,
+	dynamicClient dynamic.Interface,
+	infraClusterLabelsMap map[string]string,
+	storageClassEnforcement util.StorageClassEnforcement,
+) *WrappedControllerService {
+	driver.WithControllerService(
+		virtClient,
+		*infraClusterNamespace,
+		infraClusterLabelsMap,
+		storageClassEnforcement,
+		*enableVMIHotplugFallback,
+	)
+	return &WrappedControllerService{
+		ControllerService:       driver.ControllerService,
+		infraClient:             infraClient,
+		dynamicClient:           dynamicClient,
+		virtClient:              virtClient,
+		infraNamespace:          *infraClusterNamespace,
+		infraClusterLabels:      infraClusterLabelsMap,
+		storageClassEnforcement: storageClassEnforcement,
+	}
 }
 
 // validateRateLimitFlags rejects non-positive limits. client-go treats QPS == 0
