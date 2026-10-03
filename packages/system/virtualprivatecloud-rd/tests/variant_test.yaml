@@ -1,0 +1,41 @@
+suite: ApplicationDefinition variant selection
+templates:
+  - templates/cozyrd.yaml
+release:
+  name: virtualprivatecloud-rd
+  namespace: cozy-system
+tests:
+  # Both variants register the same VirtualPrivateCloud kind, so exactly one
+  # ApplicationDefinition may render, and its chartRef must name the artifact
+  # of the variant that was selected — a mismatch leaves every tenant VPC
+  # release pointing at a chart the cluster does not build.
+  - it: defaults to the kubevirt definition
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: virtualprivatecloud
+      - equal:
+          path: spec.release.chartRef.name
+          value: cozystack-virtualprivatecloud-application-kubevirt-virtualprivatecloud
+
+  - it: selects the cozyplane definition
+    set:
+      variant: cozyplane
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: virtualprivatecloud
+      - equal:
+          path: spec.release.chartRef.name
+          value: cozystack-virtualprivatecloud-application-cozyplane-virtualprivatecloud
+
+  - it: refuses an unknown variant
+    set:
+      variant: nonesuch
+    asserts:
+      - failedTemplate:
+          errorPattern: 'unknown variant "nonesuch"'
