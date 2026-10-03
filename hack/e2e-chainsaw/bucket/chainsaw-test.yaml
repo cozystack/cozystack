@@ -87,7 +87,7 @@ spec:
   - name: verify-s3-access
     try:
     - script:
-        timeout: 5m
+        timeout: 8m
         content: |
           set -eu
           workdir=$(mktemp -d)
@@ -108,10 +108,11 @@ spec:
           # it shares that shape, not because it produced that number. Per-command
           # caps stop any single call outliving its budget, so a hang fails fast
           # and legibly and the op `timeout` stays a backstop whose inner budgets
-          # sit under its 5m ceiling: 2×30 for the two `k` reads + 2×45 for the
-          # two `mc cp` PUTs + at most 7×15 for the other `mc` calls (eight other
-          # call sites, but the two cleanup `mc rm` are mutually exclusive) + the
-          # 30s port-forward readiness wait = at most 285s. mc and kubectl both
+          # sit under its 8m ceiling: 2×30 for the two `k` reads + 2×45 for the
+          # two `mc cp` PUTs + 2×77 for the two `await_key` probes + at most 5×15
+          # for the other `mc` calls (six other call sites, but the two cleanup
+          # `mc rm` are mutually exclusive) + the 30s port-forward readiness
+          # wait = at most 409s. mc and kubectl both
           # exit on SIGTERM. The 30s `k` cap matches the redis suite's own `k`
           # wrapper (`redis/chainsaw-test.yaml:298`), a terminal cap like this
           # one; the 45s PUT cap matches the one terminal `mc cp` in the tree,
@@ -150,8 +151,40 @@ spec:
           pf_pid=$!
           timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
 
-          mc alias set rw-user https://localhost:8333 "$ADMIN_ACCESS_KEY" "$ADMIN_SECRET_KEY" --insecure
-          mc alias set ro-user https://localhost:8333 "$VIEWER_ACCESS_KEY" "$VIEWER_SECRET_KEY" --insecure
+          # accessGranted is not "usable". The COSI driver grants access by
+          # rewriting the IAM file on the filer and returns; the S3 gateway
+          # loads that file later, from a filer metadata subscription, and the
+          # change may reach the filer it follows only after the other filer
+          # replica has passed it on. So wait here for the gateway behind this
+          # port-forward to accept the key. Only SeaweedFS's InvalidAccessKeyId
+          # text means "not loaded yet"; any other error, or an attempt cut off
+          # at its 15s cap (124), fails at once, and a key still unknown after
+          # the 60s window fails under its own name. At most 60 + 2 + 15 = 77s.
+          await_key() {  # alias access-key secret-key bucketaccess-name
+            deadline=$(( $(date +%s) + 60 ))
+            while :; do
+              rc=0
+              timeout 15 mc alias set "$1" https://localhost:8333 "$2" "$3" --insecure \
+                > "$workdir/alias.log" 2>&1 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                cat "$workdir/alias.log"
+                return 0
+              fi
+              cat "$workdir/alias.log" >&2
+              if [ "$rc" -eq 124 ] || ! grep -q 'does not exist in our records' "$workdir/alias.log"; then
+                echo "FAIL: mc alias set for BucketAccess $4 failed (exit $rc) with an error other than the key not being loaded yet" >&2
+                return 1
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "FAIL: S3 gateway still rejects the key of BucketAccess $4 after 60s of probing (the gateway never loaded it, or the driver never wrote it)" >&2
+                return 1
+              fi
+              sleep 2
+            done
+          }
+
+          await_key rw-user "$ADMIN_ACCESS_KEY" "$ADMIN_SECRET_KEY" bucket-test-admin
+          await_key ro-user "$VIEWER_ACCESS_KEY" "$VIEWER_SECRET_KEY" bucket-test-viewer
 
           # Admin (readwrite) can upload, list, download
           echo "readwrite test" > "$workdir/rw-test.txt"
@@ -346,7 +379,7 @@ spec:
   - name: verify-every-bucket-takes-a-write
     try:
     - script:
-        timeout: 5m
+        timeout: 8m
         content: |
           set -eu
           workdir=$(mktemp -d)
@@ -357,6 +390,38 @@ spec:
           timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
 
           echo "capacity probe" > "$workdir/probe.txt"
+
+          # accessGranted is not "usable". The COSI driver grants access by
+          # rewriting the IAM file on the filer and returns; the S3 gateway
+          # loads that file later, from a filer metadata subscription, and the
+          # change may reach the filer it follows only after the other filer
+          # replica has passed it on. So wait here for the gateway behind this
+          # port-forward to accept the key. Only SeaweedFS's InvalidAccessKeyId
+          # text means "not loaded yet"; any other error, or an attempt cut off
+          # at its 15s cap (124), fails at once, and a key still unknown after
+          # the 60s window fails under its own name. At most 60 + 2 + 15 = 77s.
+          await_key() {  # alias access-key secret-key bucketaccess-name
+            deadline=$(( $(date +%s) + 60 ))
+            while :; do
+              rc=0
+              timeout 15 mc alias set "$1" https://localhost:8333 "$2" "$3" --insecure \
+                > "$workdir/alias.log" 2>&1 || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                cat "$workdir/alias.log"
+                return 0
+              fi
+              cat "$workdir/alias.log" >&2
+              if [ "$rc" -eq 124 ] || ! grep -q 'does not exist in our records' "$workdir/alias.log"; then
+                echo "FAIL: mc alias set for BucketAccess $4 failed (exit $rc) with an error other than the key not being loaded yet" >&2
+                return 1
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "FAIL: S3 gateway still rejects the key of BucketAccess $4 after 60s of probing (the gateway never loaded it, or the driver never wrote it)" >&2
+                return 1
+              fi
+              sleep 2
+            done
+          }
 
           for name in cap1 cap2 cap3; do
             # Keep the read and the decode as separate commands. This runs under
@@ -388,9 +453,10 @@ spec:
             # the limit is what ends it and the catch block is what shows why.
             # The PUT gets the longest because a working one can still wait up
             # to ten seconds while the master grows a volume for the bucket.
-            # With the port-forward wait the sum stays under the step's five
-            # minutes.
-            timeout 15 mc alias set "$name" https://localhost:8333 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+            # Per bucket that is 77 for the probe + 45 + 15, so with the 30s
+            # port-forward wait the mc and port-forward budgets sum to 441s,
+            # under the step's eight minutes.
+            await_key "$name" "$ACCESS_KEY" "$SECRET_KEY" "bucket-${name}-admin"
             timeout 45 mc cp --insecure "$workdir/probe.txt" "$name/$BUCKET_NAME/probe.txt"
             timeout 15 mc rm --insecure "$name/$BUCKET_NAME/probe.txt"
           done
