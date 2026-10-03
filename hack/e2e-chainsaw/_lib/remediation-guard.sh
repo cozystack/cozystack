@@ -13,14 +13,28 @@
 # tracks the Helm release state: deployed, superseded, failed, uninstalled,
 # and so on. A remediation cycle leaves the footprint behind: a snapshot
 # with status "uninstalled" (from install/upgrade remediation) or "failed"
-# (Helm release failure that remediation then uninstalled). Those stay in
-# history even after a subsequent successful reinstall.
+# (a Helm action that failed). Those stay in history after a subsequent
+# successful reinstall or retry, with one exception: a failed install that
+# the next upgrade recovers is marked superseded by Helm, so its Snapshot
+# no longer reads "failed" and nothing here can see it.
+#
+# "Bounded" is literal. The controller truncates history on every in-sync
+# reconcile, and again before it retries or remediates a failed release:
+# on a release whose strategy is a retry it keeps the newest
+# five Snapshots, and on any other it keeps those down to the previous
+# deployed or superseded one, falling back to that same five when history
+# holds no such Snapshot to cut at. A footprint therefore outlives the
+# reconcile that follows it, not an arbitrary number of them. Reading
+# history right after the actions that wrote it, which is what an e2e run
+# does, sees it; reading it after the release has moved on may not.
 #
 # helmrelease_has_remediation_cycle takes a newline-delimited list of
 # snapshot statuses (whatever the caller extracted via kubectl -o jsonpath
 # or equivalent) and returns 0 (detected) when any entry is "failed" or
 # "uninstalled", 1 otherwise. Empty input is treated as "no history yet,
-# no cycle observed".
+# no cycle observed". Whether a detected footprint fails a run is the
+# caller's decision, because it depends on the release's own strategy:
+# see cozy_guard_helmrelease in run-kubernetes.sh.
 
 # The jsonpath a caller hands to kubectl to read those statuses, one per
 # line. It lives here rather than inline at the call site so that it is a
@@ -35,6 +49,7 @@
 HELMRELEASE_HISTORY_JSONPATH='{range .status.history[*]}{.status}{"\n"}{end}'
 
 helmrelease_has_remediation_cycle() {
+    local statuses
     statuses="$1"
     if [ -z "${statuses}" ]; then
         return 1

@@ -1568,12 +1568,11 @@ STUB
   green=$(awk -v w="$wait_line" 'NR > w && /cozy_capture_runner_canary 2/ { print NR; exit }' "$lib")
   tail_line=$(grep -n '^  versions=\$(kubectl --kubeconfig' "$lib" | head -n 1 | cut -d: -f1)
   console_line=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
-  # The signal is a separate word from the keyword, the way the fixtures in
-  # hack/bats-no-exit-trap.bats assemble theirs: that guard matches the pair
-  # lexically, so a pattern naming both would be counted here as an installed
-  # trap this file would then have to declare as debt.
-  armed_sig=EXIT
-  armed_line=$(grep -n "^  trap '_tenant_snapshot_on_fail' ${armed_sig}" "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the line that hands the failure handler the tenant kubeconfig,
+  # which is where the tenant becomes reachable. The handler itself is armed
+  # earlier, at the CR apply, and a bound there would admit a sample taken
+  # during the management-cluster waits that precede the tenant.
+  armed_line=$(grep -n '^  CURRENT_TENANT_KC=' "$lib" | head -n 1 | cut -d: -f1)
   red=$(awk -v w="$wait_line" 'NR < w && /cozy_capture_runner_canary 2/ { line = NR } END { if (line) print line }' "$lib")
   pairs_first=''
   pairs_green=''
@@ -1648,7 +1647,7 @@ STUB
   # bracket the whole test instead, and the sentence would be false about the
   # artifact it is printed into.
   if [ "$first" -le "$armed_line" ]; then
-    echo "the canary sample before the wait (line $first) is taken at or before the tenant snapshot trap is armed (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
+    echo "the canary sample before the wait (line $first) is taken at or before the tenant kubeconfig is handed to the failure handler (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
     return 1
   fi
 }

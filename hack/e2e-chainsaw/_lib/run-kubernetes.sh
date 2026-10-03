@@ -693,22 +693,27 @@ cozy_cleanup() {
   return "$cleanup_failed"
 }
 
-# Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
-# Registered as an EXIT trap INSIDE run_kubernetes_test so it fires during THIS
-# test subshell's exit, before the success path (or cozy_cleanup) deletes the
-# tenant API LoadBalancer. crust-gather reaches the tenant only through the
-# kubeconfig's server URL (it connects directly — no host-proxy mode — and the
-# in-cluster URL is unreachable from the runner), which is the LB IP and stays
-# routable until teardown. CURRENT_TENANT_KC is a global so the handler can read
-# it regardless of function scope at EXIT-trap time.
 # Where a suite's captures land, spelled once, so a handler that writes beside
 # the snapshot cannot drift from where the snapshot actually goes.
 _cozy_suite_snapshot_dir() {
   printf '%s\n' "${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}"
 }
 
+# Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
+# Reached from _tenant_failure_on_exit, which run_kubernetes_test installs as an
+# EXIT trap, so it fires during THIS test subshell's exit, before the success
+# path (or cozy_cleanup) deletes the tenant API LoadBalancer. crust-gather
+# reaches the tenant only through the kubeconfig's server URL (it connects
+# directly — no host-proxy mode — and the in-cluster URL is unreachable from the
+# runner), which is the LB IP and stays routable until teardown.
+# CURRENT_TENANT_KC is a global so the handler can read it regardless of
+# function scope at EXIT-trap time.
+#
+# Takes the failing exit status as $1 rather than reading $? itself, because the
+# handler that calls it runs a collector first and $? at entry would be that
+# collector's status.
 _tenant_snapshot_on_fail() {
-  _rc=$?
+  local _rc="$1"
   [ "$_rc" -eq 0 ] && return 0
   command -v crust-gather >/dev/null 2>&1 || return 0
   [ -n "${CURRENT_TENANT_KC:-}" ] && [ -f "${CURRENT_TENANT_KC}" ] || return 0
@@ -740,6 +745,31 @@ _tenant_snapshot_on_fail() {
     124 | 137) echo "» tenant crust-gather snapshot TRUNCATED (wall-clock $_cg_rc); partial state kept, see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
     *) echo "» tenant crust-gather snapshot FAILED (exit $_cg_rc); see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
   esac
+}
+
+# The EXIT handler run_kubernetes_test arms at the Kubernetes CR apply, which is
+# earlier than either collector needs the tenant: the parent HelmRelease exists
+# from that point and the classification reads the management cluster, while the
+# snapshot half stays a no-op until CURRENT_TENANT_KC is assigned. Two
+# collectors, in this order and for the reason the diagnostics conventions give
+# for it: the classification is a handful of bounded reads against the
+# management cluster and it discriminates between failure modes, while the
+# snapshot costs minutes. Run the other way round, a snapshot that spends its
+# wall clock would take the classification with it.
+#
+# The classification also sits ahead of the two guards below it, because neither
+# is about it: a runner without crust-gather, or a run whose tenant kubeconfig
+# never materialised, says nothing about the HelmReleases, which live on the
+# management cluster and are readable either way.
+#
+# Neither collector may fail the handler. The status the suite exits with is the
+# one that was in effect when the trap was entered, and it is what the Chainsaw
+# step reports.
+_tenant_failure_on_exit() {
+  local _exit_rc=$?
+  [ "$_exit_rc" -eq 0 ] && return 0
+  cozy_report_helmrelease_remediation tenant-test "${CURRENT_TENANT_PARENT_HR:-}" || true
+  _tenant_snapshot_on_fail "$_exit_rc" || true
 }
 
 # Render name|IP rows for worker VMIs from a `kubectl get ... -o json` document.
@@ -4778,6 +4808,30 @@ cozy_report_node_join_failure() {
     cozy_capture_tenant_serial_console 'node-join failed: captured after fewer than 2 tenant nodes became Ready inside the deadline' 6 || true
   fi
 
+  # (e) What the tenant HelmReleases did to themselves. The table printed at the
+  # top of this block says which of them are Ready; this says whether one failed
+  # an action or was remediated on the way here, which is the same question the
+  # guard asks after the assertions and cannot ask from there, because this
+  # block ends in the exit that keeps it from ever running. A tenant CNI or CSI
+  # stuck in a failed action shows up as exactly this failure -- no node ever
+  # turns Ready -- and without this the history behind it is named nowhere in
+  # the run.
+  #
+  # Below the console rather than above it, and the ordering rule is the
+  # evidence, not the price. The console is the only artefact that survives a
+  # worker which never reached apid: nothing else in this block describes that
+  # worker at all. This classification is cheap and it discriminates, but what
+  # it reads lives on the management cluster and outlives the run, so a walk the
+  # budget declines here can be answered afterwards from the objects themselves.
+  # An irreplaceable artefact is collected before a replaceable one, whichever
+  # is cheaper.
+  #
+  # Its own wall clock still applies, so a namespace whose apiserver answers
+  # slowly costs a stated number of seconds rather than however many releases
+  # happen to be in it. A decline is announced rather than silent, because a
+  # missing section reads like a namespace that had nothing to report.
+  cozy_report_helmrelease_remediation tenant-test "kubernetes-${test_name}" "(e) " || true
+
   # (d) What the workers got, what they were denied, and what the sandbox nodes
   # under them lost to their own hypervisor. Its question has no other answer
   # here: the ceiling is already carried by (a), but whether the guest ever met
@@ -5045,6 +5099,464 @@ cozy_report_node_join_timing() {
   return 0
 }
 
+# Correct the two knobs _cozy_guard_kubectl reads, once per function that is
+# about to issue reads.
+#
+# Re-checked here rather than only where they are assigned, for the reason every
+# knob in this file is: a value set after this file was sourced -- which is how
+# a test lowers it -- never passed the assignment-time check. The value that
+# costs the most is zero, because `timeout -k 5 0` disables the timeout and
+# --request-timeout=0s means no timeout to kubectl, so a zero restores the
+# unbounded read with no warning and no note.
+#
+# Not done inside _cozy_guard_kubectl, because every call site that captures a
+# value runs it in a command substitution: a correction written back there dies
+# with the subshell, and the warning would then repeat on every read rather than
+# once per function.
+#
+# Hoisting moves the write-back one frame out and no further.
+# cozy_addon_helmrelease_names is itself called in a command substitution, so its
+# correction does not outlive the call either -- it covers the read that function
+# issues, which is all it is here for, and the globals a later caller sees are
+# the ones cozy_guard_helmrelease corrected in its own frame.
+_cozy_guard_read_bounds() {
+  COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+  COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE-}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
+}
+
+# Name why a guard read failed, given its exit status. The bound below produces
+# two statuses that print nothing at all: a wall-clock kill takes the process
+# before kubectl writes anything, so "kubectl's error is above" would send the
+# reader to an empty screen at exactly the failure the bound exists to cause.
+# cozy_diag_read draws the same distinction for the same reason.
+_cozy_guard_read_failure() {
+  case "$1" in
+    124)
+      echo "the read did not finish within ${COZY_DIAG_READ_TIMEOUT}s and was cut off, so kubectl printed no error"
+      ;;
+    137)
+      # 128+SIGKILL: the -k grace produces it, and so does anything else that
+      # kills the read. Says what happened, not what caused it.
+      echo "the read was killed before it finished, so kubectl printed no error"
+      ;;
+    *)
+      echo "kubectl's error is above"
+      ;;
+  esac
+}
+
+# Every kubectl call the guard makes goes through here, bounded.
+#
+# The guard runs late - after the whole bringup on the passing path, and on the
+# failure paths inside a diagnostics phase that the tenant crust-gather
+# snapshot has to outlive. An unbounded read against a wedged apiserver does not
+# lose only itself: it holds the Chainsaw op until the op is killed, and the
+# snapshot the caller's exit was going to trigger is then lost rather than
+# truncated. Both bounds are needed and neither substitutes for the other:
+# --request-timeout bounds one HTTP request, while a client retrying against an
+# apiserver that keeps answering slowly stays inside it indefinitely, which is
+# what the wall clock catches.
+#
+# This is a bound, not a retry: the read is issued once and a read that did not
+# finish stays a failed read, which the callers report and fail on. A cut-off
+# read reported as "no history" is exactly the conflation the guard exists to
+# refuse.
+#
+# Unbounded when `timeout` is absent rather than bounded-into-exit-127, the same
+# fallback cozy_diag_read takes and for the same reason: a missing local binary
+# would otherwise be reported as the cluster refusing every read.
+_cozy_guard_kubectl() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
+      kubectl --request-timeout="${COZY_DIAG_READ_TIMEOUT}s" "$@"
+  else
+    kubectl --request-timeout="${COZY_DIAG_READ_TIMEOUT}s" "$@"
+  fi
+}
+
+# Assert that one HelmRelease did not fail an action it is configured to retry
+# in place. $1 is the namespace, $2 the release name, $3 non-empty on a release
+# whose install strategy the cluster is known to set. Returns non-zero on such a
+# footprint or on a read that failed, so the caller's errexit fails the run.
+#
+# One rule decides the verdict: a "failed" or "uninstalled" Snapshot fails the
+# run on a release whose install strategy is RetryOnFailure, and is reported on
+# any other. The releases in that shape are the parent, which the aggregated
+# apiserver stamps RetryOnFailure on install and upgrade alike, as it does every
+# Application HelmRelease (pkg/registry/apps/application/rest.go), and the
+# tenant cilium and csi, whose templates set it on both actions. Under that
+# strategy the controller never remediates: a failed action is retried as an
+# upgrade with its manifests left in place, so what it leaves behind is a
+# "failed" Snapshot, and that Snapshot is the only record the release keeps of
+# an attempt that went wrong. The release may be Ready again by the time this
+# reads it, and the run still fails, as long as the Snapshot is still "failed".
+#
+# It is not, after a failed install that the very next attempt recovers. With
+# no deployed release to upgrade from, Helm upgrades from the failed one and
+# marks it superseded on success (pkg/action/upgrade.go in Helm v4.1.1), and
+# helm-controller rewrites that Snapshot in place (recordOnObject in
+# internal/reconcile/release.go). The history then reads deployed, superseded,
+# the shape of an ordinary upgrade, and this guard passes. A failed upgrade
+# keeps its Snapshot, because Helm supersedes the last deployed release rather
+# than the failed one, and so does a failed install followed by a second
+# failure.
+#
+# Every other addon of this chart takes the default strategy with
+# remediation.retries: -1, a configuration that declares uninstall-and-reinstall
+# its recovery path. The run has no measurement of how often those releases take
+# it, and failing a whole bringup on a release doing what it is configured to do
+# is how a guard ends up switched off. Whether that configuration is itself
+# a defect is not this guard's to assert; for the CRD addons it is tracked in
+# cozystack/cozystack#3555. Their footprint is printed as a note instead.
+#
+# Both probes keep their exit status. A failed read and a field the object does
+# not carry both print nothing, so folding them together (`|| true` on the whole
+# substitution) would let an API timeout or an RBAC error pass for a release with
+# no history - the same misreading cozy_tenant_drained guards against with its
+# "err" sentinel. `|| _read_rc=$?` keeps the non-zero status from tripping the
+# errexit the caller runs under.
+#
+# kubectl's stderr is deliberately NOT folded into the values either. kubectl
+# writes warnings there while exiting 0 - a deprecation notice, or the discovery
+# noise a degraded aggregated APIService produces - and such a line landing in
+# the history capture makes an empty history look populated, which skips the
+# readiness branch below, while in the strategy-and-readiness capture it stops
+# the value matching RetryOnFailure and silently downgrades a failure to a note.
+# Left unredirected, those lines go to the script's own stderr, which is where a
+# reader wants them anyway.
+#
+# Unit-tested in hack/run-kubernetes-remediation_test.bats.
+cozy_guard_helmrelease() {
+  local _ns="$1"
+  local _hr="$2"
+  # Non-empty on a release whose install strategy the cluster is known to set,
+  # which is the parent Application HelmRelease and nothing else here. See the
+  # branch that reads it for why the check cannot be applied to the addons.
+  local _strategy_required="${3:-}"
+  local _probe _strategy _history _ready _read_rc
+  _cozy_guard_read_bounds
+  # Readiness rides in the same get as the strategy, and both are read before
+  # the history, because the opposite order observes the two in the order that
+  # makes a still-installing release look like a broken API. The controller
+  # writes the Snapshot and flips Ready in one status patch, so a release is
+  # never Ready before its first Snapshot exists; read the history first and an
+  # addon that completes its install in the round-trip between the two reads
+  # presents as Ready with an empty history, which the branch below fails the
+  # run on as a Flux status shape the guard can no longer read. Some of these
+  # releases are never waited on, so that window is open on every run. Read this
+  # way round, truncation cannot produce the misreading: Ready implies a
+  # Snapshot, and neither truncation variant in helm-controller/api empties a
+  # non-empty history - Truncate returns early below two Snapshots,
+  # TruncateIgnoringPreviousSnapshots cuts only above five.
+  #
+  # Truncation is not the only thing that shortens history, which is why the
+  # claim above is about truncation and not about the read order being safe.
+  # HelmReleaseStatus.ClearHistory() drops it outright, and where the controller
+  # calls it is in a module this tree does not carry. Landing between these two
+  # reads it would present as Ready with an empty history, which the branch
+  # below fails the run on with the wrong explanation. One round-trip wide, and
+  # nothing here can close it - what the order buys is the truncation half.
+  _read_rc=0
+  _probe=$(_cozy_guard_kubectl get hr -n "$_ns" "${_hr}" \
+    -o jsonpath='{.spec.install.strategy.name}@{.status.conditions[?(@.type=="Ready")].status}') || _read_rc=$?
+  if [ "${_read_rc}" -ne 0 ]; then
+    echo "Reading .spec.install.strategy.name and the Ready condition of ${_hr} failed - $(_cozy_guard_read_failure "${_read_rc}")." >&2
+    return 1
+  fi
+  _strategy=${_probe%%@*}
+  _ready=${_probe#*@}
+  # The history jsonpath is the one remediation-guard.sh names, because that is
+  # the value internal/fluxcontract runs against the upstream Flux type; a
+  # literal written out here would not be covered by it.
+  _read_rc=0
+  _history=$(_cozy_guard_kubectl get hr -n "$_ns" "${_hr}" \
+    -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}") || _read_rc=$?
+  if [ "${_read_rc}" -ne 0 ]; then
+    echo "Reading .status.history of ${_hr} failed - $(_cozy_guard_read_failure "${_read_rc}")." >&2
+    return 1
+  fi
+  # Always emit the raw values, so a silent future-Flux field rename shows up in
+  # the CI log as an empty history on a Ready release rather than vanishing.
+  echo "HelmRelease ${_hr} (install strategy ${_strategy:-<unset>}) history statuses:"
+  printf '%s\n' "${_history:-<empty>}"
+  # The field that arms the fatal branch below is read with kubectl -o jsonpath,
+  # which prints nothing and exits 0 for a path that stops resolving - the read
+  # fails soft, into the lenient reading. Rename spec.install.strategy in a
+  # future helm-controller and every footprint on the parent, cilium and csi
+  # becomes the NOTE below on a green run, with the unit tests still passing
+  # because they feed the value from a fixture rather than through the jsonpath.
+  # An empty value is not by itself evidence of that: most addon releases of
+  # this chart set no strategy and take the default one, which is why only a
+  # release whose strategy the cluster is known to set can carry the check. The
+  # parent is that release, so it is the one asked for it, and it is enough: the
+  # same rename empties the field on every release at once.
+  if [ -n "${_strategy_required}" ] && [ -z "${_strategy}" ]; then
+    echo "spec.install.strategy.name of ${_hr} came back empty, and this release always carries one: the aggregated apiserver stamps RetryOnFailure on the HelmRelease of every Application it serves. An empty value is therefore the read rather than the object, and it is the lenient reading - every footprint below would be reported as a note instead of failing the run. Check the field against the helm-controller version in go.mod before looking at the release." >&2
+    _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
+    return 1
+  fi
+  # A value that is not empty but not RetryOnFailure is the other way into the
+  # lenient reading: on the default strategy an uninstall-and-reinstall cycle
+  # is a NOTE, and on the parent that cycle is what this guard exists to fail.
+  if [ -n "${_strategy_required}" ] && [ "${_strategy}" != "RetryOnFailure" ]; then
+    echo "spec.install.strategy.name of ${_hr} is ${_strategy}, and this release always carries RetryOnFailure: the aggregated apiserver stamps it on the HelmRelease of every Application it serves. Any other strategy means the stamp is gone, and every footprint below would be reported as a note instead of failing the run." >&2
+    _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
+    return 1
+  fi
+  # An empty history is read against this release's own readiness. A Ready
+  # HelmRelease has a completed helm action behind it and the controller keeps a
+  # Snapshot of every one, so Ready with no history is the Flux status shape
+  # having moved under the guard - skipping that would leave the release
+  # unchecked while the run stayed green, which is the failure mode this guard
+  # exists to remove rather than reproduce. A release that is not Ready may
+  # simply never have completed an action: it has nothing to find yet, and
+  # failing on it would be a red run blamed on a Flux API change for a release
+  # that is still installing.
+  if [ -z "${_history}" ]; then
+    if [ "${_ready}" = "True" ]; then
+      echo "Unexpected empty .status.history on Ready HelmRelease ${_hr} - Flux API shape may have changed." >&2
+      _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
+      return 1
+    fi
+    echo "» ${_hr} is not Ready and has no release history - no completed helm action to judge, not inspected"
+    return 0
+  fi
+  helmrelease_has_remediation_cycle "${_history}" || return 0
+  # The fatal verdict is gated on the release still carrying RetryOnFailure, so
+  # the field that makes a failed Snapshot the only signal is also the field that
+  # switches the guard off. Take RetryOnFailure away from the tenant cilium or
+  # csi and their footprint stops failing the run and starts printing the NOTE
+  # below, with nothing here changed. What holds that field is not this guard
+  # but two chart tests,
+  # packages/apps/kubernetes/tests/cilium_install_retry_test.yaml and
+  # csi_install_retry_test.yaml, which pin strategy.name on both actions. They
+  # are load-bearing for this guard and not only for the chart. The csi they
+  # pin is helmreleases/csi.yaml, the KubeVirt driver this suite runs; on the
+  # Proxmox substrate the same release comes from csi-proxmox.yaml, which sets
+  # the strategy too and has no such pin.
+  if [ "${_strategy}" = "RetryOnFailure" ]; then
+    echo "HelmRelease ${_hr} carries a failed or uninstalled Snapshot, and its install strategy is RetryOnFailure, which retries a failed action in place instead of remediating it. An action on this release failed during the run; the release may have recovered on a retry since, and the failure is still the finding. On the tenant cilium the cause can sit outside the chart: its operator Deployment cannot schedule before a worker registers, so workers arriving more than two 10m install timeouts after the install started leave this Snapshot while still inside the node-join deadline. Compare the Snapshot times below with when the first node turned Ready before looking at the release." >&2
+    _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
+    return 1
+  fi
+  # Readiness decides the tense: a release that is not Ready carries its
+  # footprint without having recovered from it yet, and a note claiming a
+  # recovery would send a reader looking for a second cause at the point where
+  # the first one is still live.
+  if [ "${_ready}" = "True" ]; then
+    echo "» NOTE: ${_hr} carries a failed or uninstalled Snapshot under the default strategy, which remediates between the retry attempts its budget allows - it was remediated and recovered. Not failing the run; read this as the cause if something downstream did fail."
+  else
+    echo "» NOTE: ${_hr} carries a failed or uninstalled Snapshot under the default strategy and is not Ready - it was remediated and has not completed an action since. Not failing the run; read this as the cause if something downstream did fail."
+  fi
+  return 0
+}
+
+# Print the addon HelmRelease names $2 selects in namespace $1, one per line.
+#
+# Extracted from the guard because the failure-path report walks the same
+# releases and must not walk a second, hand-kept copy of the selection: a
+# release the chart adds later has to appear in both readings or in neither.
+# Returns non-zero, having said why, when the listing failed or when the prefix
+# matched nothing - two outcomes that produce the same empty stdout and that
+# only the exit status tells apart.
+cozy_addon_helmrelease_names() {
+  local _ns="$1"
+  local _prefix="$2"
+  local _all_hrs _addon_hrs _read_rc
+  _cozy_guard_read_bounds
+  _read_rc=0
+  _all_hrs=$(_cozy_guard_kubectl get hr -n "$_ns" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}') || _read_rc=$?
+  if [ "${_read_rc}" -ne 0 ]; then
+    echo "Listing HelmReleases in ${_ns} failed - $(_cozy_guard_read_failure "${_read_rc}")." >&2
+    return 1
+  fi
+  # index()==1 rather than a ^-anchored grep: the prefix is a release name, and
+  # a HelmRelease name is a DNS-1123 subdomain, so it may legally carry a dot.
+  # As a regex that dot would match any character and silently widen the
+  # selection past this parent's addons. awk exits 0 on no match, which the
+  # empty-selection check below reports.
+  _addon_hrs=$(printf '%s\n' "${_all_hrs}" | awk -v p="${_prefix}" 'index($0, p) == 1')
+  if [ -z "${_addon_hrs}" ]; then
+    echo "No addon HelmReleases matched ${_prefix}* in ${_ns}. Either the parent has not created them yet, which is what this means on a failure path that ran before it was Ready, or this prefix no longer selects them, or the chart stopped rendering them - they are gated on _namespace.etcd and on their own addons.<name>.enabled in packages/apps/kubernetes/templates/helmreleases/." >&2
+    printf '%s\n' "${_all_hrs}" >&2
+    return 1
+  fi
+  printf '%s\n' "${_addon_hrs}"
+}
+
+# Run that guard over the tenant addon HelmReleases a parent release installs.
+# $1 is the namespace, $2 the name prefix the addons share ("kubernetes-<test>-").
+#
+# The parent's own .status.history says nothing about its children, so a
+# remediation cycle on one of them surfaces only as whatever downstream deadline
+# it eventually breaks -- a node that never turns Ready, a PVC that never binds
+# -- with nothing in the run naming the failed action that preceded it. The CNI
+# and CSI releases are the sharp cases, because they carry a cluster-wide
+# precondition rather than one component.
+#
+# The addons are read from the cluster rather than listed here, so a release the
+# chart adds later is covered without touching this script.
+#
+# Adds no wait, and does not assume one happened. The parent HelmRelease carries
+# DisableWait on both actions (the Kubernetes ApplicationDefinition sets
+# release.cozystack.io/helm-install-disable-wait, deliberately, because its addon
+# releases cannot go Ready before worker nodes exist), so the parent reaching
+# Ready says nothing about them; and the suite waits on some of them by name
+# while never naming others, metrics-server and prometheus-operator-crds among
+# them. That is why each release is judged on what its own object says, readiness
+# included.
+cozy_guard_addon_helmreleases() {
+  local _ns="$1"
+  local _prefix="$2"
+  local _addon_hrs _addon_hr _failed
+  _addon_hrs=$(cozy_addon_helmrelease_names "$_ns" "${_prefix}") || return 1
+  # Every addon is inspected even after one of them fails. The notes the others
+  # print - a remediation the default strategy performed on one of them -
+  # are the context that explains the failure, and stopping at the first one
+  # hides exactly the releases a reader would compare it against.
+  _failed=0
+  for _addon_hr in ${_addon_hrs}; do
+    cozy_guard_helmrelease "$_ns" "${_addon_hr}" || _failed=1
+  done
+  return "${_failed}"
+}
+
+# Judge a parent release and the addons it installs, and report both verdicts.
+# $1 is the namespace, $2 the parent release name.
+#
+# Neither call may suppress the other, which is why the run does not simply
+# issue them back to back: the caller runs under errexit, so a non-zero parent
+# verdict would end the script before any addon was read. The run would still go
+# red, so nothing is lost about WHETHER it failed - what is lost is the addon
+# output that explains it, which is the same context the loop above preserves
+# among the addons themselves and for the same reason. The case that costs most
+# is a change in the Flux status shape, because it reaches every release alike:
+# the parent trips on it first and no addon is ever looked at. Collecting also
+# keeps the parent's own verdict, which an early return past the addons would
+# drop.
+#
+# The addon prefix is derived here rather than passed in, so the parent name and
+# the prefix that selects its children cannot drift apart.
+cozy_guard_all_helmreleases() {
+  local _ns="$1"
+  local _parent="$2"
+  local _failed=0
+  # The parent is asked to prove its install strategy read back non-empty; the
+  # addons are not, because most of them legitimately set none. See the branch
+  # in cozy_guard_helmrelease that reads this argument.
+  cozy_guard_helmrelease "$_ns" "${_parent}" required || _failed=1
+  cozy_guard_addon_helmreleases "$_ns" "${_parent}-" || _failed=1
+  # These releases are now classified, and the same flag the failure-path report
+  # uses records it. The two are not alternatives: this call runs before the
+  # snapshot trap is disarmed, deliberately, so a non-zero verdict here ends the
+  # script with the trap still armed and the handler runs the report over the
+  # releases just judged. Every line would be identical, which reads as two
+  # observations of one release, and the second pass would spend its budget in
+  # front of the snapshot on the one run where the snapshot matters most.
+  _COZY_GUARD_REPORT_DONE=1
+  return "${_failed}"
+}
+
+# How long the failure-path classification below may spend reading HelmReleases
+# before it stops and says which releases it did not reach. Its own budget in
+# addition to the diagnostics phase's, because it is called from paths that
+# never open a phase as well as from one that does, and on those the phase
+# check has nothing to say no with.
+COZY_GUARD_REPORT_BUDGET_DEFAULT=90
+# Assigned here as well as re-checked at use, like every other knob in this
+# file: left unassigned, the re-check would see an empty value on every run and
+# warn about a knob nobody set.
+COZY_GUARD_REPORT_BUDGET=$(_cozy_diag_seconds "${COZY_GUARD_REPORT_BUDGET:-$COZY_GUARD_REPORT_BUDGET_DEFAULT}" "$COZY_GUARD_REPORT_BUDGET_DEFAULT" COZY_GUARD_REPORT_BUDGET positive)
+# Cleared per run. Three call sites can reach the classification of one run --
+# the node-join collector, the exit handler after it, and the guard itself,
+# whose verdict on the passing path exits the script with that handler still
+# armed -- and printing the same verdicts twice would read as two separate
+# observations of one release.
+_COZY_GUARD_REPORT_DONE=0
+
+# Classify the same releases the guard judges, print the verdicts, and fail
+# nothing. $1 is the namespace, $2 the parent release name, $3 an optional
+# section label for a caller whose log is organised in lettered sections. The
+# exit handler passes none, because from there a lone "(e)" labels a position in
+# a list the reader never sees.
+#
+# This is the reading for the paths where the guard cannot run at all. The guard
+# sits after the assertions, and every deadline whose breach it exists to
+# explain -- a node that never turns Ready, a HelmRelease wait that expires, a
+# PVC that never binds -- ends the script under errexit well before it. So on
+# the runs where a failed action on the tenant CNI or CSI is the cause, the
+# guard had nothing to say, and the failure surfaced as the downstream deadline
+# with the history behind it unnamed. The verdict is not what those runs are
+# missing, the run is already red; the classification is.
+#
+# Which is why nothing here fails: returning non-zero from a collector on a
+# failing path would replace the caller's own exit status, and the tenant
+# crust-gather snapshot hangs off that exit.
+#
+# Bounded on its own clock, checked before the listing and before each release.
+# What comes after this on the exit path is the tenant snapshot, which needs the
+# rest of the op, so a namespace whose apiserver answers slowly must cost a
+# bounded number of seconds here rather than however many releases happen to be
+# in it. A release the budget cut off is named, not dropped in silence.
+#
+# The budget decides whether the next release may be STARTED, so it is not a
+# worst case and must not be written as one, the same way the diagnostics phase
+# budget is not. The ceiling is the budget plus the parent's reads, which are
+# issued before the first check because the deadline is stamped one line above
+# them, plus the reads of the one release the last check admitted -- at the
+# default per-read bound, up to three bounded reads each. Checking inside
+# cozy_guard_helmrelease would tighten it further and is deliberately not done:
+# that function is the guard, its verdict is what the passing path runs on, and
+# a deadline reaching into it would let a collector's clock decide which
+# releases the gate inspects.
+cozy_report_helmrelease_remediation() {
+  local _ns="$1"
+  local _parent="$2"
+  local _label="${3:-}"
+  local _addon_hrs _hr _deadline _budget
+  [ "${_COZY_GUARD_REPORT_DONE}" -eq 0 ] || return 0
+  # An empty parent name means the run failed before the release was created, so
+  # there is no history anywhere to read yet.
+  [ -n "${_parent}" ] || return 0
+  # Set below the two returns above, so a call with nothing to classify does not
+  # spend the one classification this run is allowed. Deliberately still above
+  # the phase gate below, which is the third way out: a spent phase declines
+  # every caller alike, so leaving the slot open there would buy a second
+  # decline note rather than a second reading.
+  _COZY_GUARD_REPORT_DONE=1
+  _budget=$(_cozy_diag_seconds "${COZY_GUARD_REPORT_BUDGET-}" "$COZY_GUARD_REPORT_BUDGET_DEFAULT" COZY_GUARD_REPORT_BUDGET positive)
+  _deadline=$(( $(date +%s) + _budget ))
+  # Two clocks, and both have to allow a read before it is issued. The phase
+  # budget is the caller's, and where one is open it is binding on every
+  # collector alike: what runs after this on that path is the tenant
+  # crust-gather snapshot, and a read begun past the phase deadline is taken out
+  # of the snapshot's time. The budget above is this collector's own, and it is
+  # what bounds the walk on the paths that open no phase at all -- where
+  # cozy_diag_phase_has_time returns "yes" because there is nothing to say no.
+  #
+  # The header is printed behind the first gate rather than ahead of it, so a
+  # declined run leaves the note and not a section header with nothing under it.
+  cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_parent}" || return 0
+  echo "=== ${_label}tenant HelmRelease remediation footprint (management cluster, ns ${_ns}) — classification only, this does not decide the run ==="
+  cozy_guard_helmrelease "$_ns" "${_parent}" required || true
+  cozy_diag_phase_has_time "the addon HelmRelease listing of ${_parent}" || return 0
+  if [ "$(date +%s)" -ge "${_deadline}" ]; then
+    echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; the addon releases of ${_parent} were not listed, so nothing was observed about any of them ===" >&2
+    return 0
+  fi
+  _addon_hrs=$(cozy_addon_helmrelease_names "$_ns" "${_parent}-") || return 0
+  for _hr in ${_addon_hrs}; do
+    cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_hr}" || return 0
+    if [ "$(date +%s)" -ge "${_deadline}" ]; then
+      echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; ${_hr} and every release after it were not read, and nothing was observed about them either way ===" >&2
+      break
+    fi
+    cozy_guard_helmrelease "$_ns" "${_hr}" || true
+  done
+  return 0
+}
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
@@ -5076,6 +5588,11 @@ run_kubernetes_test() {
   _COZY_RUN_STARTED_AT=$(date +%s)
   local _cozy_run_started_rfc3339
   _cozy_run_started_rfc3339=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+  # Per run rather than per source: the flag keeps one run's failure path from
+  # printing the classification twice, and a second run in the same shell is a
+  # second thing to classify rather than the same one again.
+  _COZY_GUARD_REPORT_DONE=0
 
   # Clean up stale resources from a previous failed run. Delete the worker pool
   # (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates the
@@ -5263,6 +5780,22 @@ ${talos_block}
   storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
+  # Armed here, at the apply, rather than once the tenant answers. The parent
+  # HelmRelease exists from this point on -- the aggregated apiserver renders it
+  # from the CR above -- and everything between here and the tenant LB is a
+  # management-cluster wait on that release or on what it installs: the
+  # KamajiControlPlane, the control-plane Deployments, the MachineDeployment,
+  # the admin-kubeconfig Secret. That window is the one the guard was written
+  # for. An install action that times out while admin-kubeconfig is still being
+  # provisioned leaves the failed Snapshot this reads, and every one of those
+  # waits exits under errexit with no reading at all if the handler is armed
+  # after them.
+  #
+  # Arming this early costs the snapshot nothing: _tenant_snapshot_on_fail
+  # returns on an unset CURRENT_TENANT_KC, which is assigned where the
+  # kubeconfig becomes usable, so it no-ops until then.
+  CURRENT_TENANT_PARENT_HR="kubernetes-${test_name}"
+  trap '_tenant_failure_on_exit' EXIT
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 
@@ -5362,11 +5895,15 @@ EOF
 
   # Wait for the API to answer through the LB before using it.
   timeout 60 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get --raw /healthz >/dev/null 2>&1; do sleep 2; done'
-  # The kubeconfig + LB are live now. Arm the tenant snapshot: any failure from
-  # here on captures the tenant cluster (the LB endpoint stays up until teardown,
-  # so crust-gather can reach it). Cleared on the success path below.
+  # The kubeconfig + LB are live now. Hand the handler armed above the tenant
+  # cluster as well: it returns on an unset name, so until this line its
+  # snapshot half has been a no-op and only the HelmRelease classification ran.
+  # From here a failure captures the tenant cluster too (the LB endpoint stays
+  # up until teardown, so crust-gather can reach it). Cleared on the success
+  # path below. A global for the reason the parent release name is one: the
+  # handler reads it at EXIT-trap time, where a local of this function is not
+  # something to rely on.
   CURRENT_TENANT_KC="tenantkubeconfig-${test_name}"
-  trap '_tenant_snapshot_on_fail' EXIT
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
@@ -6039,11 +6576,19 @@ EOF
 
   # Wait for the parent kubernetes-${test_name} HR to be Ready before the
   # remediation guard runs. The guard reads `.status.history`, which is empty
-  # until the helm install action completes — under Flux v2.8 kstatus the
-  # parent's helm install can still be "Running 'install'" after every child
-  # HR (cilium, coredns, csi, vsnap-crd, ingress-nginx) is already Ready,
-  # because kstatus walks all applied resources before flipping the parent
-  # Ready.
+  # until the helm install action completes, and the parent's install can still
+  # be "Running 'install'" after every child HR (cilium, coredns, csi,
+  # vsnap-crd, ingress-nginx) is already Ready. Not because it waits for them:
+  # this release carries DisableWait on both actions, from the
+  # release.cozystack.io/helm-install-disable-wait annotation on its
+  # ApplicationDefinition, so Helm skips the wait on the manifests it applied.
+  # It still waits on the chart's post-install hook Job, and that hook is what
+  # holds the install open, which is why the wait is here rather than inferred
+  # from the children.
+  #
+  # On elapse the script exits here under errexit, and the exit handler armed at
+  # the CR apply classifies the HelmReleases on the way out, so the history the
+  # guard below would have read is printed anyway.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
 
   # The two old OIDC suites created control-plane-only clusters whose useful
@@ -6059,34 +6604,17 @@ EOF
     cozy_switch_and_assert_oidc_custom_config "${test_name}"
   fi
 
-  # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
-  # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
-  # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
-  # and churn the Cluster CR.
-  # Flux helm-controller v2 retains per-revision release Snapshots in
-  # .status.history; each Snapshot's .status reflects the Helm release
-  # state (deployed/superseded/failed/uninstalled). A remediation cycle
-  # leaves a "failed" or "uninstalled" entry behind that survives a later
-  # successful reinstall, unlike the installFailures/upgradeFailures
-  # counters (which ClearFailures zeroes on every successful reconcile).
-  # The expression comes from remediation-guard.sh, sourced at the top of this
-  # file, where it is pinned against the upstream Flux type.
-  history_statuses=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" \
-    -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")
-  # Always emit the raw value so a silent future-Flux field rename shows
-  # up as "empty history on a Ready HR" in CI logs rather than vanishing.
-  echo "Parent HelmRelease history statuses:"
-  printf '%s\n' "${history_statuses:-<empty>}"
-  if [ -z "${history_statuses}" ]; then
-    echo "Unexpected empty .status.history on a Ready HelmRelease - Flux API shape may have changed." >&2
-    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
-    exit 1
-  fi
-  if helmrelease_has_remediation_cycle "${history_statuses}"; then
-    echo "Parent HelmRelease entered remediation cycle." >&2
-    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
-    exit 1
-  fi
+  # Guard: neither the parent HelmRelease nor the addon releases it installs that
+  # retry in place may have failed an action during the run. A non-zero
+  # installFailures/upgradeFailures would say so only until the next successful
+  # reconcile, because ClearFailures zeroes them, so reading them after the
+  # release is Ready is vacuous; a "failed" Snapshot in .status.history
+  # survives it, with the one exception cozy_guard_helmrelease describes.
+  #
+  # The call runs before the EXIT trap is disarmed, so a failure it finds still
+  # captures the tenant snapshot. That ordering is pinned by
+  # hack/run-kubernetes-remediation_test.bats, along with the call itself.
+  cozy_guard_all_helmreleases tenant-test "kubernetes-${test_name}"
 
   # Last, after everything the suite exists to prove. This checks a debugging
   # aid, not the product: a worker boots and serves either way, so letting it
@@ -6146,7 +6674,8 @@ EOF
     fi
   fi
 
-  # Success: disarm the tenant-snapshot trap so it doesn't fire on the clean exit.
+  # Success: disarm the failure handler -- the HelmRelease report and the tenant
+  # snapshot -- so neither fires on the clean exit.
   trap - EXIT
   # Clean up: delete the test-scoped tenant API LoadBalancer (frees its MetalLB
   # IP) and the local kubeconfig.

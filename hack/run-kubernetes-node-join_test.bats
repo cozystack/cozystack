@@ -939,8 +939,11 @@ read_cost_inputs() {
   # The grace is in this list because `timeout -k abc 20` exits 125 BEFORE running the
   # command, so a non-numeric grace makes every read in the block report exit 125 and
   # collects nothing -- the same total loss as the other three, by a different route.
+  # The report budget is in this list because the classification runs inside this
+  # block: rejected, it falls back to its default like the four above, and the
+  # collector keeps its walk.
   for knob in COZY_DIAG_PHASE_BUDGET COZY_DIAG_READ_TIMEOUT COZY_DIAG_MAX_IMPORTERS \
-    COZY_DIAG_READ_GRACE; do
+    COZY_DIAG_READ_GRACE COZY_GUARD_REPORT_BUDGET; do
    # Only values a `:-` default cannot absorb. An empty value set here is
    # indistinguishable from unset, so it takes the default silently and correctly;
    # the empty-string hazard lives on the post-source path and is checked there.
@@ -1417,9 +1420,18 @@ read_cost_inputs() {
     echo "found no gated collector at all, so this guard checked nothing" >&2
     return 1
   fi
+  # Same block filter as the spend-order test below, and for the same reason:
+  # the exit handler calls one of these collectors from outside any phase, and
+  # a call that spends no phase budget cannot spend it ahead of the console.
+  block=$(grep -n '^cozy_report_node_join_failure()' "$lib" | cut -d: -f1)
+  if [ -z "$block" ]; then
+    echo "expected to find the node-join diagnostics block in $lib" >&2
+    return 1
+  fi
   for entry in $gated; do
     line=${entry%%:*}
     fn=${entry#*:}
+    [ "$line" -gt "$block" ] || continue
     [ "$line" -lt "$console" ] || continue
     case "$fn" in
       # Not behind the phase gate at all: it runs ahead of the headline so the
@@ -1636,6 +1648,7 @@ ${carrier}
       # step. A function that is neither still fails below, which is what makes
       # this a list of exemptions rather than a list of everything.
       cozy_diag_read | _talos_image_cache_bounded_read) continue ;;
+      _cozy_guard_kubectl) continue ;;
       _cozy_cadvisor_node_stream | _cozy_virt_launcher_listing) continue ;;
       # The canary carries its guard in the body that runs one arm, the way the
       # cAdvisor captures carry theirs in the stream they share, so the sentence
@@ -1690,9 +1703,30 @@ ${carrier}
     echo "found no gated collector at all, so this test checked nothing" >&2
     exit 1
   fi
+  # Only the calls inside the diagnostics block. The same collector may also be
+  # called from elsewhere in the file -- the exit handler classifies the tenant
+  # HelmReleases on every other failing path -- and such a call belongs to no
+  # phase and has no place in this order. Matched on position rather than
+  # exempted by name, so a second call added INSIDE the block still has to
+  # appear in the list.
+  block=$(grep -n '^cozy_report_node_join_failure()' "$lib" | cut -d: -f1)
+  if [ -z "$block" ]; then
+    echo "expected to find the node-join diagnostics block in $lib" >&2
+    exit 1
+  fi
+  # Bounded at both ends: without the closing brace every collector call below
+  # the block, run_kubernetes_test's included, would be read as inside it.
+  block_end=$(awk -v b="$block" 'NR > b && /^}/ { print NR; exit }' "$lib")
+  if [ -z "$block_end" ]; then
+    echo "expected to find the end of the node-join diagnostics block in $lib" >&2
+    exit 1
+  fi
   expected=
   for entry in $gated; do
+    line=${entry%%:*}
     fn=${entry#*:}
+    [ "$line" -gt "$block" ] || continue
+    [ "$line" -lt "$block_end" ] || continue
     case "$fn" in
       cozy_capture_tenant_worker_cpu_throttle) phrase='worker CPU usage and throttling counters' ;;
       cozy_capture_sandbox_node_cpu_time) phrase='sandbox node CPU time' ;;
@@ -1701,6 +1735,7 @@ ${carrier}
       cozy_capture_tenant_worker_block_io) phrase='worker block IO counters' ;;
       cozy_capture_tenant_serial_console) phrase='serial-console family' ;;
       cozy_capture_tenant_talos) phrase='guest Talos capture' ;;
+      cozy_report_helmrelease_remediation) phrase='HelmRelease remediation footprint' ;;
       talos_image_cache_diagnose) phrase='talos-image-cache diagnosis' ;;
       # Called with the same suffix but not behind the phase gate: it runs ahead
       # of the headline so the console experiment's own failure is named before
