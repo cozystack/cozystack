@@ -24,16 +24,16 @@ Managed TCP Load Balancer Service efficiently utilizes HAProxy for load balancin
 
 ### Application-specific parameters
 
-| Name                             | Description                                                   | Type       | Value   |
-| -------------------------------- | ------------------------------------------------------------- | ---------- | ------- |
-| `httpAndHttps`                   | HTTP and HTTPS configuration.                                 | `object`   | `{}`    |
-| `httpAndHttps.mode`              | Mode for balancer.                                            | `string`   | `tcp`   |
-| `httpAndHttps.targetPorts`       | Target ports configuration.                                   | `object`   | `{}`    |
-| `httpAndHttps.targetPorts.http`  | HTTP port number.                                             | `int`      | `80`    |
-| `httpAndHttps.targetPorts.https` | HTTPS port number.                                            | `int`      | `443`   |
-| `httpAndHttps.endpoints`         | Endpoint addresses list.                                      | `[]string` | `[]`    |
-| `whitelistHTTP`                  | Secure HTTP by whitelisting client networks (default: false). | `bool`     | `false` |
-| `whitelist`                      | List of allowed client networks.                              | `[]string` | `[]`    |
+| Name                             | Description                                                                                               | Type       | Value   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `httpAndHttps`                   | HTTP and HTTPS configuration.                                                                             | `object`   | `{}`    |
+| `httpAndHttps.mode`              | Mode for balancer.                                                                                        | `string`   | `tcp`   |
+| `httpAndHttps.targetPorts`       | Target ports configuration.                                                                               | `object`   | `{}`    |
+| `httpAndHttps.targetPorts.http`  | HTTP port number.                                                                                         | `int`      | `80`    |
+| `httpAndHttps.targetPorts.https` | HTTPS port number.                                                                                        | `int`      | `443`   |
+| `httpAndHttps.endpoints`         | Endpoint addresses list.                                                                                  | `[]string` | `[]`    |
+| `whitelistHTTP`                  | Secure HTTP and HTTPS by whitelisting client networks. Requires a non-empty `whitelist` (default: false). | `bool`     | `false` |
+| `whitelist`                      | List of allowed client networks.                                                                          | `[]string` | `[]`    |
 
 
 ## Parameter examples and reference
