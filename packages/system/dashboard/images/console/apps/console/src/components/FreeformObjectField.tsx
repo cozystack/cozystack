@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { errorId } from "@rjsf/utils"
 import type { FieldProps } from "@rjsf/utils"
 
 function displayValue(value: unknown) {
@@ -6,13 +7,21 @@ function displayValue(value: unknown) {
 }
 
 export function FreeformObjectField({
-  schema, formData, onChange, idSchema, name, required, readonly, disabled, uiSchema,
+  schema, formData, onChange, idSchema, name, required, readonly, disabled, uiSchema, rawErrors, hideError,
 }: FieldProps) {
   const source = displayValue(formData)
   const [draft, setDraft] = useState<{ source: string, text: string } | null>(null)
   const value = draft?.source === source ? draft.text : source
   const invalid = typeof formData === "string"
+  // A parsed object can still fail the schema, and RJSF lists those errors
+  // under the field template rather than here.
+  const hasSchemaErrors = Boolean(rawErrors?.length)
   const helpId = `${idSchema.$id}__json_help`
+  const describedBy = [
+    helpId,
+    ...(uiSchema?.["ui:help"] ? [`${idSchema.$id}__help`] : []),
+    ...(hasSchemaErrors && !hideError ? [errorId(idSchema)] : []),
+  ].join(" ")
 
   return (
     <div className="form-group field">
@@ -28,8 +37,8 @@ export function FreeformObjectField({
         readOnly={readonly}
         disabled={disabled}
         spellCheck={false}
-        aria-invalid={invalid}
-        aria-describedby={uiSchema?.["ui:help"] ? `${helpId} ${idSchema.$id}__help` : helpId}
+        aria-invalid={invalid || hasSchemaErrors}
+        aria-describedby={describedBy}
         className="w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:opacity-50"
         onChange={(event) => {
           const text = event.target.value

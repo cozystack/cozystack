@@ -1,7 +1,9 @@
 import { createRef, useState } from "react"
 import { describe, it, expect, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import type { FieldProps } from "@rjsf/utils"
 import { SchemaForm, type SchemaFormHandle } from "./SchemaForm.tsx"
+import { FreeformObjectField } from "./FreeformObjectField.tsx"
 import { IMMUTABLE_HELP_TEXT } from "../lib/immutable-paths.ts"
 
 const schema = {
@@ -73,6 +75,42 @@ describe("free-form object editing", () => {
     setup({ settings: { enabled: true } }, { type: "object", properties: { settings: { type: "object", additionalProperties: true, "x-kubernetes-validations": [{ rule: "self == oldSelf" }] } } }, "enforce")
     expect(screen.getByLabelText("settings")).toBeDisabled()
     expect(screen.getByText(IMMUTABLE_HELP_TEXT)).toBeInTheDocument()
+  })
+
+  it("marks a valid JSON object that fails the schema as invalid and points at its errors", () => {
+    const { validate } = setup({ settings: {} }, { type: "object", properties: { settings: { type: "object", additionalProperties: true, minProperties: 1 } } })
+    const field = screen.getByLabelText("settings")
+    expect(field).toHaveAttribute("aria-invalid", "false")
+    expect(validate()).toBe(false)
+    expect(field).toHaveAttribute("aria-invalid", "true")
+    expect(field.getAttribute("aria-describedby")!.split(" ")).toContain("root_settings__error")
+    expect(document.getElementById("root_settings__error")).toBeInTheDocument()
+    expect(screen.queryByText("Enter a valid JSON object.")).not.toBeInTheDocument()
+    fireEvent.change(field, { target: { value: '{"enabled":true}' } })
+    expect(validate()).toBe(true)
+    expect(field).toHaveAttribute("aria-invalid", "false")
+    expect(field.getAttribute("aria-describedby")!.split(" ")).not.toContain("root_settings__error")
+  })
+
+  it("does not point at an error list that hideError keeps from rendering", () => {
+    const props = {
+      schema: { type: "object", additionalProperties: true },
+      formData: {},
+      onChange: vi.fn(),
+      idSchema: { $id: "root_settings" },
+      name: "settings",
+      required: false,
+      readonly: false,
+      disabled: false,
+      uiSchema: {},
+      rawErrors: ["must NOT have fewer than 1 properties"],
+      hideError: true,
+      registry: {},
+    } as unknown as FieldProps
+    render(<FreeformObjectField {...props} />)
+    const field = screen.getByLabelText("settings")
+    expect(field).toHaveAttribute("aria-invalid", "true")
+    expect(field.getAttribute("aria-describedby")!.split(" ")).not.toContain("root_settings__error")
   })
 
   it("reaches free-form objects nested in arrays", () => {
