@@ -353,5 +353,47 @@ variants and opt-in on the slim ones. */}}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
+{{- /* The vendored chart bakes the cluster domain into the proxy config-endpoint
+       URL (its own fallback is cluster.local) and subchart values cannot read
+       _cluster.cluster-domain, so networking.clusterDomain is threaded in through
+       the Package's component values. The tunnel ID the operator sets on the
+       same Package (gatewayClassConfig.tunnelID) is a sibling key the
+       platform never renders, and neither apply path removes it. Under
+       server-side apply, helm-controller's default for a fresh install and
+       kept on upgrade, the key belongs to the operator's field manager. On a
+       client-side upgrade Helm patches a custom resource with a JSON merge
+       patch computed from the previous and the new rendered manifest, so a
+       key that appears in neither is never touched. */ -}}
+{{- /* The clusterDomain key is carried only when it holds a domain. An empty
+       value is still an override and beats the package's own cozy.local
+       default: the vendored chart emits --cluster-domain only for a non-empty
+       value and falls back to cluster.local in the proxy config-endpoint URL,
+       which resolves nowhere here and reports nothing.
+
+       The enclosing controller map is rendered either way. On a client-side
+       release, dropping it would remove a key this release rendered before,
+       and that merge patch deletes such a key from the live object, taking
+       the operator's sibling tunnelID with it if the path collapses far
+       enough up. */ -}}
+{{- $cfTunnelController := dict -}}
+{{- with dig "clusterDomain" "" (default (dict) .Values.networking) }}
+{{- $cfTunnelController = dict "clusterDomain" . -}}
+{{- end }}
+{{- $cfTunnelComponents := dict "cloudflare-tunnel-gateway-controller" (dict "values" (dict "cloudflare-tunnel-gateway-controller" (dict "controller" $cfTunnelController))) -}}
+{{- /* Disable hazard guard, the same shape as the ouroboros one above.
+       helm.sh/resource-policy: keep means that taking the name out of
+       enabledPackages (or vetoing it through disabledPackages) stops
+       rendering the Package and deletes nothing: the controller keeps its
+       cluster-wide Secret read and Deployment write on a cluster whose
+       values say it is off. No acknowledgement flag is needed to get past
+       it, because deleting the Package is the exit: the next render's
+       lookup comes back empty. lookup is also empty under helm template
+       and dry-run, so CI and fresh installs never trip it. */ -}}
+{{- $cfTunnelName := "cozystack.cloudflare-tunnel-gateway-controller" -}}
+{{- $cfTunnelRendered := and (has $cfTunnelName (default (list) .Values.bundles.enabledPackages)) (not (has $cfTunnelName (default (list) .Values.bundles.disabledPackages))) -}}
+{{- if and (not $cfTunnelRendered) (lookup "cozystack.io/v1alpha1" "Package" "" $cfTunnelName) -}}
+{{- fail (printf "%s is no longer rendered (it is missing from bundles.enabledPackages or listed in bundles.disabledPackages), but its Package still exists on the cluster. helm.sh/resource-policy: keep leaves that Package, its HelmRelease and the controller's cluster-wide RBAC running. Either list it in bundles.enabledPackages again, or remove it: delete every Gateway on the cloudflare-tunnel class first (the controller is the only thing that clears the GatewayClass finalizer), then `kubectl delete package.cozystack.io %s`; the next platform reconcile then renders cleanly." $cfTunnelName $cfTunnelName) -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list $cfTunnelName $ $cfTunnelComponents) }}
 
 {{- end }}
