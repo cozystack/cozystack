@@ -10,7 +10,7 @@ assignees: ''
 Read CONTRIBUTOR_LADDER.md before filing: it defines both roles, their requirements, the privileges that come with them, and how each promotion is approved.
 
 Who may open this issue:
-- Reviewer: anyone, including a self-nomination.
+- Reviewer: anyone who can make the case; the ladder does not restrict who nominates.
 - Maintainer: a current Maintainer, and the nominee must be a current Reviewer.
 
 This issue collects the discussion. The formal step is a separate pull request, opened once there is support for it. Delete the sections that do not apply to the proposed role.
@@ -23,7 +23,7 @@ This issue collects the discussion. The formal step is a separate pull request, 
 - **Affiliation:**
 - **Proposed role:** Reviewer / Maintainer
 - **Area** (Reviewer only — the directories or component this covers):
-- **Sponsors** (Reviewer only — two current Reviewers or Maintainers): @, @
+- **Sponsors** (two current Reviewers or Maintainers; for a Maintainer nomination, the sponsors of their Reviewer promotion): @, @
 
 ## Why
 
@@ -44,7 +44,8 @@ Reviewer:
 - [ ] Has reviewed, or helped review, at least 20 pull requests
 - [ ] Two sponsors who are themselves Reviewers or Maintainers, at least one of whom does not work for the same employer
 - [ ] In-depth knowledge of the area, including having analysed and resolved test failures there
-- [ ] Supportive of new and occasional contributors
+- [ ] Commits to being responsible for that area
+- [ ] Supportive of new and occasional contributors, and helps get useful PRs in shape to commit
 
 Maintainer (in addition to the Reviewer requirements):
 
@@ -58,14 +59,14 @@ Maintainer (in addition to the Reviewer requirements):
 
 **Reviewer.** The promotion is approved on the pull request: at least two members of the team that owns the repository or directory, who are already Approvers, approve it (`CONTRIBUTOR_LADDER.md`).
 
-**Maintainer.** Current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md), vote in a comment on this issue with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed. The vote is the discussion; the decision is the promotion pull request, which a majority of the current maintainers must approve (`CONTRIBUTOR_LADDER.md`). By established practice (#2343, #2344) the vote stays open for **5 calendar days**, or until a majority of current maintainers have voted, whichever comes first.
+**Maintainer.** Current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md), vote in a comment on this issue with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed. The vote is the discussion; the decision is the promotion pull request, which a majority of the current maintainers must approve (`CONTRIBUTOR_LADDER.md`). As in #2343 and #2344, the vote stays open for **5 calendar days**, or until a majority of current maintainers have voted, whichever comes first.
 
-## Next steps once approved
+## Next steps once there is support
 
 Reviewer:
 
 1. Open the pull request adding the nominee to `.github/CODEOWNERS` for their area and to the Reviewers section of `MAINTAINERS.md`, and link it here.
-2. Once it is merged, grant the GitHub permissions the role requires and close this issue.
+2. Grant the nominee write access before the pull request is merged: a `CODEOWNERS` entry for a handle without write access is silently ignored. Once it is merged, close this issue.
 
 Maintainer:
 
