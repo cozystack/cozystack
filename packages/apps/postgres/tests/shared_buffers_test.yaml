@@ -1,9 +1,9 @@
-suite: shared_buffers default follows the memory limit
+suite: shared_buffers default follows the memory limit and request
 
 # PostgreSQL's built-in shared_buffers default is 128MB regardless of the
 # container. Below a 512Mi memory limit the chart defaults it to a quarter of
-# the limit, at least 16MB. From 512Mi up nothing is rendered, so those
-# instances keep the PostgreSQL default exactly as before.
+# the limit with a 16MB floor, capped at the memory request. From 512Mi up
+# nothing is rendered, so those instances keep the PostgreSQL default.
 
 templates:
   - templates/db.yaml
@@ -140,3 +140,111 @@ tests:
       - equal:
           path: spec.postgresql.parameters.max_wal_senders
           value: "30"
+
+  - it: "the default preset caps shared_buffers below a fractional memory request"
+    set:
+      _cluster:
+        memory-allocation-ratio: "5"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.requests.memory
+          value: "53687091"
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "51MB"
+
+  - it: "t1.nano caps shared_buffers at the memory request with overcommit"
+    set:
+      resourcesPreset: t1.nano
+      _cluster:
+        memory-allocation-ratio: "5"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.requests.memory
+          value: "26843545"
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "25MB"
+
+  - it: "a request equal to a quarter of the limit keeps the quarter"
+    set:
+      resourcesPreset: t1.nano
+      _cluster:
+        memory-allocation-ratio: "4"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.requests.memory
+          value: "33554432"
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "32MB"
+
+  - it: "a memory request below 16Mi takes precedence over the floor"
+    set:
+      resources:
+        memory: 60Mi
+      _cluster:
+        memory-allocation-ratio: "4"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.requests.memory
+          value: "15728640"
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "15MB"
+
+  - it: "an explicit memory limit uses its rendered request for the cap"
+    set:
+      resources:
+        memory: 500Mi
+      _cluster:
+        memory-allocation-ratio: "5"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.requests.memory
+          value: "104857600"
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "100MB"
+
+  - it: "an explicit shared_buffers still wins when memory is overcommitted"
+    set:
+      _cluster:
+        memory-allocation-ratio: "5"
+      postgresql:
+        parameters:
+          shared_buffers: "40MB"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.shared_buffers
+          value: "40MB"
+
+  - it: "512Mi still renders no default when memory is overcommitted"
+    set:
+      resourcesPreset: t1.small
+      _cluster:
+        memory-allocation-ratio: "5"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.postgresql.parameters.shared_buffers

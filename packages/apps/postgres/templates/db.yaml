@@ -212,8 +212,10 @@ spec:
         the default preset. A small or idle database never fills it, but a
         dump, index scans over a large table or a replica catching up after a
         failover can, and then the OOM killer takes the instance. Below 512Mi
-        the default is therefore a quarter of the memory limit, never under
-        16MB. From 512Mi up a quarter is at least 128MB, so nothing is
+        the default is therefore a quarter of the memory limit with a 16MB
+        floor, capped at the memory request: CloudNativePG rejects a Cluster
+        whose shared_buffers exceeds that request. From 512Mi up a quarter
+        is at least 128MB, so nothing is
         rendered and PostgreSQL keeps its own default as before. An explicit
         shared_buffers in postgresql.parameters still wins. The limit is read
         through the same cozy-lib helper that fills spec.resources, so presets
@@ -224,7 +226,8 @@ spec:
       {{- /* 4194304 is 4Mi, so bytes divided by it is a quarter of the limit in MiB. PostgreSQL reads MB as MiB. */}}
       {{- $quarterMi := div (include "cozy-lib.resources.toFloat" . | float64 | int64) 4194304 }}
       {{- if lt $quarterMi 128 }}
-      {{- $_ := set $defaults "shared_buffers" (printf "%dMB" (max 16 $quarterMi)) }}
+      {{- $requestMi := div (include "cozy-lib.resources.toFloat" $resources.requests.memory | float64 | int64) 1048576 }}
+      {{- $_ := set $defaults "shared_buffers" (printf "%dMB" (min $requestMi (max 16 $quarterMi))) }}
       {{- end }}
       {{- end }}
       {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
