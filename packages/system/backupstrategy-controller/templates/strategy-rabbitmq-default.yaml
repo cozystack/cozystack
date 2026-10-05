@@ -96,9 +96,6 @@ spec:
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
               value: {{ .Values.backupStorage.forcePathStyle | quote }}
-          # command is load-bearing: the reused platform-migrations image's
-          # ENTRYPOINT is run-migrations.sh. See rabbitmqBackupClientImage in
-          # ../values.yaml.
           command: ["/bin/sh", "-c"]
           args:
             - |

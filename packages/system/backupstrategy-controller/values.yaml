@@ -1,54 +1,16 @@
 backupStrategyController:
   image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0@sha256:e8bf0521d1d1d8b90ebe66e9013010887033ba2653901799d57f2df47c9d879e"
-  # chBackupClientImage is the image rendered into the Altinity strategy
-  # Pod: it drives clickhouse-backup's HTTP API via curl + jq.
-  #
-  # WORKAROUND — platform-migrations is the wrong image for this job and
-  # should be replaced by a dedicated one (see the TODO below). It is
-  # reused here only because it happens to bundle curl + jq, and this
-  # release could not absorb a new image. What that reuse actually costs:
-  #   - the strategy script needs exactly curl, jq, sleep and date, yet
-  #     this image is 349 MB carrying kubectl, helm, git, cozyhr and the
-  #     etcd-migrate binary into a tenant-adjacent backup Pod;
-  #   - its ENTRYPOINT is run-migrations.sh, so only the `command:`
-  #     override in strategy-altinity-default.yaml stands between this Pod
-  #     and running platform migrations with kubectl and helm on the PATH;
-  #   - it couples the backup client to migrations: bumping
-  #     ETCD_OPERATOR_VERSION or editing any migration script re-digests
-  #     this image, forcing this pin to move for reasons that have nothing
-  #     to do with backups. That coupling is what broke — see below.
-  #
-  # TODO: replace with a dedicated ch-backup-client image built by THIS
-  # package's own Makefile (alpine + curl + jq + ca-certificates measures
-  # 23 MB, 15x smaller). That also removes the cross-package stamp
-  # entirely, because the pin would then be produced by the package that
-  # owns it. The often-cited objection — "a second tag release CI must
-  # re-digest each cut" — is not the real cost: every other first-party
-  # image already pays it, automatically. The real defect was a pin with
-  # NO producer, which a package-owned image cannot reproduce.
-  #
-  # DO NOT hand-edit: packages/core/platform/Makefile stamps this key with
-  # the same ref it writes to .migrations.image there, so the two stay in
-  # lockstep by construction. They previously did not — this key had no
-  # producer at all and froze at v1.4.0-rc.2 while the other advanced to
-  # v1.5.0. Two digests under one repository means a promotion tries to
-  # retag both to the same stable tag, and the write-once guard in
-  # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
-  # asserts no repository is pinned at more than one digest.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
-  # rabbitmqBackupClientImage is the image rendered into the RabbitMQ Job
-  # strategy (strategy-rabbitmq-default.yaml): its script needs only curl +
-  # ca-certificates to call the RabbitMQ management API and push the
-  # definitions export to S3 (curl --aws-sigv4). It is a distinct key from
-  # chBackupClientImage so the RabbitMQ strategy carries its own upgrade
-  # cadence, but it reuses the same platform-migrations image for now — hence
-  # it is stamped in lockstep with the two keys above (packages/core/platform/
-  # Makefile), so the repository stays pinned at a single digest
-  # (hack/image-pin-consistency.bats). Same TODO applies: replace with a
-  # dedicated alpine + curl + ca-certificates image built by this package's
-  # Makefile, which also lets this pin move on its own.
-  # DO NOT hand-edit: stamped by packages/core/platform/Makefile.
-  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  # chBackupClientImage is rendered into the Altinity strategy Pod, which drives
+  # clickhouse-backup's HTTP API with curl + jq. rabbitmqBackupClientImage is
+  # rendered into the RabbitMQ strategy Pod, which calls the management API and
+  # moves the definitions export to S3 with curl --aws-sigv4. Both run the
+  # images/backup-http-client/ image (alpine + curl + jq + ca-certificates) and
+  # must hold the same ref: one repository pinned at two digests fails the
+  # release promotion (hack/image-pin-consistency.bats). They are separate keys
+  # so either strategy can move to its own image later.
+  # DO NOT hand-edit: `make image` stamps both.
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.6.0"
+  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.6.0"
   # redisBackupClientImage is rendered into the Redis strategy Pod. The
   # spotahome operator ships no backup CRD, so the strategy runs a one-shot Job
   # that dumps an RDB snapshot to S3 and, on restore, loads it into a throwaway
@@ -76,8 +38,7 @@ backupStrategyController:
       memory: 1Gi
       ephemeral-storage: 4Gi
   # The Kafka metadata strategy carries no client image here: unlike the Altinity
-  # and RabbitMQ drivers (curl-only, so a shared platform-migrations image works),
-  # its driver runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which
+  # and RabbitMQ drivers, which need only curl and jq, its driver runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which
   # only the Strimzi broker image ships. So the controller resolves the image from
   # the target Kafka broker at reconcile time (strategy-kafka-default.yaml renders
   # the container image as the "{{ .ClientImage }}" placeholder), and records it on
