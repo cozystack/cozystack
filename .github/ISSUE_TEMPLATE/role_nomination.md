@@ -58,7 +58,7 @@ Maintainer (in addition to the Reviewer requirements):
 
 **Reviewer.** The promotion is approved on the pull request: at least two members of the team that owns the repository or directory, who are already Approvers, approve it (`CONTRIBUTOR_LADDER.md`).
 
-**Maintainer.** Current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md), vote in a comment with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed. Passing requires a majority of the current maintainers (`CONTRIBUTOR_LADDER.md`). By established practice (#2343, #2344) the vote stays open for **5 calendar days**, or until a majority of current maintainers have voted, whichever comes first.
+**Maintainer.** Current maintainers, listed in [MAINTAINERS.md](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md), vote in a comment on this issue with `+1` (approve), `0` (abstain) or `-1` (do not approve). A `-1` should come with a short reason, so the concern can be addressed. The vote is the discussion; the decision is the promotion pull request, which a majority of the current maintainers must approve (`CONTRIBUTOR_LADDER.md`). By established practice (#2343, #2344) the vote stays open for **5 calendar days**, or until a majority of current maintainers have voted, whichever comes first.
 
 ## Next steps once approved
 
