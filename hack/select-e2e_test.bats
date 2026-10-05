@@ -31,7 +31,7 @@
 # expanded, but not which side is which, and reading a whole-tree diff off a trace
 # line is exactly the moment a test stops being worth having.
 full_suite_list() {
-    find hack/e2e-chainsaw -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
+    find hack/e2e-chainsaw -mindepth 2 \( -not -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \
       | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' \
       | sort -u | paste -sd ' ' -
 }
