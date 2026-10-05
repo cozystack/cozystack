@@ -19,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -50,9 +51,11 @@ type RestoreJobReconciler struct {
 	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
 	// APIReader is the manager's uncached reader. Reconcile re-reads the
-	// RestoreJob through it before dispatching to a driver, and the
+	// RestoreJob through it before dispatching to a driver, the
 	// keepOriginalPVC rename reads back objects it has just written, which
-	// the cache may not have seen yet. Wired in SetupWithManager.
+	// the cache may not have seen yet, and the concurrent-restore gate must
+	// see a peer's StartedAt before the cache does. Wired in
+	// SetupWithManager.
 	APIReader client.Reader
 }
 
@@ -154,6 +157,19 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// Only a job that has not started yet is refused, so a restore already
+	// rewriting the application is never failed by one created after it.
+	if !restoreJobStarted(restoreJob) {
+		ahead, err := restoreAhead(ctx, r.apiReader(), r.Client, restoreJob)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if ahead != "" {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, ConditionReasonConcurrentRestore, fmt.Sprintf(
+				"RestoreJob %s is already restoring the same application; wait for it to finish, then create a new RestoreJob", ahead))
+		}
+	}
+
 	// Step 3: Project the platform-managed S3 credentials into the tenant
 	// namespace so default Strategy CRs (re-rendered at restore time) can
 	// reference a deterministic Secret name. Idempotent / no-op when
@@ -213,6 +229,10 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.RestoreJob{}).
+		// One worker: restoreAhead lets exactly one of two concurrent restores
+		// through only because a peer's StartedAt, written by an earlier
+		// reconcile, is already on the API server when the next one reads.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }
 
