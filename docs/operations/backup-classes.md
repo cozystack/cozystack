@@ -375,6 +375,8 @@ spec:
     name: orders-db
 ```
 
+An application takes one restore at a time. A RestoreJob that targets an application another unfinished RestoreJob is already restoring fails with reason `ConcurrentRestore` before it changes anything, and its message names the job that goes first. It is not queued: once that job has finished, create a new RestoreJob if the restore is still wanted. A restore that has started always goes first. Between two that have not, the older one runs; creation times have one-second precision, so of two created in the same second, the one whose name sorts first runs.
+
 ## Point-in-time recovery (PostgreSQL)
 
 A `RestoreJob` restores a `Postgres` application from a `Backup`. Omit `spec.options.recoveryTime` to recover to the latest point in the WAL archive; set it (RFC3339) to recover the database to an exact instant — a point-in-time recovery (PITR). The CNPG barman-cloud plugin restores a base backup and replays archived WAL from it: up to `recoveryTime` when one is set, so the restored cluster reflects the database as of that instant and later writes are absent, and to the end of the archive otherwise.
@@ -441,7 +443,7 @@ Recovery follows `recovery_target_timeline: latest`, which CNPG leaves as Postgr
 
 ### Idempotency under GitOps
 
-An in-progress restore is safe to reconcile. The driver purges the target `Cluster` + PVCs exactly once per RestoreJob (guarded by the `TargetPurged` condition and a freshly-recovered check), suspends the target's HelmRelease across the purge so Flux cannot race the bootstrap swap, and resumes it once the recovery cluster is rendered. A Flux reconcile (or a controller restart) mid-restore therefore re-attaches to the recovering cluster rather than deleting it and starting over.
+An in-progress restore is safe to reconcile. The driver purges the target `Cluster` + PVCs exactly once per RestoreJob (guarded by the `TargetPurged` condition and by the `postgres.cozystack.io/restored-server-name` annotation, which identifies the RestoreJob whose purge produced the live recovery `Cluster`), suspends the target's HelmRelease across the purge so Flux cannot race the bootstrap swap, and resumes it once the recovery cluster is rendered. A Flux reconcile (or a controller restart) mid-restore therefore re-attaches to the recovering cluster rather than deleting it and starting over.
 
 ## Kafka: topic metadata only
 
