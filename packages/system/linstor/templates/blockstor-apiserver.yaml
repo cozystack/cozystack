@@ -9,20 +9,42 @@ metadata:
   name: blockstor-apiserver
   namespace: {{ .Release.Namespace }}
 ---
-# CRUD on the blockstor.io CRDs + Secrets for the encryption-passphrase
-# path. No status / finalizers / events / leases (REST handlers don't
-# write those).
+# CRUD on the blockstor.io CRDs, named rather than wildcarded so a kind
+# added to the group later is not granted by omission. No finalizers,
+# events or leases: the REST handlers do not write those.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: blockstor-apiserver
 rules:
   - apiGroups: [blockstor.cozystack.io]
-    resources: ["*"]
+    resources:
+      - controllerconfigs
+      - controllerconfigs/status
+      - nodes
+      - nodes/status
+      - physicaldevices
+      - physicaldevices/status
+      - resourcedefinitions
+      - resourcedefinitions/status
+      - resourcegroups
+      - resourcegroups/status
+      - resources
+      - resources/status
+      - snapshots
+      - snapshots/status
+      - storagepools
+      - storagepools/status
     verbs: [get, list, watch, create, update, patch, delete]
+  # Read-only, and cluster-wide only because the apiserver reads the
+  # passphrase Secret through controller-runtime's default cached client,
+  # whose informer lists and watches Secrets at cluster scope. Narrowing
+  # this needs the binary to scope its Secret cache to its own namespace;
+  # until then a namespaced Role here would leave that informer forbidden
+  # and every passphrase read hanging.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch, create, update, patch]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -32,6 +54,34 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: blockstor-apiserver
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-apiserver
+    namespace: {{ .Release.Namespace }}
+---
+# Writes to Secrets stay in this namespace: the only Secret the apiserver
+# writes is the encryption passphrase, `encryption create-passphrase` and
+# `modify-passphrase`, and it always lives here. A cluster-wide write
+# grant would let this ServiceAccount rewrite any tenant's credentials.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: blockstor-apiserver-secrets
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: blockstor-apiserver-secrets
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: blockstor-apiserver-secrets
 subjects:
   - kind: ServiceAccount
     name: blockstor-apiserver
