@@ -74,22 +74,15 @@ spec:
     - blockstor-apiserver.cozy-linstor
     - blockstor-apiserver.cozy-linstor.svc
     - blockstor-apiserver.cozy-linstor.svc.cluster.local
-    # External-mode compat: the linstor-scheduler/gui packages dial the
-    # apiserver through the linstor-controller Service alias (see
-    # linstor-compat.yaml), so the serving cert must carry these SANs
-    # for their mTLS verification to pass.
-    - linstor-controller.cozy-linstor.svc
-    - linstor-controller.cozy-linstor.svc.cluster.local
   issuerRef:
     name: blockstor-api-ca
     kind: Issuer
 ---
-# Client certificate for in-cluster consumers (blockstor's own Go
-# clients, the `linstor` CLI). Mounted into the consuming pods and
-# presented to the apiserver's RequireAndVerifyClientCert listener.
-# linstor-csi gets its OWN client cert from the operator via
-# LinstorCluster.spec.apiTLS (issued from blockstor-api-ca) — this one
-# is for direct CLI / debug access.
+# Client certificate for in-cluster consumers: piraeus-operator's own
+# API probe, linstor-scheduler and linstor-gui (the platform points both
+# here under this backend), and the `linstor` CLI. Presented to the
+# apiserver's RequireAndVerifyClientCert listener. linstor-csi gets its
+# own client cert from the operator via LinstorCluster.spec.apiTLS.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

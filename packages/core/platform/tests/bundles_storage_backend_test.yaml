@@ -75,3 +75,71 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'storage.backend must be "linstor" or "blockstor", got "blockstore"'
+
+  # Under linstor the API consumers keep their chart defaults, which name the
+  # objects piraeus-operator creates. Under blockstor piraeus runs external and
+  # the linstor package must not render objects under piraeus's names, which
+  # Helm refuses to adopt, so the consumers are pointed at blockstor's own.
+  - it: leaves the linstor-scheduler on its defaults under linstor
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: points the linstor-scheduler at blockstor-apiserver under blockstor
+    set:
+      storage:
+        backend: blockstor
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - equal:
+          path: spec.components.linstor-scheduler.values.linstor-scheduler.linstor
+          value:
+            endpoint: https://blockstor-apiserver.cozy-linstor.svc:3371
+            clientSecret: blockstor-apiserver-client-tls
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: points linstor-gui at blockstor-apiserver under blockstor
+    set:
+      storage:
+        backend: blockstor
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages: [cozystack.linstor-gui]
+    asserts:
+      - equal:
+          path: spec.components.linstor-gui.values.linstor
+          value:
+            endpoint: https://blockstor-apiserver.cozy-linstor.svc:3371
+            clientSecret: blockstor-apiserver-client-tls
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-gui
+
+  - it: leaves linstor-gui on its defaults under linstor
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages: [cozystack.linstor-gui]
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-gui

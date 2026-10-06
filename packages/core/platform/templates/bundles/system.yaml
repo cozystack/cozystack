@@ -349,7 +349,12 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.keda" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
+{{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" }}
+{{- $guiComponents := dict "linstor-gui" (dict "values" (dict "linstor" (include "cozystack.platform.storage.linstorApiClient" $ | fromYaml))) -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $ $guiComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
+{{- end }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
