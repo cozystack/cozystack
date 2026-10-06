@@ -1,0 +1,90 @@
+suite: storage backend selection
+
+# The backend is opt-in and defaults to LINSTOR. That default is what every
+# existing cluster runs, so a change that quietly flipped it would swap the
+# storage control plane under live data on the next reconcile. These tests
+# pin the default and prove each backend renders only its own control plane.
+
+release:
+  name: linstor
+  namespace: cozy-linstor
+
+tests:
+  - it: "defaults to the LINSTOR backend"
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: LinstorCluster
+      # The operator runs its own in-cluster controller: no external URL.
+      - notExists:
+          path: spec.externalController
+
+  - it: "renders no blockstor control plane by default"
+    templates:
+      - templates/blockstor-controller.yaml
+      - templates/blockstor-apiserver.yaml
+      - templates/blockstor-satellite.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "renders no blockstor CRDs by default"
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "renders no LINSTOR-controller satellite configuration on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-cozy.yaml
+      - templates/satellites-plunger.yaml
+      - templates/satellites-reloader.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The Talos patch is NOT one of those. piraeus-operator still creates
+  # linstor-satellite.<node> DaemonSets in external mode, and on Talos
+  # they wedge at Init:0/3 without it — the hostPath /run/systemd/system
+  # does not exist there — which then churns linstor-csi-node and blocks
+  # every PVC attach while every HelmRelease still reports Ready.
+  - it: "patches the satellite for Talos under both backends"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+
+  - it: "patches the satellite for Talos on the LINSTOR backend too"
+    set:
+      backend: linstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+
+  - it: "ships the blockstor CRDs on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 8
+      - isKind:
+          of: CustomResourceDefinition
