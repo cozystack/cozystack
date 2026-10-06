@@ -109,3 +109,44 @@
     return 1
   fi
 }
+
+@test "the linstor default leaves the platform Package without a storage block" {
+  manifest=$(hack/e2e-platform-packages.sh)
+  if printf '%s\n' "$manifest" | grep -q '^        storage:'; then
+    echo "the default install names a storage backend it never used to" >&2
+    return 1
+  fi
+}
+
+@test "blockstor reaches the platform as storage.backend" {
+  manifest=$(COZY_STORAGE_BACKEND=blockstor hack/e2e-platform-packages.sh)
+  backend=$(printf '%s\n' "$manifest" | yq 'select(.metadata.name == "cozystack.cozystack-platform") | .spec.components.platform.values.storage.backend')
+  if [ "$backend" != blockstor ]; then
+    echo "storage.backend is '$backend', want blockstor" >&2
+    return 1
+  fi
+  # The block sits in the values, not inside bundles.
+  bundles=$(printf '%s\n' "$manifest" | yq 'select(.metadata.name == "cozystack.cozystack-platform") | .spec.components.platform.values.bundles | keys | join(",")')
+  if [ "$bundles" != enabledPackages ]; then
+    echo "bundles carries '$bundles'" >&2
+    return 1
+  fi
+}
+
+@test "an unknown storage backend fails before emitting YAML" {
+  if manifest=$(COZY_STORAGE_BACKEND=blokstor hack/e2e-platform-packages.sh); then
+    echo "an unknown backend unexpectedly succeeded" >&2
+    return 1
+  fi
+  if [ -n "$manifest" ]; then
+    echo "an unknown backend emitted a partial manifest" >&2
+    return 1
+  fi
+}
+
+@test "blockstor on the container lane is refused" {
+  if manifest=$(COZY_STORAGE_BACKEND=blockstor COZY_LINSTOR_DRBD_ENABLED=false hack/e2e-platform-packages.sh); then
+    echo "blockstor without a block device unexpectedly succeeded" >&2
+    return 1
+  fi
+}

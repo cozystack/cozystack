@@ -157,7 +157,7 @@ delete-cluster-container:
 # QEMU defaults; the container lane supplies its node endpoint, disables DRBD,
 # and selects local storage because its Talos nodes share one kernel.
 install-cozystack:
-	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_STORAGE_BACKEND="${COZY_STORAGE_BACKEND}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
@@ -173,8 +173,10 @@ test-openapi:
 # reports into that same chainsaw-report.xml.
 # COZY_E2E_STORAGE_CLASS is passed both to script operations and as a Chainsaw
 # value for templated resource files; empty keeps the QEMU default, replicated.
+# COZY_STORAGE_BACKEND reaches the install and the suite alike, so the pool
+# guards read the backend the cluster was installed with; empty is linstor.
 test-chainsaw:
-	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
+	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" -e COZY_STORAGE_BACKEND="${COZY_STORAGE_BACKEND}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
