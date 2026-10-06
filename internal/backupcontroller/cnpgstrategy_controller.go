@@ -541,22 +541,24 @@ func cnpgPurgeNeeded(purgedCondition, liveClusterFreshlyRecovered bool) bool {
 // restore that rendered the Cluster. When the annotation is present, the
 // Cluster is fresh only if it carries wantMark.
 //
-// A Cluster rendered by a chart that predates the annotation has none; it then
-// falls back to the creation-time comparison (created strictly after
-// StartedAt), which still separates a Cluster from an earlier completed restore
-// (created before StartedAt) from this restore's own re-render.
+// A Cluster without the annotation was rendered either by a chart that
+// predates it or from values with no bootstrap.newServerName (a manually
+// configured recovery). It is fresh only if appMark, the application's current
+// bootstrap.newServerName, is wantMark - this restore has patched the values -
+// and it was created strictly after StartedAt, which separates a Cluster from
+// an earlier completed restore from this restore's own re-render.
 //
 // Returns false when freshness cannot be determined (no recovery bootstrap, or
 // a missing timestamp on the fallback path): the caller then purges, which is
 // the safe default.
-func cnpgClusterFreshlyRecovered(state recoveryClusterState, wantMark string, restoreStartedAt *metav1.Time) bool {
+func cnpgClusterFreshlyRecovered(state recoveryClusterState, wantMark, appMark string, restoreStartedAt *metav1.Time) bool {
 	if !state.hasRecovery {
 		return false
 	}
 	if state.restoreMark != "" {
 		return state.restoreMark == wantMark
 	}
-	if state.createdAt == nil || restoreStartedAt == nil {
+	if appMark != wantMark || state.createdAt == nil || restoreStartedAt == nil {
 		return false
 	}
 	return state.createdAt.After(restoreStartedAt.Time)
@@ -1035,7 +1037,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// produced. A recovery Cluster rendered for any other restore still holds
 	// that restore's data, so it must be purged - otherwise a repeat in-place
 	// restore silently no-ops.
-	freshlyRecovered := cnpgClusterFreshlyRecovered(clusterState, restoredServerName(clusterName, restoreJob.UID), restoreJob.Status.StartedAt)
+	freshlyRecovered := cnpgClusterFreshlyRecovered(clusterState, restoredServerName(clusterName, restoreJob.UID), targetApp.Spec.Bootstrap.NewServerName, restoreJob.Status.StartedAt)
 	if cnpgPurgeNeeded(purgedCondition, freshlyRecovered) {
 		// A physical restore only opens on the major version that wrote the
 		// data files. Across majors the recovery pods loop on "database files
