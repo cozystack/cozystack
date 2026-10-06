@@ -15,12 +15,18 @@
 {{- if and $seal.previousSecretName (not $static) }}
 {{- fail "seal.previousSecretName only applies to seal.type \"static\"" }}
 {{- end }}
+{{- if and $seal.previousSecretName (eq $seal.previousSecretName $seal.secretName) }}
+{{- fail "seal.previousSecretName must name a different Secret than seal.secretName" }}
+{{- end }}
+{{- if and $seal.previousKeyId (eq $seal.previousKeyId $seal.keyId) }}
+{{- fail "seal.previousKeyId must differ from seal.keyId" }}
+{{- end }}
 {{- /*
 Refuse a silent seal change on an existing instance. Changing the seal of an
-initialized OpenBAO is a seal migration (`bao operator unseal -migrate`); a
-plain config change instead leaves a barrier nobody can decrypt. The seal in
-use is visible in the config ConfigMap the previous release rendered. `lookup`
-returns nothing on first install and on dry-run, so the check is a no-op there.
+initialized OpenBAO is a seal migration (`bao operator unseal -migrate`), and a
+plain config change leaves an instance that cannot unseal. The seal in use is
+visible in the config ConfigMap the previous release rendered. `lookup` returns
+nothing on first install and on dry-run, so the check is a no-op there.
 */}}
 {{- $cm := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-config" .Release.Name) }}
 {{- if $cm }}
@@ -36,7 +42,7 @@ direction rather than emit a config the migration cannot run against.
 {{- fail "migration from seal.type \"static\" to \"shamir\" is not supported by this chart" }}
 {{- end }}
 {{- if and (ne $liveSeal $seal.type) (not $seal.allowMigration) }}
-{{- fail (printf "seal.type %q differs from the seal in use (%q). Changing the seal of an existing instance is a seal migration (bao operator unseal -migrate); set seal.allowMigration: true only while performing it." $seal.type $liveSeal) }}
+{{- fail (printf "seal.type %q differs from the seal in use (%q). Changing the seal of an existing instance is a seal migration (bao operator unseal -migrate). Set seal.allowMigration: true only while performing it." $seal.type $liveSeal) }}
 {{- end }}
 {{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -93,10 +99,10 @@ spec:
         # The upstream chart mounts each Secret at /openbao/userconfig/<name>/.
         extraVolumes:
           - type: secret
-            name: {{ $seal.secretName }}
+            name: {{ $seal.secretName | quote }}
           {{- with $seal.previousSecretName }}
           - type: secret
-            name: {{ . }}
+            name: {{ . | quote }}
           {{- end }}
         {{- end }}
         {{- if gt (int .Values.replicas) 1 }}

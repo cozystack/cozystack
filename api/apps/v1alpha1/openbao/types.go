@@ -39,7 +39,7 @@ type ConfigSpec struct {
 	// Enable the OpenBAO web UI.
 	// +kubebuilder:default:=true
 	Ui bool `json:"ui"`
-	// Seal configuration. Defaults to Shamir key shares; set `type: static` for auto-unseal.
+	// Seal configuration. The default is Shamir key shares. Set `type: static` for auto-unseal.
 	// +kubebuilder:default:={}
 	Seal Seal `json:"seal"`
 }
@@ -52,22 +52,28 @@ type Resources struct {
 }
 
 type Seal struct {
-	// Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`; set it only while running `bao operator unseal -migrate`, then remove it.
+	// Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`. Set it only while running `bao operator unseal -migrate`, then remove it.
 	// +kubebuilder:default:=false
 	AllowMigration bool `json:"allowMigration,omitempty"`
-	// Permanent identifier of the current key. Change it whenever the key material changes; OpenBAO refuses a key whose identifier it has already seen with different material. Required when `type` is `static`.
+	// Permanent identifier of the current key. OpenBAO stores it with the data the key wraps and picks the key by it, so change it whenever the key material changes. Lowercase alphanumerics, `-`, `.` and `_`, starting and ending with an alphanumeric, because the upstream chart evaluates the server config as a template and rewrites upper case placeholders such as `HOSTNAME` in it. Required when `type` is `static`.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$"
 	KeyId string `json:"keyId"`
-	// Identifier of the previous key. Required when `previousSecretName` is set.
+	// Identifier of the previous key, with the same character constraints as `keyId`. Required when `previousSecretName` is set.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$"
 	PreviousKeyId string `json:"previousKeyId,omitempty"`
-	// Secret holding the previous key during an n-1 key rotation. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`; see the README.
+	// Secret holding the previous key during an n-1 key rotation, with the same name constraints as `secretName`. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`, see the README.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=52
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
 	PreviousSecretName string `json:"previousSecretName,omitempty"`
-	// Existing Secret in the release namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). Required when `type` is `static`.
+	// Existing Secret in the tenant namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). A cluster administrator creates it, because tenant roles cannot create Secrets. Lowercase alphanumerics and hyphens, at most 52 characters, because the pod volume is named `userconfig-<name>` and a volume name is a DNS label. Required when `type` is `static`.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=52
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
 	SecretName string `json:"secretName"`
-	// Seal type. `shamir` keeps the current behaviour; `static` enables auto-unseal from `secretName`.
+	// Seal type. `shamir` keeps the current behaviour, `static` enables auto-unseal from `secretName`.
 	// +kubebuilder:default:="shamir"
 	Type SealType `json:"type"`
 }
