@@ -4,7 +4,6 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -15,9 +14,9 @@ import (
 // was refused because another restore into the same application goes first.
 const ConditionReasonConcurrentRestore = "ConcurrentRestore"
 
-// restoreAhead returns the name of a non-terminal RestoreJob in rj's namespace
-// that writes into the same application as rj and goes before it, or "" when
-// there is none.
+// restoreAhead returns the name of the first non-terminal RestoreJob in rj's
+// namespace that writes into the same application as rj and goes before it,
+// or "" when there is none.
 //
 // Two restores into one application must not interleave: each rewrites the
 // target from its own Backup, and the CNPG driver cannot tell which of them
@@ -42,7 +41,7 @@ func restoreAhead(ctx context.Context, reader client.Reader, c client.Client, rj
 	if err := reader.List(ctx, list, client.InNamespace(rj.Namespace)); err != nil {
 		return "", fmt.Errorf("list RestoreJobs: %w", err)
 	}
-	var ahead []string
+	var first *backupsv1alpha1.RestoreJob
 	for i := range list.Items {
 		other := &list.Items[i]
 		if other.Name == rj.Name {
@@ -58,15 +57,14 @@ func restoreAhead(ctx context.Context, reader client.Reader, c client.Client, rj
 		if err != nil {
 			return "", err
 		}
-		if ok && sameApplication(otherTarget, target) {
-			ahead = append(ahead, other.Name)
+		if ok && sameApplication(otherTarget, target) && (first == nil || restoreGoesFirst(other, first)) {
+			first = other
 		}
 	}
-	if len(ahead) == 0 {
+	if first == nil {
 		return "", nil
 	}
-	sort.Strings(ahead)
-	return ahead[0], nil
+	return first.Name, nil
 }
 
 func restoreJobStarted(rj *backupsv1alpha1.RestoreJob) bool {

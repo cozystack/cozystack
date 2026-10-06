@@ -71,6 +71,27 @@ func TestRestoreAhead(t *testing.T) {
 			want: "second",
 		},
 		{
+			name:   "an older restore goes first even when its name sorts later",
+			self:   restore("alpha", t1, "", nil),
+			others: []client.Object{restore("zeta", t0, "", nil)},
+			want:   "zeta",
+		},
+		{
+			name:   "a newer restore does not go first even when its name sorts earlier",
+			self:   restore("zeta", t0, "", nil),
+			others: []client.Object{restore("alpha", t1, "", nil)},
+			want:   "",
+		},
+		{
+			name: "several ahead: names the one that goes first, not the lowest name",
+			self: restore("self", metav1.NewTime(t1.Add(time.Minute)), "", nil),
+			others: []client.Object{
+				restore("alpha", t1, "", nil),
+				restore("zeta", t0, backupsv1alpha1.RestoreJobPhaseRunning, nil),
+			},
+			want: "zeta",
+		},
+		{
 			name:   "created at the same time: the lower name goes first",
 			self:   restore("b", t0, "", nil),
 			others: []client.Object{restore("a", t0, "", nil)},
