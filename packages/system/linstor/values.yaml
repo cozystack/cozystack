@@ -10,7 +10,8 @@
 # linstor-csi build, so the StorageClasses (provisioner
 # linstor.csi.linbit.com) and every PV bound to them are unchanged by
 # the choice. That is what makes switching an existing cluster a values
-# change rather than a reprovision — see the migration guide.
+# change rather than a reprovision. The migration guide:
+# https://cozystack.io/docs/next/storage/blockstor-migration/
 backend: linstor
 
 piraeusServer:

@@ -39,8 +39,9 @@ migrations:
 #   blockstor — EXPERIMENTAL. A LINSTOR-API-compatible control plane;
 #               the CSI driver, StorageClasses and existing PVs are
 #               unchanged by the choice, so an existing cluster can move
-#               across without reprovisioning. See the migration guide
-#               before switching a cluster that holds data.
+#               across without reprovisioning. Read the migration
+#               guide before switching a cluster that holds data:
+#               https://cozystack.io/docs/next/storage/blockstor-migration/
 #
 # Anything else fails the render rather than defaulting, so a typo
 # cannot quietly deploy the wrong storage control plane.
