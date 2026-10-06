@@ -701,3 +701,159 @@ idle_pool_datasets() {
     return 1
   fi
 }
+
+# The blockstor backend has no controller pod to exec into: the pool guard
+# reads StoragePool objects and lists datasets through blockstor's own
+# satellite. These pin that it does, and that the LINSTOR path is not touched.
+blockstor_storage_pools_json() {
+  printf '%s' '{"items":[
+    {"spec":{"nodeName":"srv1","providerKind":"ZFS_THIN","props":{"StorDriver/ZPoolThin":"data"}},"status":{"freeCapacity":104857600}},
+    {"spec":{"nodeName":"srv1","providerKind":"DISKLESS","props":{}},"status":{}},
+    {"spec":{"nodeName":"srv2","providerKind":"ZFS_THIN","props":{"StorDriver/ZPoolThin":"data"}},"status":{"freeCapacity":'"${1:-104857600}"'}},
+    {"spec":{"nodeName":"srv3","providerKind":"ZFS_THIN","props":{"StorDriver/ZPoolThin":"data"}},"status":{"freeCapacity":104857600}}
+  ]}'
+}
+
+@test "the blockstor pool floor is read from StoragePool objects, not a controller" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_STORAGE_BACKEND=blockstor
+  calls="_out/tmp/blockstor-calls-$$"
+  mkdir -p _out/tmp
+  : >"$calls"
+  kubectl() {
+    printf '%s\n' "$*" >>"$calls"
+    case "$*" in
+      'get storagepools.blockstor.cozystack.io '*-o\ json*) blockstor_storage_pools_json ;;
+      *) return 1 ;;
+    esac
+  }
+  fake_linstor_clock
+
+  rc=0
+  output=$(cozy_wait_linstor_pool_free 90 300 2>&1) || rc=$?
+  rm -f "$clock_file"
+  unset COZY_STORAGE_BACKEND
+
+  if [ "$rc" -ne 0 ]; then
+    echo "the blockstor floor failed on pools that all hold 100 GiB: $output" >&2
+    return 1
+  fi
+  if grep -q 'linstor-controller' "$calls"; then
+    echo "the blockstor floor reached for the LINSTOR controller" >&2
+    return 1
+  fi
+  rm -f "$calls"
+}
+
+@test "a blockstor pool below the floor fails the guard and names the node" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_STORAGE_BACKEND=blockstor
+  kubectl() {
+    case "$*" in
+      'get storagepools.blockstor.cozystack.io '*-o\ json*) blockstor_storage_pools_json 87127923 ;;
+      *) printf 'STUB-POOL-TABLE\n' ;;
+    esac
+  }
+  fake_linstor_clock
+
+  rc=0
+  output=$(cozy_wait_linstor_pool_free 90 300 2>&1) || rc=$?
+  rm -f "$clock_file"
+  unset COZY_STORAGE_BACKEND
+
+  if [ "$rc" -eq 0 ]; then
+    echo "the blockstor floor passed with srv2 at 83 GiB" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$output" | grep -q '87127923 KiB on srv2'; then
+    echo "the blockstor floor failure does not name the short node: $output" >&2
+    return 1
+  fi
+}
+
+@test "a pool read that fails is told apart from a full pool" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_STORAGE_BACKEND=blockstor
+  kubectl() {
+    case "$*" in
+      'get storagepools.blockstor.cozystack.io '*-o\ json*)
+        echo 'Error from server (Forbidden): storagepools is forbidden' >&2
+        return 1 ;;
+    esac
+  }
+  fake_linstor_clock
+
+  rc=0
+  output=$(cozy_wait_linstor_pool_free 90 300 2>&1) || rc=$?
+  rm -f "$clock_file"
+  unset COZY_STORAGE_BACKEND
+
+  if [ "$rc" -eq 0 ]; then
+    echo "the floor passed on a read that failed" >&2
+    return 1
+  fi
+  if printf '%s\n' "$output" | grep -q 'last read exited 0'; then
+    echo "a failed read was reported as a successful one: $output" >&2
+    return 1
+  fi
+}
+
+@test "the blockstor dataset listing goes through blockstor's satellite" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_STORAGE_BACKEND=blockstor
+  calls="_out/tmp/blockstor-calls-$$"
+  mkdir -p _out/tmp
+  : >"$calls"
+  kubectl() {
+    printf '%s\n' "$*" >>"$calls"
+    case "$*" in
+      'get storagepools.blockstor.cozystack.io '*) blockstor_storage_pools_json ;;
+      *'-l app=blockstor-satellite'*)
+        printf 'srv1 blockstor-satellite-a\nsrv2 blockstor-satellite-b\nsrv3 blockstor-satellite-c\n' ;;
+      *'--container=satellite -- zfs list'*) printf 'data\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  timeout() {
+    [ "${1:-}" = -k ] && [ "${3:-0}" -gt 0 ] || return 97
+    shift 3
+    "$@"
+  }
+
+  rc=0
+  rows=$(_cozy_linstor_pool_datasets) || rc=$?
+  unset COZY_STORAGE_BACKEND
+
+  if [ "$rc" -ne 0 ] || [ "$rows" != "$(printf 'srv1 data\nsrv2 data\nsrv3 data')" ]; then
+    echo "the blockstor dataset listing returned rc=$rc rows=$rows" >&2
+    cat "$calls" >&2
+    return 1
+  fi
+  if grep -q 'linstor-controller\|linstor-satellite' "$calls"; then
+    echo "the blockstor listing reached for LINSTOR's own pods" >&2
+    return 1
+  fi
+  rm -f "$calls"
+}
+
+@test "an unknown storage backend stops the pool guard before it reads anything" {
+  # shellcheck source=/dev/null
+  . "$HACK_DIR/e2e-chainsaw/_lib/run-kubernetes.sh"
+  COZY_STORAGE_BACKEND=blokstor
+  kubectl() { printf 'UNEXPECTED_READ\n'; }
+  fake_linstor_clock
+
+  rc=0
+  output=$(cozy_wait_linstor_pool_free 90 300 2>&1) || rc=$?
+  rm -f "$clock_file"
+  unset COZY_STORAGE_BACKEND
+
+  if [ "$rc" -ne 2 ] || printf '%s\n' "$output" | grep -q UNEXPECTED_READ; then
+    echo "an unknown backend was read as some backend: rc=$rc $output" >&2
+    return 1
+  fi
+}
