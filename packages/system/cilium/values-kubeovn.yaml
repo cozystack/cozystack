@@ -17,3 +17,20 @@ cilium:
   enableIdentityMark: false
   forceDeviceDetection: true
   devices: "ovn0 genev_sys_6081"
+  # Chained behind kube-ovn, Cilium allocates no pod addresses, but the agent
+  # still takes its router IP (cilium_host) and the per-node Gateway API Ingress
+  # IP from its own allocation CIDR. In ipam.mode kubernetes that CIDR is
+  # Node.spec.podCIDR, which the documented installs slice from the same range
+  # kube-ovn allocates pods from, so kube-ovn sooner or later hands a pod an
+  # address Cilium already holds. cluster-pool gives Cilium a block of its own,
+  # the last /21 of the pod CIDR, which kube-ovn is told to exclude. The
+  # platform derives both from networking.podCIDR, see
+  # cozystack.platform.ciliumPool, and the value below matches the default
+  # 10.244.0.0/16. templates/ipam-migration.yaml moves clusters installed under
+  # ipam.mode kubernetes onto the block.
+  ipam:
+    mode: cluster-pool
+    operator:
+      clusterPoolIPv4PodCIDRList:
+        - 10.244.248.0/21
+      clusterPoolIPv4MaskSize: 29

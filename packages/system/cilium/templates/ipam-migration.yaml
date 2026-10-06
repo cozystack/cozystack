@@ -1,0 +1,165 @@
+{{- /*
+Moves a cluster installed under ipam.mode kubernetes onto the cluster-pool
+allocation, see files/ipam-migration.sh for the mechanism. Rendered only where
+the mode is cluster-pool, which today means the kube-ovn variants, and only as
+a post-upgrade hook. A fresh install creates its CiliumNodes empty and the
+operator fills them from the pool, while on an upgrade the work has to wait
+until no agent runs in ipam.mode kubernetes any more.
+
+The Job runs on the host network with the API endpoint the agent itself uses,
+because it restarts the agents that program the pod network it would otherwise
+depend on.
+*/}}
+{{- if eq .Values.cilium.ipam.mode "cluster-pool" }}
+{{- $name := "cilium-ipam-migration" }}
+{{- $hook := "post-upgrade" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnodes"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  - apiGroups: ["kubeovn.io"]
+    resources: ["subnets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["kubeovn.io"]
+    resources: ["ips"]
+    verbs: ["list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames: ["subnets.kubeovn.io"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ $hook }}
+    helm.sh/hook-weight: "0"
+    # A failed Job stays for `kubectl logs`, a succeeded one is removed.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      hostNetwork: true
+      tolerations:
+        - operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: home
+          emptyDir: {}
+      containers:
+        - name: migrate
+          image: {{ .Values.ipamMigration.image | quote }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+{{ .Files.Get "files/ipam-migration.sh" | indent 14 }}
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: POOL
+              value: {{ join " " .Values.cilium.ipam.operator.clusterPoolIPv4PodCIDRList | quote }}
+            - name: MASK
+              value: {{ .Values.cilium.ipam.operator.clusterPoolIPv4MaskSize | quote }}
+            - name: HOME
+              value: /tmp
+            {{- with .Values.cilium.k8sServiceHost }}
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ . | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ $.Values.cilium.k8sServicePort | quote }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: home
+              mountPath: /tmp
+{{- end }}
