@@ -88,3 +88,24 @@ tests:
           count: 8
       - isKind:
           of: CustomResourceDefinition
+
+  # A value arriving outside the platform chart's own check, a hand-set
+  # component value for one, rendered some objects of each backend and
+  # exited 0.
+  - it: fails the render on an unrecognised backend
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blokstor
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: backend must be "linstor" or "blockstor", got "blokstor"'
+
+  - it: accepts both known backends
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 0
