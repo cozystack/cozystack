@@ -1,0 +1,132 @@
+suite: bootstrap restore reads where the backup storage writes
+
+templates:
+  - templates/mongodb.yaml
+  - templates/restore.yaml
+
+release:
+  name: test-mongodb
+  namespace: tenant-test
+
+tests:
+  - it: gives the restore the same S3 location and access as the backup storage
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      bootstrap:
+        enabled: true
+        backupName: "2026-10-01T02:00:21Z"
+      backup:
+        enabled: true
+        destinationPath: "s3://mybucket/mongodb/prod/"
+        endpointURL: "https://s3.example.org"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.bucket
+          value: mybucket
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: mybucket
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.prefix
+          value: mongodb/prod/
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: mongodb/prod/
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.endpointUrl
+          value: https://s3.example.org
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.endpointUrl
+          value: https://s3.example.org
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.insecureSkipTLSVerify
+          value: false
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.insecureSkipTLSVerify
+          value: false
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.forcePathStyle
+          value: true
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.forcePathStyle
+          value: true
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://mybucket/mongodb/prod/2026-10-01T02:00:21Z
+        template: templates/restore.yaml
+
+  - it: keeps a numeric bucket and prefix as strings on both sides
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      bootstrap:
+        enabled: true
+        backupName: "2026-10-01T02:00:21Z"
+      backup:
+        enabled: true
+        destinationPath: "s3://2024/10"
+        endpointURL: "https://s3.example.org"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.bucket
+          value: "2024"
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.prefix
+          value: "10"
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: "2024"
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: "10"
+        template: templates/restore.yaml
