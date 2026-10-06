@@ -1,0 +1,146 @@
+suite: vm-instance primary network
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+  networks:
+    - name: front
+    - name: back
+kubernetesProvider:
+  scheme:
+    "kubeovn.io/v1/IP":
+      gvr:
+        group: kubeovn.io
+        version: v1
+        resource: ips
+      namespaced: false
+  objects:
+    - apiVersion: kubeovn.io/v1
+      kind: IP
+      metadata:
+        name: test-vm.tenant-test
+      spec:
+        macAddress: "00:00:5E:00:53:01"
+        ipAddress: "192.0.2.10"
+tests:
+  - it: preserves the default pod network and both secondary NICs when unset
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+      - equal:
+          path: spec.template.spec.networks
+          value:
+            - name: default
+              pod: {}
+            - name: front
+              multus:
+                networkName: tenant-test/front
+            - name: back
+              multus:
+                networkName: tenant-test/back
+      - lengthEqual:
+          path: spec.template.spec.domain.devices.interfaces
+          count: 3
+  - it: uses the selected VPC for the default NIC without duplicating its attachment
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      primaryNetwork: front
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: tenant-test/front
+      - equal:
+          path: spec.template.spec.networks
+          value:
+            - name: default
+              pod: {}
+            - name: back
+              multus:
+                networkName: tenant-test/back
+      - equal:
+          path: spec.template.spec.domain.devices.interfaces
+          value:
+            - name: default
+              bridge: {}
+            - name: back
+              bridge: {}
+  - it: accepts a primary network selected through the deprecated subnets alias
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks: []
+      subnets:
+        - name: front
+      primaryNetwork: front
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: tenant-test/front
+      - lengthEqual:
+          path: spec.template.spec.networks
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.domain.devices.interfaces
+          count: 1
+  - it: rejects an unattached primary network
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      primaryNetwork: absent
+    asserts:
+      - failedTemplate:
+          errorMessage: primaryNetwork must be attached through networks or subnets
+  - it: rejects primary selection without the Cozyplane VPC API
+    capabilities:
+      apiVersions: []
+    set:
+      primaryNetwork: front
+    asserts:
+      - failedTemplate:
+          errorMessage: primaryNetwork requires the Cozyplane VPC API
+  - it: avoids pinning the old Kube-OVN primary IP when both APIs are served
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+        - kubeovn.io/v1/IP
+    set:
+      primaryNetwork: back
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: tenant-test/back
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/ip_address"]
+      - notExists:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/mac_address"]
+      - equal:
+          path: spec.template.spec.networks
+          value:
+            - name: default
+              pod: {}
+            - name: front
+              multus:
+                networkName: tenant-test/front
+      - equal:
+          path: spec.template.spec.domain.devices.interfaces
+          value:
+            - name: default
+              bridge: {}
+            - name: front
+              bridge: {}

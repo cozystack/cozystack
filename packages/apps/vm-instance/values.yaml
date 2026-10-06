@@ -75,6 +75,10 @@ networks: []
 ##   - name: subnet-84dbec17
 ##   - name: subnet-aa8896b5
 
+## @param {string} primaryNetwork - Attached network to use for the pod/default VM interface with Cozyplane. Requires the Cozyplane VPC API. The selected network is not added again as a secondary Multus interface. Empty keeps the default pod network.
+## @x-cozystack-options {source: network}
+primaryNetwork: ""
+
 ## @param {[]Network} subnets - Deprecated: use networks instead.
 subnets: []
 

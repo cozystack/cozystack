@@ -20,6 +20,19 @@
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
 {{- $networks := .Values.networks | default .Values.subnets }}
+{{- $primaryNetwork := .Values.primaryNetwork | default "" }}
+{{- if $primaryNetwork }}
+{{- if not (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") }}
+{{- fail "primaryNetwork requires the Cozyplane VPC API" }}
+{{- end }}
+{{- $attached := false }}
+{{- range $net := $networks }}
+{{- if eq $net.name $primaryNetwork }}{{- $attached = true }}{{- end }}
+{{- end }}
+{{- if not $attached }}
+{{- fail "primaryNetwork must be attached through networks or subnets" }}
+{{- end }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -47,7 +60,9 @@ spec:
     metadata:
       annotations:
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
-        {{- if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
+        {{- if $primaryNetwork }}
+        sdn.cozystack.io/vpc: {{ printf "%s/%s" .Release.Namespace $primaryNetwork | quote }}
+        {{- else if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
         {{- $ovnIPName := printf "%s.%s" (include "virtual-machine.fullname" .) .Release.Namespace }}
         {{- $ovnIP := lookup "kubeovn.io/v1" "IP" "" $ovnIPName }}
         {{- if $ovnIP }}
@@ -117,8 +132,10 @@ spec:
           - name: default
             bridge: {}
           {{- range $i, $net := $networks }}
+          {{- if or (not $primaryNetwork) (ne $net.name $primaryNetwork) }}
           - name: {{ $net.name }}
             bridge: {}
+          {{- end }}
           {{- end }}
         machine:
           type: ""
@@ -152,7 +169,9 @@ spec:
       - name: default
         pod: {}
       {{- range $i, $net := $networks }}
+      {{- if or (not $primaryNetwork) (ne $net.name $primaryNetwork) }}
       - name: {{ $net.name }}
         multus:
           networkName: {{ $.Release.Namespace }}/{{ $net.name }}
+      {{- end }}
       {{- end }}

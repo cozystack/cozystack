@@ -44,6 +44,9 @@ type ConfigSpec struct {
 	// Networks to attach the VM to.
 	// +kubebuilder:default:={}
 	Networks []Network `json:"networks,omitempty"`
+	// Attached network to use for the pod/default VM interface with Cozyplane. Requires the Cozyplane VPC API. The selected network is not added again as a secondary Multus interface. Empty keeps the default pod network.
+	// +kubebuilder:default:=""
+	PrimaryNetwork string `json:"primaryNetwork"`
 	// Deprecated: use networks instead.
 	// +kubebuilder:default:={}
 	Subnets []Network `json:"subnets,omitempty"`
