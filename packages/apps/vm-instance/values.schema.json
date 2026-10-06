@@ -100,6 +100,14 @@
         }
       }
     },
+    "primaryNetwork": {
+      "description": "Attached network to use for the pod/default VM interface with Cozyplane. Requires the Cozyplane VPC API. The selected network is not added again as a secondary Multus interface. Empty keeps the default pod network.",
+      "type": "string",
+      "default": "",
+      "x-cozystack-options": {
+        "source": "network"
+      }
+    },
     "subnets": {
       "description": "Deprecated: use networks instead.",
       "type": "array",
