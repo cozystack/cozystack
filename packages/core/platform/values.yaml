@@ -38,6 +38,17 @@ bundles:
   system:
     enabled: false
     variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "isp-slim", "isp-slim-generic", "isp-hosted-slim"
+    # CNI/networking selector for the "isp-full" (Talos) variant:
+    #   "kubeovn-cilium" — KubeOVN fabric + Cilium (default)
+    #   "cozyplane"      — cozyplane eBPF CNI + cozyplane-kpr socket-LB KPR
+    #                      (no Cilium, no kube-proxy)
+    # On "cozyplane", CiliumNetworkPolicy objects apply but are NOT ENFORCED
+    # (the CRDs ship inert so stock charts install): tenant network isolation
+    # on the default network and the Cilium host firewall are not in effect.
+    # cozystack-api's SecurityGroup — a restricted interface over
+    # CiliumNetworkPolicy — is not served either; cozyplane's own SecurityGroup
+    # polices traffic inside and across VPCs instead.
+    networkingVariant: "kubeovn-cilium"
   iaas:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
@@ -87,6 +98,10 @@ networking:
   podCIDR: "10.244.0.0/16"
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
+  # Cluster DNS ClusterIP, used by the cozyplane networking variant (the one
+  # cluster-internal door a VPC gateway opens). Empty derives the kubeadm
+  # convention, the service CIDR's .10.
+  clusterDNS: ""
   joinCIDR: "100.64.0.0/16"
   # KubeOVN master nodes override (optional)
   # By default, KubeOVN helm chart uses `lookup` to find control-plane nodes

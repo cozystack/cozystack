@@ -1,0 +1,64 @@
+---
+# The TENANT persona: NAMESPACED kinds only, so a RoleBinding can never reach the
+# cluster-scoped allocation surface (Ports, ServiceVIPs, HostFirewalls) — R2
+# holds structurally, not by vigilance (docs/multitenancy.md §R2). Aggregated
+# into the built-in admin/edit/view roles, so a namespace admin gets the tenant
+# surface without per-tenant wiring.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-tenant-edit
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  # A tenant's own network: its VPCs, who may use them, its boundary, its policy,
+  # its external addresses. All namespaced; all its own.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs
+      - vpcbindings
+      - vpcgateways
+      - vpcpeerings
+      - securitygroups
+      - floatingips
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs/status
+      - vpcgateways/status
+      - vpcpeerings/status
+      - securitygroups/status
+      - floatingips/status
+    verbs: ["get"]
+
+  {{- /* Granting the virtual verbs in an aggregated edit role is not an
+  escalation — it is the reason they are checked against the VPC rather than the
+  binding: a RoleBinding in the tenant's namespace can only ever authorize
+  export/peer on VPCs IN THAT NAMESPACE, so reaching a VPC elsewhere still needs
+  a grant from its owner, in the owner's namespace (docs/multitenancy.md §R4). */}}
+  # The virtual verbs on a tenant's OWN VPCs: `export` gates VPCBinding creation,
+  # `peer` a peering half. Attach is default-deny even same-namespace, so without
+  # `export` a tenant could not use its own VPC (docs/control-plane.md §6).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs"]
+    verbs: ["export", "peer"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-tenant-view
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs
+      - vpcbindings
+      - vpcgateways
+      - vpcpeerings
+      - securitygroups
+      - floatingips
+    verbs: ["get", "list", "watch"]

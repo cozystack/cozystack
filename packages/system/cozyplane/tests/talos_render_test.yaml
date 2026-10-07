@@ -1,0 +1,67 @@
+suite: cozyplane CNI renders with the Talos overlay
+# The overlay is what the platform actually installs (valuesFiles values.yaml +
+# values-talos.yaml in sources/networking.yaml); the bare chart defaults are
+# the kind/dev path. Cozystack-side suite: the chart itself is vendored from
+# lllamnyp/cozyplane, so keep assertions to the contract the platform relies
+# on, not to chart internals.
+templates:
+  - templates/agent.yaml
+  - templates/controller.yaml
+  - templates/crds.yaml
+release:
+  name: cozyplane
+  namespace: cozy-cozyplane
+values:
+  - ../values-talos.yaml
+tests:
+  # With no kube-proxy, the kubernetes.default ClusterIP is unserved until
+  # cozyplane-kpr is up — which needs the agent — so the agent must bootstrap
+  # against a real endpoint. On Talos that is KubePrism on localhost:7445;
+  # without these env vars the agent deadlocks against the unserved VIP.
+  - it: dials KubePrism instead of the unserved ClusterIP
+    templates: [templates/agent.yaml]
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_HOST
+            value: localhost
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_PORT
+            value: "7445"
+
+  # 00- sorts before any co-installed CNI's conflist (Cilium ships 05-), so
+  # the kubelet keeps cozyplane as the primary CNI.
+  - it: writes the primary conflist under the 00- prefix
+    templates: [templates/agent.yaml]
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--cni-conf-name=00-cozyplane.conflist"
+
+  - it: renders the controller
+    templates: [templates/controller.yaml]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].image
+
+  # Only the LOCAL group ships as CRDs: the tenant kinds (VPC, Port, …) are
+  # served by the aggregated apiserver alone, and a CRD for them would break
+  # the group's OpenAPI (docs/api-groups.md upstream).
+  - it: ships only local.sdn.cozystack.io CRDs
+    templates: [templates/crds.yaml]
+    asserts:
+      - matchRegex:
+          path: spec.group
+          pattern: ^local\.sdn\.cozystack\.io$
