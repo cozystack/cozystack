@@ -10,6 +10,6 @@ keywords:
   - ipam
   - networking
   - cozystack
-home: https://github.com/lllamnyp/address-controller
+home: https://github.com/cozystack/address-controller
 sources:
-  - https://github.com/lllamnyp/address-controller
+  - https://github.com/cozystack/address-controller

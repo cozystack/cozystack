@@ -1,5 +1,5 @@
 # Container image for the core controller.
-image: ghcr.io/lllamnyp/address-controller:main
+image: ghcr.io/cozystack/address-controller:main
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 

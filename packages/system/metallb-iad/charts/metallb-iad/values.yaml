@@ -1,5 +1,5 @@
 # Container image for the driver.
-image: ghcr.io/lllamnyp/metallb-iad:main
+image: ghcr.io/cozystack/metallb-iad:main
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 

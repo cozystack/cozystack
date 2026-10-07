@@ -3,4 +3,4 @@ address-controller:
   # running controller change with no change in this tree. Pinned here rather
   # than in charts/, which `make update` regenerates. Bump in lockstep with
   # ADDRESS_CONTROLLER_REF in the Makefile.
-  image: ghcr.io/lllamnyp/address-controller:0.1.0@sha256:c99244a55e52211aad2fc050fc49872667219fc0706d9045e643a6bc30f16fc6
+  image: ghcr.io/cozystack/address-controller:main-ee38d0a@sha256:a154074e031a352eb9144a6815de1fd68cc0726b2bcf43f148ffe6c7c544a918

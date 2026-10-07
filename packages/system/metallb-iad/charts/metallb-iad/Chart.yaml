@@ -10,6 +10,6 @@ keywords:
   - metallb
   - networking
   - cozystack
-home: https://github.com/lllamnyp/metallb-iad
+home: https://github.com/cozystack/metallb-iad
 sources:
-  - https://github.com/lllamnyp/metallb-iad
+  - https://github.com/cozystack/metallb-iad
