@@ -1,0 +1,228 @@
+suite: proxmox workers on Proxmox-backed VPC subnets
+# A pool that names a VPC subnet takes bridge, VLAN and IP pool from the
+# subnet's ProxmoxNetwork in its own namespace, never from tenant input. The
+# fixtures below are what the proxmox-network controller reports for VPC "net"
+# of tenant-test: subnet "private" on VLAN 101 and subnet "data" on VLAN 102.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    network:
+      vpc: net
+      subnet: private
+    dnsServers: ["8.8.8.8"]
+# helm-unittest's fake cluster cannot deep-copy plain ints, so the numbers in
+# these fixtures are strings; the chart converts with int64 either way, and a
+# real lookup returns int64.
+kubernetesProvider:
+  scheme: &scheme
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetwork":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworks"
+      namespaced: true
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr:
+        group: "cluster.x-k8s.io"
+        version: "v1beta1"
+        resource: "machinesets"
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/ProxmoxMachineTemplate":
+      gvr:
+        group: "infrastructure.cluster.x-k8s.io"
+        version: "v1alpha1"
+        resource: "proxmoxmachinetemplates"
+      namespaced: true
+  objects: &networks
+    # helm-unittest registers a LIST kind only for a GVK with at least one
+    # object, and the pool render LISTs MachineSets and ProxmoxMachineTemplates
+    # in its namespace. These live elsewhere so those LISTs stay empty.
+    - apiVersion: cluster.x-k8s.io/v1beta1
+      kind: MachineSet
+      metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+      spec: {template: {spec: {infrastructureRef: {kind: ProxmoxMachineTemplate, name: none}}}}
+    - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: ProxmoxMachineTemplate
+      metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetwork
+      metadata:
+        name: subnet-b10ab7f7
+        namespace: tenant-test
+      spec: {zone: default, subnet: subnet-b10ab7f7, ipPool: subnet-b10ab7f7}
+      status:
+        vlan: "101"
+        bridge: vmbr70
+        mtu: "1500"
+        gateway: 10.208.64.1
+        prefix: "24"
+        conditions:
+          - {type: Ready, status: "True", reason: Ready, message: ok}
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetwork
+      metadata:
+        name: subnet-5a84a280
+        namespace: tenant-test
+      spec: {zone: default, subnet: subnet-5a84a280, ipPool: subnet-5a84a280}
+      status:
+        vlan: "102"
+        bridge: vmbr70
+        gateway: 10.208.65.1
+        prefix: "24"
+        conditions:
+          - {type: Ready, status: "True", reason: Ready, message: ok}
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetwork
+      metadata:
+        # tenant-other's "private" subnet of a VPC also called "net": same
+        # names, different namespace, different VLAN.
+        name: subnet-b10ab7f7
+        namespace: tenant-other
+      spec: {zone: default, subnet: subnet-b10ab7f7, ipPool: subnet-b10ab7f7}
+      status:
+        vlan: "150"
+        bridge: vmbr70
+        gateway: 10.208.128.1
+        prefix: "24"
+        conditions:
+          - {type: Ready, status: "True"}
+tests:
+  - it: puts net0 on the subnet's VLAN and draws its address from the subnet pool
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.default
+          value:
+            bridge: vmbr70
+            model: virtio
+            vlan: 101
+            mtu: 1500
+            ipv4PoolRef:
+              apiGroup: ipam.cluster.x-k8s.io
+              kind: InClusterIPPool
+              name: subnet-b10ab7f7
+      - notExists:
+          path: spec.template.spec.network.additionalDevices
+
+  - it: adds one capmox device per additional network, each with its own pool
+    set:
+      proxmox.additionalNetworks:
+        - {name: net1, vpc: net, subnet: data, mtu: 9000}
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.additionalDevices
+          value:
+            - name: net1
+              bridge: vmbr70
+              model: virtio
+              vlan: 102
+              mtu: 9000
+              ipv4PoolRef:
+                apiGroup: ipam.cluster.x-k8s.io
+                kind: InClusterIPPool
+                name: subnet-5a84a280
+
+  - it: refuses a raw VLAN next to a subnet, which is how a tenant would pick a VLAN that is not theirs
+    set:
+      proxmox.network.vlan: 50
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.network: set either vpc/subnet or bridge/vlan, not both; a VPC subnet's bridge and VLAN come from the platform"
+
+  - it: refuses a raw bridge next to a subnet
+    set:
+      proxmox.network.bridge: vmbr0
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.network: set either vpc/subnet or bridge/vlan, not both; a VPC subnet's bridge and VLAN come from the platform"
+
+  - it: refuses a subnet that is not Proxmox-backed in this namespace
+    set:
+      proxmox.network.subnet: elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: 'subnet "elsewhere" of VPC "net" is not Proxmox-backed'
+
+  - it: refuses a network that is not Ready, quoting its condition
+    release:
+      name: kubernetes-nodes-myk8s-md0
+      namespace: tenant-notready
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            name: subnet-4f4bc656
+            namespace: tenant-notready
+          spec: {zone: default, subnet: subnet-4f4bc656, ipPool: subnet-4f4bc656}
+          status:
+            conditions:
+              - {type: Ready, status: "False", reason: ZoneExhausted, message: zone "default" has no free VLAN in 101-199}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not Ready: ZoneExhausted: zone "default" has no free VLAN'
+
+  - it: refuses an additional network without a subnet
+    set:
+      proxmox.additionalNetworks:
+        - {name: net1, vpc: net, subnet: ""}
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.additionalNetworks[net1]: set vpc and subnet; extra NICs only attach to Proxmox-backed VPC subnets"
+
+  - it: refuses net0 as an additional device name
+    set:
+      proxmox.additionalNetworks:
+        - {name: net0, vpc: net, subnet: data}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'proxmox.additionalNetworks: name "net0" must be net1..net31'
+
+  - it: refuses the same device twice
+    set:
+      proxmox.additionalNetworks:
+        - {name: net1, vpc: net, subnet: data}
+        - {name: net1, vpc: net, subnet: private}
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.additionalNetworks: net1 is used twice"
+
+  - it: keeps the raw bridge path unchanged for pools that use no VPC
+    set:
+      proxmox.network:
+        vpc: ""
+        subnet: ""
+        bridge: vmbr50
+        vlan: 7
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.default
+          value:
+            bridge: vmbr50
+            model: virtio
+            vlan: 7
