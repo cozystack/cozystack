@@ -49,6 +49,20 @@ assert_full_suite() {
     assert_selection "expected the full Chainsaw suite" "$1" "$(full_suite_list)"
 }
 
+# The broad tier retains one tenant Kubernetes integration suite and withholds
+# only the previous-version duplicate. Derive the rest from the on-disk suite
+# inventory so adding an unrelated suite does not require editing this fixture.
+broad_tier_list() {
+    find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml \
+      | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' \
+      | grep -vx 'kubernetes-previous' \
+      | sort | paste -sd ' ' -
+}
+
+assert_broad_tier() {
+    assert_selection "expected the broad tier (retain kubernetes-latest, withhold kubernetes-previous)" "$1" "$(broad_tier_list)"
+}
+
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -346,12 +360,122 @@ assert_full_suite() {
 # status was then posted green with no suite run. Each test below pins one side
 # of the classification — escalate, or skip by an explicit rule.
 
-@test "hack/*.mk triggers full suite (build flags of every image)" {
+@test "hack/*.mk triggers the broad tier (build flags of every image)" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "hack/common-envs.mk" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+@test "root go.mod triggers the broad tier, not the full suite" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "go.mod" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    case " $output " in
+        *" kubernetes-latest "*) ;;
+        *) echo "the broad tier must retain kubernetes-latest: $output" >&2; exit 1 ;;
+    esac
+    case " $output " in
+        *" kubernetes-previous "*) echo "the broad tier must withhold kubernetes-previous: $output" >&2; exit 1 ;;
+        *) ;;
+    esac
+    rm -rf "$tmp"
+}
+
+@test "nested kubevirt CSI go.mod remains graph-scoped" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/kubernetes/images/kubevirt-csi-driver/go.mod" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_selection "expected the nested module to select the suites that install the Kubernetes chart" "$output" "computeplane kubernetes-latest kubernetes-previous"
+    rm -rf "$tmp"
+}
+
+@test "root Makefile triggers the broad tier" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "Makefile" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+# The tier must never SUBTRACT what the graph walk selected on its own account.
+# A diff that edits the kubernetes chart and bumps the root go.mod has a path
+# that genuinely needs the tenant suites, and the broad path must not take them
+# away again.
+@test "broad tier never withholds a suite the graph selected explicitly" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\npackages/apps/kubernetes/Chart.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+# A broad path selects no suite of its own, so the "nothing to run" exit has to
+# know about it. Reporting an empty selection here would be read by both lanes
+# as "skip Chainsaw" and then post the required status green (#3392).
+@test "a diff of only broad paths still reports a selection" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.sum\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -n "$output" ]
+    assert_broad_tier "$output"
+    rm -rf "$tmp"
+}
+
+# An unscopeable path outranks a broad one: the broader answer wins whenever
+# both classes appear in the same diff.
+@test "full-suite path beats a broad path in the same diff" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\npackages/core/platform/values.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
+# A broad path must not weaken an unknown path's per-path escalation. This small
+# case keeps the original regression trigger visible beside the full mixed-path
+# matrix below.
+@test "an unresolved suite still escalates when a broad path is in the diff" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf 'go.mod\nhack/e2e-chainsaw/nosuch/a.yaml\n' > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    grep -Fq "'hack/e2e-chainsaw/nosuch/a.yaml' names no runnable suite ('nosuch')" "$tmp/err" \
+      || { echo "expected the unresolved-suite reason on stderr, got: $(cat "$tmp/err")" >&2; exit 1; }
+    rm -rf "$tmp"
+}
+
+# This reads the selector's actual configuration. If the variable is renamed or
+# points at a missing suite, a separately hard-coded expected broad list could
+# otherwise keep passing while the implementation silently runs everything.
+@test "withheld_suite names the previous-version suite on disk" {
+    suite=$(sed -n "s/^withheld_suite='\([^']*\)'$/\1/p" hack/select-e2e.sh)
+    [ "$suite" = "kubernetes-previous" ] \
+      || { echo "expected withheld_suite=kubernetes-previous, got '$suite'" >&2; exit 1; }
+    [ -f "hack/e2e-chainsaw/$suite/chainsaw-test.yaml" ] \
+      || { echo "withheld_suite names '$suite', which has no chainsaw-test.yaml" >&2; exit 1; }
+    [ "$(broad_tier_list)" != "$(full_suite_list)" ]
+}
+
+@test "the broad-tier escalation names its cause on stderr" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "go.mod" > "$tmp/diff"
+    err=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>&1 >/dev/null)
+    case "$err" in
+        *broad_suite_pattern*) ;;
+        *) echo "expected a broad_suite_pattern reason on stderr, got: $err" >&2; exit 1 ;;
+    esac
     rm -rf "$tmp"
 }
 
@@ -368,15 +492,6 @@ assert_full_suite() {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "pkg/cozystack/registry.go" > "$tmp/diff"
-    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    assert_full_suite "$output"
-    rm -rf "$tmp"
-}
-
-@test "go.mod triggers full suite" {
-    tmp=$(mktemp -d)
-    cp -r packages/core/platform/sources "$tmp/sources"
-    echo "go.mod" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     assert_full_suite "$output"
     rm -rf "$tmp"
@@ -1179,6 +1294,72 @@ assert_full_suite() {
             exit 1
         fi
     done
+    rm -rf "$tmp"
+}
+
+@test "an unknown Chainsaw suite path escalates independently of valid neighbours" {
+    # A deleted suite path and the old side of a suite rename both name a
+    # directory absent from the runnable inventory. Each must force a full run
+    # on its own account: merging names before checking membership lets a valid
+    # direct or graph-selected neighbour hide the unknown one. A broad path is
+    # another neighbour, and its 20-suite answer must not pre-empt the full run.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    [ ! -d hack/e2e-chainsaw/deleted-suite ]
+    [ ! -d hack/e2e-chainsaw/renamed-postgres ]
+
+    for neighbour in \
+        hack/e2e-chainsaw/postgres/chainsaw-test.yaml \
+        packages/apps/postgres/Chart.yaml; do
+        for broad in '' go.mod; do
+            for order in unknown-first unknown-last; do
+                unknown=hack/e2e-chainsaw/deleted-suite/chainsaw-test.yaml
+                if [ "$order" = unknown-first ]; then
+                    printf '%s\n' "$unknown" "$neighbour" "$broad" > "$tmp/diff"
+                else
+                    printf '%s\n' "$broad" "$neighbour" "$unknown" > "$tmp/diff"
+                fi
+                output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+                assert_full_suite "$output"
+                if ! grep -Fq "'$unknown' names no runnable suite ('deleted-suite')" "$tmp/err"; then
+                    echo "unknown path must explain the full run ($neighbour, ${broad:-no broad}, $order); stderr was:" >&2
+                    cat "$tmp/err" >&2
+                    exit 1
+                fi
+            done
+        done
+    done
+
+    # A rename diff contains both the old unknown directory and the new valid
+    # one. The old side still escalates even though the new side selects a suite.
+    old=hack/e2e-chainsaw/renamed-postgres/chainsaw-test.yaml
+    printf '%s\n' "$old" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_full_suite "$output"
+    grep -Fq "'$old' names no runnable suite ('renamed-postgres')" "$tmp/err"
+    rm -rf "$tmp"
+}
+
+@test "known and disabled Chainsaw paths keep their scoped behavior" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+
+    echo hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "a known direct path must stay scoped" "$output" postgres
+    [ ! -s "$tmp/err" ]
+
+    # Disabled files are inert even when their directory names no runnable
+    # suite, alone and beside a valid direct path.
+    disabled=hack/e2e-chainsaw/no-such-suite/chainsaw-test.yaml.disabled
+    echo "$disabled" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    [ -z "$output" ]
+    [ ! -s "$tmp/err" ]
+    printf '%s\n' "$disabled" hack/e2e-chainsaw/postgres/chainsaw-test.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>"$tmp/err")
+    assert_selection "a disabled neighbour must stay inert" "$output" postgres
+    [ ! -s "$tmp/err" ]
     rm -rf "$tmp"
 }
 
