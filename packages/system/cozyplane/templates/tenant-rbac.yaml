@@ -1,17 +1,9 @@
 ---
-# The TENANT persona (docs/multitenancy.md).
-#
-# R2 ("a tenant enumerates nothing it does not own") is satisfied STRUCTURALLY, not
-# by vigilance: these roles list only NAMESPACED kinds, and a RoleBinding cannot
-# grant access to a cluster-scoped resource. So a tenant bound to these in its own
-# namespace *cannot* be given `list ports`, `list servicevips` or
-# `list hostfirewalls`.
-# Those are cluster-scoped precisely because allocation needs a global keyspace, and
-# that allocation detail must never become a tenant-visible surface: one `list ports`
-# would hand over every other tenant's pods, addresses, MACs and node placement.
-#
-# They aggregate into the built-in admin/edit/view ClusterRoles, so a namespace
-# admin gets cozyplane's tenant surface without anyone wiring it up per tenant.
+# The TENANT persona: NAMESPACED kinds only, so a RoleBinding can never reach the
+# cluster-scoped allocation surface (Ports, ServiceVIPs, HostFirewalls) — R2
+# holds structurally, not by vigilance (docs/multitenancy.md §R2). Aggregated
+# into the built-in admin/edit/view roles, so a namespace admin gets the tenant
+# surface without per-tenant wiring.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -41,16 +33,14 @@ rules:
       - floatingips/status
     verbs: ["get"]
 
-  # The virtual verbs on a tenant's OWN VPCs.
-  #
-  # `export` gates creating a VPCBinding to a VPC; `peer` gates creating a peering
-  # half. Granting them here is not an escalation, and this is the whole reason the
-  # verbs are checked against the VPC rather than the binding: a RoleBinding in the
-  # tenant's namespace can only ever authorize these on VPCs IN THAT NAMESPACE.
-  # Reaching into someone else's namespace still needs their consent, from them.
-  #
-  # Without `export` a tenant could not attach a pod even to its own VPC (attach is
-  # default-deny and a VPCBinding is required in every case, including same-namespace).
+  {{- /* Granting the virtual verbs in an aggregated edit role is not an
+  escalation — it is the reason they are checked against the VPC rather than the
+  binding: a RoleBinding in the tenant's namespace can only ever authorize
+  export/peer on VPCs IN THAT NAMESPACE, so reaching a VPC elsewhere still needs
+  a grant from its owner, in the owner's namespace (docs/multitenancy.md §R4). */}}
+  # The virtual verbs on a tenant's OWN VPCs: `export` gates VPCBinding creation,
+  # `peer` a peering half. Attach is default-deny even same-namespace, so without
+  # `export` a tenant could not use its own VPC (docs/control-plane.md §6).
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcs"]
     verbs: ["export", "peer"]
