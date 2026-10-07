@@ -1,0 +1,85 @@
+suite: tenant egress to the KubeVirt export proxy
+# The vm-exportproxy Ingress in cozy-kubevirt is served by the ingress
+# controller running in tenant-root. Tenant egress is default-deny plus
+# explicit allow-to-* policies, so without this one the controller cannot
+# reach virt-exportproxy. It follows allow-to-cdi-upload-proxy, the policy for
+# the sibling CDI upload proxy, in where and when it renders.
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: renders next to allow-to-cdi-upload-proxy in the root tenant
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-cdi-upload-proxy
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-vm-exportproxy
+        isKind:
+          of: CiliumNetworkPolicy
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-vm-exportproxy
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+
+  - it: renders next to allow-to-cdi-upload-proxy in a nested tenant with every module off
+    release:
+      name: tenant-bar
+      namespace: tenant-foo
+    set:
+      monitoring: false
+      ingress: false
+      etcd: false
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-cdi-upload-proxy
+        equal:
+          path: metadata.namespace
+          value: tenant-foo-bar
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-vm-exportproxy
+        equal:
+          path: metadata.namespace
+          value: tenant-foo-bar
+
+  - it: applies to every pod of the tenant, as allow-to-cdi-upload-proxy does
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-vm-exportproxy
+        equal:
+          path: spec.endpointSelector
+          value: {}
+
+  - it: allows only the export proxy pods on their container port
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-vm-exportproxy
+        equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.kubernetes.pod.namespace": cozy-kubevirt
+                    kubevirt.io: virt-exportproxy
+              toPorts:
+                - ports:
+                    - port: "8443"
+                      protocol: TCP
