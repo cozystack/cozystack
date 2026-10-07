@@ -107,7 +107,7 @@ tests:
               storageclass.kubevirt.io/is-default-virt-class: "true"
     asserts:
       - failedTemplate:
-          errorPattern: 'storageClass "virt-newer" differs from golden image .* storageClass "virt-default".* An empty storageClass was resolved to the cluster default StorageClass "virt-newer"'
+          errorPattern: 'storageClass "virt-newer" differs from golden image .* storageClass "virt-default".* An empty storageClass was resolved to "virt-newer"'
 
   - it: ignores a virtualization default annotation that is not "true"
     kubernetesProvider:
