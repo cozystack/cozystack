@@ -280,7 +280,7 @@ spec:
              and no CR edit is needed to trigger the abort, only the next periodic
              reconcile. The comment below rejects exactly that blast radius for a
              mid-import golden; applying the same reasoning to a golden that is
-             absent or Failed is what it costs to be consistent.
+             absent or failing to import is what it costs to be consistent.
 
              So the loud failure stays where it is the only signal — a pool still
              waiting for its first disk — and a pool that is past that point is
@@ -345,21 +345,32 @@ spec:
       {{-       fail (printf "nodeGroup %q: osImage.builtin requested golden image %q not found in cozy-public, neither as a DataVolume nor as a PVC — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to osImage.factory." .groupName $goldenName) }}
       {{-     end }}
       {{-   else }}
-      {{- /* Fail only on the golden's terminal failure phase, not on "not yet
+      {{- /* Fail only on a golden whose import is failing, not on "not yet
              Succeeded". A golden mid-import is transient: CDI holds the worker
              DataVolume until the source is populated, which is the correct
              behaviour and recovers unattended. Hard-failing the render there would
              abort the ENTIRE KubernetesNodes HelmRelease — every resource, not just
              this disk — for every pool pinned to that golden, blocking unrelated
-             scale operations for the length of an import. Only Failed, which
-             never recovers without operator action, justifies that blast radius.
+             scale operations for the length of an import. Failed never recovers
+             without operator action, but CDI reaches it only on a fatal error such
+             as a checksum mismatch: an unreachable URL restarts the importer with
+             back-off while the phase stays in progress. So an importer that
+             restarted at least three times and is not running now is refused too;
+             that refusal lifts on its own once an attempt succeeds.
              Falling back to the HTTP import is deliberately not an option either: it
              would make disk-system's source depend on cluster state, so the source —
              and with it the content-hashed KubevirtMachineTemplate name — would flip
              once the golden went Ready and roll every worker in the pool. */}}
       {{-     $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
+      {{-     $goldenRestarts := dig "status" "restartCount" 0 $goldenDV | int }}
+      {{-     $goldenRunning := "" }}
+      {{-     range (dig "status" "conditions" (list) $goldenDV) }}
+      {{-       if eq (dig "type" "" . | toString) "Running" }}{{- $goldenRunning = dig "status" "" . | toString }}{{- end }}
+      {{-     end }}
       {{-     if and (eq $goldenPhase "Failed") (not $poolCloned) }}
       {{-       fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this pool's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
+      {{-     else if and (ne $goldenPhase "Succeeded") (ge $goldenRestarts 3) (eq $goldenRunning "False") (not $poolCloned) }}
+      {{-       fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public keeps failing to import (%d importer restarts) — cloning it would block this pool's workers while it does. The refusal lifts by itself once an import attempt succeeds. The importer is retried with a growing back-off, and a recreated importer pod counts as not running until its container starts, so that can take a few minutes after the source is fixed. Check the importer pod logs in cozy-public." .groupName $goldenName $goldenRestarts) }}
       {{-     end }}
       {{- /* CDI takes the storage-layer CSI-clone path only when source and target
              share a StorageClass; across classes it silently falls back to a
