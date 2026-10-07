@@ -4,6 +4,8 @@
 # e2e-fork.yaml uses for the push allowlist, or the early check and the push
 # disagree about what counts as new.
 
+load test_helper
+
 ROOT="$(pwd)"
 SCRIPT="$ROOT/hack/fork-new-images.sh"
 FORK_WF="$ROOT/.github/workflows/e2e-fork.yaml"
