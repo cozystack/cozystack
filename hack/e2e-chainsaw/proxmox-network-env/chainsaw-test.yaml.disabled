@@ -1,0 +1,200 @@
+# Proxmox-backed VPC subnets on a real Proxmox VE environment.
+#
+# Parked as .disabled on purpose, like kubernetes-proxmox: suites are
+# discovered as chainsaw-test.yaml, so this one is registered nowhere and no CI
+# lane can select it. It needs what no CI runner has: Proxmox VE hosts whose
+# zone bridge carries the zone's VLANs, cluster nodes with a trunk NIC on that
+# bridge, a transit router for the egress gateways, and capmox with
+# credentials. README.md beside this file lists the prerequisites and the
+# variables, and shows how to run it.
+#
+# What it adds to proxmox-network/, which runs in CI without any of that: the
+# gateway (each router port's HA chassis group, the ARP flows a VM depends on),
+# the egress gateways, the datapath from pods and from Proxmox VMs, the
+# isolation matrix between two tenants with a positive control for every
+# denied cell, a Proxmox-backed Kubernetes cluster per tenant whose workers join
+# through the egress gateway, the MTU budget, restarts and a capmox outage,
+# and a deletion under live VMs. docs/proxmox-networking.md, section 11, lists
+# the cells.
+#
+# The checks themselves live in _lib/run-proxmox-network.sh, one phase per
+# step: most of them compare objects with each other or send traffic, which is
+# a script's job rather than an assert's. Where an object can be named, the
+# step asserts it here.
+#
+# It does not install Cozystack. It runs against an existing cluster and an
+# existing hypervisor, which is a weaker guarantee than a sandbox per run.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: proxmox-network-env
+spec:
+  # Nothing is applied through Chainsaw: the phases create and delete the
+  # applications themselves. The package's namespace is a precondition, so
+  # naming it here keeps Chainsaw from creating a namespace of its own.
+  namespace: cozy-proxmox-network
+  skipDelete: true
+  bindings:
+  - name: nsA
+    value: (env('COZY_PXNET_NS_A'))
+  - name: nsB
+    value: (env('COZY_PXNET_NS_B'))
+  catch:
+  - events: {}
+  - script:
+      timeout: 5m
+      content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh diagnostics
+  steps:
+  - name: preflight
+    try:
+    - script:
+        timeout: 5m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh preflight
+    cleanup:
+    # Registered by the first step, so it runs at the end whether the suite
+    # passed, failed or stopped early: a leaked cluster leaves VMs on the
+    # hypervisor. The teardown step does the same with checks; this only
+    # deletes. COZY_KEEP_TENANT=true leaves everything for debugging.
+    - script:
+        timeout: 5m
+        content: |
+          set -u
+          if [ "${COZY_KEEP_TENANT:-false}" = "true" ]; then
+            echo "COZY_KEEP_TENANT=true: leaving the clusters and VPCs in place"
+            exit 0
+          fi
+          for ns in "${COZY_PXNET_NS_A:-}" "${COZY_PXNET_NS_B:-}"; do
+            [ -n "$ns" ] || continue
+            timeout -k 5 30 kubectl -n "$ns" delete pods -l e2e.proxmox.cozystack.io/probe=true --ignore-not-found --wait=false
+            timeout -k 5 30 kubectl -n "$ns" delete kubernetesnodes.apps.cozystack.io pxa-md0 pxb-md0 --ignore-not-found --wait=false
+            timeout -k 5 30 kubectl -n "$ns" delete kubernetes.apps.cozystack.io pxa pxb --ignore-not-found --wait=false
+            timeout -k 5 30 kubectl -n "$ns" delete virtualprivateclouds.apps.cozystack.io net --ignore-not-found --wait=false
+          done
+          exit 0
+
+  - name: vpc
+    try:
+    # Up to 300s for each of the four networks to become Ready, plus the applies.
+    - script:
+        timeout: 25m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh vpc
+    # The releases cozystack-api generates from the applications: their install
+    # waits through kstatus on every rendered object, the ProxmoxNetworks'
+    # Ready included, with the default 10m install timeout; 11m clears it.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: virtualprivatecloud-net
+            namespace: ($nsA)
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: virtualprivatecloud-net
+            namespace: ($nsB)
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: ($nsA)
+            labels:
+              cozystack.io/subnetName: private
+          status:
+            (conditions[?type == 'GatewayReady']):
+            - status: "True"
+              reason: ChassisAssigned
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: control
+    try:
+    # Worst case: the per-network gateway waits (3 x 60s for each of four
+    # networks) and the per-tenant egress gateway waits (300s + 2 x 120s).
+    - script:
+        timeout: 35m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh control
+
+  - name: datapath
+    try:
+    # Five probe pods at up to 180s each, then pings and egress probes.
+    - script:
+        timeout: 25m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh datapath
+
+  - name: capi
+    try:
+    # Two clusters, each with COZY_PXNET_CLUSTER_TIMEOUT (1800s by default) for
+    # its first worker and 600s for its join, then the VM-level cells.
+    - script:
+        timeout: 90m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh capi
+    # Both releases installed, not merely applied: kubernetes-rd disables the
+    # kstatus wait, so Ready here is the end of the chart's own post-install
+    # hook. The phase above has already waited far longer for the joins.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-pxa
+            namespace: ($nsA)
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-pxb
+            namespace: ($nsB)
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: resilience
+    try:
+    # A worker added during a capmox outage gets COZY_PXNET_CLUSTER_TIMEOUT.
+    - script:
+        timeout: 45m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh resilience
+
+  - name: lifecycle
+    try:
+    # B's networks may take COZY_PXNET_CLUSTER_TIMEOUT to finish deleting once
+    # its machines are gone.
+    - script:
+        timeout: 50m
+        content: cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh lifecycle
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: ($nsB)
+
+  - name: teardown
+    try:
+    - script:
+        timeout: 45m
+        content: |
+          if [ "${COZY_KEEP_TENANT:-false}" = "true" ]; then
+            echo "COZY_KEEP_TENANT=true: skipping the teardown checks"
+            exit 0
+          fi
+          cd ../../.. && hack/e2e-chainsaw/_lib/run-proxmox-network.sh teardown

@@ -1,0 +1,26 @@
+# Helm values of tenant A's VPC (packages/apps/vpc). Two Proxmox-backed
+# subnets in the shared zone, one in the zone that does not admit tenant A,
+# and an overlay subnet next to them that admits the Proxmox ones, as a tenant
+# would write it. 10.231.0.0/16 overlaps nothing the e2e cluster uses.
+subnets:
+- name: private
+  cidr: 10.231.64.0/24
+  proxmox:
+    zone: pxnet-e2e
+- name: data
+  cidr: 10.231.65.0/24
+  proxmox:
+    zone: pxnet-e2e
+- name: locked
+  cidr: 10.231.66.0/24
+  proxmox:
+    zone: pxnet-e2e-locked
+- name: pods
+  cidr: 10.231.67.0/24
+  allowSubnets:
+  - 10.231.64.0/24
+  - 10.231.65.0/24
+# The egress gateway's pods run only on trunk nodes, and the e2e cluster has
+# none, so they would stay Pending.
+egress:
+  enabled: false
