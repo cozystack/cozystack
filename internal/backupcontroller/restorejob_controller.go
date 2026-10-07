@@ -49,9 +49,10 @@ type RestoreJobReconciler struct {
 	// (missing pods/log RBAC) branch - is unit-testable without a live cluster.
 	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
-	// APIReader is the manager's uncached reader. The keepOriginalPVC rename
-	// reads back objects it has just written, which the cache may not have
-	// seen yet. Wired in SetupWithManager.
+	// APIReader is the manager's uncached reader. Reconcile re-reads the
+	// RestoreJob through it before dispatching to a driver, and the
+	// keepOriginalPVC rename reads back objects it has just written, which
+	// the cache may not have seen yet. Wired in SetupWithManager.
 	APIReader client.Reader
 }
 
@@ -101,6 +102,22 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded ||
 		restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
 		logger.V(1).Info("RestoreJob already completed, skipping", "phase", restoreJob.Status.Phase)
+		return ctrl.Result{}, nil
+	}
+
+	// Re-read past the cache for the reason BackupJobReconciler.Reconcile
+	// gives. Here the step retried for a job already over can be destructive:
+	// halting the VM, renaming its PVCs, deleting the Postgres cluster.
+	if err := r.apiReader().Get(ctx, req.NamespacedName, restoreJob); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "failed to re-read RestoreJob")
+		return ctrl.Result{}, err
+	}
+	if restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded ||
+		restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		logger.V(1).Info("RestoreJob terminal on the apiserver ahead of the cache, skipping", "phase", restoreJob.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 
