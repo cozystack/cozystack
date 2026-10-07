@@ -540,7 +540,8 @@ spec:
               rejects RWX volumes that are not on a DRBD-backed StorageClass,
               which is why the pool's storageClass defaults to a replicated/DRBD
               class rather than to the cluster default. An empty storageClass
-              omits the field so the cluster default applies.
+              omits the field, and CDI binds the disk on its virtualization
+              default or, without one, the Kubernetes default.
 
               A builtin pool instead renders the class the guard above resolved for
               it. Omitting the field there would let the disk bind on whatever the
