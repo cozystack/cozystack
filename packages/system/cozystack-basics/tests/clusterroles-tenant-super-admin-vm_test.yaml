@@ -8,9 +8,8 @@ release:
   namespace: cozy-system
 
 # super-admin:base must grant no write on raw kubevirt.io/virtualmachines: that
-# bypasses the apps.cozystack.io wrapper where size and quota are enforced. The
-# whole rule set is pinned so any broadening of this most-privileged tenant tier
-# is a deliberate test change. Raw-VM reads live at cozy:tenant:admin:base.
+# bypasses the apps.cozystack.io wrapper's size/quota. The whole rule set is
+# pinned, so broadening this tier is a deliberate test change.
 tests:
   - it: cozy:tenant:super-admin:base grants apps.cozystack.io only, never raw kubevirt VMs
     documentSelector:
