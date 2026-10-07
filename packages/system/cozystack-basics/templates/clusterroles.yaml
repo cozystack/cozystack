@@ -309,10 +309,6 @@ metadata:
   name: cozy:tenant:super-admin:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
-{{/* No rule for raw kubevirt.io/virtualmachines: write there bypasses the
-     apps.cozystack.io wrapper that enforces VM size and quota. Reads come from
-     cozy:tenant:admin:base (get/list). Pinned by the helm-unittest and the
-     vminstance e2e. */}}
 rules:
 - apiGroups: ["apps.cozystack.io"]
   resources:
