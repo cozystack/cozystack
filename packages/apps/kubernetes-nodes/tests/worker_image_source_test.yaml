@@ -367,8 +367,8 @@ tests:
           value: talos-worker-norunning-v1.0.0
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
-  # Cross-StorageClass clone: CDI would silently fall back to a host-assisted copy
-  # over the pod network, the exact transfer osImage.builtin exists to avoid.
+  # Cross-StorageClass clone: a host-assisted copy over the pod network, or a
+  # clone left to the CSI driver to support, so the pool is refused.
   - it: osImage.builtin fails when the pool storageClass differs from the golden's
     set:
       storageClass: local
