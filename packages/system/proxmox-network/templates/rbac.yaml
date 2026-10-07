@@ -1,0 +1,66 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proxmox-network-controller
+rules:
+# Own API.
+- apiGroups: ["proxmox.cozystack.io"]
+  resources: ["proxmoxnetworks", "proxmoxnetworkzones"]
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["proxmox.cozystack.io"]
+  resources: ["proxmoxnetworks/status", "proxmoxnetworkzones/status"]
+  verbs: ["get", "update", "patch"]
+# The controller is the only writer of tenant Vlans: it creates them on
+# allocation and deletes them on release.
+- apiGroups: ["kubeovn.io"]
+  resources: ["vlans"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+# Subnets are only read and get the controller's finalizer.
+- apiGroups: ["kubeovn.io"]
+  resources: ["subnets"]
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["kubeovn.io"]
+  resources: ["provider-networks"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ipam.cluster.x-k8s.io"]
+  resources: ["inclusterippools"]
+  verbs: ["get", "list", "watch"]
+# A network is in use while a ProxmoxMachine references its pool, even after
+# the IPAM provider has released the address.
+- apiGroups: ["infrastructure.cluster.x-k8s.io"]
+  resources: ["proxmoxmachines"]
+  verbs: ["get", "list"]
+# VPC egress gateway pods: port security goes off on the ones whose ownership
+# chain leads to a VpcEgressGateway the vpc chart rendered. Only the gateway
+# pods are cached (label selector); the chain is read with single gets.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["apps"]
+  resources: ["replicasets", "deployments"]
+  verbs: ["get"]
+- apiGroups: ["kubeovn.io"]
+  resources: ["vpc-egress-gateways"]
+  verbs: ["get"]
+# Nodes: the trunk nodes of a zone's provider network and their OVN chassis
+# make up each network's HA chassis group.
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+# Namespaces: label selection for zones, and the networks annotation the
+# admission policy reads.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxmox-network-controller-leader-election
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

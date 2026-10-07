@@ -1,0 +1,385 @@
+{{- /*
+CEL, true when the k8s.v1.cni.cncf.io/networks value in expression `.` names a
+NetworkAttachmentDefinition outside the request's namespace. Multus (its own
+parsePodNetworkAnnotation) and Kube-OVN (network-attachment-definition-client
+ParseNetworkAnnotation) read this key alike: an empty value selects nothing;
+JSON as soon as it contains one of [ { "; otherwise comma-separated
+[<namespace>/]<name>[@<ifname>] entries; a missing namespace is the pod's.
+- JSON: every "namespace" key must name the request's namespace. Go's decoder
+  matches keys case-insensitively, which (?i) mirrors, and through \u escapes,
+  so a backslash is refused outright: none of the names involved needs one.
+- Comma form: every entry must be unqualified or qualified with the request's
+  namespace, in the DNS-label grammar both parsers enforce. Anything looser
+  (spaces around the slash, empty entries) is refused rather than parsed.
+*/}}
+{{- define "proxmox-network.foreignNetworks" -}}
+({{ . }} != '' && ({{ . }}.contains('\\') ||
+          ({{ . }}.contains('[') || {{ . }}.contains('{') || {{ . }}.contains('"')
+            ? !{{ . }}.findAll('(?i:"namespace")\\s*:\\s*"[^"]*"').all(m,
+                m.matches('^(?i:"namespace")\\s*:\\s*"' + request.namespace + '"$'))
+            : !{{ . }}.split(',').all(e,
+                e.matches('^\\s*(' + request.namespace + '/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(@[a-z0-9]([-a-z0-9]*[a-z0-9])?)?\\s*$')))))
+{{- end }}
+{{- /*
+CEL, true when the v1.multus-cni.io/default-network value in expression `.` is
+not one NetworkAttachmentDefinition qualified with the request's namespace.
+Here the two readers differ: Multus puts a missing namespace in its own
+(kube-system), Kube-OVN in the pod's. Only the explicit
+<namespace>/<name>[@<ifname>] form names the same object for both, so JSON
+and unqualified names are refused. KubeVirt copies a default multus network's
+networkName into this key verbatim.
+*/}}
+{{- define "proxmox-network.foreignDefaultNetwork" -}}
+!{{ . }}.matches('^\\s*' + request.namespace + '/[a-z0-9]([-a-z0-9]*[a-z0-9])?(@[a-z0-9]([-a-z0-9]*[a-z0-9])?)?\\s*$')
+{{- end }}
+{{- /*
+CEL, true when the Kube-OVN logical switch annotation key `k` picks a subnet.
+Kube-OVN takes ovn.kubernetes.io/logical_switch (primary NIC) and
+<provider>.kubernetes.io/logical_switch (one attachment) as a subnet name
+without checking the subnet's namespace, provider or VPC. Only the namespace's
+own default switches, which Kube-OVN would pick anyway, are let through.
+*/}}
+{{- define "proxmox-network.subnetPin" -}}
+(k.endsWith('kubernetes.io/logical_switch') &&
+            !(k == 'ovn.kubernetes.io/logical_switch' && variables.annotations[k] in variables.namespaceSwitches))
+{{- end }}
+{{- define "proxmox-network.attachmentMatchConditions" -}}
+- name: not-a-platform-namespace
+  expression: >-
+    !request.namespace.startsWith('cozy-') && !(request.namespace in {{ . | toJson }})
+# Finalizers must always come off, whatever the object still references.
+- name: not-being-deleted
+  expression: "!has(object.metadata.deletionTimestamp)"
+{{- end }}
+{{- define "proxmox-network.namespaceSwitches" -}}
+- name: namespaceSwitches
+  expression: >-
+    namespaceObject != null && has(namespaceObject.metadata.annotations) &&
+    'ovn.kubernetes.io/logical_switch' in namespaceObject.metadata.annotations
+      ? namespaceObject.metadata.annotations['ovn.kubernetes.io/logical_switch'].split(',') : []
+{{- end }}
+{{- /* Namespaces the attachment policies skip: the platform's own, where
+      Kube-OVN's gateways and the zones' egress gateways legitimately attach
+      other namespaces' networks (the transit NAD, a tenant subnet as the
+      primary NIC). */}}
+{{- $exempt := list "kube-system" .Release.Namespace }}
+{{- range .Values.zones }}
+{{- with .egress }}{{ with .gatewayNamespace }}{{ $exempt = append $exempt . }}{{ end }}{{ end }}
+{{- end }}
+{{- $exempt = concat $exempt (.Values.admission.exemptNamespaces | default list) | uniq }}
+{{- if .Values.admission.enabled }}
+{{- $bridges := list }}
+{{- $uplinks := list }}
+{{- $uplinkBridges := list }}
+{{- range .Values.zones }}
+{{- $zone := . }}
+{{- $bridges = append $bridges .bridge }}
+{{- if hasKey . "uplinkVLAN" }}
+{{- $vlan := int .uplinkVLAN }}
+{{- if or (lt $vlan 1) (gt $vlan 4094) }}
+{{- fail (printf "zones[%s].uplinkVLAN must be a VLAN ID (1-4094), got %v" .name .uplinkVLAN) }}
+{{- end }}
+{{- $uplinks = append $uplinks $vlan }}
+{{- end }}
+{{- with .uplinkBridges }}
+{{- if not (kindIs "slice" .) }}
+{{- fail (printf "zones[%s].uplinkBridges must be a list of bridge names" $zone.name) }}
+{{- end }}
+{{- range . }}
+{{- $uplinkBridges = append $uplinkBridges (toString .) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $uplinkBridges }}
+{{- if has . $bridges }}
+{{- fail (printf "uplinkBridges lists %s, which is a zone bridge" .) }}
+{{- end }}
+{{- end }}
+{{- /*
+proxmox-network-machine-binding: which Proxmox networks a machine may use.
+
+- A NIC on a zone bridge must be one of the networks of its own namespace, as a
+  (bridge, VLAN, pool) triple from the namespace annotation the controller
+  maintains. This holds in every namespace, so a namespace with no Proxmox
+  network cannot put a VM on a tenant VLAN, the transit VLAN or an untagged
+  port of the trunk bridge through the raw bridge/vlan path.
+- No NIC on any other bridge may be tagged with a zone's uplink VLAN, the outer
+  VLAN that carries the zone bridge between hypervisors (bond0.70 under
+  vmbr70). On a VLAN-aware bridge over the same bond, such a NIC sends frames
+  with that outer tag, and any inner tag the guest chooses, into the zone; on a
+  traditional bridge Proxmox would build vmbrXv70 on the bond VLAN the zone
+  bridge already enslaves.
+- No NIC at all may sit on a zone's uplink bridges, the bridges that enslave
+  the uplink's parent device itself (vmbr0 over bond0). An untagged NIC there
+  is a trunk: the guest sets the outer tag itself, and the other hypervisor
+  hands frames tagged with the uplink VLAN to its VLAN device (bond0.70)
+  before its bridge sees them, so they enter the zone with any inner tag. A
+  tagged NIC there makes Proxmox enslave the parent's VLAN device for that tag
+  into a new bridge, and that device may be one the hypervisor uses itself.
+- In a namespace that owns Proxmox networks, every NIC must be one of them and
+  network.default must be set: without it the VM keeps the template's NIC,
+  which may sit on an infrastructure bridge.
+- NICs on other bridges in namespaces without Proxmox networks keep working,
+  so clusters on the raw path are unaffected. That makes the uplink bridges
+  list load-bearing: a bridge over the uplink's parent that is not listed is
+  a trunk into the zone for any machine placed on it. VMs created outside
+  these kinds are not covered at all; for them the hypervisor has to drop
+  guest VLAN tags on such bridges.
+
+CREATE only: both kinds are immutable in their network once created, and
+capmox keeps updating its machines while a network drains.
+*/}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-machine-binding
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE"]
+      resources: ["proxmoxmachines", "proxmoxmachinetemplates"]
+  variables:
+  - name: owns
+    expression: >-
+      has(namespaceObject.metadata.annotations) &&
+      'proxmox.cozystack.io/networks' in namespaceObject.metadata.annotations
+  - name: allowed
+    expression: >-
+      variables.owns ? namespaceObject.metadata.annotations['proxmox.cozystack.io/networks'].split(',') : []
+  - name: zoneBridges
+    expression: {{ $bridges | toJson | quote }}
+  - name: uplinkVLANs
+    expression: {{ $uplinks | uniq | toJson | quote }}
+  - name: uplinkBridges
+    expression: {{ $uplinkBridges | uniq | toJson | quote }}
+  - name: spec
+    expression: "request.kind.kind == 'ProxmoxMachineTemplate' ? object.spec.template.spec : object.spec"
+  - name: nics
+    expression: >-
+      !has(variables.spec.network) ? [] :
+      (has(variables.spec.network.default) ? [variables.spec.network.default] : []) +
+      (has(variables.spec.network.additionalDevices) ? variables.spec.network.additionalDevices : [])
+  - name: triples
+    expression: >-
+      variables.nics.map(n,
+        has(n.vlan) && has(n.ipv4PoolRef) && n.ipv4PoolRef.kind == 'InClusterIPPool'
+          ? n.bridge + '/' + string(n.vlan) + '/' + n.ipv4PoolRef.name
+          : '')
+  validations:
+  - expression: "!variables.owns || (has(variables.spec.network) && has(variables.spec.network.default))"
+    message: >-
+      this namespace owns Proxmox networks, so a machine must declare
+      network.default; without it the VM keeps the template's NIC, which may sit
+      on an infrastructure bridge
+  - expression: >-
+      variables.nics.all(n, !(n.bridge in variables.zoneBridges) ||
+        (has(n.vlan) && has(n.ipv4PoolRef) && n.ipv4PoolRef.kind == 'InClusterIPPool' &&
+         (n.bridge + '/' + string(n.vlan) + '/' + n.ipv4PoolRef.name) in variables.allowed))
+    messageExpression: >-
+      'a NIC on a Proxmox network zone bridge must use a Proxmox network of this namespace (' +
+      (variables.owns ? variables.allowed.join(', ') : 'it has none') + '); got ' +
+      variables.triples.filter(t, t != '').join(', ')
+  - expression: >-
+      variables.nics.all(n, n.bridge in variables.zoneBridges || !has(n.vlan) ||
+        !(n.vlan in variables.uplinkVLANs))
+    messageExpression: >-
+      'a NIC outside the Proxmox network zone bridges may not use a zone uplink VLAN (' +
+      variables.uplinkVLANs.map(v, string(v)).join(', ') + '), which would put it on the zone trunk; got ' +
+      variables.nics.filter(n, !(n.bridge in variables.zoneBridges) && has(n.vlan) &&
+        n.vlan in variables.uplinkVLANs).map(n, n.bridge + '/' + string(n.vlan)).join(', ')
+  - expression: "variables.nics.all(n, !(n.bridge in variables.uplinkBridges))"
+    messageExpression: >-
+      'a NIC may not use ' + variables.uplinkBridges.join(', ') +
+      ': these bridges enslave the parent device of a Proxmox network zone uplink, so a machine on them reaches the zone trunk; got ' +
+      variables.nics.filter(n, n.bridge in variables.uplinkBridges)
+        .map(n, has(n.vlan) ? n.bridge + '/' + string(n.vlan) : n.bridge).join(', ')
+  - expression: >-
+      !variables.owns || variables.triples.all(t, t != '' && t in variables.allowed)
+    messageExpression: >-
+      'every NIC must use a Proxmox network of this namespace (bridge/vlan/pool one of ' +
+      variables.allowed.join(', ') + ')'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-machine-binding
+spec:
+  policyName: proxmox-network-machine-binding
+  validationActions:
+    {{- toYaml .Values.admission.validationActions | nindent 4 }}
+{{- end }}
+{{- if .Values.admission.vmNetworkNamespace }}
+{{- /*
+proxmox-network-vm-attachments: a KubeVirt VM attaches only networks of its own
+namespace. Multus has no namespace isolation and Kube-OVN resolves an
+attachment by the namespace written in its name, so a tenant allowed to create
+VirtualMachines could otherwise place a port on another tenant's VLAN-backed
+subnet, or on the transit network every VPC's egress gateway shares. Two routes
+lead there:
+- spec networks: multus.networkName qualified with another namespace, or, for
+  the multus default network, not qualified with its own: KubeVirt writes that
+  name into v1.multus-cni.io/default-network, where Multus resolves an
+  unqualified one in kube-system;
+- annotations: KubeVirt copies the VMI's annotations (the VM template's) onto
+  the virt-launcher pod. There Multus reads k8s.v1.cni.cncf.io/networks and
+  v1.multus-cni.io/default-network unless KubeVirt writes its own, and Kube-OVN
+  reads *.kubernetes.io/logical_switch as the subnet of the primary NIC or of
+  an attachment.
+
+On UPDATE only what is new is judged: an entry the old object already had
+passes. An object admitted before this policy (or while it only warned) can
+still be updated, migrated and finalized, and loses a foreign attachment by
+dropping it; a VMI it would start is refused, as is that VMI's launcher pod.
+*/}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-vm-attachments
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["kubevirt.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["virtualmachines", "virtualmachineinstances"]
+  matchConditions:
+  {{- include "proxmox-network.attachmentMatchConditions" $exempt | nindent 2 }}
+  variables:
+  - name: vm
+    expression: "request.kind.kind == 'VirtualMachine'"
+  - name: networks
+    expression: >-
+      (variables.vm
+        ? (has(object.spec.template) && has(object.spec.template.spec) && has(object.spec.template.spec.networks) ? object.spec.template.spec.networks : [])
+        : (has(object.spec.networks) ? object.spec.networks : []))
+      .filter(n, has(n.multus) && has(n.multus.networkName)).map(n, n.multus)
+  - name: oldNetworks
+    expression: >-
+      oldObject == null ? [] :
+      (variables.vm
+        ? (has(oldObject.spec.template) && has(oldObject.spec.template.spec) && has(oldObject.spec.template.spec.networks) ? oldObject.spec.template.spec.networks : [])
+        : (has(oldObject.spec.networks) ? oldObject.spec.networks : []))
+      .filter(n, has(n.multus) && has(n.multus.networkName)).map(n, n.multus)
+  - name: annotations
+    expression: >-
+      variables.vm
+        ? (has(object.spec.template) && has(object.spec.template.metadata) && has(object.spec.template.metadata.annotations) ? object.spec.template.metadata.annotations : {})
+        : (has(object.metadata.annotations) ? object.metadata.annotations : {})
+  - name: oldAnnotations
+    expression: >-
+      oldObject == null ? {} :
+      variables.vm
+        ? (has(oldObject.spec.template) && has(oldObject.spec.template.metadata) && has(oldObject.spec.template.metadata.annotations) ? oldObject.spec.template.metadata.annotations : {})
+        : (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {})
+  {{- include "proxmox-network.namespaceSwitches" . | nindent 2 }}
+  - name: foreignNetworks
+    expression: >-
+      variables.networks.filter(m,
+        (has(m.default) && m.default
+          ? !m.networkName.startsWith(request.namespace + '/')
+          : m.networkName.contains('/') && !m.networkName.startsWith(request.namespace + '/')) &&
+        !(m in variables.oldNetworks))
+      .map(m, m.networkName)
+  - name: foreignAnnotations
+    expression: >-
+      variables.annotations.filter(k,
+        (k == 'k8s.v1.cni.cncf.io/networks'
+          ? {{ include "proxmox-network.foreignNetworks" "variables.annotations[k]" }}
+          : k == 'v1.multus-cni.io/default-network'
+          ? {{ include "proxmox-network.foreignDefaultNetwork" "variables.annotations[k]" }}
+          : {{ include "proxmox-network.subnetPin" . }}) &&
+        !(k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.annotations[k]))
+  validations:
+  - expression: "variables.foreignNetworks.size() == 0 && variables.foreignAnnotations.size() == 0"
+    # Used when the value echoed below carries a line break.
+    message: a VM may attach only network attachment definitions and Kube-OVN subnets of its own namespace
+    messageExpression: >-
+      'a VM may attach only network attachment definitions and Kube-OVN subnets of its own namespace (' +
+      request.namespace + '; a multus default network as ' + request.namespace + '/<name>); refused: ' +
+      (variables.foreignNetworks + variables.foreignAnnotations.map(k, k + '=' + variables.annotations[k])).join(', ')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-vm-attachments
+spec:
+  policyName: proxmox-network-vm-attachments
+  validationActions:
+    {{- toYaml .Values.admission.validationActions | nindent 4 }}
+{{- end }}
+{{- if .Values.admission.podNetworkNamespace }}
+{{- /*
+proxmox-network-pod-attachments: the same annotation rule on the pods
+themselves, whichever controller writes them: virt-launcher pods, CDI importer
+pods (which take a DataVolume's network annotation), any workload controller.
+
+On UPDATE only the Multus annotations are judged, and only when they change
+(network hotplug edits k8s.v1.cni.cncf.io/networks on a running pod); one the
+old pod already had passes, so a pod admitted before this policy can still be
+updated. Kube-OVN's logical switch annotations are judged on CREATE alone:
+kube-ovn-controller writes them back onto every pod it allocates, and nobody
+outside the platform may update pods.
+
+A logical switch pin is refused on CREATE even when it names a subnet of the
+pod's own namespace (CEL cannot tell which namespace a subnet serves); only
+the namespace's default switches pass. So in every namespace this policy
+holds, whether or not it has Proxmox networks, a pod or VM reaches a
+non-default subnet only through a NetworkAttachmentDefinition, and a copy of a
+running pod (kubectl debug --copy-to, a restored backup) that keeps the
+switches kube-ovn wrote is refused. admission.exemptNamespaces lifts both
+attachment policies for a namespace.
+*/}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-pod-attachments
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["pods"]
+  matchConditions:
+  {{- include "proxmox-network.attachmentMatchConditions" $exempt | nindent 2 }}
+  variables:
+  - name: annotations
+    expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+  - name: oldAnnotations
+    expression: "oldObject != null && has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+  {{- include "proxmox-network.namespaceSwitches" . | nindent 2 }}
+  - name: foreignAnnotations
+    expression: >-
+      variables.annotations.filter(k,
+        (k == 'k8s.v1.cni.cncf.io/networks'
+          ? {{ include "proxmox-network.foreignNetworks" "variables.annotations[k]" }}
+          : k == 'v1.multus-cni.io/default-network'
+          ? {{ include "proxmox-network.foreignDefaultNetwork" "variables.annotations[k]" }}
+          : request.operation == 'CREATE' && {{ include "proxmox-network.subnetPin" . }}) &&
+        !(k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.annotations[k]))
+  validations:
+  - expression: "variables.foreignAnnotations.size() == 0"
+    # Used when the value echoed below carries a line break.
+    message: a pod may attach only network attachment definitions and Kube-OVN subnets of its own namespace
+    messageExpression: >-
+      'a pod may attach only network attachment definitions and Kube-OVN subnets of its own namespace (' +
+      request.namespace + '; a multus default network as ' + request.namespace + '/<name>); refused: ' +
+      variables.foreignAnnotations.map(k, k + '=' + variables.annotations[k]).join(', ')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-pod-attachments
+spec:
+  policyName: proxmox-network-pod-attachments
+  validationActions:
+    {{- toYaml .Values.admission.validationActions | nindent 4 }}
+{{- end }}

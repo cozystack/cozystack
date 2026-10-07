@@ -1,0 +1,34 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.proxmox-network
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # Maps VPC subnets onto Proxmox VLANs. Kube-OVN carries the VLANs to the
+  # nodes and the IPAM provider owns the pool types the controller reads and
+  # the vpc chart writes; capmox itself is not a dependency, because a zone and
+  # its networks are usable by pods before any Proxmox-backed cluster exists.
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-provider-ipam-in-cluster
+    components:
+    - name: proxmox-network-crds
+      path: system/proxmox-network-crds
+      install:
+        namespace: cozy-proxmox-network
+        releaseName: proxmox-network-crds
+    - name: proxmox-network
+      path: system/proxmox-network
+      install:
+        privileged: true
+        namespace: cozy-proxmox-network
+        releaseName: proxmox-network
+        dependsOn:
+        - proxmox-network-crds

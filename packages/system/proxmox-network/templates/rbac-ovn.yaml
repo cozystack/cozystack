@@ -1,0 +1,30 @@
+{{- if .Values.ovn.manageGatewayChassis }}
+{{- $secret := include "proxmox-network.ovnTLSSecret" . | splitList "/" }}
+# The controller writes HA chassis groups to the OVN NB with Kube-OVN's
+# client certificate. It reads that one secret with a single get: no list or
+# watch, and no other secret of the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxmox-network-controller-ovn-tls
+  namespace: {{ index $secret 0 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: [{{ index $secret 1 | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxmox-network-controller-ovn-tls
+  namespace: {{ index $secret 0 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: proxmox-network-controller-ovn-tls
+subjects:
+- kind: ServiceAccount
+  name: proxmox-network-controller
+  namespace: {{ .Release.Namespace }}
+{{- end }}

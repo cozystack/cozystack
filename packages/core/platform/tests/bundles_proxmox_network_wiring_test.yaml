@@ -1,0 +1,49 @@
+suite: bundles.iaas proxmox-network wiring
+# The VLAN allocator is opt-in, like capmox, and brings the IPAM provider: a
+# Proxmox-backed subnet's VM range is an InClusterIPPool.
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+set:
+  bundles:
+    system:
+      enabled: true
+      variant: isp-full
+    iaas:
+      enabled: true
+tests:
+  - it: ships nothing by default
+    set:
+      bundles.enabledPackages: []
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.proxmox-network
+          any: true
+        not: true
+
+  - it: brings the IPAM provider along when enabled
+    set:
+      bundles.enabledPackages: [cozystack.proxmox-network]
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.proxmox-network
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+          any: true
+
+  - it: stops the render when IPAM is disabled alongside it
+    set:
+      bundles.enabledPackages: [cozystack.proxmox-network]
+      bundles.disabledPackages: [cozystack.capi-provider-ipam-in-cluster]
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.proxmox-network requires cozystack.capi-provider-ipam-in-cluster"

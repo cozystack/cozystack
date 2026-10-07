@@ -1,0 +1,14 @@
+suite: proxmox-network CRDs survive a release uninstall
+templates:
+  - templates/crds.yaml
+tests:
+  - it: renders both CRDs, each kept on uninstall
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
