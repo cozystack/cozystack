@@ -247,7 +247,7 @@ spec:
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
       {{- /* A builtin pool whose golden is absent, failed to import, or on a
-             StorageClass the worker disk cannot CSI-clone from fails loudly here
+             StorageClass other than the worker disk's fails loudly here
              rather than degrading silently. And because a CDI clone target must be
              at least as large as its source, a worker diskSize below the golden's
              storage would fail the clone at runtime — reject it at render when the
@@ -372,19 +372,24 @@ spec:
       {{-     else if and (ne $goldenPhase "Succeeded") (ge $goldenRestarts 3) (eq $goldenRunning "False") (not $poolCloned) }}
       {{-       fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public keeps failing to import (%d importer restarts) — cloning it would block this pool's workers while it does. The refusal lifts by itself once an import attempt succeeds. The importer is retried with a growing back-off, and a recreated importer pod counts as not running until its container starts, so that can take a few minutes after the source is fixed. Check the importer pod logs in cozy-public." .groupName $goldenName $goldenRestarts) }}
       {{-     end }}
-      {{- /* CDI takes the storage-layer CSI-clone path only when source and target
-             share a StorageClass; across classes it silently falls back to a
+      {{- /* Keep a pool on its golden's StorageClass. CDI falls back to a
              host-assisted copy over the pod network — exactly the per-worker
-             network transfer osImage.builtin exists to avoid (#3231). Reject the
-             case we can prove. An empty class on either side means "the cluster
-             default", which is resolvable against a live cluster and is resolved
-             here: leaving it unresolved is what let the one corner that CANNOT be
-             a clone — a pool at storageClass "" whose golden is on an explicit
-             class — pass unchecked. With no cluster to read (helm template) both
-             stay empty and the comparison is skipped, as before. This rules out
-             the guaranteed-host-assisted case, not every one: a matching
-             StorageClass still leaves the strategy to the CDI StorageProfile,
-             which the worker DataVolume inherits. */}}
+             network transfer osImage.builtin exists to avoid (#3231) — when the
+             two claims have different CSI drivers or volume modes
+             (validateAdvancedClonePVC in CDI's pkg/controller/clone/planner.go).
+             Two classes of one driver do not fall back: CDI asks that driver for
+             a snapshot or CSI clone into the other class, and whether that works
+             depends on the driver and on both classes' parameters. Sharing a
+             class rules out both a driver mismatch and a cross-class clone. An
+             empty class on either side means the class CDI binds on, which is
+             resolvable against a live cluster and is resolved here: leaving it
+             unresolved is what let a pool at storageClass "" whose golden is on
+             an explicit class pass unchecked. With no cluster to read (helm template) both stay empty
+             and the comparison is skipped, as before. A matching StorageClass
+             does not rule out every host-assisted copy: the strategy still comes
+             from the CDI StorageProfile the worker DataVolume inherits, and CDI
+             also falls back on differing volume modes, when no VolumeSnapshotClass
+             fits, or when a larger target cannot be expanded. */}}
       {{-     $workerSC := $cloneWorkerSC }}
       {{-     $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
       {{- /* A golden that declares no class is not on "the cluster default" as it
@@ -416,9 +421,9 @@ spec:
              made, and reports it as the empty string. */}}
       {{-       $defaultNote := "" }}
       {{-       if $resolvedFromDefault }}
-      {{-         $defaultNote = printf " An empty storageClass was resolved to the cluster default StorageClass %q." $defaultSC }}
+      {{-         $defaultNote = printf " An empty storageClass was resolved to %q, the class CDI binds a disk that names none on." $defaultSC }}
       {{-       end }}
-      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network.%s Neither side can be moved in place: this golden's class is fixed for its lifetime, because a DataVolume spec cannot be patched, and the pool's storageClass is immutable on an existing pool. So add a NEW kubernetes-worker-image catalog entry with a different (schematicID, version) on storageClass %q (kubernetesWorkerImage.images in the cozystack-platform Package values) and point this pool's osImage.builtin at it; or, once no pool clones this golden, delete it and let the catalog recreate it on that class. Switching this pool to osImage.factory also resolves it." .groupName $workerSC $goldenName $goldenSC $defaultNote $workerSC) }}
+      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — across StorageClasses CDI either falls back to a host-assisted copy over the pod network (different CSI drivers or volume modes) or leaves a clone into the other class to the CSI driver.%s Neither side can be moved in place: this golden's class is fixed for its lifetime, because a DataVolume spec cannot be patched, and the pool's storageClass is immutable on an existing pool. So add a NEW kubernetes-worker-image catalog entry with a different (schematicID, version) on storageClass %q (kubernetesWorkerImage.images in the cozystack-platform Package values) and point this pool's osImage.builtin at it; or, once no pool clones this golden, delete it and let the catalog recreate it on that class. Switching this pool to osImage.factory also resolves it." .groupName $workerSC $goldenName $goldenSC $defaultNote $workerSC) }}
       {{-     end }}
       {{-     $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
       {{- /* Same authority argument as the class one line up: a golden whose spec
@@ -514,10 +519,10 @@ spec:
 
               A builtin pool instead renders the class the guard above resolved for
               it. Omitting the field there would let the disk bind on whatever the
-              cluster default is at bind time, and CDI takes the storage-layer path
-              only when source and target share a class -- so a default that moved
-              after the pool's earlier disks were bound turns the next clone into a
-              host-assisted copy over the pod network, the transfer the guard exists
+              cluster default is at bind time -- so a default that moved after the
+              pool's earlier disks were bound turns the next clone into a
+              cross-class one, which CDI either runs as a host-assisted copy over
+              the pod network or leaves to the CSI driver, the clone the guard exists
               to refuse, while the guard reports no drift because it compared the
               class those earlier disks sit on. With both levels empty and no cluster
               to resolve against the field is still omitted, so the HTTP path renders
