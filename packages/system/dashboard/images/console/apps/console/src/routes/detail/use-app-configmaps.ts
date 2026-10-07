@@ -35,7 +35,8 @@ export function useApplicationConfigMaps(
     { apiGroup: "", apiVersion: "v1", plural: "configmaps", namespace },
     { enabled: !!name && !!namespace, fieldSelector: `metadata.name=${name}`, retry: false },
   )
-  const resources = query.data?.items.find((item) => item.metadata.name === name)?.data?.resources
+  const unavailable = query.error && query.error instanceof K8sApiError && [403, 404].includes(query.error.status)
+  const resources = unavailable ? undefined : query.data?.items.find((item) => item.metadata.name === name)?.data?.resources
   const parsed = useMemo(() => {
     try {
       return { names: configMapNames(resources, namespace ?? ""), error: null }
@@ -43,6 +44,5 @@ export function useApplicationConfigMaps(
       return { names: [], error: error instanceof Error ? error : new Error("Invalid resource map.") }
     }
   }, [resources, namespace])
-  const unavailable = query.error && query.error instanceof K8sApiError && [403, 404].includes(query.error.status)
   return { ...parsed, isLoading: query.isLoading, error: parsed.error ?? (unavailable ? null : query.error) ?? null }
 }

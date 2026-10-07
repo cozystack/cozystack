@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, screen, waitFor } from "@testing-library/react"
 import { K8sApiError, K8sClient } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
@@ -24,7 +24,7 @@ function Configuration() {
   return <ConfigMapsTab namespace={namespace} names={maps.names} error={maps.error} />
 }
 
-function makeClient(error?: Error) {
+function makeClient(error?: Error, map = resources) {
   const client = new K8sClient()
   vi.spyOn(client, "watch").mockReturnValue(() => {})
   vi.spyOn(client, "list").mockImplementation(async (_group, _version, _plural, ns, options) => {
@@ -32,7 +32,7 @@ function makeClient(error?: Error) {
     const name = options?.fieldSelector?.replace("metadata.name=", "")
     if (name === "foundationdb-demo-resourcemap") {
       return { apiVersion: "v1", kind: "ConfigMapList", metadata: { resourceVersion: "1" }, items: [
-        { metadata: { name, namespace }, data: { resources } },
+        { metadata: { name, namespace }, data: { resources: map } },
       ] }
     }
     expect(name).toBe("foundationdb-demo-config")
@@ -86,6 +86,27 @@ describe("application ConfigMaps", () => {
     renderWithK8sProvider(<Configuration />, { client: makeClient(new K8sApiError(403, "ConfigMap access denied")) })
     expect(await screen.findByRole("alert")).toHaveTextContent("ConfigMap access denied")
     expect(screen.queryByText("No configuration values.")).not.toBeInTheDocument()
+  })
+
+  it.each([403, 404])("drops the ConfigMaps when the resource map answers %i after a successful read", async (status) => {
+    const client = makeClient()
+    const { queryClient } = renderWithK8sProvider(<Configuration />, { client })
+    expect(await screen.findByText(clusterFile)).toBeInTheDocument()
+    vi.mocked(client.list).mockRejectedValue(new K8sApiError(status, "resource map unavailable"))
+    await act(() => queryClient.invalidateQueries())
+    expect(await screen.findByText("No ConfigMaps.")).toBeInTheDocument()
+    expect(screen.queryByText(clusterFile)).not.toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("drops a malformed-map error when the resource map turns forbidden", async () => {
+    const client = makeClient(undefined, "not a list")
+    const { queryClient } = renderWithK8sProvider(<Configuration />, { client })
+    expect(await screen.findByRole("alert")).toHaveTextContent("must contain a list")
+    vi.mocked(client.list).mockRejectedValue(new K8sApiError(403, "resource map unavailable"))
+    await act(() => queryClient.invalidateQueries())
+    expect(await screen.findByText("No ConfigMaps.")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 
   it("ignores non-ConfigMap and cross-namespace entries and removes duplicate names", () => {

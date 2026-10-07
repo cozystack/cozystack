@@ -1,19 +1,24 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import { MemoryRouter, Routes, Route } from "react-router"
+import { K8sApiError } from "@cozystack/k8s-client"
 
 // Drive useK8sGet's result per test; the page's loading/error guards are the unit under test.
 const h = vi.hoisted(() => ({
   get: { data: undefined as unknown, isLoading: true, error: undefined as unknown },
   configMaps: [] as unknown[],
+  configMapsError: undefined as unknown,
   tabLabels: [] as string[],
 }))
 
-vi.mock("@cozystack/k8s-client", () => ({
+vi.mock("@cozystack/k8s-client", async (importOriginal) => ({
+  K8sApiError: (await importOriginal<typeof import("@cozystack/k8s-client")>()).K8sApiError,
   useK8sGet: () => h.get,
   useK8sDelete: () => ({ mutateAsync: vi.fn() }),
   // Presence probes (use-resource-presence.ts) — report empty lists.
-  useK8sList: (ref: { plural: string }) => ({ data: { items: ref.plural === "configmaps" ? h.configMaps : [] }, isLoading: false }),
+  useK8sList: (ref: { plural: string }) => ref.plural === "configmaps"
+    ? { data: { items: h.configMaps }, error: h.configMapsError, isLoading: false }
+    : { data: { items: [] }, isLoading: false },
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -88,5 +93,20 @@ describe("ApplicationDetailPage configuration", () => {
     h.tabLabels = []
     renderPage()
     expect(h.tabLabels).toContain("ConfigMaps")
+  })
+
+  it("drops the ConfigMaps tab when the resource map stops being readable", () => {
+    h.get = {
+      data: { kind: "Postgres", metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.configMaps = [{ metadata: { name: "demo-resourcemap" }, data: {
+      resources: "- apiVersion: v1\n  kind: ConfigMap\n  name: postgres-demo-config",
+    } }]
+    h.configMapsError = new K8sApiError(403, "forbidden")
+    h.tabLabels = []
+    renderPage()
+    expect(h.tabLabels).not.toContain("ConfigMaps")
   })
 })
