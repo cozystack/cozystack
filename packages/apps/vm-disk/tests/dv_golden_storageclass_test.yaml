@@ -1115,6 +1115,48 @@ tests:
     asserts:
       - notFailedTemplate: {}
 
+  - it: leaves a disk alone whose PVC exists without its DataVolume when the golden is stuck
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *diskPVC
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: &stuck
+            phase: ImportInProgress
+            restartCount: "3"
+            conditions:
+              - {type: Running, status: "False", reason: Error}
+    asserts:
+      - notFailedTemplate: {}
+
+  # Fixing the class alone would still leave the clone waiting on the import.
+  - it: names the stuck import, not the class, for a disk that trips both
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: *stuck
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "vm-default-images-ubuntu" in cozy-public has not finished importing after 3 importer restarts'
+
   # A key under another prefix belongs to someone else and is not read.
   - it: clones into a LINSTOR class that allows remote access next to a foreign key that denies it
     set:
