@@ -309,22 +309,11 @@ metadata:
   name: cozy:tenant:super-admin:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
-{{/* No rule for the raw kubevirt.io/virtualmachines resource here, on purpose.
-     A tenant's VM size, and the quota it counts against, are set and enforced
-     only on the apps.cozystack.io wrapper (vm-instance) below; VM power is
-     use:base via the subresources.kubevirt.io start/stop/restart verbs, and
-     console/VNC is the virtualmachineinstances subresources. A '*' on the raw
-     kubevirt object let a super-admin create or resize a VM straight past that
-     wrapper, unseen by every gate and quota. That '*' arrived with helmreleases
-     in #516 and outlived it. Raw-VM reads stay through cozy:tenant:admin:base
-     (get/list), which aggregates up unchanged, so this tier adds only the
-     apps.cozystack.io wrapper below. Dropping '*' also drops watch on the raw
-     object, so a super-admin's VM console refreshes status by re-listing, as a
-     tenant admin's console (get/list, no watch) already does. Pinned by
-     tests/clusterroles-tenant-super-admin-vm_test.yaml and the tenant-rbac e2e.
-     (Go-template comment, stripped at render — a `#` YAML comment would be
-     copied into every rendered manifest in every tenant and drift out of
-     date.) */}}
+{{/* No raw kubevirt.io/virtualmachines rule here, on purpose: write on the raw
+     object bypasses the apps.cozystack.io wrapper (vm-instance) where VM size
+     and quota are enforced. Reads stay via cozy:tenant:admin:base get/list.
+     Pinned by tests/clusterroles-tenant-super-admin-vm_test.yaml and the
+     tenant-super-admin-raw-vm-rbac case of the vminstance e2e. */}}
 rules:
 - apiGroups: ["apps.cozystack.io"]
   resources:
