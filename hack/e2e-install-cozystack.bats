@@ -469,6 +469,73 @@ EOF
   | grep -qx '250m 128Mi 25m 128Mi'
 }
 
+@test "Tenant super-admin holds no write verb outside the allowlist" {
+  # cozy:tenant:super-admin is aggregated from every ClusterRole labelled for
+  # it or for a level below, across several packages, so a write path into a
+  # tenant namespace can arrive without touching the role that names it. The
+  # raw kubevirt.io VirtualMachine grant did: a '*' that let a tenant size a VM
+  # outside any application. The effective rules are read back from the
+  # apiserver, after aggregation, and any write verb the allowlist does not
+  # name fails the test; adding a line there is the statement that the write
+  # is accounted for.
+  #
+  # The bare system:authenticated identity is subtracted first, so what
+  # Kubernetes grants every user (the selfsubject* reviews) does not tie the
+  # list to a Kubernetes version. An allowlisted line the cluster does not
+  # grant is reported without failing: a lane with COZY_DISABLED_PACKAGES set
+  # lacks the tenant roles those packages ship.
+  #
+  # can-i prints a table only. Non-resource rows have no resource column and
+  # are skipped; every other row becomes one "resource names verb" line per
+  # verb other than get, list and watch, with "-" for no resource names. A line
+  # already covered by a wildcard grant is then dropped, so a '*' on a whole
+  # group (apps.cozystack.io, the gated API) does not make every new kind an
+  # allowlist edit. Staged through files rather than pipes: /bin/sh here has
+  # no pipefail.
+  local normalize subsume allowlist granted baseline effective unexpected missing
+  normalize='$1 ~ /^\[/ { next }
+    {
+      line = substr($0, length($1) + 1); n = 0
+      while (match(line, /\[[^]]*\]/)) { n++; g[n] = substr(line, RSTART + 1, RLENGTH - 2); line = substr(line, RSTART + RLENGTH) }
+      names = g[2]; gsub(/ /, ",", names); if (names == "") names = "-"
+      k = split(g[3], verbs, " ")
+      for (i = 1; i <= k; i++) if (verbs[i] != "get" && verbs[i] != "list" && verbs[i] != "watch") print $1, names, verbs[i]
+    }'
+  subsume='NR == FNR { have[$0] = 1; next }
+    {
+      dot = index($1, ".")
+      if (dot > 1 && $1 !~ /^\*\./ && (("*" substr($1, dot) " - *") in have)) next
+      if ($3 != "*" && (($1 " " $2 " *") in have)) next
+      print
+    }'
+  allowlist=$(mktemp); granted=$(mktemp); baseline=$(mktemp)
+  effective=$(mktemp); unexpected=$(mktemp); missing=$(mktemp)
+  timeout -k 5 30 kubectl auth can-i --list --no-headers -n tenant-test \
+    --as=e2e-rbac-probe --as-group=system:authenticated --as-group=tenant-test-super-admin > "$granted"
+  timeout -k 5 30 kubectl auth can-i --list --no-headers -n tenant-test \
+    --as=e2e-rbac-probe --as-group=system:authenticated > "$baseline"
+  awk "$normalize" "$granted" > "$granted.n"
+  awk "$normalize" "$baseline" > "$baseline.n"
+  yq '.writeVerbs[]' hack/e2e-tenant-super-admin-write-verbs.yaml > "$allowlist"
+  LC_ALL=C sort -u -o "$granted.n" "$granted.n"
+  LC_ALL=C sort -u -o "$baseline.n" "$baseline.n"
+  LC_ALL=C sort -u -o "$allowlist" "$allowlist"
+  LC_ALL=C comm -23 "$granted.n" "$baseline.n" > "$effective.n"
+  awk "$subsume" "$effective.n" "$effective.n" > "$effective"
+  LC_ALL=C comm -23 "$effective" "$allowlist" > "$unexpected"
+  LC_ALL=C comm -13 "$effective" "$allowlist" > "$missing"
+  if [ -s "$missing" ]; then
+    echo "allowlisted but not granted on this cluster:"
+    cat "$missing"
+  fi
+  if [ -s "$unexpected" ]; then
+    echo "FAIL: tenant-test-super-admin holds write verbs hack/e2e-tenant-super-admin-write-verbs.yaml does not allow:" >&2
+    cat "$unexpected" >&2
+    false
+  fi
+  rm -f "$allowlist" "$granted" "$granted.n" "$baseline" "$baseline.n" "$effective" "$effective.n" "$unexpected" "$missing"
+}
+
 @test "Deletion-protection VAP denies delete on labeled cozystack-version ConfigMap" {
   # Locks down the contract delivered by packages/core/platform/templates/
   # deletion-protection.yaml: a DELETE on any object carrying
