@@ -335,9 +335,10 @@ func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
 // imageProvider lists the default image PVCs in cozy-public and strips the
 // vm-default-images- prefix to get the catalog name used by the vm-disk chart.
 //
-// A golden whose DataVolume is in phase Failed is left out: CDI never
-// populates it, so a disk cloned from it never becomes usable. One still
-// importing stays, because CDI holds a clone until the source is populated.
+// A golden whose import is failing is left out (see goldenImportFailing):
+// CDI does not populate it, so a disk cloned from it never becomes usable.
+// One still importing stays, because CDI holds a clone until the source is
+// populated.
 func imageProvider(dyn dynamic.Interface) providerFunc {
 	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
 		list, err := dyn.Resource(gvrPVCs).Namespace(publicImagesNamespace).List(ctx, listOpts())
@@ -353,7 +354,7 @@ func imageProvider(dyn dynamic.Interface) providerFunc {
 			logProviderError("image", err)
 		} else {
 			for i := range dvs.Items {
-				if phase, _, _ := unstructured.NestedString(dvs.Items[i].Object, "status", "phase"); phase == "Failed" {
+				if goldenImportFailing(&dvs.Items[i]) {
 					failed[dvs.Items[i].GetName()] = true
 				}
 			}
@@ -369,6 +370,33 @@ func imageProvider(dyn dynamic.Interface) providerFunc {
 		sortItems(items)
 		return items, nil
 	}
+}
+
+// goldenImportFailing reports a golden DataVolume whose import is failing.
+// CDI sets phase Failed only on a fatal error such as a checksum mismatch; an
+// unreachable URL restarts the importer with back-off while the phase stays
+// in progress, so an importer that restarted at least three times and is not
+// running now counts as failing too. The vm-disk and kubernetes-nodes charts
+// apply the same test before cloning a golden.
+func goldenImportFailing(dv *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+	if phase == "Failed" {
+		return true
+	}
+	if phase == "Succeeded" {
+		return false
+	}
+	restarts, _, _ := unstructured.NestedInt64(dv.Object, "status", "restartCount")
+	if restarts < 3 {
+		return false
+	}
+	conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+	for _, c := range conditions {
+		if cm, ok := c.(map[string]any); ok && cm["type"] == "Running" {
+			return cm["status"] == "False"
+		}
+	}
+	return false
 }
 
 // storagePoolProvider derives selectable pool names from the seaweedfs
