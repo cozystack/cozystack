@@ -51,7 +51,8 @@
        the chart default, so the rendered Package states which way it went. */ -}}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{- $linstorComponents := dict "linstor" (dict "values" (dict "backend" (include "cozystack.platform.storage.backend" $))) -}}
+{{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
@@ -137,7 +138,9 @@
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
-{{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
+{{- $linstorComponents := dict "linstor" (dict "values" (dict
+  "talos" (dict "enabled" false)
+  "backend" (include "cozystack.platform.storage.backend" $))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
@@ -346,7 +349,12 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.keda" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
+{{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" }}
+{{- $guiComponents := dict "linstor-gui" (dict "values" (dict "linstor" (include "cozystack.platform.storage.linstorApiClient" $ | fromYaml))) -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $ $guiComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
+{{- end }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}

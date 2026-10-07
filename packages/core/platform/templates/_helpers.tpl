@@ -175,7 +175,12 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
+{{- if eq (include "cozystack.platform.storage.backend" $root) "blockstor" }}
+{{- $schedulerComponents := dict "linstor-scheduler" (dict "values" (dict "linstor-scheduler" (dict "linstor" (include "cozystack.platform.storage.linstorApiClient" $root | fromYaml)))) -}}
+{{include "cozystack.platform.package" (list "cozystack.linstor-scheduler" "default" $root $schedulerComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}
 {{- /* securitygroup-controller maintains membership labels for CiliumNetworkPolicy-backed
        SecurityGroups, so it only makes sense where Cilium runs. Keeping it here with the
@@ -184,3 +189,36 @@ cozystack-scheduler (emitted with its own variant in both branches)
        common-packages and has no cilium.io CRD for the controller to watch. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
+
+{{- /*
+Resolve the storage backend for the linstor package.
+
+Defaults to `linstor`, which is what every existing cluster runs.
+`blockstor` is experimental and must be asked for explicitly. An
+unrecognised value fails the render rather than silently falling back:
+a typo here would otherwise deploy the wrong storage control plane.
+*/ -}}
+{{- define "cozystack.platform.storage.backend" -}}
+{{- $backend := "linstor" -}}
+{{- if .Values.storage -}}
+{{- $backend = default "linstor" .Values.storage.backend -}}
+{{- end -}}
+{{- if not (has $backend (list "linstor" "blockstor")) -}}
+{{- fail (printf "storage.backend must be \"linstor\" or \"blockstor\", got %q" $backend) -}}
+{{- end -}}
+{{- $backend -}}
+{{- end -}}
+
+{{- /*
+Where the LINSTOR API consumers outside the linstor package (linstor-scheduler,
+linstor-gui) reach the API under the blockstor backend, and with which client
+certificate. Under linstor they keep their own defaults, linstor-controller and
+linstor-client-tls, which piraeus-operator creates and owns. The blockstor
+backend serves the API from blockstor-apiserver and issues the client cert
+itself, so the consumers are pointed there instead of the linstor package
+rendering objects under piraeus's names, which Helm refuses to adopt.
+*/ -}}
+{{- define "cozystack.platform.storage.linstorApiClient" -}}
+endpoint: https://blockstor-apiserver.cozy-linstor.svc:3371
+clientSecret: blockstor-apiserver-client-tls
+{{- end -}}

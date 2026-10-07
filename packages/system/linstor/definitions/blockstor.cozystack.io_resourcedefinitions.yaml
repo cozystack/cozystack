@@ -1,0 +1,499 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: resourcedefinitions.blockstor.cozystack.io
+spec:
+  group: blockstor.cozystack.io
+  names:
+    kind: ResourceDefinition
+    listKind: ResourceDefinitionList
+    plural: resourcedefinitions
+    singular: resourcedefinition
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ResourceDefinition is the Schema for the resourcedefinitions
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of ResourceDefinition
+            properties:
+              drbdOptions:
+                description: |-
+                  drbdOptions is the typed DRBD configuration applied to this
+                  RD. Overrides the parent ResourceGroup's drbdOptions
+                  field-by-field; in turn overridden by per-Resource drbdOptions
+                  at the Resource scope. Phase 10.3.
+                properties:
+                  disk:
+                    description: |-
+                      disk configures the `disk { ... }` section (on-io-error,
+                      activity-log size, resync hints).
+                    properties:
+                      alExtents:
+                        description: |-
+                          alExtents is the activity-log size (in extents). Larger values
+                          reduce metadata write amplification at the cost of longer
+                          resync windows.
+                        format: int32
+                        type: integer
+                      onIoError:
+                        description: |-
+                          onIOError is the action when the local backing device returns
+                          an I/O error. `detach` is the production-safe default — the
+                          satellite drops the local replica to Diskless and consumers
+                          keep going via the network path.
+                        enum:
+                        - detach
+                        - pass-on
+                        - call-local-io-error
+                        type: string
+                    type: object
+                  handlers:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      handlers maps event names to script paths (e.g. fence-peer,
+                      before-resync-target). Free-form for now; the rendered .res
+                      emits one line per pair under `handlers { }`.
+                    type: object
+                  net:
+                    description: |-
+                      net configures the `net { ... }` section of the rendered .res
+                      file (replication protocol, secret, dual-primary, after-sb).
+                    properties:
+                      afterSb0Pri:
+                        description: |-
+                          afterSb0Pri is the recovery action when DRBD detects split-
+                          brain and both sides were Secondary at the time.
+                        enum:
+                        - disconnect
+                        - discard-younger-primary
+                        - discard-older-primary
+                        - discard-zero-changes
+                        - discard-least-changes
+                        - discard-local
+                        - discard-remote
+                        type: string
+                      afterSb1Pri:
+                        description: afterSb1Pri is the recovery action when one side
+                          was Primary.
+                        enum:
+                        - disconnect
+                        - consensus
+                        - violently-as0p
+                        - discard-secondary
+                        - call-pri-lost-after-sb
+                        type: string
+                      afterSb2Pri:
+                        description: |-
+                          afterSb2Pri is the recovery action when both sides were Primary
+                          (only possible if allow-two-primaries was enabled).
+                        enum:
+                        - disconnect
+                        - violently-as0p
+                        - call-pri-lost-after-sb
+                        type: string
+                      allowTwoPrimaries:
+                        description: |-
+                          allowTwoPrimaries enables dual-primary mode (live-migration,
+                          shared-export NFS Ganesha). Must be paired with consumer-side
+                          fencing — DRBD does NOT serialise concurrent writes from two
+                          primaries.
+                        type: boolean
+                      maxBuffers:
+                        description: maxBuffers is the maximum number of in-flight
+                          network buffers.
+                        format: int32
+                        type: integer
+                      protocol:
+                        description: |-
+                          protocol picks the DRBD replication protocol. A=async (writer
+                          returns once data hits local disk), B=memory-sync (returns on
+                          peer ACK after kernel buffer), C=sync (returns on peer disk
+                          fsync). DRBD-9 default is C.
+                        enum:
+                        - A
+                        - B
+                        - C
+                        type: string
+                      sharedSecretRef:
+                        description: |-
+                          sharedSecretRef references a Secret containing the DRBD network
+                          authentication shared secret under the key `shared-secret`.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  peerDevice:
+                    description: |-
+                      peerDevice configures the `peer-device { ... }` block (per-peer
+                      resync rate caps and similar).
+                    properties:
+                      cMaxRate:
+                        description: |-
+                          cMaxRate caps the per-peer resync transfer rate. Format
+                          matches DRBD: integer + suffix (`100M`, `1G`).
+                        type: string
+                    type: object
+                  resource:
+                    description: |-
+                      resource configures resource-level `options { ... }` (auto-
+                      promote, quorum mode, on-no-quorum action).
+                    properties:
+                      autoPromote:
+                        description: |-
+                          autoPromote causes DRBD to promote the resource to Primary
+                          automatically when a consumer opens the device, provided no
+                          other peer is already Primary. Cluster-wide default true.
+                        type: boolean
+                      autoTieBreaker:
+                        description: |-
+                          autoTieBreaker gates auto-creation of a DISKLESS+TIE_BREAKER
+                          witness when a parent RD has an even number of diskful
+                          replicas and no operator-placed diskless replica. Replaces
+                          `Props["DrbdOptions/AutoAddQuorumTiebreaker"]`. nil inherits
+                          the cluster-wide default (true). Phase 10.3.
+                        type: boolean
+                      onNoQuorum:
+                        description: |-
+                          onNoQuorum is the action when quorum is lost. `io-error`
+                          returns EIO to the consumer (drbd-reactor's typical trigger
+                          for failover). `suspend-io` blocks I/O until quorum returns
+                          (useful for deliberate maintenance windows).
+                        enum:
+                        - io-error
+                        - suspend-io
+                        - freeze-io
+                        type: string
+                      quorum:
+                        description: |-
+                          quorum picks the quorum policy. `majority` requires more than
+                          half of all replicas (including diskless witnesses) to be
+                          connected before allowing writes. `off` allows writes from any
+                          replica regardless of partition state — split-brain risk.
+                          `all` requires every replica to be reachable, useful only for
+                          strict 2-replica configurations under deliberate operator
+                          control.
+                        enum:
+                        - "off"
+                        - majority
+                        - all
+                        type: string
+                    type: object
+                type: object
+              drbdPort:
+                description: |-
+                  drbdPort is an OPTIONAL preferred TCP port seed for this RD,
+                  mirroring upstream LINSTOR's `RscDfn.port` preferred value. The
+                  per-node port allocator (Resource.Spec.DRBDPort) tries this
+                  value first on each hosting node and falls back to a per-node
+                  free port on collision. nil means "no preference — allocate
+                  per-node freely". This is a seed, NOT the authoritative
+                  listen-port: the authoritative per-replica value lives on
+                  Resource.Spec.DRBDPort. clusterIP-style settable-once so an
+                  accidental edit can't perturb the per-node allocation.
+                format: int32
+                type: integer
+                x-kubernetes-validations:
+                - message: drbdPort is settable-once
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              encryption:
+                description: |-
+                  encryption configures LUKS encryption for the volumes in this
+                  RD. The passphrase is held in a referenced Secret rather than
+                  inline in the spec. Phase 10.3.
+                properties:
+                  passphraseSecretRef:
+                    description: |-
+                      passphraseSecretRef references the Secret carrying the LUKS
+                      passphrase under the key `passphrase`. The satellite reads it
+                      via the apiserver during reconcile; the passphrase never lands
+                      on Spec in plaintext.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              externalName:
+                description: |-
+                  externalName is the user-facing name surfaced by csi (CSI volume id).
+                  Empty means the same as metadata.name.
+                type: string
+              extraProps:
+                additionalProperties:
+                  type: string
+                description: |-
+                  extraProps carries upstream-LINSTOR property keys we have not
+                  yet typed into structured fields. Forward-compat shim populated
+                  only by the REST shim when golinstor sends an unknown key.
+                  Phase 10.3.
+                type: object
+              flags:
+                description: flags carries user-controlled RD flags (DELETE, INACTIVE,
+                  ...).
+                items:
+                  type: string
+                type: array
+              initialized:
+                description: |-
+                  initialized is the durable "this RD has completed its initial
+                  replica-set establishment and now holds (or has held) committed
+                  data" latch. The controller flips it true ONCE, append-only, the
+                  first time any diskful replica of the RD reports a real
+                  data-bearing disk state that has advanced past the deterministic
+                  day0 GI (a genuine write, or an adoption of pre-existing data) —
+                  see ResourceReconciler.ensureRDInitialized. Once true it is NEVER
+                  cleared or mutated.
+
+                  It is the OFFLINE-SAFE, BACKUP-SAFE source of truth for the
+                  skip-initial-sync decision (replaces the live-kernel
+                  AnyConnectedPeerHasData probe as the authoritative signal):
+
+                    - A Resource created while initialized is nil/false is part of
+                      the genuinely-fresh initial set — every such replica is
+                      stamped Spec.SkipInitialSync=true and skips the initial sync
+                      (instant UpToDate, no SyncTarget). Invariant 1.
+                    - A Resource created AFTER initialized latched true (relocate /
+                      migrate-disk / extra replica) is stamped
+                      Spec.SkipInitialSync=false and must SyncTarget the real data —
+                      EVEN IF the sole data-holder is offline at seed time, because
+                      this latch was set while the data was being written (holder
+                      online) and PERSISTS in Spec across the holder going offline.
+                      Invariant 2 + offline-safety.
+
+                  Lives in Spec (backed up by `kubectl get -o yaml`, restored by
+                  `kubectl apply`), NOT Status — a restored, already-initialized RD
+                  must keep forcing new replicas to sync rather than skip. Invariant
+                  3 (backup/restore-safe).
+
+                  clusterIP-style append-only: nil means "not yet initialized" (the
+                  conservative pre-upgrade / fresh default → fresh replicas may skip,
+                  the controller flips it on first real data). The controller writes
+                  it only when transitioning nil/false→true and never otherwise, so
+                  a user `kubectl apply` / golinstor REST that omits it never fights
+                  the controller (3-way-merge-safe — invariant 4).
+                type: boolean
+                x-kubernetes-validations:
+                - message: 'initialized is append-only: it may go unset→value or false→true
+                    but never back to false'
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value() || (oldSelf.value()
+                    == false && self == true)'
+              layerStack:
+                description: |-
+                  layerStack is the LINSTOR layer composition for this RD's
+                  satellite-side render — `["DRBD","STORAGE"]` (default) renders a
+                  .res file and runs drbdadm; `["LUKS","STORAGE"]` layers
+                  cryptsetup over the storage device with no DRBD; `["STORAGE"]`
+                  is single-replica local mode (no replication, no encryption).
+                  Order is top-down: the first layer's device is what the
+                  consumer Pod mounts, the last is the raw block device the
+                  storage provider creates.
+                  Empty = inherits from the parent ResourceGroup; both empty =
+                  `["DRBD","STORAGE"]`.
+                items:
+                  type: string
+                type: array
+              props:
+                additionalProperties:
+                  type: string
+                description: props is the LINSTOR property map.
+                type: object
+              resourceGroupName:
+                description: |-
+                  resourceGroupName references the ResourceGroup template this RD was
+                  spawned from (or empty if directly created).
+                type: string
+              volumeDefinitions:
+                description: volumeDefinitions are the volume slots inside this RD.
+                items:
+                  description: ResourceDefinitionVolume is one volume slot inside
+                    an RD.
+                  properties:
+                    drbdMinor:
+                      description: |-
+                        drbdMinor is the /dev/drbd<N> device minor for THIS volume,
+                        identical on every node that hosts a replica (the minor is the
+                        device identity, not a per-replica value). Mirrors upstream
+                        LINSTOR's per-volume-definition `VLM_MINOR_NR`.
+
+                        clusterIP-style allocation (Service.spec.clusterIP model): nil
+                        means "controller, allocate one for me"; a non-nil value is
+                        authoritative and is NEVER overwritten — that is what makes a
+                        plain `kubectl get -o yaml` backup + `kubectl apply` restore
+                        preserve the device identity with no resync/flap. The pointer
+                        (rather than a plain int32) distinguishes "unset" from a valid
+                        minor 0.
+
+                        Replaces the legacy single `RD.Status.DRBDMinor` base +
+                        `base+volumeNumber` derivation: each volume carries its own
+                        minor, so adoption can preserve arbitrary (possibly
+                        non-contiguous) LINSTOR per-volume minors verbatim.
+
+                        NOTE: no CEL settable-once rule here. volumeDefinitions is a
+                        plain (uncorrelatable) array — CEL `oldSelf` cannot track an
+                        element across an update, so a transition rule on a nested
+                        array field is rejected by the apiserver. Immutability is
+                        instead enforced by the controller's allocate-if-nil /
+                        respect-preset pass (it NEVER overwrites a non-nil minor) plus
+                        the store-side VolumeDefinitions carry-across that preserves the
+                        value through a REST modify. The settable-once CEL is retained
+                        on the (correlatable scalar) Resource.Spec.DRBDPort / DRBDNodeID
+                        and RD.Spec.DRBDPort fields.
+                      format: int32
+                      type: integer
+                    flags:
+                      items:
+                        type: string
+                      type: array
+                    props:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    sizeKib:
+                      format: int64
+                      type: integer
+                    volumeNumber:
+                      format: int32
+                      type: integer
+                  required:
+                  - sizeKib
+                  - volumeNumber
+                  type: object
+                type: array
+            type: object
+          status:
+            description: status defines the observed state of ResourceDefinition
+            properties:
+              conditions:
+                description: conditions represent the current state of the ResourceDefinition.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              drbdMinor:
+                description: |-
+                  drbdMinor is a LEGACY read-only mirror of the (historically
+                  cluster-scope, base+k) DRBD minor. DEPRECATED: the authoritative
+                  per-volume minor now lives on
+                  ResourceDefinition.Spec.VolumeDefinitions[].DRBDMinor. Retained
+                  so the one-time status→spec backfill migration can read the
+                  pre-upgrade base value (expanded base+k per volume). Not written
+                  by the allocator any more. Bug 268.
+                format: int32
+                type: integer
+              drbdPort:
+                description: |-
+                  drbdPort is a LEGACY read-only mirror of the (historically
+                  cluster-scope) DRBD port. DEPRECATED: the authoritative DRBD
+                  listen-port now lives per-replica on Resource.Spec.DRBDPort,
+                  and the optional preferred seed on RD.Spec.DRBDPort. Retained
+                  so the one-time status→spec backfill migration can read the
+                  pre-upgrade value, and so observers/REST that still read it
+                  don't break in the same change. Not written by the allocator
+                  any more. Bug 266.
+                format: int32
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

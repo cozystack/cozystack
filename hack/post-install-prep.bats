@@ -127,6 +127,30 @@ case "$*" in
   'get hr -A '*)
     echo "cozy-linstor linstor False dependency 'cozy-system/piraeus-operator' is not ready"
     echo "STUB-HR cozy-kubeovn kubeovn False install retries exhausted" ;;
+  'get linstorsatellite '*)
+    if [ -n "${STUB_SAT_READ_FAIL:-}" ]; then
+      echo 'Error from server (Forbidden): linstorsatellites is forbidden' >&2
+      exit 1
+    fi
+    printf '%s\n' "${STUB_SAT_APPLIED:-True True True}" | tr ' ' '\n' ;;
+  'get nodes '*InternalIP*)
+    if [ -n "${STUB_NODE_ROWS_FAIL:-}" ]; then
+      echo 'Error from server (Forbidden): nodes is forbidden' >&2
+      exit 1
+    fi
+    for n in ${STUB_NODES:-srv1 srv2 srv3}; do echo "$n 192.0.2.$((${#n} + 10))"; done ;;
+  'get nodes '*)
+    if [ -n "${STUB_NODES_READ_FAIL:-}" ]; then
+      echo 'Error from server (Forbidden): nodes is forbidden' >&2
+      exit 1
+    fi
+    for n in ${STUB_NODES:-srv1 srv2 srv3}; do echo "$n"; done ;;
+  'get pods -n cozy-linstor -l app=blockstor-satellite '*spec.nodeName*)
+    for n in ${STUB_NODES:-srv1 srv2 srv3}; do echo "blockstor-satellite-$n $n"; done ;;
+  'get pods -n cozy-linstor -l app=blockstor-satellite '*Ready*)
+    for n in ${STUB_NODES:-srv1 srv2 srv3}; do echo True; done ;;
+  'apply '*)
+    cat >> "${STUB_APPLIED:-/dev/null}" ;;
   'get pods '*)
     if [ -n "${STUB_PODS_FAIL:-}" ]; then
       echo "Error from server (Forbidden): pods is forbidden" >&2
@@ -185,6 +209,8 @@ run_prep() {
   STUB_CLOCK="$d/clock" STUB_CALLS="$d/calls" \
   STUB_HR_READY_AT=$2 STUB_DEPLOY_READY_AT=$3 \
   STUB_EVENTS_FAIL="${4:-}" STUB_PODS_FAIL="${5:-}" \
+  STUB_APPLIED="$d/applied" \
+  COZY_STORAGE_BACKEND="${STUB_BACKEND-linstor}" \
   PATH="$d/bin:$PATH" \
     "$SCRIPT" > "$d/out" 2> "$d/err" && echo 0 > "$d/rc" || echo $? > "$d/rc"
 }
@@ -510,6 +536,134 @@ run_prep() {
   grep -q 'command terminated with exit code 137' "$tmp/err"
   if grep -q 'killed after' "$tmp/err"; then
     echo "a remote kill was blamed on the call bound" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+# run_prep_blockstor <dir>
+# The blockstor branch. Every wait before the satellite gate is answered as
+# ready, so what a test sees is the gate and what follows it.
+run_prep_blockstor() {
+  STUB_BACKEND=blockstor run_prep "$1" 0 0
+}
+
+@test "the prep refuses to run without being told the storage backend" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  STUB_BACKEND="" run_prep "$tmp" 0 0
+
+  # A guess here races the install it runs alongside and fails open to linstor.
+  [ "$(cat "$tmp/rc")" -eq 2 ]
+  grep -q 'COZY_STORAGE_BACKEND must be set' "$tmp/err"
+  if grep -q '^wait ' "$tmp/calls"; then
+    echo "the prep waited on the cluster before it knew the backend" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "the prep refuses a storage backend it does not know" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  STUB_BACKEND=blokstor run_prep "$tmp" 0 0
+
+  [ "$(cat "$tmp/rc")" -eq 2 ]
+  grep -q "got 'blokstor'" "$tmp/err"
+  rm -rf "$tmp"
+}
+
+@test "the blockstor prep registers a Node CR and a StoragePool for every node" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  run_prep_blockstor "$tmp"
+
+  cat "$tmp/err" >&2
+  [ "$(cat "$tmp/rc")" -eq 0 ]
+  grep -q '\[post-install-prep\] done' "$tmp/out"
+  for n in srv1 srv2 srv3; do
+    # The durable outcome, not whether a wait returned: the objects applied.
+    grep -A8 '^kind: Node$' "$tmp/applied" | grep -q "^  name: $n$"
+    grep -A8 '^kind: StoragePool$' "$tmp/applied" | grep -q "^  name: data.$n$"
+    grep -A8 '^kind: StoragePool$' "$tmp/applied" | grep -q "^  nodeName: $n$"
+    grep -q "^exec -n cozy-linstor blockstor-satellite-$n -- sh -ec" "$tmp/calls"
+  done
+  if grep '^UNBOUNDED ' "$tmp/calls" >&2; then
+    echo "unbounded kubectl calls on the blockstor path" >&2
+    return 1
+  fi
+  # Never the LINSTOR path's own controller.
+  if grep -q 'linstor-controller' "$tmp/calls"; then
+    echo "the blockstor prep reached for the LINSTOR controller" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "the blockstor prep fails when a satellite never reports Applied" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export STUB_SAT_APPLIED="True False True"
+  run_prep_blockstor "$tmp"
+  unset STUB_SAT_APPLIED
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q '2 of 3 LinstorSatellite objects Applied' "$tmp/err"
+  if grep -q '^kind: StoragePool$' "$tmp/applied" 2>/dev/null; then
+    echo "pools were created past a satellite that never applied" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "the satellite gate does not pass when both of its reads fail" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  # Two failed reads each count zero, and zero equals zero.
+  export STUB_SAT_READ_FAIL=1 STUB_NODES_READ_FAIL=1
+  run_prep_blockstor "$tmp"
+  unset STUB_SAT_READ_FAIL STUB_NODES_READ_FAIL
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q 'LinstorSatellite read exited 1, Node read exited 1' "$tmp/err"
+  rm -rf "$tmp"
+}
+
+@test "the satellite gate does not pass on a cluster with no node" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  export STUB_NODES=" " STUB_SAT_APPLIED=" "
+  run_prep_blockstor "$tmp"
+  unset STUB_NODES STUB_SAT_APPLIED
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  grep -q '0 of 0 LinstorSatellite objects Applied' "$tmp/err"
+  rm -rf "$tmp"
+}
+
+@test "a failed node read stops the blockstor prep before it registers anything" {
+  tmp=$(mktemp -d)
+  prep_sandbox "$tmp"
+
+  # A read used as a for-list is not covered by set -e: it registers nothing
+  # and the script reports done.
+  export STUB_NODE_ROWS_FAIL=1
+  run_prep_blockstor "$tmp"
+  unset STUB_NODE_ROWS_FAIL
+
+  [ "$(cat "$tmp/rc")" -ne 0 ]
+  if grep -q '\[post-install-prep\] done' "$tmp/out"; then
+    echo "the prep reported done after a failed node read" >&2
+    return 1
+  fi
+  if grep -q '^kind: \(Node\|StoragePool\)$' "$tmp/applied" 2>/dev/null; then
+    echo "objects were registered after the node read failed" >&2
     return 1
   fi
   rm -rf "$tmp"

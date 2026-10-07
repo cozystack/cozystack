@@ -57,6 +57,26 @@ validate_linstor_storage_mode() {
   esac
 }
 
+# Which storage control plane the install deployed. The caller passes what it
+# installed rather than this script guessing: a probe run here would race the
+# install it runs alongside, since the namespace it would look in does not
+# exist yet when the script starts, and it would fail open to linstor on any
+# error. An unknown value is refused for the same reason the platform chart
+# refuses one: it would otherwise take whichever branch is the fallback.
+validate_storage_backend() {
+  case "${COZY_STORAGE_BACKEND:-}" in
+    linstor | blockstor) return 0 ;;
+    "")
+      echo "[post-install-prep] COZY_STORAGE_BACKEND must be set to linstor or blockstor" >&2
+      return 1
+      ;;
+    *)
+      echo "[post-install-prep] COZY_STORAGE_BACKEND must be linstor or blockstor, got '${COZY_STORAGE_BACKEND}'" >&2
+      return 1
+      ;;
+  esac
+}
+
 # KUBECTL_BOUND prefixes the cluster calls in the helpers below with a wall-clock
 # bound. The main body sets it; it stays empty when unit tests source the
 # helpers, because `timeout` execs a binary and would bypass the kubectl shell
@@ -132,12 +152,62 @@ patch_local_cdi_storage_profile() {
     -p '{"spec":{"claimPropertySets":[{"accessModes":["ReadWriteOnce"],"volumeMode":"Block"}]}}'
 }
 
+# count_true <text>: how many lines of <text> are exactly True.
+count_true() {
+  printf '%s\n' "$1" | grep -c '^True$' || true
+}
+
+# count_lines <text>: how many non-empty lines <text> has.
+count_lines() {
+  printf '%s\n' "$1" | grep -c . || true
+}
+
+render_blockstor_node() {
+  cat <<EOF
+apiVersion: blockstor.cozystack.io/v1alpha1
+kind: Node
+metadata:
+  name: $1
+spec:
+  type: SATELLITE
+  netInterfaces:
+    - {name: default, address: $2}
+EOF
+}
+
+# The CRD's CEL rule pins metadata.name to <poolName>.<nodeName>.
+render_blockstor_storage_pool() {
+  cat <<EOF
+apiVersion: blockstor.cozystack.io/v1alpha1
+kind: StoragePool
+metadata:
+  name: data.$1
+spec:
+  nodeName: $1
+  poolName: data
+  providerKind: ZFS_THIN
+  props:
+    StorDriver/ZPoolThin: data
+EOF
+}
+
 # Unit tests source the pure helpers above without reaching a cluster.
 if [ "${E2E_POST_INSTALL_PREP_LIB:-false}" = true ]; then
   return 0 2>/dev/null || exit 0
 fi
 
 if ! validate_linstor_storage_mode; then
+  exit 2
+fi
+
+if ! validate_storage_backend; then
+  exit 2
+fi
+
+# The blockstor branch creates its zpool on the QEMU lane's private /dev/vdc.
+# The container lane has no such disk, and runs no DRBD for blockstor to drive.
+if [ "$COZY_STORAGE_BACKEND" = blockstor ] && [ "${COZY_LINSTOR_DRBD_ENABLED:-true}" = false ]; then
+  echo "[post-install-prep] COZY_STORAGE_BACKEND=blockstor is not supported with COZY_LINSTOR_DRBD_ENABLED=false" >&2
   exit 2
 fi
 
@@ -281,6 +351,11 @@ wait_for_object() {
 
 wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
+
+echo "[post-install-prep] storage backend: $COZY_STORAGE_BACKEND"
+
+if [ "$COZY_STORAGE_BACKEND" = linstor ]; then
+
 wait_for_linstor "linstor-controller Deployment to be Available" \
   deployment/linstor-controller -n cozy-linstor --for=condition=available
 
@@ -330,6 +405,141 @@ done
 for pid in $pids; do
   wait "$pid"
 done
+
+else # COZY_STORAGE_BACKEND = blockstor
+
+# piraeus-operator runs in external mode here: there is no in-cluster
+# linstor-controller to exec into. The zpool is made inside the
+# blockstor-satellite pod, which carries the /dev, /run/udev and /lib/modules
+# mounts libzfs needs, and the pool is then declared as a StoragePool.
+wait_for_linstor "blockstor-apiserver Deployment to be Available" \
+  deployment/blockstor-apiserver -n cozy-linstor --for=condition=available
+wait_for_linstor "blockstor-controller Deployment to be Available" \
+  deployment/blockstor-controller -n cozy-linstor --for=condition=available
+wait_for_linstor "LinstorCluster to be Available" \
+  linstorcluster/linstorcluster --for=condition=Available
+
+# Available says the operator reached the API once. It does not say a
+# satellite reconcile finished, and the two came apart in the field: the
+# operator probes /v1/controller/version before every LinstorSatellite
+# reconcile, so a probe it cannot complete leaves each satellite at
+# Applied=False with its DaemonSet frozen at a spec the chart no longer
+# renders, while every HelmRelease reports Ready. That surfaces only when a pod
+# is recreated, on a node that then loses its satellite for good, so the
+# per-satellite condition is asserted here.
+#
+# Both reads are checked: a gate comparing two counts passes on no data when
+# both reads fail and each count comes out zero. A cluster with no node is
+# not a pass either.
+echo "[post-install-prep] waiting for every LinstorSatellite to report Applied"
+applied_deadline=$(( $(date +%s) + 300 ))
+while :; do
+  sat_rc=0
+  sat_applied=$(timeout -k 5 30 kubectl get linstorsatellite --request-timeout=10s \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Applied")].status}{"\n"}{end}' \
+    2>/dev/null) || sat_rc=$?
+  node_rc=0
+  node_names=$(timeout -k 5 30 kubectl get nodes --request-timeout=10s \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null) || node_rc=$?
+  if [ "$sat_rc" -eq 0 ] && [ "$node_rc" -eq 0 ]; then
+    node_count=$(count_lines "$node_names")
+    applied_count=$(count_true "$sat_applied")
+    if [ "$node_count" -gt 0 ] && [ "$applied_count" -eq "$node_count" ]; then
+      break
+    fi
+    applied_state="$applied_count of $node_count LinstorSatellite objects Applied"
+  else
+    applied_state="LinstorSatellite read exited $sat_rc, Node read exited $node_rc"
+  fi
+  if [ "$(date +%s)" -ge "$applied_deadline" ]; then
+    echo "[post-install-prep] timed out after 300s waiting for every LinstorSatellite to report Applied: $applied_state" >&2
+    timeout -k 5 30 kubectl get linstorsatellite --request-timeout=10s \
+      -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.conditions[?(@.type=="Applied")].message}{"\n"}{end}' \
+      2>&1 | tail -n 30 >&2
+    exit 1
+  fi
+  sleep 5
+done
+
+echo "[post-install-prep] waiting for a Ready blockstor-satellite pod on each of $node_count nodes"
+sat_deadline=$(( $(date +%s) + 300 ))
+while :; do
+  ready_rc=0
+  sat_ready=$(timeout -k 5 30 kubectl get pods -n cozy-linstor -l app=blockstor-satellite \
+    --request-timeout=10s \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
+    2>/dev/null) || ready_rc=$?
+  if [ "$ready_rc" -eq 0 ] && [ "$(count_true "$sat_ready")" -eq "$node_count" ]; then
+    break
+  fi
+  if [ "$(date +%s)" -ge "$sat_deadline" ]; then
+    echo "[post-install-prep] timed out after 300s waiting for $node_count Ready blockstor-satellite pods (read exited $ready_rc)" >&2
+    timeout -k 5 30 kubectl get pods -n cozy-linstor -l app=blockstor-satellite -o wide \
+      --request-timeout=10s 2>&1 | tail -n 30 >&2
+    exit 1
+  fi
+  sleep 5
+done
+
+# Node CRs carrying each node's InternalIP must exist before replicated volumes
+# can resolve their DRBD peers: the label-sync controller only patches Node CRs
+# that already exist. The reads are assignments, not `for` lists, so a failed
+# one stops the script under set -e instead of registering nothing and going on.
+echo "[post-install-prep] registering blockstor Node CRs for DRBD peer resolution"
+node_rows=$($KUBECTL_BOUND kubectl get nodes --request-timeout=60s \
+  -o jsonpath='{range .items[*]}{.metadata.name} {.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}')
+if [ "$(count_lines "$node_rows")" -ne "$node_count" ]; then
+  echo "[post-install-prep] expected $node_count nodes with an address, read: $node_rows" >&2
+  exit 1
+fi
+while read -r node ip; do
+  [ -n "$node" ] || continue
+  if [ -z "$ip" ]; then
+    echo "[post-install-prep] node $node has no InternalIP" >&2
+    exit 1
+  fi
+  render_blockstor_node "$node" "$ip" | $KUBECTL_BOUND kubectl apply --request-timeout=60s -f -
+done <<EOF
+$node_rows
+EOF
+
+echo "[post-install-prep] creating the 'data' zpool and StoragePool on each satellite (parallel)"
+sat_pods=$($KUBECTL_BOUND kubectl get pods -n cozy-linstor -l app=blockstor-satellite \
+  --request-timeout=60s -o jsonpath='{range .items[*]}{.metadata.name} {.spec.nodeName}{"\n"}{end}')
+if [ "$(count_lines "$sat_pods")" -ne "$node_count" ]; then
+  echo "[post-install-prep] expected $node_count blockstor-satellite pods, read: $sat_pods" >&2
+  exit 1
+fi
+pids=""
+while read -r pod node; do
+  [ -n "$pod" ] || continue
+  (
+    # Partition first and hand zpool the partition: a whole-disk create needs
+    # a GPT rescan that fails inside the container's devtmpfs view.
+    $KUBECTL_BOUND kubectl exec -n cozy-linstor "$pod" -- sh -ec '
+      if zpool list data >/dev/null 2>&1; then
+        echo "zpool data already exists on '"$node"'"
+        exit 0
+      fi
+      wipefs -af /dev/vdc* 2>/dev/null || true
+      sgdisk --zap-all /dev/vdc 2>/dev/null || true
+      sgdisk --new=1:0:0 -t 1:bf01 /dev/vdc
+      partprobe /dev/vdc 2>/dev/null || true
+      sleep 1
+      zpool create -f -o cachefile=none data /dev/vdc1
+      echo "zpool data created on '"$node"'"
+    '
+    render_blockstor_storage_pool "$node" | $KUBECTL_BOUND kubectl apply --request-timeout=60s -f -
+  ) &
+  pids="$pids $!"
+done <<EOF
+$sat_pods
+EOF
+for pid in $pids; do
+  wait "$pid"
+done
+
+fi # COZY_STORAGE_BACKEND
 
 echo "[post-install-prep] applying StorageClasses"
 render_linstor_storageclasses | $KUBECTL_BOUND kubectl apply --request-timeout=60s -f -

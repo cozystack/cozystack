@@ -184,6 +184,11 @@
   # Stage the generated manifest instead of piping it into kubectl: cozytest
   # runs under /bin/sh without pipefail, so a generator failure in a pipeline
   # could be hidden by kubectl successfully applying empty input.
+  # The storage control plane this install deploys. Set once here and read by
+  # both the generator, which passes it to the platform, and the prep, which
+  # needs it to take the matching branch and will not guess.
+  export COZY_STORAGE_BACKEND="${COZY_STORAGE_BACKEND:-linstor}"
+
   local platform_packages
   platform_packages=$(mktemp)
   hack/e2e-platform-packages.sh > "$platform_packages"

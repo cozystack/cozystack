@@ -1,4 +1,9 @@
 {{- if .Values.talos.enabled }}
+{{- /* Gated on the OS, never on .Values.backend: piraeus creates the
+       linstor-satellite.<node> DaemonSets under blockstor too, and on Talos
+       they wedge at Init:0/3 on the run-systemd-system hostPath without
+       this patch. On generic Linux the patch must not apply at all: it
+       drops drbd-module-loader, the only thing that loads DRBD there. */ -}}
 {{- $shutdown := .Values.talos.gracefulShutdown | default dict }}
 {{- $enabled := dig "enabled" false $shutdown }}
 {{- if kindIs "invalid" $enabled }}{{- $enabled = false }}{{- end }}

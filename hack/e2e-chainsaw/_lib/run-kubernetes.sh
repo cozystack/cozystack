@@ -455,31 +455,73 @@ cozy_wait_schedulable_node() {
 # the free capacity LINSTOR caches for thick pools (see
 # _cozy_linstor_pool_datasets), so it can understate a pool whose last destroy
 # was still freeing blocks when the satellite reported.
+# The storage control plane the cluster under test runs, as the install was
+# told (COZY_STORAGE_BACKEND, forwarded into the sandbox). Unset means linstor,
+# the default every lane installs; anything else unknown is refused rather than
+# read as linstor, which would poll a controller that does not exist.
+_cozy_storage_backend() {
+  case "${COZY_STORAGE_BACKEND:-linstor}" in
+    linstor | blockstor) printf '%s\n' "${COZY_STORAGE_BACKEND:-linstor}" ;;
+    *)
+      echo "» ERROR: COZY_STORAGE_BACKEND must be linstor or blockstor, got '${COZY_STORAGE_BACKEND}'" >&2
+      return 2
+      ;;
+  esac
+}
+
+# Print `<free_kib>:<node>` for every ZFS pool that reports a free capacity.
+# The LINSTOR path asks the controller, whose `sp l` serves one outer array of
+# pool objects with free_capacity in KiB; OFFLINE satellites omit it, and the
+# DISKLESS placeholder carries a Long.MAX_VALUE sentinel, so both are skipped.
+# The blockstor path reads the StoragePool objects, whose status.freeCapacity
+# is in KiB too; there is no controller pod to exec into.
+_cozy_pool_free_rows() {
+  _backend=$(_cozy_storage_backend) || return 2
+  if [ "$_backend" = blockstor ]; then
+    # Read first and filter second: piped, the read's status is jq's, and jq
+    # on empty input succeeds.
+    _pools_json=$(kubectl get storagepools.blockstor.cozystack.io --request-timeout=20s -o json) || return 1
+    printf '%s\n' "$_pools_json" |
+      jq -r '.items[] | select((.spec.providerKind | test("^ZFS")) and .status.freeCapacity != null) | "\(.status.freeCapacity):\(.spec.nodeName)"'
+    return
+  fi
+  # jq lives inside the controller pod (Debian-bookworm base, `sh` is dash,
+  # so the script stays POSIX).
+  kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+    linstor --machine-readable sp l 2>/dev/null |
+    jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.free_capacity):\(.node_name)\""
+  '
+}
+
+_cozy_pool_diagnostics() {
+  if [ "$(_cozy_storage_backend 2>/dev/null)" = blockstor ]; then
+    kubectl get storagepools.blockstor.cozystack.io -o wide --request-timeout=20s 2>&1
+    return
+  fi
+  kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1
+}
+
 cozy_wait_linstor_pool_free() {
   _min_free_gib="${1:-90}"
   _timeout="${2:-300}"
   _min_free_kib=$(( _min_free_gib * 1024 * 1024 ))
   _deadline=$(( $(date +%s) + _timeout ))
   while :; do
-    # jq lives inside the controller pod (Debian-bookworm base, `sh` is
-    # dash — keep the heredoc POSIX-safe). LINSTOR's `--machine-readable`
-    # output for `sp l` on LINSTOR 1.33.x is a one-element outer array
-    # whose sole element is a flat array of storage-pool objects; each
-    # pool object exposes free_capacity at the top level in KiB. Filter
-    # to ZFS variants (both `ZFS` and `ZFS_THIN`) so DISKLESS
-    # placeholders (whose free_capacity is a Long.MAX_VALUE sentinel)
-    # and any future non-ZFS driver are skipped. Also guard against
-    # OFFLINE satellites, whose pool objects omit free_capacity entirely
-    # (StoragePool schema marks it optional) — without the null guard
-    # `sort -n` would rank the string "null" ahead of real numbers and
-    # the loop would silently poll to timeout. Emit
-    # `<free_capacity_kib>:<node>` lines so a single sort yields the
-    # smallest pool and its owner in one round-trip.
-    _min_line=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
-      linstor --machine-readable sp l 2>/dev/null |
-      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.free_capacity):\(.node_name)\"" |
-      sort -n | head -n 1
-    ' 2>/dev/null) || _min_line=""
+    # Filter to ZFS variants (both `ZFS` and `ZFS_THIN`) so DISKLESS
+    # placeholders and any future non-ZFS driver are skipped, and to pools
+    # that report a free capacity at all, or `sort -n` would rank a missing
+    # one ahead of real numbers. The read keeps its own status: piped
+    # straight into `head` it took head's, so a failed read, a 403 and a
+    # pool that is genuinely full all looked alike.
+    _rows_rc=0
+    _rows=$(_cozy_pool_free_rows 2>/dev/null) || _rows_rc=$?
+    if [ "$_rows_rc" -eq 2 ]; then
+      return 2
+    fi
+    _min_line=""
+    if [ "$_rows_rc" -eq 0 ]; then
+      _min_line=$(printf '%s\n' "$_rows" | grep . | sort -n | head -n 1)
+    fi
     _min_kib="${_min_line%%:*}"
     _min_node="${_min_line#*:}"
     if [ -n "$_min_kib" ] && [ "$_min_kib" -ge "$_min_free_kib" ] 2>/dev/null; then
@@ -487,9 +529,9 @@ cozy_wait_linstor_pool_free() {
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» ERROR: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown})" >&2
+      echo "» ERROR: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}; last read exited ${_rows_rc})" >&2
       _pool_diag_rc=0
-      _pool_diag=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1) || _pool_diag_rc=$?
+      _pool_diag=$(_cozy_pool_diagnostics) || _pool_diag_rc=$?
       if [ "$_pool_diag_rc" -ne 0 ]; then
         echo "  linstor-pool: diagnostic read failed with exit $_pool_diag_rc" >&2
       fi
@@ -518,19 +560,34 @@ _cozy_linstor_pool_baseline_file() {
 # `data-srvN` in container mode, where every node's pool is imported into one
 # shared kernel. Every read carries its own ceiling, so a wedged controller or
 # satellite fails the poll within 35s instead of holding the caller for good.
+#
+# On the blockstor backend the pools are StoragePool objects rather than
+# controller rows, the zpool is whichever StorDriver property names it, and the
+# satellite is blockstor's own DaemonSet.
 _cozy_linstor_pool_datasets() {
-  _pools=$(timeout -k 5 30 kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
-    linstor --machine-readable sp l 2>/dev/null |
-    jq -r "first | .[] | select(.provider_kind | test(\"^ZFS\")) | \"\(.node_name) \(.props[\"StorDriver/StorPoolName\"] // \"\")\""
-  ' 2>/dev/null) || return 1
+  _backend=$(_cozy_storage_backend) || return 1
+  if [ "$_backend" = blockstor ]; then
+    _pools_json=$(timeout -k 5 30 kubectl get storagepools.blockstor.cozystack.io --request-timeout=20s -o json 2>/dev/null) || return 1
+    _pools=$(printf '%s\n' "$_pools_json" |
+      jq -r '.items[] | select(.spec.providerKind | test("^ZFS")) | "\(.spec.nodeName) \(.spec.props["StorDriver/StorPoolName"] // .spec.props["StorDriver/ZPoolThin"] // .spec.props["StorDriver/ZPool"] // "")"') || return 1
+    _satellite_selector=app=blockstor-satellite
+    _satellite_container=satellite
+  else
+    _pools=$(timeout -k 5 30 kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+      linstor --machine-readable sp l 2>/dev/null |
+      jq -r "first | .[] | select(.provider_kind | test(\"^ZFS\")) | \"\(.node_name) \(.props[\"StorDriver/StorPoolName\"] // \"\")\""
+    ' 2>/dev/null) || return 1
+    _satellite_selector=app.kubernetes.io/component=linstor-satellite
+    _satellite_container=linstor-satellite
+  fi
   [ -n "$_pools" ] || return 1
-  _satellites=$(timeout -k 5 30 kubectl -n cozy-linstor get pods -l app.kubernetes.io/component=linstor-satellite \
+  _satellites=$(timeout -k 5 30 kubectl -n cozy-linstor get pods -l "$_satellite_selector" \
     -o jsonpath='{range .items[*]}{.spec.nodeName} {.metadata.name}{"\n"}{end}' 2>/dev/null) || return 1
   while read -r _node _zpool; do
     [ -n "$_node" ] && [ -n "$_zpool" ] || return 1
     _pod=$(printf '%s\n' "$_satellites" | awk -v node="$_node" '$1 == node { print $2; exit }')
     [ -n "$_pod" ] || return 1
-    _datasets=$(timeout -k 5 30 kubectl -n cozy-linstor exec "$_pod" --container=linstor-satellite -- \
+    _datasets=$(timeout -k 5 30 kubectl -n cozy-linstor exec "$_pod" --container="$_satellite_container" -- \
       zfs list -H -o name -t filesystem,volume,snapshot -r "$_zpool" </dev/null 2>/dev/null) || return 1
     [ -n "$_datasets" ] || return 1
     printf '%s\n' "$_datasets" | awk -v node="$_node" '{ print node " " $0 }'

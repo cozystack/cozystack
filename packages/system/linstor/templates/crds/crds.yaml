@@ -1,0 +1,30 @@
+{{- /*
+Blockstor's CRDs ship only with the blockstor backend. A LINSTOR
+cluster has no use for them, and installing a component's schema
+without the component that reconciles it invites objects nothing
+serves.
+
+Ordering for a migration: switch the backend first, which installs
+these and starts blockstor's control plane against an empty database,
+then apply the converted resources for it to adopt. LINSTOR's own CRDs
+are installed by piraeus-operator, not from here, so they survive the
+switch and the source data stays readable throughout.
+
+Every CRD is kept on an upgrade that stops rendering it. These live
+under templates/, so they are ordinary release members: switching the
+backend back to linstor would otherwise delete them, and the API server
+deletes every object of a CRD before it removes the CRD. Those objects
+are blockstor's whole database; it runs with no other datastore. The
+annotation is added here rather than in definitions/, which is copied
+verbatim from blockstor's generated manifests.
+*/}}
+{{- if eq .Values.backend "blockstor" }}
+{{- range $path, $_ := .Files.Glob "definitions/*" }}
+{{- $crd := $.Files.Get $path | fromYaml }}
+{{- $annotations := default dict $crd.metadata.annotations }}
+{{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+{{- $_ := set $crd.metadata "annotations" $annotations }}
+---
+{{ toYaml $crd }}
+{{- end }}
+{{- end }}
