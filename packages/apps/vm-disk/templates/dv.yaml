@@ -12,8 +12,17 @@
   {{- if hasKey .Values.source "image" }}
     {{- $desiredSource = dict "pvc" (dict "name" (printf "vm-default-images-%s" (required "A valid .Values.source.image.name entry required!" .Values.source.image.name)) "namespace" "cozy-public") }}
     {{- /* Refuse a golden that is missing or whose import Failed: CDI never
-           populates it, so the clone would wait forever. A golden still importing
-           is left alone because CDI holds the clone until the source is populated.
+           populates it, so the clone would wait forever. Failed is reached only on
+           a fatal error such as a checksum mismatch; an unreachable URL instead
+           restarts the importer with back-off while the phase stays in progress,
+           so an importer that restarted at least three times counts as failing
+           too, running or not: CDI reports every attempt as running, including
+           one that is about to fail again, and this check runs only until the
+           disk exists, so a disk created during an attempt would pass and wait
+           unnoticed. A healthy import with three early restarts is refused until
+           it succeeds, and the release retries the render. Any other golden still
+           importing is left alone because CDI holds the clone until the source is
+           populated.
            Missing means neither the DataVolume nor the PVC CDI clones exists, as
            the DataVolume can precede its PVC, and counts only when the release
            namespace is visible: helm template has no cluster and every lookup
@@ -24,8 +33,12 @@
     {{- if not (or $existingDV (lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Release.Name)) }}
       {{- $golden := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $desiredSource.pvc.name }}
       {{- $goldenPVC := lookup "v1" "PersistentVolumeClaim" "cozy-public" $desiredSource.pvc.name }}
-      {{- if eq (dig "status" "phase" "" $golden | toString) "Failed" }}
+      {{- $goldenPhase := dig "status" "phase" "" $golden | toString }}
+      {{- $goldenRestarts := dig "status" "restartCount" 0 $golden | int }}
+      {{- if eq $goldenPhase "Failed" }}
         {{- fail (printf "source.image %q: golden DataVolume %q in cozy-public failed to import (phase Failed), so a clone of it would never complete. Ask the platform administrator to check the importer pod in cozy-public, then delete that DataVolume to retry the import." .Values.source.image.name $desiredSource.pvc.name) }}
+      {{- else if and (ne $goldenPhase "Succeeded") (ge $goldenRestarts 3) }}
+        {{- fail (printf "source.image %q: golden DataVolume %q in cozy-public has not finished importing after %d importer restarts, so a clone of it would not complete while the import keeps failing. The refusal lifts by itself once the import succeeds. The importer is retried with a growing back-off, so that can take a few minutes after the source is fixed. Ask the platform administrator to check the importer pod logs in cozy-public." .Values.source.image.name $desiredSource.pvc.name $goldenRestarts) }}
       {{- else if and (not $golden) (not $goldenPVC) (lookup "v1" "Namespace" "" .Release.Namespace) }}
         {{- fail (printf "source.image %q: golden image %q not found in cozy-public, so a clone of it would never start. Check the image name, or ask the platform administrator to add cozystack.vm-default-images to bundles.enabledPackages." .Values.source.image.name $desiredSource.pvc.name) }}
       {{- end }}
