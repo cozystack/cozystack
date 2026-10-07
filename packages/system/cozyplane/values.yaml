@@ -2,7 +2,7 @@
 # Digest-pinned (no floating tag). Built and published by .github/workflows/
 # release.yml on every push to main; see docs/packaging.md for how the digest is
 # refreshed and why pinning it does not change it.
-image: ghcr.io/lllamnyp/cozyplane@sha256:60111afff00d91883a63183a058d24f81620f250a4526a94dbb26b937bb327e7
+image: ghcr.io/lllamnyp/cozyplane@sha256:880db75719674fc68dc8d1fac2bbbaca17f923ca369cd717d310f91db3ab9ae1
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -56,6 +56,22 @@ egress:
   internalCIDRs: []
 
 agent:
+  # Bind address for the per-VPC Prometheus metrics (/metrics). The kubelet
+  # resolves $(HOST_IP) to the node's primary InternalIP, so in-cluster
+  # Prometheus scrapes the agent pods on :9411 as usual (hostNetwork: pod IP ==
+  # host IP) while any other node address — a public one included — serves
+  # nothing. The agent brackets the host itself, so this is also correct when
+  # that primary address is IPv6; only the primary FAMILY is served, though, so
+  # nothing listens on the other family's node address. ":9411" restores
+  # listening on every address; "" disables metrics. See README.md § Upgrading.
+  metricsBindAddress: "$(HOST_IP):9411"
+  # Delegated authn/authz on /metrics (TokenReview + SubjectAccessReview against
+  # the kube-apiserver): the scraper sends its ServiceAccount token — a standard
+  # in-cluster prometheus/vmagent scrape with bearerTokenFile, plain HTTP — and
+  # that ServiceAccount needs `get` on nonResourceURL /metrics, so bind the
+  # cozyplane-metrics-reader ClusterRole to it. false serves /metrics
+  # unauthenticated to anything that can reach the bind address.
+  metricsSecure: true
   priorityClassName: system-node-critical
   resources:
     requests:

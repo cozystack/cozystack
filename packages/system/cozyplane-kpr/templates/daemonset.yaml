@@ -23,10 +23,15 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
-  # Cilium's imported cells reconcile their own CRDs (CiliumNode, LB IP pools, …).
-  - apiGroups: [cilium.io]
-    resources: ["*"]
-    verbs: [get, list, watch, create, update, patch, delete]
+  {{- /* No cilium.io rule. The wired cells watch only Services/EndpointSlices
+  (the LB reflector) and node-local Pods/Namespaces (the daemon tables). The one
+  cilium.io consumer compiled in, CiliumLocalRedirectPolicy, registers neither
+  reflector nor controller: kpr/main.go's stubbed DaemonConfig sets the family
+  gates and nothing else, so EnableLocalRedirectPolicy keeps its zero value. The
+  CiliumNode/CiliumEndpoint/policy resource constructors in daemonk8s.ResourcesCell
+  are in the DI graph but never constructed, nothing in this hive depending on
+  them. A template comment, not a `#` one: it documents a rule that is absent, so
+  it has no business shipping inside every applied manifest. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

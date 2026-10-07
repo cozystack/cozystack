@@ -164,6 +164,39 @@ subjects:
     name: cozyplane-controller
     namespace: {{ .Release.Namespace }}
 ---
+# Leader election: the manager's Lease lives in its own namespace, and the
+# elector records events there on transitions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozyplane-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozyplane-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozyplane-controller-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-controller
+    namespace: {{ .Release.Namespace }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -191,7 +224,12 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["/usr/local/bin/sdn-controller"]
           args:
-            - --leader-elect=false
+            # Unconditional: controller.replicas is settable, and two
+            # uncoordinated managers would both write Services/EndpointSlices/Ports.
+            # At one replica it costs a Lease, plus up to one lease duration (~15s)
+            # with no active controller after a restart, while the new pod waits
+            # for the old holder's Lease to expire.
+            - --leader-elect=true
             - --metrics-bind-address=0
             - --health-probe-bind-address=:8081
             {{- if .Values.egress.clusterCIDR }}
