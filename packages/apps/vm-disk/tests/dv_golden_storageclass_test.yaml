@@ -1,0 +1,1362 @@
+suite: vm-disk refuses a golden-image clone CDI would leave to the CSI driver
+# CDI's csi-clone path, and its snapshot path once a VolumeSnapshotClass
+# serves the provisioner, check the source and target classes for a common
+# provisioner, a matching volume mode and room to expand, and nothing else: a
+# target in another class of the same provisioner gets no host-assisted
+# fallback. LINSTOR creates the clone next to the source data, so on a
+# target class without remote volume access its clone PVC may never bind.
+# A snapshot class both profiles name that does not exist is refused as
+# well, since CDI then fails instead of falling back. Every other
+# combination either falls back to a host-assisted copy, is reachable from
+# any node, or is a case the chart cannot see, and renders.
+# The class the golden lives in is read from its PVC, which carries the
+# class CDI resolved for it.
+release:
+  name: test-vm-disk
+  namespace: tenant-test
+templates:
+  - templates/dv.yaml
+tests:
+  - it: refuses a new disk in another class of the golden's provisioner under csi-clone
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: &scheme
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "cdi.kubevirt.io/v1beta1/CDI":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: cdis}
+          namespaced: false
+        "cdi.kubevirt.io/v1beta1/StorageProfile":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: storageprofiles}
+          namespaced: false
+        "v1/Namespace":
+          gvr: {group: "", version: v1, resource: namespaces}
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+          namespaced: true
+        "storage.k8s.io/v1/StorageClass":
+          gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+          namespaced: false
+      objects:
+        - &namespace
+          kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - &goldenPVC
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          spec: {storageClassName: replicated, volumeMode: Block}
+        - &cdiCSIClone
+          kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {cloneStrategyOverride: csi-clone}
+        - &replicatedClass
+          kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: replicated}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+        - &localClass
+          kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+        - &localProfile
+          kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'source.image "ubuntu": golden image "vm-default-images-ubuntu" lives in StorageClass "replicated", and a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI\. LINSTOR creates the clone next to the source data, and StorageClass "local" does not allow remote volume access from every node, so the clone may never bind\. Set storageClass to "replicated"'
+
+  # The golden's own class carries a profile here too, so only the class
+  # comparison keeps the common case from being refused.
+  - it: clones a golden in the class the disk asks for
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - &replicatedProfile
+          kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status:
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  - it: renders without a cluster to look the golden up in
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: local
+
+  # The DataVolume can exist a moment before CDI creates its PVC; its own spec
+  # may name no class, so only the PVC is trusted for the comparison.
+  - it: clones a golden whose PVC does not exist yet
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: {phase: ImportScheduled}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves an existing disk alone
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+              vm-disk.cozystack.io/storage-class: local
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: local}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not compare classes for a source other than an image
+    set:
+      source: {disk: {name: other}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*namespace, *goldenPVC, *cdiCSIClone, *replicatedClass, *localClass, *localProfile]
+    asserts:
+      - notFailedTemplate: {}
+
+  # Each of the following removes exactly one condition of the refusal from
+  # the fixture above; CDI falls back to a host-assisted copy for each, which
+  # completes across classes.
+  - it: clones into a class of another provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: rancher.io/local-path
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones under the copy strategy
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {cloneStrategyOverride: copy}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones into a class whose volume mode differs from the golden's
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Filesystem}]
+    asserts:
+      - notFailedTemplate: {}
+
+  # Without expansion CDI falls back only for a disk larger than the golden;
+  # the chart does not compare sizes, so it leaves such a class alone.
+  - it: clones into a class that does not allow volume expansion
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+    asserts:
+      - notFailedTemplate: {}
+
+  # The snapshot path falls back to a host-assisted copy only when no
+  # VolumeSnapshotClass serves the provisioner; past that it runs the same
+  # checks as csi-clone, so a usable snapshot class is refused like csi-clone.
+  - it: refuses under the snapshot strategy when a snapshot class serves the provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: &snapshotAPI
+      apiVersions:
+        - snapshot.storage.k8s.io/v1/VolumeSnapshotClass
+    kubernetesProvider:
+      scheme: &snapshotScheme
+        "cdi.kubevirt.io/v1beta1/CDI":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: cdis}
+          namespaced: false
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "cdi.kubevirt.io/v1beta1/StorageProfile":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: storageprofiles}
+          namespaced: false
+        "v1/Namespace":
+          gvr: {group: "", version: v1, resource: namespaces}
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+          namespaced: true
+        "storage.k8s.io/v1/StorageClass":
+          gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+          namespaced: false
+        "snapshot.storage.k8s.io/v1/VolumeSnapshotClass":
+          gvr: {group: snapshot.storage.k8s.io, version: v1, resource: volumesnapshotclasses}
+          namespaced: false
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - &cdiSnapshot
+          kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {cloneStrategyOverride: snapshot}
+        - &linstorSnapshotClass
+          kind: VolumeSnapshotClass
+          apiVersion: snapshot.storage.k8s.io/v1
+          metadata: {name: linstor-snapshots}
+          driver: linstor.csi.linbit.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: clones under the snapshot strategy when no snapshot class serves the provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - *cdiSnapshot
+        - kind: VolumeSnapshotClass
+          apiVersion: snapshot.storage.k8s.io/v1
+          metadata: {name: other-snapshots}
+          driver: rancher.io/local-path
+    asserts:
+      - notFailedTemplate: {}
+
+  # When both StorageProfiles name the same snapshot class, CDI uses that one
+  # class and falls back if its driver is another provisioner's.
+  - it: clones under the snapshot strategy when the profiles' common snapshot class serves another provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *cdiSnapshot
+        - *linstorSnapshotClass
+        - kind: VolumeSnapshotClass
+          apiVersion: snapshot.storage.k8s.io/v1
+          metadata: {name: other-snapshots}
+          driver: rancher.io/local-path
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: other-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: other-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses under the snapshot strategy when the profiles' common snapshot class serves the provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *cdiSnapshot
+        - *linstorSnapshotClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: linstor-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: linstor-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  # A snapshot class only one profile names is not common to both, so CDI
+  # picks any class of the provisioner instead.
+  - it: refuses under the snapshot strategy when only the golden's profile names a snapshot class
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - *cdiSnapshot
+        - *linstorSnapshotClass
+        - kind: VolumeSnapshotClass
+          apiVersion: snapshot.storage.k8s.io/v1
+          metadata: {name: other-snapshots}
+          driver: rancher.io/local-path
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: other-snapshots}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: refuses under the snapshot strategy when only the target's profile names a snapshot class
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *cdiSnapshot
+        - *linstorSnapshotClass
+        - kind: VolumeSnapshotClass
+          apiVersion: snapshot.storage.k8s.io/v1
+          metadata: {name: other-snapshots}
+          driver: rancher.io/local-path
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: other-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  # Without the snapshot API there is no snapshot class to look up, and a
+  # lookup of a kind the cluster does not serve would fail the render.
+  - it: clones under the snapshot strategy when the cluster has no snapshot API
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*namespace, *goldenPVC, *replicatedClass, *localClass, *localProfile, *cdiSnapshot]
+    asserts:
+      - notFailedTemplate: {}
+
+  # With no global override CDI takes the strategy from the target class's
+  # StorageProfile.
+  - it: refuses without an override when the target profile selects csi-clone
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - &cdiNoOverride
+          kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            cloneStrategy: csi-clone
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  # The CDI override wins over the target profile's strategy, in both directions.
+  - it: refuses when the override is csi-clone and the target profile selects copy
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            cloneStrategy: copy
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: clones when the override is copy and the target profile selects csi-clone
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {cloneStrategyOverride: copy}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            cloneStrategy: csi-clone
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - notFailedTemplate: {}
+
+  # With no override and no profile strategy CDI takes snapshot, which a
+  # snapshot class of the provisioner turns into an advanced clone.
+  - it: refuses without an override or a profile strategy when a snapshot class serves the provisioner
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - *linstorSnapshotClass
+        - kind: CDI
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: cdi}
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  # Without the CDI resource the strategy is unknown, even with a profile that
+  # names csi-clone.
+  - it: clones when the CDI resource cannot be found
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *localClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            cloneStrategy: csi-clone
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones when the golden's StorageClass cannot be found
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*namespace, *goldenPVC, *cdiCSIClone, *localClass, *localProfile]
+    asserts:
+      - notFailedTemplate: {}
+
+  # Without a claim property set the target's volume mode is unknown.
+  - it: clones when the target profile carries no claim property set
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status: {}
+    asserts:
+      - notFailedTemplate: {}
+
+  # A volume mode left unset on either side means Filesystem: the API server
+  # defaults the PVC, and CDI leaves an unset profile mode to that default.
+  - it: refuses when both volume modes are left at the default
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          spec: {storageClassName: replicated}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            claimPropertySets: [{accessModes: [ReadWriteOnce]}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: clones without an override when the target profile names no strategy
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*namespace, *goldenPVC, *cdiNoOverride, *replicatedClass, *localClass, *localProfile]
+    asserts:
+      - notFailedTemplate: {}
+
+  # An empty storageClass leaves the choice to CDI, which for a kubevirt
+  # DataVolume takes the class annotated as the default virt class first and
+  # the Kubernetes default class only when there is none.
+  - it: refuses an empty class whose default virt class differs from the golden's
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: replicated
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: local
+            annotations: {storageclass.kubevirt.io/is-default-virt-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: refuses an empty class whose Kubernetes default class differs from the golden's
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *localProfile
+        - *replicatedClass
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: local
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'a clone into StorageClass "local" of the same provisioner gets no host-assisted fallback from CDI'
+
+  - it: clones with an empty class whose default virt class is the golden's
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *localProfile
+        - *replicatedProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: local
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: replicated
+            annotations: {storageclass.kubevirt.io/is-default-virt-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+      - notExists:
+          path: spec.storage.storageClassName
+
+  - it: clones with an empty class when the cluster has no default class
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*namespace, *goldenPVC, *cdiCSIClone, *replicatedClass, *localClass, *localProfile]
+    asserts:
+      - notFailedTemplate: {}
+
+  # CDI breaks a tie between several defaults by creation time, which the
+  # comparison does not reproduce, so a tie compares nothing.
+  - it: clones with an empty class when several classes claim the default
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        # Both tied classes carry a profile, so only the tie keeps this from
+        # being refused.
+        - &fastProfile
+          kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: fast}
+          status:
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+        - &localDefault
+          kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: local
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: fast
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # A tie among default virt classes does not hand the choice to the
+  # Kubernetes default: CDI picks one of the virt classes.
+  - it: clones with an empty class when several classes claim the default virt class
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *localProfile
+        - *fastProfile
+        - *localDefault
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: replicated
+            annotations: {storageclass.kubevirt.io/is-default-virt-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: fast
+            annotations: {storageclass.kubevirt.io/is-default-virt-class: "true"}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # LINSTOR's clone lands next to the source data, and only then places the
+  # volume for the node it is asked for: a class that allows remote access
+  # serves that node over the network, so the clone binds.
+  - it: clones into a LINSTOR class that allows remote volume access
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "1"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # linstor-csi reads its parameters with or without the driver prefix and
+  # matches the key case-insensitively.
+  - it: refuses a class that denies remote access under an unprefixed key
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {AllowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'StorageClass "local" does not allow remote volume access'
+
+  # A rule list whose every rule names a fromSame label allows access only from
+  # nodes sharing that label, which need not include the one the clone is
+  # asked for.
+  - it: refuses a class that allows remote access only by rule
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters:
+            linstor.csi.linbit.com/allowRemoteVolumeAccess: |
+              - fromSame: [topology.kubernetes.io/zone]
+          allowVolumeExpansion: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'StorageClass "local" does not allow remote volume access'
+
+  # Without the parameter linstor-csi allows remote access exactly when the
+  # layer list carries DRBD or NVMe, and the default layer list carries DRBD.
+  - it: clones into a LINSTOR class with neither the parameter nor a layer list
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses a LINSTOR class whose layer list has no network layer and no parameter
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/layerList: "luks storage"}
+          allowVolumeExpansion: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'StorageClass "local" does not allow remote volume access'
+
+  - it: clones into a LINSTOR class whose layer list carries NVMe and no parameter
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {layerList: "NVME storage"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # Where the clone lands is a property of the driver, and only LINSTOR's is
+  # known to strand it.
+  - it: clones into another class of a provisioner other than LINSTOR
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: replicated}
+          provisioner: example.com/csi
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: example.com/csi
+          parameters: {allowRemoteVolumeAccess: "false"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # CDI takes the target's volume mode from the first claim property set; a
+  # LINSTOR profile lists Block before Filesystem.
+  - it: refuses when the target profile's first claim property set matches the golden's volume mode
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            claimPropertySets:
+              - {accessModes: [ReadWriteMany], volumeMode: Block}
+              - {accessModes: [ReadWriteOnce], volumeMode: Filesystem}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'StorageClass "local" does not allow remote volume access'
+
+  # CDI reads the source's driver from its bound PV and falls back to the
+  # class's provisioner only for an unbound claim.
+  - it: clones a golden whose PV belongs to another driver than its class names
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme:
+        <<: *scheme
+        "v1/PersistentVolume":
+          gvr: {group: "", version: v1, resource: persistentvolumes}
+          namespaced: false
+      objects:
+        - *namespace
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          spec: {storageClassName: replicated, volumeMode: Block, volumeName: pv-golden}
+        - kind: PersistentVolume
+          apiVersion: v1
+          metadata: {name: pv-golden}
+          spec: {csi: {driver: example.com/csi, volumeHandle: golden}}
+    asserts:
+      - notFailedTemplate: {}
+
+  # Both profiles name a snapshot class that does not exist: CDI fails to plan
+  # the clone instead of falling back, so it never starts.
+  - it: refuses under the snapshot strategy when the profiles' common snapshot class does not exist
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *cdiSnapshot
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          allowVolumeExpansion: true
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: missing-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: missing-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VolumeSnapshotClass "missing-snapshots", named by the StorageProfiles of both "replicated" and "local", does not exist'
+
+  # CDI can garbage-collect a completed DataVolume and leave its PVC, which is
+  # the disk; a PVC restored on its own is the same state.
+  - it: leaves a disk alone whose PVC exists without its DataVolume
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localClass
+        - *localProfile
+        - &diskPVC
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: test-vm-disk, namespace: tenant-test}
+          spec: {storageClassName: local, volumeMode: Block}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves a disk alone whose PVC exists without its DataVolume when the golden failed
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *diskPVC
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: {phase: Failed}
+    asserts:
+      - notFailedTemplate: {}
+
+  # A key under another prefix belongs to someone else and is not read.
+  - it: clones into a LINSTOR class that allows remote access next to a foreign key that denies it
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters:
+            linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+            other.example.com/allowRemoteVolumeAccess: "false"
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  # With no common driver CDI falls back before it looks the snapshot class up.
+  - it: clones under the snapshot strategy into another provisioner when the profiles' common snapshot class does not exist
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *replicatedClass
+        - *cdiSnapshot
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: example.com/csi
+          allowVolumeExpansion: true
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: missing-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: missing-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - notFailedTemplate: {}
+
+  # With neither class found there is no driver to compare, and nothing is.
+  - it: clones under the snapshot strategy when neither class nor the common snapshot class can be found
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiSnapshot
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: missing-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: missing-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - notFailedTemplate: {}
+
+  # linstor-csi's own "from anywhere" policy is a single rule with no label.
+  - it: clones into a LINSTOR class whose rule list has a rule naming no label
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters:
+            linstor.csi.linbit.com/allowRemoteVolumeAccess: |
+              - fromSame: [topology.kubernetes.io/zone]
+              - {}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses under the snapshot strategy when the common snapshot class of another driver does not exist
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    capabilities: *snapshotAPI
+    kubernetesProvider:
+      scheme: *snapshotScheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiSnapshot
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: replicated}
+          provisioner: example.com/csi
+          allowVolumeExpansion: true
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: example.com/csi
+          allowVolumeExpansion: true
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: replicated}
+          status: {snapshotClass: missing-snapshots}
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: local}
+          status:
+            snapshotClass: missing-snapshots
+            claimPropertySets: [{accessModes: [ReadWriteOnce], volumeMode: Block}]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'VolumeSnapshotClass "missing-snapshots", named by the StorageProfiles of both "replicated" and "local", does not exist'
+
+  # Every spelling strconv.ParseBool reads as true allows remote access.
+  - it: clones into a LINSTOR class whose allowRemoteVolumeAccess is "t"
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "t"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones into a LINSTOR class whose allowRemoteVolumeAccess is "T"
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "T"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones into a LINSTOR class whose allowRemoteVolumeAccess is "TRUE"
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "TRUE"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones into a LINSTOR class whose allowRemoteVolumeAccess is "true"
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones into a LINSTOR class whose allowRemoteVolumeAccess is "True"
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: local
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - *cdiCSIClone
+        - *replicatedClass
+        - *localProfile
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata: {name: local}
+          provisioner: linstor.csi.linbit.com
+          parameters: {linstor.csi.linbit.com/allowRemoteVolumeAccess: "True"}
+          allowVolumeExpansion: true
+    asserts:
+      - notFailedTemplate: {}

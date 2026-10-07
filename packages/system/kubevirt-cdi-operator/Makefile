@@ -4,7 +4,9 @@ export NAMESPACE=cozy-kubevirt-cdi
 # The CDI release whose operator manifest is vendored under templates/. This
 # package decides which CDI the platform runs, so moving to another release is
 # an edit to this line, MANIFEST_SHA256 and the expectations under tests/,
-# rather than a side effect of running `update`.
+# rather than a side effect of running `update`. The golden-image clone guard
+# in packages/apps/vm-disk/templates/dv.yaml mirrors this release's clone
+# planner and has to be re-checked against the new one.
 RELEASE = v1.66.1
 
 # sha256 of the cdi-operator.yaml release asset as published, measured before
