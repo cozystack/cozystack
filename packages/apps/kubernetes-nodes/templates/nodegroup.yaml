@@ -509,8 +509,8 @@ spec:
               an empty nodeGroup storageClass falls back to the application-level
               storageClass (a replicated/DRBD class) instead of the cluster
               default, which may be a non-DRBD class that the CSI driver would
-              reject. Both empty still omits the field so the cluster default
-              applies.
+              reject. Both empty still omits the field, and CDI binds the disk on
+              its virtualization default or, without one, the Kubernetes default.
 
               A builtin pool instead renders the class the guard above resolved for
               it. Omitting the field there would let the disk bind on whatever the
