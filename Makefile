@@ -260,6 +260,20 @@ bats-posix-compat-tests:
 	done; \
 	exit $$status
 
+# No cluster for the unit and controller lanes. A test that misses a stub, or
+# whose stub a `timeout` or `bash -c` steps past, otherwise reaches whatever
+# cluster the caller's kubeconfig points at. An empty KUBERNETES_SERVICE_HOST
+# is needed beside KUBECONFIG: given an empty kubeconfig, client-go falls back
+# to in-cluster credentials wherever that variable and a service-account token
+# are present.
+# Every prerequisite of unit-tests is listed so it is guarded when run on its
+# own too; hack/unit-lane-no-cluster.bats fails when one is missing.
+NO_CLUSTER_TARGETS := unit-tests test-controllers helm-unit-tests bats-unit-tests \
+	bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check \
+	test-check-readiness test-backport-audit migrations-target-check
+$(NO_CLUSTER_TARGETS): export KUBECONFIG := /dev/null
+$(NO_CLUSTER_TARGETS): export KUBERNETES_SERVICE_HOST :=
+
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded
 # k3s runtime. Safe to run at any time; always exits 0.
