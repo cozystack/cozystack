@@ -57,10 +57,12 @@ rules:
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachineinstances"]
   verbs: ["get"]
-# CDI DataVolumes: pre-restore deletes DVs so CDI doesn't recreate PVCs after rename
+# CDI DataVolumes: pre-restore deletes DVs so CDI doesn't recreate PVCs after rename,
+# and reads each one back to hold the restore until it is gone (a point Get
+# through the dynamic client, so no list/watch)
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
-  verbs: ["delete"]
+  verbs: ["get", "delete"]
 # HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR
 # and deletes old. patch additionally lets the DefaultObjectsGate stamp
 # reconcile.fluxcd.io/forceAt + requestedAt on THIS chart's own release to
