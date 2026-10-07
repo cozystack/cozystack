@@ -45,7 +45,7 @@ alert_severity_rows() {
 
   if ! (
     cd "$severity_root" &&
-      git grep -Il -E '^[[:space:]]*kind:[[:space:]]*(PrometheusRule|VMRule)[[:space:]]*$' -- \
+      git grep -Il -E "kind:[[:space:]]*[\"']?(PrometheusRule|VMRule)[\"']?([[:space:]#,}]|\$)" -- \
         'packages/**/*.yaml' \
         'packages/**/*.yml' \
         ':(exclude)packages/**/charts/**'
@@ -61,6 +61,19 @@ alert_severity_rows() {
   while IFS= read -r file; do
     if ! (cd "$severity_root" && helm_actions_stripped "$file" > "$severity_stripped" && FILE="$file" yq 'select(.kind == "PrometheusRule" or .kind == "VMRule") | .spec.groups[]? | .rules[]? | select(has("alert")) | [strenv(FILE), .alert, ((.labels.severity // "<missing>") | tostring)] | @tsv' "$severity_stripped") >> "$severity_rows"; then
       echo "$file: failed to parse alert rules" >&2
+      rm -f "$severity_files" "$severity_rows" "$severity_stripped"
+      return 1
+    fi
+    if ! severity_hidden=$(yq 'select(.kind == "PrometheusRule" or .kind == "VMRule") | ((select(((.spec.groups // []) | length) == 0) | ["a rule document without rule groups"] | @tsv), (.spec.groups[]? | select(((.rules // []) | map(select(tag == "!!map" and (has("alert") or has("record")))) | length) == 0) | ["rule group " + ((.name // "") | tostring)] | @tsv))' "$severity_stripped"); then
+      echo "$file: failed to parse alert rules" >&2
+      rm -f "$severity_files" "$severity_rows" "$severity_stripped"
+      return 1
+    fi
+    severity_hidden=$(printf '%s\n' "$severity_hidden" | sed '/^[[:space:]]*$/d')
+    if [ -n "$severity_hidden" ]; then
+      printf '%s\n' "$severity_hidden" | while IFS= read -r what; do
+        echo "$file: $what shows no alert or recording rule once template actions are stripped" >&2
+      done
       rm -f "$severity_files" "$severity_rows" "$severity_stripped"
       return 1
     fi
@@ -226,4 +239,93 @@ alert_severity_contract() {
   ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
   rm -rf "$fixture"
   [ "$contract_succeeded" -ne 0 ]
+}
+
+@test "quoted kinds and trailing comments do not hide a rule source" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/alerts"
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: "VMRule"' \
+    'spec:' \
+    '  groups:' \
+    '  - name: quoted' \
+    '    rules:' \
+    '    - alert: QuotedKindSeverity' \
+    '      labels:' \
+    '        severity: warn' \
+    > "$fixture/packages/system/example/alerts/00-quoted.yaml"
+  printf '%s\n' \
+    'apiVersion: monitoring.coreos.com/v1' \
+    'kind: PrometheusRule # served by the operator' \
+    'spec:' \
+    '  groups:' \
+    '  - name: commented' \
+    '    rules:' \
+    '    - alert: CommentedKindSeverity' \
+    '      labels:' \
+    '        severity: warn' \
+    > "$fixture/packages/system/example/alerts/01-commented.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/alerts/00-quoted.yaml packages/system/example/alerts/01-commented.yaml
+
+  rows=$(mktemp)
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_rows > "$rows" 2>/dev/null || true
+  found=$(grep -cE 'QuotedKindSeverity|CommentedKindSeverity' "$rows" || true)
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture" "$rows"
+  [ "$found" -eq 2 ]
+  [ "$contract_succeeded" -ne 0 ]
+}
+
+@test "a rule group that only template actions fill fails the contract" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/templates"
+  printf '%s\n' \
+    'apiVersion: monitoring.coreos.com/v1' \
+    'kind: PrometheusRule' \
+    'metadata:' \
+    '  name: example' \
+    'spec:' \
+    '  groups:' \
+    '  - name: generated' \
+    '    rules:' \
+    '    {{- include "example.rules" . | nindent 4 }}' \
+    > "$fixture/packages/system/example/templates/alerts.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/templates/alerts.yaml
+
+  errors=$(mktemp)
+  parser_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_rows >/dev/null 2>"$errors" || parser_succeeded=$?
+  named=$(grep -c '^packages/system/example/templates/alerts.yaml: rule group generated shows no alert or recording rule' "$errors" || true)
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture" "$errors"
+  [ "$parser_succeeded" -ne 0 ]
+  [ "$named" -eq 1 ]
+  [ "$contract_succeeded" -ne 0 ]
+}
+
+@test "a group of recording rules alone passes the contract" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/alerts"
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: VMRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: recording' \
+    '    rules:' \
+    '    - record: job:up:sum' \
+    '      expr: sum by (job) (up)' \
+    > "$fixture/packages/system/example/alerts/00-recording.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/alerts/00-recording.yaml
+
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture"
+  [ "$contract_succeeded" -eq 0 ]
 }
