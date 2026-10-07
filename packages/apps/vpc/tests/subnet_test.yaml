@@ -85,3 +85,46 @@ tests:
         documentSelector:
           path: spec.cidrBlock
           value: "172.16.0.0/24"
+
+  # Kube-OVN parses localConnectIP as a CIDR (util.CheckCidrs) and fails the
+  # whole Vpc reconcile, static and policy routes included, on a bare address.
+  # Both ends of a pair land in the same /30: vpc-37739d sorts first and takes
+  # .245, vpc-a0c9fc takes .246.
+  - it: gives each end of a peering its address on a shared /30
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+      peers:
+        - vpcName: other
+          tenantNamespace: tenant-other
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - equal:
+          path: spec.vpcPeerings
+          value:
+            - remoteVpc: vpc-37739d
+              localConnectIP: "169.254.19.246/30"
+
+  - it: gives the remote end of the same peering the other address of the /30
+    release:
+      name: virtualprivatecloud-other
+      namespace: tenant-other
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.17.0.0/24"
+      peers:
+        - vpcName: myvpc
+          tenantNamespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - equal:
+          path: spec.vpcPeerings
+          value:
+            - remoteVpc: vpc-a0c9fc
+              localConnectIP: "169.254.19.245/30"

@@ -27,12 +27,14 @@ spec:
 {{- $byte1 := int (include "cozy-lib.strings.hexToInt" (substr 2 4 $pairHash)) }}
 {{- $oct3 := int (add (mod $byte0 254) 1) }}
 {{- $base4 := int (mul (mod $byte1 64) 4) }}
+{{- /* The two ends of a /30 link. Kube-OVN parses localConnectIP as a CIDR
+      and fails the whole Vpc reconcile on a bare address. */}}
 {{- if eq $vpcId (index $sorted 0) }}
     - remoteVpc: {{ $remoteVpcId }}
-      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 1)) }}
+      localConnectIP: {{ printf "169.254.%d.%d/30" $oct3 (int (add $base4 1)) }}
 {{- else }}
     - remoteVpc: {{ $remoteVpcId }}
-      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 2)) }}
+      localConnectIP: {{ printf "169.254.%d.%d/30" $oct3 (int (add $base4 2)) }}
 {{- end }}
 {{- end }}
 {{- end }}
