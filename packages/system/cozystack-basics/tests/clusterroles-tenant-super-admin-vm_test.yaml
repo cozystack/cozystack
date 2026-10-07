@@ -1,0 +1,35 @@
+suite: cozystack-basics tenant super-admin grants no raw-VM write
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# A tenant super-admin manages VMs through the apps.cozystack.io wrapper
+# (vm-instance), where size and quota are set and enforced, and powers them
+# through the subresources.kubevirt.io verbs granted at cozy:tenant:use:base. A
+# write grant on the raw kubevirt.io/virtualmachines object is none of that: it
+# lets a super-admin create or resize a VM straight past the wrapper, so no gate
+# or ResourceQuota sees it. Such a '*' was added with helmreleases in #516,
+# survived the helmreleases removal, and is what this suite keeps out.
+#
+# The whole rule set is pinned, not just the absence of kubevirt.io, because
+# cozy:tenant:super-admin:base is the most privileged tier a tenant reaches:
+# every rule added here should be a reviewed, deliberate change to this test,
+# not a silent broadening. Read access to raw VMs is deliberately NOT here — it
+# lives at cozy:tenant:admin:base (get/list), which the dashboard relies on and
+# which aggregates up into super-admin unchanged.
+tests:
+  - it: cozy:tenant:super-admin:base grants apps.cozystack.io only, never raw kubevirt VMs
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:super-admin:base
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["apps.cozystack.io"]
+              resources: ["*"]
+              verbs: ["*"]
