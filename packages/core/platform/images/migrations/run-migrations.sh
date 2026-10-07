@@ -8,8 +8,11 @@ NAMESPACE="${NAMESPACE:-cozy-system}"
 CURRENT_VERSION="${CURRENT_VERSION:-0}"
 TARGET_VERSION="${TARGET_VERSION:-0}"
 
-# Check if ConfigMap exists
-if ! kubectl get configmap --namespace "$NAMESPACE" cozystack-version >/dev/null 2>&1; then
+# --ignore-not-found turns only NotFound into empty output; any other failure
+# still exits non-zero and aborts here, so the Job retries it. Reading such a
+# failure as absence would stamp the target over migrations that never ran.
+EXISTING=$(kubectl get configmap --namespace "$NAMESPACE" cozystack-version --ignore-not-found --output name)
+if [ -z "$EXISTING" ]; then
   echo "ConfigMap cozystack-version does not exist, creating it with version $TARGET_VERSION"
   # Stamp via the shared helper so the bootstrap ConfigMap carries the
   # platform.cozystack.io/no-delete label, matching every go-forward stamp

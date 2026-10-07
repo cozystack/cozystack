@@ -45,7 +45,7 @@ prep() {
   : > "$WORK/ran"
   [ "$1" = none ] || printf '%s' "$1" > "$WORK/state"
   chmod +x "$FAKEBIN/kubectl"
-  unset FAKE_FAIL_AT FAKE_READ_FAIL || true
+  unset FAKE_FAIL_AT FAKE_READ_FAIL FAKE_EXIST_FAIL || true
   return 0
 }
 
@@ -62,6 +62,7 @@ run_pod() {
     -e FAKE_STATE=/work/state \
     -e FAKE_FAIL_AT="${FAKE_FAIL_AT-}" \
     -e FAKE_READ_FAIL="${FAKE_READ_FAIL-}" \
+    -e FAKE_EXIST_FAIL="${FAKE_EXIST_FAIL-}" \
     -e NAMESPACE=cozy-system \
     -e CURRENT_VERSION="$1" \
     -e TARGET_VERSION="$2" \
@@ -147,6 +148,21 @@ ran() {
   [ "$rc" -ne 0 ]
   [ -z "$(ran)" ]
   [ "$(cat "$WORK/state")" = 58 ]
+  rm -rf "$WORK"
+}
+
+# Only NotFound means a fresh cluster. Reading any other failure of the
+# existence check as absence stamps the target over a cluster whose
+# migrations never ran, and the Job ends green.
+@test "a failed existence check stops before stamping or running anything" {
+  prep 57
+  export FAKE_EXIST_FAIL="Unable to connect to the server: net/http: TLS handshake timeout"
+  rc=0
+  run_pod 57 60 || rc=$?
+  echo "ran: $(ran)"
+  [ "$rc" -ne 0 ]
+  [ -z "$(ran)" ]
+  [ "$(cat "$WORK/state")" = 57 ]
   rm -rf "$WORK"
 }
 
