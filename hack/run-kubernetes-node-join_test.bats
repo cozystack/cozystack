@@ -202,6 +202,26 @@ no_sandbox_talosconfig() {
   export TALOSCONFIG="$1/talosconfig-absent"
 }
 
+# A fresh `bash -c` sees none of the function mocks above, and `timeout` execs
+# its argument, so a read can reach the real kubectl past a stub the subshell
+# does define. These executables go first on that subshell's PATH and record
+# every call into $1/exec.calls, so a test can fail on a call nothing stubbed.
+stage_exec_recorders() {
+  mkdir -p "$1/exec-bin"
+  for c in kubectl talosctl; do
+    printf '#!/bin/sh\necho "%s $*" >>"%s/exec.calls"\nexit 1\n' "$c" "$1" >"$1/exec-bin/$c"
+    chmod +x "$1/exec-bin/$c"
+  done
+}
+
+assert_no_exec_calls() {
+  if [ -s "$1/exec.calls" ]; then
+    echo "FAIL: a cluster client was executed past its stub:" >&2
+    cat "$1/exec.calls" >&2
+    false
+  fi
+}
+
 # The block calls collectors that have their own suites and their own bounds.
 # The ones here are stubbed everywhere; the ones under stub_gated_collectors
 # below are stubbed only where the test is about the budget rather than the
@@ -936,6 +956,7 @@ read_cost_inputs() {
   # stops existing. The read bound becomes `--request-timeout=2ms`.
   tmp=$(mktemp -d)
   use_temp_report_dir "$tmp"
+  stage_exec_recorders "$tmp"
   # 0480 alongside 8m: all digits, so a digits-only check passes it, and then the
   # budget dies in `$(( ))` as octal exactly as the suffix does while the read bound
   # quietly becomes 480 seconds. Same arm the previous-logs collector already has.
@@ -951,7 +972,7 @@ read_cost_inputs() {
    # indistinguishable from unset, so it takes the default silently and correctly;
    # the empty-string hazard lives on the post-source path and is checked there.
    for bad in 8m 0480; do
-    out=$(env "$knob=$bad" bash -c '
+    out=$(env "$knob=$bad" PATH="$tmp/exec-bin:$PATH" bash -c '
       set -eu
       . hack/e2e-chainsaw/_lib/run-kubernetes.sh
       cozy_report_guest_console_wedge() { :; }
@@ -964,6 +985,7 @@ read_cost_inputs() {
       cozy_capture_runner_kernel_cpu_time() { :; }
       cozy_capture_sandbox_qemu_thread_cpu() { :; }
       cozy_capture_runner_canary() { :; }
+      timeout() { :; }
       kubectl() { :; }
       cozy_report_node_join_failure test-latest-version
     ' 2>&1) || true
@@ -982,6 +1004,7 @@ read_cost_inputs() {
     fi
    done
   done
+  assert_no_exec_calls "$tmp"
   rm -rf "$tmp"
 }
 
@@ -1989,7 +2012,8 @@ EOF
   fi
   tmp=$(mktemp -d)
   use_temp_report_dir "$tmp"
-  bash -c '
+  stage_exec_recorders "$tmp"
+  PATH="$tmp/exec-bin:$PATH" bash -c '
     set -eu
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     cozy_report_guest_console_wedge() { :; }
@@ -2003,6 +2027,7 @@ EOF
     cozy_capture_sandbox_qemu_thread_cpu() { :; }
     cozy_capture_runner_canary() { :; }
     cozy_capture_tenant_worker_block_io() { :; }
+    timeout() { :; }
     kubectl() { :; }
     COZY_DIAG_PHASE_BUDGET=0
     cozy_report_node_join_failure test-latest-version
@@ -2016,6 +2041,7 @@ EOF
   # Not vacuous: the phase really did decline, so the run above walked the path
   # the assertion is about rather than returning early somewhere else.
   assert_file_contains 'not collected' "$tmp/out"
+  assert_no_exec_calls "$tmp"
   rm -rf "$tmp"
 }
 
