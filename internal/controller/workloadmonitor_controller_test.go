@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1721,6 +1722,26 @@ func TestReconcile_DataVolumeMessageCarriesTheImporterError(t *testing.T) {
 			t.Errorf("Message = %q, want %q", got.Status.Message, want)
 		}
 	})
+}
+
+// The fixture is a DataVolume read off a CDI v1.64 cluster after its importer
+// had restarted 1988 times on a 404; only names and the URL are changed. For a
+// single-container importer failing like this one, the pinned v1.66 differs
+// only in requiring every container to run before it reports Running=True.
+func TestReconcile_LiveStuckImportNamesTheSourceError(t *testing.T) {
+	raw, err := os.ReadFile("testdata/datavolume-http-404.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dv := &unstructured.Unstructured{}
+	if err := dv.UnmarshalJSON(raw); err != nil {
+		t.Fatal(err)
+	}
+	got := reconcileDataVolumeMonitor(t, true, nil, dv)
+	const want = "DataVolume vm-disk-test is ImportInProgress: Unable to connect to http data source: expected status code 200, got 404. Status: 404 Not Found"
+	if *got.Status.Operational || got.Status.Message != want {
+		t.Errorf("Operational=%v Message=%q, want false and %q", *got.Status.Operational, got.Status.Message, want)
+	}
 }
 
 func TestReconcile_PopulatedDataVolumeClearsTheLastVerdict(t *testing.T) {
