@@ -48,7 +48,7 @@ rules:
 - apiGroups: ["kubevirt.io"]
   resources: ["kubevirts"]
   verbs: ["get", "watch", "list"]
-# The image picker drops golden images whose import Failed.
+# The image picker drops golden images whose import failed or keeps failing.
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
   verbs: ["get", "watch", "list"]
