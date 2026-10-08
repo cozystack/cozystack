@@ -1,35 +1,5 @@
 ---
-apiVersion: kamaji.clastix.io/v1alpha1
-kind: DataStore
-metadata:
-  name: {{ .Release.Namespace }}
-spec:
-  driver: etcd
-  endpoints:
-  - etcd.{{ $.Release.Namespace }}.svc:2379
-  tlsConfig:
-    certificateAuthority:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-    clientCertificate:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
+{{ include "cozy-lib.etcd.datastore" (dict "name" "etcd" "dataStoreName" .Release.Namespace "root" $) }}
 ---
 apiVersion: v1
 kind: Secret
