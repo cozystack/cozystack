@@ -152,7 +152,11 @@ func TestReconcileRestore_DoesNotRetryAJobItAlreadyFailed(t *testing.T) {
 			Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &started, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
 		}
 		strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "velero"}}
-		c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(rj, backup, strategy).
+		veleroBackup := &velerov1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Name: "vb", Namespace: veleroNamespace},
+			Status:     velerov1.BackupStatus{Phase: velerov1.BackupPhaseCompleted},
+		}
+		c := clientfake.NewClientBuilder().WithScheme(s).WithObjects(rj, backup, strategy, veleroBackup).
 			WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).Build()
 		dyn := dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t), makeUnstructuredHelmRelease(hrName, ns, nil))
 		r := &RestoreJobReconciler{
