@@ -1,0 +1,85 @@
+suite: vm-instance joins a cozyplane VPC by annotation
+
+# On the cozyplane networking variant there is no multus: a VM joins its VPC
+# through the sdn.cozystack.io/vpc pod annotation and keeps its single default
+# pod interface. The variant is detected the same way the Kube-OVN pinning is —
+# by API discovery — so the same values render the multus path on the Cilium
+# variants and the annotation path on cozyplane.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+tests:
+  - it: annotates the VPC and renders no multus when the sdn API is served
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      # The bare name resolves against the VM's own namespace; the prefix is
+      # the VPC application's release prefix, the same convention peers use.
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-mynet
+      - lengthEqual:
+          path: spec.template.spec.domain.devices.interfaces
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.networks
+          count: 1
+      - equal:
+          path: spec.template.spec.networks[0].name
+          value: default
+
+  - it: refuses more than one network on cozyplane
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: one
+        - name: two
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cozyplane networking variant joins a VM to exactly one VPC'
+
+  - it: carries no VPC annotation without networks
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+
+  - it: keeps the multus path when the sdn API is not served
+    capabilities:
+      apiVersions: []
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+      - lengthEqual:
+          path: spec.template.spec.networks
+          count: 2
+      - equal:
+          path: spec.template.spec.networks[1].multus.networkName
+          value: tenant-test/mynet
+      - lengthEqual:
+          path: spec.template.spec.domain.devices.interfaces
+          count: 2

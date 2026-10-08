@@ -41,7 +41,7 @@ type ConfigSpec struct {
 	// List of disks to attach.
 	// +kubebuilder:default:={}
 	Disks []Disk `json:"disks,omitempty"`
-	// Networks to attach the VM to.
+	// Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).
 	// +kubebuilder:default:={}
 	Networks []Network `json:"networks,omitempty"`
 	// Deprecated: use networks instead.
