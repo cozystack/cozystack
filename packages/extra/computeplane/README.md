@@ -21,15 +21,7 @@ applications. The tenant never sees that Secret: tenant-visible secrets are an
 allowlist, and this module's `ApplicationDefinition` includes nothing, which
 withholds every Secret in the module's lineage by construction.
 
-**Prerequisite:** an `etcd` module must be available to the tenant — its own,
-or one inherited from an ancestor tenant (the `_namespace.etcd` context
-propagates down the tenant tree, so enabling a redundant local etcd is not
-required). The tenant Kubernetes machinery — including the cluster-autoscaler
-that brings up the default scale-from-zero `md0` node group — is backed by
-that etcd; without it the wrapped chart collapses to its `awaiting-etcd`
-status beacon and the ComputePlane provisions no control plane or workers
-(the HelmReleases still report Ready over the empty shell, so check for the
-beacon ConfigMap when nothing comes up).
+The wrapped cluster brings its own etcd (`EtcdCluster/computeplane-cluster-etcd`), so the tenant needs no `etcd` module. A ComputePlane created before per-cluster etcd keeps the tenant etcd it already runs on.
 
 See the full design in
 [cozystack/community design-proposals/compute-plane](https://github.com/cozystack/community/tree/main/design-proposals/compute-plane).

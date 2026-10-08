@@ -1,1 +1,1 @@
-{{ include "cozy-lib.etcd.podScrape" (dict "name" "etcd" "selector" (dict "app.kubernetes.io/name" "etcd")) }}
+{{ include "cozy-lib.etcd.podScrape" (dict "name" "etcd" "selector" (dict "app.kubernetes.io/instance" "etcd")) }}

@@ -24,7 +24,7 @@
   switched off there is nothing for a controller to serve and no token to hold.
 */ -}}
 {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
-{{- if and .Values._namespace.etcd .Values.proxmox.csi.enabled }}
+{{- if .Values.proxmox.csi.enabled }}
 {{- if not .Values.proxmox.csi.credentialsSecretName }}
 {{-   fail "proxmox.csi.credentialsSecretName is required on the proxmox substrate: the CSI controller cannot reach the hypervisor without an API token" }}
 {{- end }}

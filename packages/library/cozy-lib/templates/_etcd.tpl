@@ -417,7 +417,7 @@ spec:
               type: RuntimeDefault
           containers:
           - name: etcd-defrag
-            image: ghcr.io/ahrtr/etcd-defrag:v0.13.0
+            image: {{ include "cozy-lib.image" (list "ghcr.io/ahrtr/etcd-defrag:v0.13.0@sha256:e8d5411a83561d11b5165aaf9cddcc3c24aa6846acda696eba0d18225154a249" $root) }}
             securityContext:
               allowPrivilegeEscalation: false
               readOnlyRootFilesystem: true
@@ -505,4 +505,9 @@ spec:
   selector:
     matchLabels:
       {{- toYaml .selector | nindent 6 }}
+{{- end -}}
+
+{{- /* The etcd chart's default version; bump the two together. */ -}}
+{{- define "cozy-lib.etcd.defaultVersion" -}}
+3.6.11
 {{- end -}}

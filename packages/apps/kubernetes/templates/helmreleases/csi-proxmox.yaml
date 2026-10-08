@@ -13,7 +13,7 @@
       different values shape. Splitting them keeps the KubeVirt path rendering
       byte-for-byte what it rendered before Proxmox existed. */}}
 {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
-{{- if and .Values._namespace.etcd .Values.proxmox.csi.enabled }}
+{{- if .Values.proxmox.csi.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

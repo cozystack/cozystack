@@ -263,6 +263,12 @@ tests:
           path: spec.template.spec.volumes[0].secret.secretName
           value: "{{ .Datastore.CertificateSecret }}"
         template: templates/strategy-kubernetes-default.yaml
+      # A cluster's own etcd denies its client port to every Pod without this
+      # label, the dump Job's included.
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-etcd-cluster"]
+          value: "{{ .Release.Prefix }}{{ .Release.Name }}-etcd"
+        template: templates/strategy-kubernetes-default.yaml
       - equal:
           path: spec.velero.spec.orLabelSelectors[2].matchLabels["cluster.x-k8s.io/cluster-name"]
           value: "kubernetes-{{ .Application.metadata.name }}"
