@@ -91,6 +91,88 @@ tests:
           path: metadata.name
           value: keycloak-kms-proxy-kek
 
+  - it: generates a static KEK the proxy can decode (base64 of 32 bytes)
+    # data.kek is the Secret encoding of KKP_KEK, which must itself be base64
+    # of 32 bytes (44 characters), so data.kek is 60 characters long.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: data.kek
+          pattern: ^[A-Za-z0-9+/]{59}=$
+
+  - it: keeps an existing static KEK the proxy can decode
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0=
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: data.kek
+          value: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0=
+
+  - it: replaces a static KEK from earlier chart versions that the proxy rejects
+    # Earlier versions stored 32 alphanumeric characters, which decode to 24
+    # bytes; the proxy never started with them, so nothing was encrypted.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU=
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: data.kek
+          pattern: ^[A-Za-z0-9+/]{59}=$
+
   - it: exposes the proxy on a postgres Service
     template: templates/proxy.yaml
     documentSelector:
