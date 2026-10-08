@@ -1,0 +1,66 @@
+#!/bin/sh
+# Migration 60 --> 61
+# Report the tenant Kubernetes clusters that stay on a shared tenant etcd.
+#
+# From this release a new Kubernetes cluster renders its own EtcdCluster and
+# Kamaji DataStore, while an existing one keeps the DataStore its control plane
+# already names. Moving a cluster off it is a Kamaji datastore migration, which
+# freezes the tenant's writes while it copies and leaves every worker kubelet
+# needing a restart, so it is an operator's decision per cluster and never an
+# upgrade step. This migration changes nothing: it lists the clusters that
+# remain on a shared DataStore, which is what retiring Tenant.spec.etcd waits
+# on.
+#
+# A DataStore belongs to a cluster when the cluster's own release renders it,
+# which Helm records in the meta.helm.sh/release-name and release-namespace
+# annotations. Reading those rather than recomputing the chart's name for the
+# DataStore keeps this from drifting from the chart.
+#
+# Fail-closed like migration 59: migrations never re-run, so a list it could
+# not read is an error rather than an empty report.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# --ignore-not-found separates a cluster without Kamaji (no output, rc 0) from
+# an API error, which aborts under set -e.
+crd=$(kubectl get crd kamajicontrolplanes.controlplane.cluster.x-k8s.io --ignore-not-found -o name)
+if [ -z "$crd" ]; then
+  echo "KamajiControlPlane is not installed; no tenant Kubernetes cluster to report"
+  stamp_cozystack_version 61
+  exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+kubectl get kamajicontrolplanes.controlplane.cluster.x-k8s.io --all-namespaces -o json > "$work/kcps.json"
+kubectl get datastores.kamaji.clastix.io -o json > "$work/datastores.json"
+
+jq -r --slurpfile ds "$work/datastores.json" '
+  ($ds[0].items | map({key: .metadata.name, value: .}) | from_entries) as $byname
+  | .items[]
+  | .metadata.namespace as $ns
+  | .metadata.name as $name
+  | (.spec.dataStoreName // "") as $store
+  | ($byname[$store] // {}) as $ds
+  | ($ds.metadata.annotations // {}) as $a
+  | select($a["meta.helm.sh/release-name"] != $name or $a["meta.helm.sh/release-namespace"] != $ns)
+  | "\($ns)/\($name) DataStore=\(if $store == "" then "<none>" else $store end) endpoints=\(($ds.spec.endpoints // []) | join(","))"
+' "$work/kcps.json" > "$work/shared"
+
+if [ ! -s "$work/shared" ]; then
+  echo "Every tenant Kubernetes cluster runs on its own etcd; none remains on a shared DataStore"
+  stamp_cozystack_version 61
+  exit 0
+fi
+
+echo "$(wc -l < "$work/shared" | tr -d ' ') tenant Kubernetes cluster(s) stay on a shared tenant etcd."
+echo "They keep running as they are; only clusters created from now on get an etcd of their own."
+while read -r line; do
+  echo "  shared-etcd: $line"
+done < "$work/shared"
+
+stamp_cozystack_version 61
