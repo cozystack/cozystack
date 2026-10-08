@@ -68,7 +68,7 @@ spec:
             cluster reads the Secret into a tmpfs volume, and nothing carries it
             into the tenant. */}}
       - name: build-cloud-config
-        image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+        image: {{ include "cozy-lib.image" (list (.Files.Get "images/busybox.tag" | trim) $) | quote }}
         command:
         - sh
         - -c
