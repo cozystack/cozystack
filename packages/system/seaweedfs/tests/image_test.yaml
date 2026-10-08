@@ -1,0 +1,39 @@
+suite: seaweedfs image
+
+# Every SeaweedFS component must run the in-tree build from images/seaweedfs,
+# which carries the patches in images/seaweedfs/patches. The vendored chart
+# falls back to chrislusf/seaweedfs at its appVersion when the image keys are
+# unset, and that is the unpatched upstream binary. The reference must carry a
+# digest, as every first-party reference does (docs/agents/image-refs.md).
+
+templates:
+  - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/volume/volume-statefulset.yaml
+  - charts/seaweedfs/templates/filer/filer-statefulset.yaml
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+  # filer-statefulset includes it for its checksum annotation.
+  - charts/seaweedfs/templates/s3/s3-secret.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: runs the in-tree image in the master
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts: &inTreeImage
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/cozystack/cozystack/seaweedfs:[^@]+@sha256:[0-9a-f]{64}$
+
+  - it: runs the in-tree image in the volume servers
+    template: charts/seaweedfs/templates/volume/volume-statefulset.yaml
+    asserts: *inTreeImage
+
+  - it: runs the in-tree image in the filer
+    template: charts/seaweedfs/templates/filer/filer-statefulset.yaml
+    asserts: *inTreeImage
+
+  - it: runs the in-tree image in the S3 gateway
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts: *inTreeImage
