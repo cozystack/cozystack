@@ -2921,9 +2921,10 @@ func TestReconcile_TLSRouteOnPassthroughListenerTerminatesNothing(t *testing.T) 
 // same hostname as the passthrough listener. Gateway API admits that —
 // its uniqueness rule is on (port, protocol, hostname) and the two
 // differ in protocol — and calls for both to be marked Conflicted, so
-// the hostname is served by neither. The pinned v1.19.5 marks nothing
-// and hands Envoy two chains under one server name; v1.19.6 marks the
-// pair from the listener specs alone.
+// the hostname is served by neither. Cilium marks the pair from the
+// listener specs alone and drops it from Envoy, and the operator patch
+// that admits a wildcard beside a narrower passthrough listener keeps
+// that for an identical hostname.
 func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -3487,9 +3488,9 @@ func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
 // terminate listener leaves nothing on the Gateway for the route to
 // attach to, and Accepted=True would then describe a hostname the
 // controller deliberately dropped. Nothing on the Gateway says so
-// instead: the pinned Cilium sets no Conflicted condition, so the pair
-// rendered and left no record of the collision anywhere. That is what
-// makes the route condition the only place to say it.
+// instead: the terminate listener is never rendered, so the Gateway
+// holds no record of the claim. That is what makes the route condition
+// the only place to say it.
 //
 // The reason must differ from HostnameConflict, which states that
 // another route won the same hostname. Nothing won this one.
@@ -3766,8 +3767,8 @@ func TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict(t *testin
 // accepted exactly when some listener answering its name would take a
 // route from its namespace.
 // noRouteHostnames marks a verdict-table row whose route declares no
-// spec.hostnames at all, the shape TLSRoute v1alpha2 permits and the
-// pinned Cilium serves on the hostname of the listener the route
+// spec.hostnames at all, the shape TLSRoute v1alpha2 permits and
+// Gateway API serves on the hostname of the listener the route
 // selects. Spelled as a name rather than left as a bare "" so a row
 // cannot be read as claiming the empty hostname.
 const noRouteHostnames = ""
@@ -3848,8 +3849,8 @@ func TestReconcile_TLSRouteVerdictTable(t *testing.T) {
 		{"section names no listener, tenant namespace", "svc." + apex, "tenant-foo",
 			[]string{"svc"}, nil, "tls-absent", 0, false, "tls-absent", ""},
 		// A route that declares no hostnames is served on the hostname
-		// of the listener it selects: ComputeHosts substitutes it at the
-		// pin (operator/pkg/model/helpers.go, v1.19.5), so the claim
+		// of the listener it selects: ComputeHosts substitutes it
+		// (operator/pkg/model/helpers.go, v1.20.2), so the claim
 		// exists and is judged like a declared one. Pinning the listener
 		// by sectionName and leaving the hostname to it is the ordinary
 		// way to write such a route.
@@ -4264,9 +4265,9 @@ func TestReconcile_HostnameLessTLSRouteEntryIsRetractedWhenItsListenerGoes(t *te
 // TestReconcile_BorrowedHostnamesStopAtListenersTheRouteCanAttachTo
 // pins which listeners lend their hostname to a route that declares
 // none. A native-port listener admits the publishing tenant alone, so
-// the pinned Cilium never puts a route from elsewhere on it and never
-// serves that route on its hostname; a port-443 passthrough listener
-// takes every attached namespace and does lend. Borrowing from both
+// no route from elsewhere attaches to it or is served on its
+// hostname; a port-443 passthrough listener takes every attached
+// namespace and does lend. Borrowing from both
 // hands a route a name its own object does not carry and then refuses
 // it for the namespace, in the same pass that sheds a terminate
 // listener because the very same route is serving the name it did
@@ -4352,11 +4353,9 @@ func TestReconcile_BorrowedHostnamesStopAtListenersTheRouteCanAttachTo(t *testin
 // the native-port listeners declare no kinds at all. The verdict is the
 // same on both.
 //
-// Nor does anything else tell the route: CheckGatewayRouteKindAllowed
-// (operator/pkg/gateway-api/routechecks/gateway_checks.go, v1.19.5)
-// reads each listener's kinds against every route on the Gateway rather
-// than against the routes that named it, so the HTTPRoute entry on the
-// port-443 listeners has Cilium report such a route Accepted.
+// Nothing else is bound to tell the route: the port-443 listeners list
+// HTTPRoute among their kinds, so whether the Gateway controller refuses
+// such a route is left to the implementation.
 //
 // A route claiming the same hostname with no sectionName is refused
 // for the reservation instead, and one naming a listener outside the
@@ -6596,9 +6595,9 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 		{"duplicate passthrough service", nil,
 			[]string{"api", "api"}, apex, true, "duplicate entry"},
 		// Gateway API keys listeners by (port, protocol, hostname), so
-		// these are distinct and the object is accepted; Cilium routes
-		// passthrough by SNI alone (cilium#42898) and silently serves
-		// only one of them.
+		// these are distinct and the object is accepted; the controller
+		// refuses the pair, which Cilium before 1.19.6 served only one
+		// of (cilium#42898).
 		{"same hostname on different ports", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("pg", 5432, "db.foo.example.com"),
 			mk("pg2", 5433, "db.foo.example.com"),
@@ -8648,16 +8647,15 @@ func TestReconcile_Port443ListenersShareKinds(t *testing.T) {
 	assertPort443Contract := func(t *testing.T, gw *gatewayv1.Gateway) {
 		t.Helper()
 		// Swept by whether the listener declares kinds at all, not by
-		// port, because that is the shape of the check at the pinned
-		// v1.19.5: CheckGatewayRouteKindAllowed walks every listener on
-		// the Gateway with no port and no sectionName filter, skips the
-		// ones whose kinds are empty, and overwrites the route's
+		// port, because that was the shape of the check before v1.19.6:
+		// CheckGatewayRouteKindAllowed walked every listener on the
+		// Gateway with no port and no sectionName filter, skipped the
+		// ones whose kinds were empty, and overwrote the route's
 		// Accepted condition on each of the rest, so the last listener
-		// decides. One listener whose set omits HTTPRoute therefore
-		// rejects every HTTPRoute on the Gateway, whatever port it
-		// sits on. v1.19.6 narrows the walk to the listener the
-		// parentRef names, which makes this sweep stricter than that
-		// release requires rather than wrong for it.
+		// decided. v1.19.6 narrows the walk to the listener the
+		// parentRef names, which makes this sweep stricter than the
+		// shipped release requires rather than wrong for it; it goes
+		// with the uniform-kinds workaround.
 		var declared []gatewayv1.Listener
 		for _, l := range gw.Spec.Listeners {
 			if l.AllowedRoutes != nil && len(l.AllowedRoutes.Kinds) > 0 {
@@ -8988,10 +8986,10 @@ func TestReconcile_EdgeModeRendersPlainHTTPListeners(t *testing.T) {
 		}
 		if l.Hostname == nil {
 			// A hostname-less listener admits every host, and Cilium
-			// reads only the first listener when deciding whether a
-			// namespace may attach (cilium#42159), so one sitting at
-			// index 0 with the narrow ACME selector detaches every
-			// inheriting tenant's route.
+			// before 1.19.6 read only the first listener when deciding
+			// whether a namespace may attach (cilium#42159), so one
+			// sitting at index 0 with the narrow ACME selector detached
+			// every inheriting tenant's route.
 			t.Errorf("edge mode must render no hostname-less listener, got %q", l.Name)
 			continue
 		}
@@ -9324,7 +9322,7 @@ func TestReconcile_LeavingEdgeForAWildcardModeClearsTheWithdrawal(t *testing.T) 
 // whole-apex pass leaves a route with no spec.hostnames alone, which is
 // not that the controller never judges one. Under http01 it does: the
 // route is judged on the hostname the listener its sectionName names
-// lends it, the way the pinned Cilium serves it. What decides the skip
+// lends it, the way Gateway API serves it. What decides the skip
 // is the leg where that lends nothing. A route pinned to a section this
 // Gateway renders no listener for produces no claim under http01
 // either, so a refusal written on it under edge would have no pass that

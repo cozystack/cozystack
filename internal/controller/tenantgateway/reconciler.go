@@ -291,12 +291,10 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// listener as ResolvedRefs=False/InvalidRouteKinds rather than
 		// as a grant.
 		//
-		// Nothing else tells the route. CheckGatewayRouteKindAllowed
-		// (operator/pkg/gateway-api/routechecks/gateway_checks.go,
-		// v1.19.5) reads each listener's kinds against every route on
-		// the Gateway rather than against the routes that named it, so
-		// that same HTTPRoute entry has Cilium report this route
-		// Accepted, and this condition is the only refusal.
+		// Nothing else is bound to tell the route. The listener lists
+		// HTTPRoute among its kinds, so whether the Gateway controller
+		// refuses the route is left to the implementation, and this
+		// condition is the refusal that does not depend on it.
 		//
 		// Such a ref then leaves the hostname before anything else is
 		// decided about it, the way a refused TLSRoute leaves the
@@ -1375,9 +1373,10 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// route and the http->https redirect, neither of which exists in edge
 	// mode, where it would only be a catch-all admitting any hostname.
 	// Leaving it out also keeps a hostname-pinned listener at index 0,
-	// which is what Cilium's first-listener-wins namespace check reads
-	// (cilium#42159, fixed in 1.19.6): with the narrow :80 selector first,
-	// an inheriting tenant's route attaches to no listener at all.
+	// which is what Cilium's first-listener-wins namespace check read
+	// before 1.19.6 (cilium#42159, fixed by cilium#45693): with the narrow
+	// :80 selector first, an inheriting tenant's route attached to no
+	// listener at all.
 	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeEdge {
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:          httpListenerName,
@@ -1588,12 +1587,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// on the entry's native Port, mode Passthrough, matching the
 	// entry's per-engine SNI Hostname, rendered alongside the port-443
 	// terminate listeners. What may attach is left to the protocol
-	// rather than declared: the port-443 TLSPassthroughServices
-	// listeners above must share their allowedRoutes.kinds with the
-	// terminate listeners to dodge Cilium's same-port listener collapse
-	// (cilium#45559), and these declare no kinds at all, because on the
-	// pinned Cilium a declared set is applied to every route on the
-	// Gateway rather than to the listener that declares it. A dedicated
+	// rather than declared, for the reason on Kinds below. A dedicated
 	// (port, SNI) pair still yields exactly one Envoy filter chain that
 	// SNI-routes to the attaching TLSRoute's backend. No engine is wired here: the
 	// TLSRoute, certificate, and CA plumbing land in later phases.
@@ -1606,30 +1600,21 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		// of the whole subtree. Narrowing costs nothing while no chart
 		// value exposes this field; once something depends on the wide
 		// form, narrowing becomes a behaviour change instead.
-		// Kinds is left unset on purpose, and the reason is upstream
-		// rather than stylistic. CheckGatewayRouteKindAllowed at the
-		// pinned v1.19.5 walks every listener on the Gateway with no
-		// port and no sectionName filter, skips the ones that declare
-		// no kinds, and overwrites the route's Accepted condition on
-		// each of the rest, last one winning. A listener declaring
-		// TLSRoute alone would therefore reject every HTTPRoute on the
-		// Gateway, whatever port it sits on. Declaring nothing keeps
-		// this listener out of that loop. What it opens is bounded by
-		// the implementation rather than by the spec: Gateway API says
-		// only that an absent Kinds derives the set from the listener
-		// protocol and leaves the mapping to the implementation, and
-		// the conventional table pairs TLS with TCPRoute as well as
-		// TLSRoute. Cilium implements neither TCPRoute nor UDPRoute, so
-		// on the pinned version TLSRoute is what a TLS listener admits,
-		// and the listener pins kubernetes.io/metadata.name to the
-		// publishing tenant regardless.
-		//
-		// This one lifts on a patch bump rather than with the rest of
-		// the pin: v1.19.6 skips listeners the parentRef's sectionName
-		// or port does not name and returns on the first match, so
-		// declaring TLSRoute here would then bind to this listener
-		// alone. Spelling it out again is safe from that release on,
-		// and pointless, since the protocol already says TLSRoute.
+		// Kinds is left unset because the protocol already says
+		// TLSRoute. Before v1.19.6, CheckGatewayRouteKindAllowed applied
+		// a listener's declared kinds to every route on the Gateway, so
+		// declaring TLSRoute here would have rejected every HTTPRoute.
+		// From that release it judges a route against the listener its
+		// sectionName or port names alone.
+		// What an unset Kinds opens is bounded by the implementation
+		// rather than by the spec: Gateway API leaves the
+		// protocol-to-kind mapping to it, and the conventional table
+		// pairs TLS with TCPRoute as well as TLSRoute. Cilium maps the
+		// TLS protocol to TLSRoute alone (getSupportedRouteKinds in
+		// operator/pkg/gateway-api/helpers.go, v1.20.2), so TLSRoute is
+		// what a TLS listener admits, and the listener pins
+		// kubernetes.io/metadata.name to the publishing tenant
+		// regardless.
 		passthroughAllowed := allowedRoutesFromValues([]string{tgw.Namespace})
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(passthroughListenerPrefix + pl.Name),

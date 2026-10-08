@@ -258,11 +258,11 @@ const passthroughListenerPrefix = "tls-"
 // Gateway API admits either — its listener uniqueness rule keys on
 // (port, protocol, hostname), so differing protocols are distinct — and
 // calls for the conflict to surface as Conflicted on both listeners,
-// which then serve nothing. That is the specification rather than the
-// pinned behaviour: v1.19.5 sets no Conflicted condition anywhere, and
-// v1.19.6 adds one in samePortCrossProtocolConflictedListeners, keyed on
-// the listener specs alone. Rejecting the entry up front turns either
-// into a per-field error on TenantGateway status instead.
+// which then serve nothing. Cilium marks such a pair Conflicted from the
+// listener specs alone (listenerPairConflict in
+// operator/pkg/gateway-api/status_listener.go, v1.20.2). Rejecting the
+// entry up front turns either into a per-field error on TenantGateway
+// status instead.
 //
 // A function rather than a package-level set: the ports are a property
 // of what renderGateway emits, so nothing should be able to write to
@@ -557,16 +557,15 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		// Two listeners sharing a hostname on different ports are
 		// distinct to Gateway API — listeners are keyed by (port,
 		// protocol, hostname) — and the object is accepted. Cilium
-		// routes passthrough by SNI without distinguishing the port
-		// (cilium#42898, fixed upstream by cilium#44889 and
-		// backported via cilium#46826 into 1.19.6 — cozystack pins
-		// 1.19.5 in packages/system/cilium/images/cilium/Dockerfile,
-		// so revisit this restriction when that pin moves), so only
-		// one of them works and which one depends on route ordering.
-		// On a native database port that is a raw stream forwarded to
-		// the wrong backend, with Accepted and Programmed both true
-		// and nothing on the status to show for it. Reject the shape
-		// instead.
+		// before 1.19.6 routed passthrough by SNI without
+		// distinguishing the port (cilium#42898), so only one of them
+		// worked, a raw stream forwarded to the wrong backend with
+		// Accepted and Programmed both true. From 1.19.6 (cilium#44889,
+		// backported by cilium#46826) a Gateway with two routed
+		// passthrough ports gets an Envoy listener per port
+		// (NeedsPerPortTLSPassthroughListeners in
+		// operator/pkg/model/model.go), so the shipped 1.20.2 no longer
+		// needs this refusal; lifting it is tracked in cozystack/cozystack#4765.
 		//
 		// Checked after the apex test on purpose: an out-of-apex
 		// hostname that also happens to overlap should report the apex
@@ -575,7 +574,7 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 			if !hostnamesOverlap(l.Hostname, claimed.hostname) {
 				continue
 			}
-			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps %s hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.source, claimed.hostname)
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps %s hostname %q; two passthrough listeners may not match the same ClientHello SNI, even on different ports", l.Name, l.Hostname, claimed.source, claimed.hostname)
 		}
 		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, fmt.Sprintf("listener %q", l.Name)})
 	}
@@ -591,8 +590,7 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 // does not match "foo.example.com"), which is why the exact leg tests
 // for the leading dot.
 //
-// This matters because the caller rejects overlapping hostnames on the
-// premise that Cilium routes passthrough by SNI alone. An exact-match
+// This matters because the caller rejects overlapping hostnames. An exact-match
 // check would let a single "*.<apex>" entry silently shadow the
 // tls-<svc> listeners the chart ships by default (api, vm-exportproxy,
 // cdi-uploadproxy all render <svc>.<apex>), which is the exact failure
