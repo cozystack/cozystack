@@ -68,7 +68,7 @@ disks: []
 ## - name: example-data
 ##   bus: sata
 
-## @param {[]Network} networks - Networks to attach the VM to.
+## @param {[]Network} networks - Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).
 networks: []
 ## Example:
 ## networks:

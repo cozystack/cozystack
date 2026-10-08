@@ -20,6 +20,13 @@
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
 {{- $networks := .Values.networks | default .Values.subnets }}
+{{- /* On the cozyplane networking variant a VM joins its VPC through a pod
+       annotation: no multus, no secondary interfaces, and exactly one VPC per
+       pod — so more than one network cannot be honored and must not render. */ -}}
+{{- $cozyplaneSDN := .Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC" }}
+{{- if and $cozyplaneSDN (gt (len ($networks | default list)) 1) }}
+{{- fail (printf "the cozyplane networking variant joins a VM to exactly one VPC, got %d networks" (len $networks)) }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -54,6 +61,11 @@ spec:
         ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
         {{- end }}
+        {{- end }}
+        {{- if and $cozyplaneSDN (gt (len ($networks | default list)) 0) }}
+        {{- /* The VPC lives in the VM's own namespace, so the bare release name
+               resolves; <owner-ns>/<vpc> is only for foreign VPCs. */}}
+        sdn.cozystack.io/vpc: virtualprivatecloud-{{ (index $networks 0).name }}
         {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
@@ -116,9 +128,11 @@ spec:
           interfaces:
           - name: default
             bridge: {}
+          {{- if not $cozyplaneSDN }}
           {{- range $i, $net := $networks }}
           - name: {{ $net.name }}
             bridge: {}
+          {{- end }}
           {{- end }}
         machine:
           type: ""
@@ -151,8 +165,10 @@ spec:
       networks:
       - name: default
         pod: {}
+      {{- if not $cozyplaneSDN }}
       {{- range $i, $net := $networks }}
       - name: {{ $net.name }}
         multus:
           networkName: {{ $.Release.Namespace }}/{{ $net.name }}
+      {{- end }}
       {{- end }}

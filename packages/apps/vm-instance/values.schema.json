@@ -46,18 +46,12 @@
     "instanceType": {
       "description": "Virtual Machine instance type. Ignored when `resources` sizes the VM, which needs whole-number cpu and sockets plus memory; the whole type is dropped then, so any dedicated CPU placement, hugepages, NUMA or realtime settings it carries go with it. While this field is set, a `resources` block that sizes only part of the VM is rejected outright instead of ignored, so complete it or clear it.",
       "type": "string",
-      "default": "u1.medium",
-      "x-cozystack-options": {
-        "source": "instancetype"
-      }
+      "default": "u1.medium"
     },
     "instanceProfile": {
       "description": "Virtual Machine preferences profile.",
       "type": "string",
-      "default": "ubuntu",
-      "x-cozystack-options": {
-        "source": "instanceprofile"
-      }
+      "default": "ubuntu"
     },
     "disks": {
       "description": "List of disks to attach.",
@@ -75,16 +69,13 @@
           },
           "name": {
             "description": "Disk name.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "vmdisk"
-            }
+            "type": "string"
           }
         }
       }
     },
     "networks": {
-      "description": "Networks to attach the VM to.",
+      "description": "Networks to attach the VM to. On the cozyplane networking variant the single entry names the VirtualPrivateCloud the VM joins (at most one; the VM keeps its one pod interface).",
       "type": "array",
       "default": [],
       "items": {
@@ -92,10 +83,7 @@
         "properties": {
           "name": {
             "description": "Network attachment name.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "network"
-            }
+            "type": "string"
           }
         }
       }
@@ -109,10 +97,7 @@
         "properties": {
           "name": {
             "description": "Network attachment name.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "network"
-            }
+            "type": "string"
           }
         }
       }
@@ -129,10 +114,7 @@
         "properties": {
           "name": {
             "description": "The name of the GPU resource to attach.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "gpu"
-            }
+            "type": "string"
           }
         }
       }
