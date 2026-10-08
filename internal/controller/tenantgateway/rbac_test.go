@@ -61,12 +61,10 @@ func TestShippedClusterRoleNamesEveryTypeThisControllerReads(t *testing.T) {
 		{"gateway.networking.k8s.io", "gateways"},
 		{"gateway.networking.k8s.io", "httproutes"},
 		{"gateway.networking.k8s.io", "tlsroutes"},
-		{"gateway.networking.k8s.io", "referencegrants"},
 		{"gateway.networking.k8s.io", "gatewayclasses"},
 		{"cert-manager.io", "certificates"},
 		{"cert-manager.io", "issuers"},
 		{"", "namespaces"},
-		{"", "services"},
 	}
 
 	raw, err := os.ReadFile(clusterRolePath)

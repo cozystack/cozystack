@@ -377,10 +377,10 @@ type TenantGatewaySpec struct {
 	// for the listener's Hostname — a passthrough listener never
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Until such a route attaches and its backend
-	// resolves, the entry publishes the port and answers nothing on it:
-	// a passthrough listener carrying no forwarding route contributes
-	// no filter chain, so a hostname an HTTPS-terminate listener
-	// already serves goes on being served there.
+	// resolves, the entry publishes the port and answers nothing on it.
+	// Under certMode http01 its hostname is reserved from the moment it
+	// is declared: no HTTPS-terminate listener or certificate is
+	// rendered for it on 443, route or no route.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
