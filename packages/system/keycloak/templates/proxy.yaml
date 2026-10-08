@@ -55,6 +55,17 @@
 {{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
 {{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
 {{- end }}
+{{- /*
+  Without KKP_DEKSET_FILE the proxy mints a fresh DEK set on every start and
+  keeps it only in memory, so after any restart (rollout, drain, OOM) it can
+  no longer decrypt what it wrote before. Refuse to encrypt without a
+  persistent DEK set. fields=disabled is pure passthrough and needs no key: it
+  is how the static backend gets its KEK Secret created before the operator
+  mints a DEK set with it.
+*/}}
+{{- if and (ne (.Values.encryption.fields | default "") "disabled") (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.deksetSecretName is required unless encryption.fields is \"disabled\": without a persistent DEK set the proxy mints a new key on every start and cannot decrypt data written before a restart. Mint one with the proxy's `backfill generate-dekset`, store it in a Secret and set encryption.deksetSecretName" }}
+{{- end }}
 {{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
