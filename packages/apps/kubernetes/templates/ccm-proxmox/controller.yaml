@@ -12,7 +12,6 @@
   admin, there is nothing left to grant.
 */ -}}
 {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
-{{- if .Values._namespace.etcd }}
 {{- if not .Values.proxmox.ccm.credentialsSecretName }}
 {{-   fail "proxmox.ccm.credentialsSecretName is required on the proxmox substrate: without a cloud-controller-manager every worker keeps the uninitialized taint and the cluster schedules nothing" }}
 {{- end }}
@@ -160,5 +159,4 @@ spec:
         - name: kubeconfig
           secret:
             secretName: {{ .Release.Name }}-admin-kubeconfig
-{{- end }}
 {{- end }}
