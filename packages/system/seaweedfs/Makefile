@@ -1,11 +1,35 @@
 export NAME=seaweedfs-system
+SEAWEEDFS_TAG=$(shell grep -F 'ARG VERSION=' images/seaweedfs/Dockerfile | cut -f2 -d=)
 
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+image:
+	docker buildx build images/seaweedfs \
+		$(call image-tags,seaweedfs,$(SEAWEEDFS_TAG)) \
+		$(call cache-args,seaweedfs) \
+		--metadata-file images/seaweedfs.json \
+		$(BUILDX_ARGS)
+	REPOSITORY="$(REGISTRY)/seaweedfs" \
+		yq -i '.seaweedfs.image.repository = strenv(REPOSITORY)' values.yaml
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/seaweedfs.json -o json -r) \
+		yq -i '.seaweedfs.image.tag = strenv(TAG)' values.yaml
+	rm -f images/seaweedfs.json
+
 test:
 	helm unittest .
 	$(MAKE) test-guard-fail-closed
+	$(MAKE) test-image-version
+
+# The image replaces weed in the upstream image of ARG VERSION, so a chart moved
+# by `make update` without the Dockerfile would run the previous release's
+# binary under the new chart.
+.PHONY: test-image-version
+test-image-version:
+	@chart=$$(yq e '.appVersion' charts/seaweedfs/Chart.yaml); \
+	[ "$(SEAWEEDFS_TAG)" = "$$chart" ] \
+	  || { echo "FAIL: images/seaweedfs/Dockerfile builds $(SEAWEEDFS_TAG), the vendored chart is $$chart"; exit 1; }
+	@echo "ok: images/seaweedfs builds the chart's appVersion $(SEAWEEDFS_TAG)"
 
 # The naming guard refuses to render an UPGRADE that cannot see the cluster
 # (templates/naming-guard.yaml): a client-side lookup silently returns nothing,
