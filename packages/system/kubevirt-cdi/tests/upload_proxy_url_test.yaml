@@ -1,0 +1,172 @@
+suite: CDI upload proxy URL advertisement
+templates:
+  - templates/cdi-cr.yaml
+
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+
+tests:
+  - it: derives the exposed ingress proxy URL from the root host
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,cdi-uploadproxy"
+        gateway-enabled: "false"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org
+
+  - it: derives the same URL for the Gateway TLSRoute path
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org
+
+  - it: preserves an explicit upload proxy URL
+    set:
+      uploadProxyURL: https://uploads.custom.example.net
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://uploads.custom.example.net
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
+
+  - it: keeps CDI certificate ownership when a platform wildcard is configured
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
+
+  - it: omits the URL when the proxy is not exposed
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,api"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
+
+  - it: omits the URL when the root host is blank
+    set:
+      _cluster:
+        root-host: ""
+        expose-services: "cdi-uploadproxy"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
+
+  - it: omits the URL when cluster publication values are absent
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+      - documentIndex: 0
+        notExists:
+          path: spec.customizeComponents
+
+  - it: renders an explicit URL when the proxy is not exposed
+    set:
+      uploadProxyURL: https://uploads.custom.example.net
+      _cluster: {}
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://uploads.custom.example.net
+
+  - it: omits the derived URL when the root Gateway terminates TLS at the edge
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-class-name: cloudflare
+        gateway-edge-classes: "other,cloudflare"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+
+  - it: reads the edge class list the way the gateway chart does, trimming entries
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-class-name: cloudflare
+        gateway-edge-classes: "other, cloudflare"
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: spec.config.uploadProxyURLOverride
+
+  - it: keeps an explicit URL when the root Gateway terminates TLS at the edge
+    set:
+      uploadProxyURL: https://uploads.custom.example.net
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-class-name: cloudflare
+        gateway-edge-classes: cloudflare
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://uploads.custom.example.net
+
+  - it: derives the URL on a class that does not terminate at the edge
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "true"
+        gateway-class-name: cilium
+        gateway-edge-classes: cloudflare
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org
+
+  - it: derives the URL through the Ingress even when an edge class is configured
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "cdi-uploadproxy"
+        gateway-enabled: "false"
+        gateway-class-name: cloudflare
+        gateway-edge-classes: cloudflare
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.config.uploadProxyURLOverride
+          value: https://cdi-uploadproxy.example.org

@@ -182,7 +182,7 @@ stringData:
       proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
       gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
-      {{- /* Normalised once here rather than at each reader: two charts
+      {{- /* Normalised once here rather than at each reader: three charts
              compare this scalar against the comma-joined lists below,
              which trim their own entries on split, so a padded name that
              reached them would match in neither.
