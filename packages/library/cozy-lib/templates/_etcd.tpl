@@ -480,3 +480,8 @@ spec:
     matchLabels:
       {{- toYaml .selector | nindent 6 }}
 {{- end -}}
+
+{{- /* The etcd chart's default version; bump the two together. */ -}}
+{{- define "cozy-lib.etcd.defaultVersion" -}}
+3.6.11
+{{- end -}}

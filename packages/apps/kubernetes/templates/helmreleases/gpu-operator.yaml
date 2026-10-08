@@ -65,7 +65,7 @@ gpu-operator:
         value: cdi.k8s.io/
 {{- end }}
 
-{{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
+{{- if .Values.addons.gpuOperator.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

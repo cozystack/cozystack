@@ -1,4 +1,4 @@
-{{- if and $.Values.addons.gatewayAPI.enabled $.Values._namespace.etcd }}
+{{- if $.Values.addons.gatewayAPI.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

@@ -719,6 +719,15 @@ backupStrategyController: {}
 # `replicated` must move the golden onto their class). Empty (the default)
 # forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
+# StorageClasses for the etcd each tenant Kubernetes cluster runs for its control
+# plane, chosen by its member count. Three members already replicate through
+# Raft, so a node-local class avoids replicating the data a second time; a single
+# member has nothing but its volume, so a replicated class lets it outlive its
+# node. Empty leaves the namespace default StorageClass. A cluster's etcd reads
+# this once, when it is created: the class of an existing etcd cannot change.
+kubernetesEtcd:
+  storageClassLocal: ""
+  storageClassReplicated: ""
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

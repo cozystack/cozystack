@@ -1088,7 +1088,7 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
-@test "an etcd-operator change selects the etcd suite, not the whole run" {
+@test "an etcd-operator change selects the suites that run an etcd, not the whole run" {
     # cozystack.etcd-operator reached no runnable suite, so every change to the
     # operator ran all 21 -- 5 of the last 150 merged pull requests. The suite
     # exists and the app genuinely needs the operator (extra/etcd renders kind:
@@ -1096,6 +1096,8 @@ assert_full_suite() {
     # was the dependsOn edge that makes the app reachable from it. Both operator
     # components are asserted: the reverse walk starts from whichever
     # PackageSource owns the changed path, and the CRDs sit in the same source.
+    # Every tenant Kubernetes cluster renders an EtcdCluster of its own as well,
+    # so the kubernetes-application edge brings in the suites that create one.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     # Guard the premise: without the edge this passes for the wrong reason,
@@ -1105,8 +1107,8 @@ assert_full_suite() {
         packages/system/etcd-operator-crds/templates/etcd-clusters.yaml; do
         echo "$path" > "$tmp/diff"
         output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-        assert_selection "an etcd-operator change must select only the etcd suite" \
-            "$output" "etcd"
+        assert_selection "an etcd-operator change must select the etcd and tenant Kubernetes suites" \
+            "$output" "computeplane etcd kubernetes-latest kubernetes-previous"
     done
     rm -rf "$tmp"
 }

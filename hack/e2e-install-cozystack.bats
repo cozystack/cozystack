@@ -277,9 +277,13 @@
   # package itself stays installed, because tenant-application declares
   # dependsOn cozystack.monitoring-application. Turning it on also means
   # flipping monitoring.rootEnabled in hack/e2e-platform-packages.sh.
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  #
+  # The root etcd stays off as well: every tenant Kubernetes cluster brings its
+  # own, and leaving the shared one off is what proves a cluster comes up with
+  # no tenant etcd anywhere above it.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":false,"isolated":true, "seaweedfs": true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
   # so listing the children this patch enables plus the parent gives precise
   # failure messages without redundant separate waits. seaweedfs now
@@ -290,7 +294,7 @@
   # parent's Ready can land past the HR's single 15m timeout window; the HR
   # re-reconciles every 1m until it converges, so this wait is 20m to observe
   # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root \
+  kubectl wait hr/ingress hr/seaweedfs hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
 

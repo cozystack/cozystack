@@ -339,6 +339,15 @@ controlPlane:
   kubelet:
     preferredAddressTypes: []
 
+## @typedef {struct} Etcd - etcd that holds this cluster's control-plane state.
+## @field {int} replicas=3 - Number of etcd members: `3` keeps quorum through the loss of one member, `1` runs a single member with no failover. Only `1` and `3` are accepted. The StorageClass is picked by the platform for each of the two shapes and fixed when the etcd is first created, so changing the count later keeps the class it started with.
+## @minimum 1
+## @maximum 3
+
+## @param {Etcd} etcd - Dedicated etcd for this cluster's control plane, rendered with the cluster and deleted with it. Clusters that already run on their tenant's shared etcd keep it, and this section does not apply to them.
+etcd:
+  replicas: 3
+
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 ## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.

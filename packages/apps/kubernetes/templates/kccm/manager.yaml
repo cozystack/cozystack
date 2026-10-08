@@ -6,7 +6,6 @@
       (templates/csi-proxmox/, templates/ccm-proxmox/). Rendering these would
       leave a controller in the tenant reconciling objects that do not exist. */}}
 {{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
-{{- if .Values._namespace.etcd }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -69,5 +68,4 @@ spec:
           optional: true
         name: kubeconfig
       serviceAccountName: {{ .Release.Name }}-kccm
-{{- end }}
 {{- end }}

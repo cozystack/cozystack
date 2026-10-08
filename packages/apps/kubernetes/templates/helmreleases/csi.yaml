@@ -6,7 +6,6 @@
       (templates/csi-proxmox/, templates/ccm-proxmox/). Rendering these would
       leave a controller in the tenant reconciling objects that do not exist. */}}
 {{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
-{{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -95,5 +94,4 @@ spec:
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
-{{- end }}
 {{- end }}
