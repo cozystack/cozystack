@@ -272,7 +272,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	byHostname := make(map[string]passthroughListener, len(rendered))
 	sections := make(map[string]string, len(rendered))
 	for _, l := range rendered {
-		byHostname[l.hostname] = l
+		_ = l // mutation: reservation set left empty
 		sections[l.section] = l.hostname
 	}
 	dynHostnames := make([]string, 0, len(claims))
