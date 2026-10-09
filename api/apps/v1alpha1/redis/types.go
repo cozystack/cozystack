@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// Redis major version to deploy
+	// Redis major version to deploy. The Redis and Sentinel pods run the same image.
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
 	// TLS configuration. TLS is opt-in and is not inferred from `external`.

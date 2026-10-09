@@ -79,7 +79,7 @@ external: false
 ## @value v8
 ## @value v7
 
-## @param {Version} version - Redis major version to deploy
+## @param {Version} version - Redis major version to deploy. The Redis and Sentinel pods run the same image.
 version: v8
 
 ##

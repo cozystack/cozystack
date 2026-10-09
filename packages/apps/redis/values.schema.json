@@ -128,7 +128,7 @@
       "default": false
     },
     "version": {
-      "description": "Redis major version to deploy",
+      "description": "Redis major version to deploy. The Redis and Sentinel pods run the same image.",
       "type": "string",
       "default": "v8",
       "enum": [

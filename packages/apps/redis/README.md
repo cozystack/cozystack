@@ -25,7 +25,7 @@ Service utilizes the freshworks-oss Redis Operator (a maintained fork of the arc
 | `size`             | Persistent Volume Claim size available for application data.                                                                                                                                                                                     | `quantity` | `1Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                                                                                                                                             | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission. | `bool`     | `false`   |
-| `version`          | Redis major version to deploy                                                                                                                                                                                                                    | `string`   | `v8`      |
+| `version`          | Redis major version to deploy. The Redis and Sentinel pods run the same image.                                                                                                                                                                   | `string`   | `v8`      |
 
 
 ### TLS parameters
