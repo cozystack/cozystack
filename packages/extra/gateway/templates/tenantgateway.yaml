@@ -198,7 +198,7 @@ spec:
          None in edge mode: the controller renders no TLS listener there. */}}
   {{- $exposed := splitList "," ((index .Values._cluster "expose-services") | default "") }}
   {{- $passthrough := list }}
-  {{- if and (ne $tlsTermination "edge") (eq .Release.Namespace $publishingNS) (eq (toString ((index .Values._cluster "gateway-enabled") | default "false")) "true") }}
+  {{- if and (ne $tlsTermination "edge") (eq (toString ((index .Values._cluster "gateway-enabled") | default "false")) "true") }}
     {{- range .Values.tlsPassthroughServices }}
       {{- if has . $exposed }}
         {{- $passthrough = append $passthrough . }}
