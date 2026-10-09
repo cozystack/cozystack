@@ -44,6 +44,17 @@ Service utilizes the freshworks-oss Redis Operator (a maintained fork of the arc
 | `authEnabled` | Enable password generation. | `bool` | `true` |
 
 
+### Sentinel parameters
+
+| Name                        | Description                                                                                                                                                                                                                                                                               | Type       | Value |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----- |
+| `sentinel`                  | Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does. | `object`   | `{}`  |
+| `sentinel.resources`        | Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.                                                                                                                                                      | `object`   | `{}`  |
+| `sentinel.resources.cpu`    | CPU available to each replica.                                                                                                                                                                                                                                                            | `quantity` | `""`  |
+| `sentinel.resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                                                                                                   | `quantity` | `""`  |
+| `sentinel.resourcesPreset`  | Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.                                                                                                                                                                                                                       | `string`   | `{}`  |
+
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
@@ -63,6 +74,20 @@ This setting is ignored if the corresponding `resources` value is set.
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+
+### sentinel
+
+`sentinel.resources` and `sentinel.resourcesPreset` size the three Sentinel pods separately from the Redis pods. A Sentinel holds only its configuration and the failover state, so it needs a small fraction of what a Redis replica holding the dataset does. When the `sentinel` block sets neither, the Sentinel pods are sized like the Redis pods, which is how every instance was sized before these parameters existed.
+
+```yaml
+resourcesPreset: u1.small
+sentinel:
+  resources:
+    cpu: 100m
+    memory: 64Mi
+```
+
+Every key `sentinel.resources` leaves unset is taken from `sentinel.resourcesPreset`, which defaults to `resourcesPreset`.
 
 ### tls
 

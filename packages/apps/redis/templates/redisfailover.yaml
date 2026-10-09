@@ -1,4 +1,17 @@
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
+{{- /*
+  A Sentinel holds only its configuration and failover state, so the Redis
+  sizing over-provisions it. An empty sentinel block still falls back to the
+  Redis sizing, so existing instances render unchanged on upgrade.
+  An empty sentinel.resources map counts as unset, mirroring how an empty
+  top-level resources falls back to resourcesPreset.
+*/}}
+{{- $sentinel := .Values.sentinel | default dict -}}
+{{- $sentinelPreset := $sentinel.resourcesPreset | default .Values.resourcesPreset -}}
+{{- $sentinelResources := .Values.resources -}}
+{{- if or $sentinel.resources $sentinel.resourcesPreset -}}
+{{-   $sentinelResources = $sentinel.resources | default dict -}}
+{{- end -}}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
   {{- $password := randAlphaNum 32 | b64enc }}
@@ -50,7 +63,7 @@ spec:
     # on upgrade. Bump as a deliberate, separate change.
     image: redis:6.2.6-alpine
     replicas: 3
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $sentinelPreset $sentinelResources $) | nindent 6 }}
   redis:
     image: "redis:{{ include "redis.versionMap" $ }}"
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
@@ -118,7 +131,7 @@ metadata:
   name: {{ $.Release.Name }}-sentinel
   namespace: {{ $.Release.Namespace }}
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ $sentinelPreset | quote }}
 spec:
   minReplicas: 2
   replicas: 3
