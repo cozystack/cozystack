@@ -3,10 +3,11 @@
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
 
-# The QEMU lane exercises replicated DRBD storage. The container lane cannot
-# represent three DRBD nodes on one shared kernel, so its otherwise-identical
-# suites use the production local class instead. Keep the accepted values
-# narrow because this result is interpolated into Kubernetes YAML below.
+# The QEMU sandbox, which no CI lane boots, exercises replicated DRBD storage.
+# The container lane cannot represent three DRBD nodes on one shared kernel, so
+# its otherwise-identical suites use the production local class instead. Keep
+# the accepted values narrow because this result is interpolated into
+# Kubernetes YAML below.
 cozy_e2e_storage_class() {
   case "${COZY_E2E_STORAGE_CLASS:-replicated}" in
     local | replicated) printf '%s\n' "${COZY_E2E_STORAGE_CLASS:-replicated}" ;;

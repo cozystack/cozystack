@@ -140,6 +140,25 @@ step_line() {
   grep -qF 'CHAINSAW_VERSION' "$REPO_ROOT/packages/core/testing/images/e2e-sandbox/Dockerfile"
 }
 
+@test "e2e-tag refuses a tree that predates the container lane and names the ref to dispatch from" {
+  # tags.yaml calls the e2e-tag.yaml from the tag's own commit, so the guard can
+  # only fire on a dispatch from a newer ref against an older tag, v1.6.3 and
+  # earlier on this line.
+  step="$(yq -r '.jobs.e2e.steps[] | select(.name == "Require a container-lane tree") | .run' "$E2E_TAG")"
+  [ -n "$step" ]
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/old" "$tmp/new/hack"
+  touch "$tmp/new/hack/e2e-compose.yaml"
+  printf '%s\n' "$step" >"$tmp/step.sh"
+  (cd "$tmp/new" && TAG=v1.6.4 bash -e "$tmp/step.sh")
+  rc=0
+  (cd "$tmp/old" && TAG=v1.6.3 bash -e "$tmp/step.sh") >"$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -qF '::error title=e2e-tag::v1.6.3 predates the container lane' "$tmp/out"
+  grep -qF -- '--ref v1.6.3' "$tmp/out"
+  rm -rf "$tmp"
+}
+
 # ── the candidate-aware promotion pipeline this base must carry ──────────────
 
 @test "the base carries every file promote-rc.yaml's preflight demands" {
