@@ -21,7 +21,20 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].image
+<<<<<<< HEAD
           value: velero/velero-plugin-for-aws:v1.14.1
+=======
+          value: velero/velero-plugin-for-aws:v1.14.4
+
+  # The release build stamps its own rebuild over the upstream ref, so only the
+  # repository name is common to both.
+  - it: installs the KubeVirt plugin as an init container
+    template: charts/velero/templates/deployment.yaml
+    documentSelector:
+      path: metadata.name
+      value: velero
+    asserts:
+>>>>>>> 83aaa65 (fix(velero): bump velero-plugin-for-aws to v1.14.4 so backups work on R2)
       - equal:
           path: spec.template.spec.initContainers[1].image
           value: quay.io/kubevirt/kubevirt-velero-plugin:v0.9.0
