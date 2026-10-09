@@ -179,3 +179,16 @@ step_block() {
   printf '%s\n' "$handler" | grep -qF 'sweep_failed=1'
   printf '%s\n' "$handler" | grep -qF "promotion_ids='[]'"
 }
+
+@test "a refused delete flags the run instead of aborting the sweep" {
+  # Unflagged, a failed xargs would abort the step under `set -e`: still red,
+  # but the remaining packages and the promotion sweep would never run.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  calls="$(printf '%s\n' "$block" | code_lines | grep -F 'retention-delete.sh' || true)"
+  [ "$(printf '%s\n' "$calls" | grep -c .)" -ge 2 ]
+  if printf '%s\n' "$calls" | grep -vqE '\|\| sweep_failed=1$'; then
+    echo "FAIL: a delete call does not flag the run: $calls"
+    false
+  fi
+}

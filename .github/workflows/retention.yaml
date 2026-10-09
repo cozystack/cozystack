@@ -25,9 +25,12 @@ name: Artifact Retention
 # Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
 # actually delete. Deletion is irreversible.
 #
-# NOTE (admin): deleting org container-package versions requires the
-# cozystack-ci app installation to carry the `packages: write` permission. If
-# the delete step 403s, grant it there — this workflow cannot.
+# NOTE (admin): the cozystack-ci app installation token cannot delete here: it
+# lists package versions, yet DELETE of a listed version answered "404 Package
+# not found" (run 37939905343). This repository's GITHUB_TOKEN, with the job's
+# packages: write and no change to package settings, deleted the same version
+# (run 37941084456) from a package linked to this repository. Applying needs
+# the delete call switched to that token.
 
 on:
   schedule:
@@ -210,10 +213,10 @@ jobs:
           # what keeps a candidate safe is the protected set, which no part of
           # this list feeds.
           #
-          # A package whose versions cannot be read is likewise reported and
-          # skipped so the rest is still swept, then fails the run at the end.
-          # The loop is fed by a here-string rather than a pipe so the flag
-          # survives it.
+          # A package whose versions cannot be read, or a version that cannot
+          # be deleted, is likewise reported and skipped so the rest is still
+          # swept, then fails the run at the end. The loop is fed by a
+          # here-string rather than a pipe so the flag survives it.
           sweep_failed=0
           gh_err="$(mktemp)"
           tree="$(mktemp -d)"
@@ -256,16 +259,7 @@ jobs:
             drop_ids="$(printf '%s' "$ids" | jq -r ".[${KEEP}:][]")"
             echo "── ${pkg}: ${total} nightlies, keep ${KEEP}, drop $((total - KEEP))"
 
-            printf '%s\n' "$drop_ids" | while IFS= read -r id; do
-              [ -n "$id" ] || continue
-              if [ "$APPLY" = "true" ]; then
-                echo "  ✗ deleting ${pkg} version ${id}"
-                gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
-                  || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
-              else
-                echo "  • would delete ${pkg} version ${id}"
-              fi
-            done
+            printf '%s\n' "$drop_ids" | xargs ./hack/retention-delete.sh "$pkg" version || sweep_failed=1
           done <<< "$pkgs"
 
           # Anything unresolved above means the protected set is incomplete, so
@@ -301,18 +295,10 @@ jobs:
           }
           promotion_total="$(printf '%s' "$promotion_ids" | jq 'length')"
           echo "── ${pkg}: ${promotion_total} abandoned promotion candidate(s) older than ${PROMOTION_TTL_DAYS} days"
-          printf '%s' "$promotion_ids" | jq -r '.[]' | while IFS= read -r id; do
-            [ -n "$id" ] || continue
-            if [ "$APPLY" = "true" ]; then
-              echo "  ✗ deleting ${pkg} promotion candidate version ${id}"
-              gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
-                || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
-            else
-              echo "  • would delete ${pkg} promotion candidate version ${id}"
-            fi
-          done
+          printf '%s' "$promotion_ids" | jq -r '.[]' \
+            | xargs ./hack/retention-delete.sh "$pkg" "promotion candidate version" || sweep_failed=1
           if [ "$sweep_failed" -eq 1 ]; then
-            echo "::error::some packages could not be read and were not swept."
+            echo "::error::some versions could not be read or deleted; see the errors above."
             exit 1
           fi
           echo "Done."
