@@ -27,10 +27,10 @@ name: Artifact Retention
 #
 # NOTE (admin): the cozystack-ci app installation token cannot delete here: it
 # lists package versions, yet DELETE of a listed version answered "404 Package
-# not found" (run 37939905343). This repository's GITHUB_TOKEN, with the job's
-# packages: write and no change to package settings, deleted the same version
-# (run 37941084456) from a package linked to this repository. Applying needs
-# the delete call switched to that token.
+# not found". This repository's GITHUB_TOKEN, with the job's packages: write
+# and no change to package settings, deleted the same version from a package
+# linked to this repository, so deletes use it. A package linked to another
+# repository is skipped with a warning.
 
 on:
   schedule:
@@ -87,6 +87,8 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
           APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
+          # See the admin NOTE above for why deletes do not use the app token.
+          DELETE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
@@ -218,6 +220,8 @@ jobs:
           # swept, then fails the run at the end. The loop is fed by a
           # here-string rather than a pipe so the flag survives it.
           sweep_failed=0
+          unlinked=""
+          linked_count=0
           gh_err="$(mktemp)"
           tree="$(mktemp -d)"
           pkgs="$(flux pull artifact "oci://ghcr.io/${ORG}/cozystack/cozystack-packages:nightly" --output "$tree" >/dev/null \
@@ -235,6 +239,20 @@ jobs:
           while IFS= read -r pkg; do
             [ -n "$pkg" ] || continue
             enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
+
+            # DELETE_TOKEN was shown to delete from a package linked to this
+            # repository; one linked elsewhere is not attempted, only named in
+            # a warning, so it cannot fail every apply run.
+            linked="$(gh api "/orgs/${ORG}/packages/container/${enc}" --jq '.repository.full_name // ""' 2>"$gh_err")" || {
+              echo "::error::Could not read ${pkg}; not swept: $(cat "$gh_err")"
+              sweep_failed=1
+              continue
+            }
+            if [ "$linked" != "$GITHUB_REPOSITORY" ]; then
+              unlinked="${unlinked:+${unlinked} }${pkg}"
+              continue
+            fi
+            linked_count=$((linked_count + 1))
 
             # Version ids whose tags are non-empty AND every tag is a dated
             # nightly (so the floating `nightly` tag and any release tag exclude
@@ -261,6 +279,12 @@ jobs:
 
             printf '%s\n' "$drop_ids" | xargs ./hack/retention-delete.sh "$pkg" version || sweep_failed=1
           done <<< "$pkgs"
+          [ -z "$unlinked" ] || echo "::warning::not linked to ${GITHUB_REPOSITORY}, skipped: ${unlinked}"
+          # One unlinked package is expected; all of them means nothing was swept.
+          if [ -n "$pkgs" ] && [ "$linked_count" -eq 0 ]; then
+            echo "::error::None of the resolved packages is linked to ${GITHUB_REPOSITORY}; the nightly sweep pruned nothing."
+            sweep_failed=1
+          fi
 
           # Anything unresolved above means the protected set is incomplete, so
           # no candidate can be called abandoned. Skip this sweep entirely and

@@ -14,7 +14,7 @@ _stub_gh() {
   mkdir -p "$1"
   cat > "$1/gh" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >> "$GH_CALLS"
+printf '%s token=%s\n' "$*" "${GH_TOKEN:-}" >> "$GH_CALLS"
 case "$*" in
   */versions/2*) echo 'gh: Forbidden (HTTP 403)' >&2; exit 1 ;;
 esac
@@ -28,6 +28,8 @@ setup() {
   export PATH="${BATS_TEST_TMPDIR}/bin:$PATH"
   export GH_CALLS="${BATS_TEST_TMPDIR}/calls"
   export ORG=cozystack
+  export GH_TOKEN=app-token
+  export DELETE_TOKEN=workflow-token
   : > "$GH_CALLS"
 }
 
@@ -56,4 +58,25 @@ setup() {
     *"would delete cozystack/foo version 2"*) ;;
     *) echo "FAIL: dry-run did not report: $output"; false ;;
   esac
+}
+
+@test "apply: deletes with DELETE_TOKEN, not the token that listed the versions" {
+  run env APPLY=true "$SCRIPT" cozystack/foo version 1
+  [ "$status" -eq 0 ]
+  grep -q 'versions/1 token=workflow-token$' "$GH_CALLS"
+}
+
+@test "apply: no DELETE_TOKEN is refused before any call" {
+  run env -u DELETE_TOKEN APPLY=true "$SCRIPT" cozystack/foo version 1
+  [ "$status" -ne 0 ]
+  [ ! -s "$GH_CALLS" ]
+  case "$output" in
+    *"DELETE_TOKEN is required"*) ;;
+    *) echo "FAIL: refusal does not name DELETE_TOKEN: $output"; false ;;
+  esac
+}
+
+@test "dry-run needs no DELETE_TOKEN" {
+  run env -u DELETE_TOKEN APPLY=false "$SCRIPT" cozystack/foo version 1
+  [ "$status" -eq 0 ]
 }

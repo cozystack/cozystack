@@ -192,3 +192,73 @@ step_block() {
     false
   fi
 }
+
+@test "deletes use the workflow token and skip packages linked elsewhere" {
+  # The app token lists versions but cannot delete them; GITHUB_TOKEN deleted a
+  # version of a package linked to this repository. A package linked elsewhere
+  # is not attempted, so it cannot turn every apply run red: it is skipped with
+  # a warning before its versions are read, while a failed linkage read still
+  # fails the run.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
+
+  printf '%s\n' "$block" | grep -qF 'DELETE_TOKEN: ${{ secrets.GITHUB_TOKEN }}'
+
+  link_at="$(printf '%s\n' "$code" | grep -nF '/packages/container/${enc}" --jq' | awk -F: 'NR == 1 { print $1 }')"
+  read_at="$(printf '%s\n' "$code" | grep -nF '/versions" 2>' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$link_at" ] && [ -n "$read_at" ]
+  [ "$link_at" -lt "$read_at" ]
+  window="$(printf '%s\n' "$code" | awk -v s="$link_at" -v e="$read_at" 'NR >= s && NR < e')"
+  printf '%s\n' "$window" | grep -qF '.repository.full_name'
+  printf '%s\n' "$window" | grep -qF 'sweep_failed=1'
+  printf '%s\n' "$window" | grep -qF '!= "$GITHUB_REPOSITORY"'
+  printf '%s\n' "$window" | grep -qF 'unlinked='
+  [ "$(printf '%s\n' "$window" | grep -cF 'continue')" -ge 2 ]
+  if printf '%s\n' "$window" | grep -qF 'retention-delete.sh'; then
+    echo "FAIL: a delete is reachable before the linkage check"
+    false
+  fi
+
+  warn_at="$(printf '%s\n' "$code" | grep -nF 'not linked to' | awk -F: 'NR == 1 { print $1 }')"
+  promotion_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids=' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$warn_at" ] && [ "$warn_at" -lt "$promotion_at" ]
+  printf '%s\n' "$code" | sed -n "${warn_at}p" | grep -qF '::warning::'
+}
+
+@test "a sweep that finds no linked package cannot exit green" {
+  # Skipping one unlinked package is deliberate, but if every resolved package
+  # were skipped the nightly sweep would prune nothing and still end green,
+  # unlike an empty name list. Flagged rather than exited, so the promotion
+  # sweep still runs.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
+
+  link_at="$(printf '%s\n' "$code" | grep -nF '!= "$GITHUB_REPOSITORY"' | awk -F: 'NR == 1 { print $1 }')"
+  read_at="$(printf '%s\n' "$code" | grep -nF '/versions" 2>' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$link_at" ] && [ -n "$read_at" ]
+  # Counted from zero, set once ahead of the loop.
+  [ "$(printf '%s\n' "$code" | grep -cE '^[[:space:]]*linked_count=0$')" -eq 1 ]
+  [ "$(printf '%s\n' "$code" | grep -nE '^[[:space:]]*linked_count=0$' | cut -d: -f1)" -lt \
+    "$(printf '%s\n' "$code" | grep -nF 'while IFS= read -r pkg' | awk -F: 'NR == 1 { print $1 }')" ]
+  # The only increment, and only past the linkage check.
+  [ "$(printf '%s\n' "$code" | grep -cF 'linked_count=$((')" -eq 1 ]
+  printf '%s\n' "$code" | awk -v s="$link_at" -v e="$read_at" 'NR > s && NR < e' \
+    | grep -qF 'linked_count=$((linked_count + 1))'
+
+  loop_end="$(printf '%s\n' "$code" | grep -nF 'done <<< "$pkgs"' | awk -F: 'NR == 1 { print $1 }')"
+  check_at="$(printf '%s\n' "$code" | grep -nF '"$linked_count" -eq 0' | awk -F: 'NR == 1 { print $1 }')"
+  promotion_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids=' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$loop_end" ] && [ -n "$check_at" ] && [ -n "$promotion_at" ]
+  [ "$loop_end" -lt "$check_at" ]
+  [ "$check_at" -lt "$promotion_at" ]
+  printf '%s\n' "$code" | sed -n "${check_at}p" | grep -qF '[ -n "$pkgs" ]'
+  branch="$(printf '%s\n' "$code" | awk -v s="$check_at" 'NR >= s && NR <= s + 4')"
+  printf '%s\n' "$branch" | grep -qF '::error::'
+  printf '%s\n' "$branch" | grep -qF 'sweep_failed=1'
+  if printf '%s\n' "$branch" | grep -qE '(^|[^_])exit '; then
+    echo "FAIL: an all-unlinked sweep exits before the promotion sweep"
+    false
+  fi
+}
