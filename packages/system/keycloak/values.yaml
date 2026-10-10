@@ -186,6 +186,38 @@ encryption:
     limits:
       memory: 256Mi
 
+# Placement of the keycloak-db instances (the CloudNativePG Cluster). Empty leaves
+# it to the scheduler, which is free to put both instances in one failure domain:
+# losing that domain then loses the database and every login with it. `affinity`
+# takes the CloudNativePG affinity shape (nodeAffinity, podAntiAffinityType, ...),
+# `topologySpreadConstraints` the Kubernetes one; the labelSelector for
+# cnpg.io/cluster: keycloak-db is added to each constraint that has none. When
+# topologySpreadConstraints is set it replaces the cluster-wide
+# _cluster.scheduling.globalAppTopologySpreadConstraints for this database.
+# Example, one instance per zone on nodes of two zones only:
+#
+#   database:
+#     affinity:
+#       nodeAffinity:
+#         requiredDuringSchedulingIgnoredDuringExecution:
+#           nodeSelectorTerms:
+#             - matchExpressions:
+#                 - key: topology.kubernetes.io/zone
+#                   operator: In
+#                   values: [zone-a, zone-b]
+#     topologySpreadConstraints:
+#       - maxSkew: 1
+#         topologyKey: topology.kubernetes.io/zone
+#         whenUnsatisfiable: DoNotSchedule
+#         nodeTaintsPolicy: Honor
+#
+# Placement applies to instances created from now on; CloudNativePG does not
+# move a running instance, so an existing cluster has to be rebuilt one instance
+# at a time (scale out, then remove the misplaced one).
+database:
+  affinity: {}
+  topologySpreadConstraints: []
+
 # Scheduled S3 backup of the Keycloak CNPG database (keycloak-db).
 # Disabled by default; enabling it configures WAL archiving + base backups
 # to an S3-compatible object store via CNPG Barman.
