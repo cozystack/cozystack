@@ -1,4 +1,4 @@
-FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+FROM ubuntu:26.04@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
 ARG KUBECTL_VERSION=1.33.13
 ARG TALOSCTL_VERSION=1.13.5
@@ -13,7 +13,7 @@ ARG TARGETOS
 ARG TARGETARCH
 
 RUN apt update -q
-RUN apt install -yq --no-install-recommends psmisc genisoimage ca-certificates qemu-kvm qemu-utils iproute2 iptables wget xz-utils netcat-openbsd curl jq make git bash-completion
+RUN apt install -yq --no-install-recommends psmisc genisoimage ca-certificates qemu-system-x86 qemu-utils iproute2 iptables wget xz-utils netcat-openbsd curl jq make git bash-completion
 RUN curl -sSL "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-${TARGETOS}-${TARGETARCH}" -o /usr/local/bin/talosctl \
  && chmod +x /usr/local/bin/talosctl
 RUN curl -sSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/${TARGETOS}/${TARGETARCH}/kubectl" -o /usr/local/bin/kubectl \
