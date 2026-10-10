@@ -7,6 +7,7 @@ import {
   type APIGroupList,
 } from "@cozystack/k8s-client"
 import App from "./App.tsx"
+import { SELECTED_TENANT_KEY } from "./lib/constants.ts"
 import { renderWithK8sProvider } from "./test-utils/render.tsx"
 
 // Echoes the router location so a redirect can be asserted by URL.
@@ -109,5 +110,25 @@ describe("runtime config", () => {
     // that the loaded config is published to the whole tree (routes read the
     // same context for serviceDomain).
     expect(await screen.findByText("v0.0.0-test")).toBeTruthy()
+  })
+})
+
+describe("tenant in the URL", () => {
+  // The shell has to call useTenantFromUrl for a cross-tenant link to survive
+  // a middle click or a pasted URL; the hook's own tests cannot see whether it
+  // is wired in, so pin it against the real App.
+  it("adopts the tenant named in the query string", async () => {
+    const client = makeClient()
+    localStorage.setItem(SELECTED_TENANT_KEY, "globex")
+
+    // Any route will do — the shell adopts the param regardless of which page
+    // renders under it; the tenant list just gives a stable marker to await.
+    renderWithK8sProvider(<App />, {
+      client,
+      initialRoute: "/admin/tenants?tenant=acme",
+    })
+
+    await screen.findByRole("heading", { name: "Tenants" })
+    expect(localStorage.getItem(SELECTED_TENANT_KEY)).toBe("acme")
   })
 })
