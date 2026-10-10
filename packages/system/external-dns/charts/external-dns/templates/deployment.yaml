@@ -157,6 +157,23 @@ spec:
             - name: http
               protocol: TCP
               containerPort: 7979
+          {{- /*
+          cozystack (patches/deployment-startup-probe.diff): the upstream
+          external-dns chart templates only liveness/readiness and renders no
+          startupProbe, so a slow first start has no grace period distinct
+          from liveness. Under E2E-sandbox load the informer source-cache sync
+          outlasts the liveness budget (initialDelaySeconds 10 + periodSeconds
+          10 * failureThreshold 2 = ~30s), kubelet SIGKILLs a healthy-but-slow
+          container before it binds /healthz on :7979, and the restart loop
+          cascades into the wrapping HelmRelease timing out. A values-driven
+          startupProbe gates liveness on the slow-start window instead. Rendered
+          with `with` so an unset value is a no-op (upstream-compatible).
+          See cozystack/cozystack#3459.
+          */}}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
