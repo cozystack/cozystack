@@ -1,11 +1,11 @@
 name: Artifact Retention
 
 # Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
-# each cozystack package, delete older ones. Nightlies are GHCR OCI tags
-# (0.0.0-nightly.<date>.<run-id>.<attempt> on every component image plus
-# cozystack-packages, cozy-installer and cozystack-nocloud) — not git tags or
-# releases — so this prunes container-package versions via the GitHub Packages
-# API.
+# each cozystack package the current nightly publishes, delete older ones.
+# Nightlies are GHCR OCI tags (0.0.0-nightly.<date>.<run-id>.<attempt> on every
+# component image plus cozystack-packages, cozy-installer and cozystack-nocloud)
+# — not git tags or releases — so this prunes container-package versions via
+# the GitHub Packages API.
 #
 # Strictly scoped: only versions whose tags are ALL of the form
 # 0.0.0-nightly.<YYYYMMDD>.<run-id>.<attempt> are eligible. A version that also
@@ -18,15 +18,19 @@ name: Artifact Retention
 # tag, so a retry never moves one and leaves an untagged manifest behind. A
 # successful promotion adds a stable tag to the same manifest, which makes it
 # ineligible below. A candidate stays protected while an open bot-authored
-# release PR pins its digest; otherwise it becomes eligible after
-# PROMOTION_TTL_DAYS only when ALL its tags are still temporary.
+# release PR, or the tip of main or a release-X.Y branch, pins its digest;
+# otherwise it becomes eligible after PROMOTION_TTL_DAYS only when ALL its tags
+# are still temporary.
 #
 # Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
 # actually delete. Deletion is irreversible.
 #
-# NOTE (admin): deleting org container-package versions requires the
-# cozystack-ci app installation to carry the `packages: write` permission. If
-# the delete step 403s, grant it there — this workflow cannot.
+# NOTE (admin): the cozystack-ci app installation token cannot delete here: it
+# lists package versions, yet DELETE of a listed version answered "404 Package
+# not found". This repository's GITHUB_TOKEN, with the job's packages: write
+# and no change to package settings, deleted the same version from a package
+# linked to this repository, so deletes use it. A package linked to another
+# repository is skipped with a warning.
 
 on:
   schedule:
@@ -60,6 +64,16 @@ jobs:
       packages: write
       pull-requests: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
@@ -73,6 +87,8 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
           APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
+          # See the admin NOTE above for why deletes do not use the app token.
+          DELETE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
@@ -187,41 +203,56 @@ jobs:
           protected_count="$(printf '%s\n' "$protected_promotion_digests" | awk '{print NF}')"
           echo "Protecting ${protected_count} promotion candidate digest(s) named by an open release PR or a base-branch tip."
 
-          # All container packages under the org that live in the cozystack/
-          # registry namespace (ghcr.io/cozystack/cozystack/<name>).
+          # The cozystack/* packages to sweep. GitHub refuses to list org
+          # container packages to an app installation token (400 Invalid
+          # argument), so the names come from the published nightly tree; see
+          # hack/retention-packages.sh for why that tree and what it covers.
           #
-          # Listed and filtered as two statements, because one `|| true` cannot
-          # mean two things. `grep` legitimately exits 1 when the org has no
-          # cozystack/* package, and a failed listing produces the same empty
-          # output, so a trailing `|| true` covering both turned an API failure
-          # into "no packages found" — which exits 0 BELOW the nightly sweep and
-          # ABOVE the deferred guard, so an unresolvable protection set ended in
-          # a green run that swept nothing. That bypasses the guard rather than
-          # varying it.
-          all_pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
-            --jq '.[].name')" || {
-            echo "::error::Could not list ${ORG} container packages; refusing retention of promotion candidates."
-            promotion_retention_blocked=1
-            all_pkgs=""
+          # An empty list is never "nothing to do": the nightly publishes into
+          # these packages every day, so empty means the names could not be
+          # resolved. That skips the nightly sweep and fails the run, but not
+          # before the promotion sweep below: it reads one fixed package, and
+          # what keeps a candidate safe is the protected set, which no part of
+          # this list feeds.
+          #
+          # A package whose versions cannot be read, or a version that cannot
+          # be deleted, is likewise reported and skipped so the rest is still
+          # swept, then fails the run at the end. The loop is fed by a
+          # here-string rather than a pipe so the flag survives it.
+          sweep_failed=0
+          unlinked=""
+          linked_count=0
+          gh_err="$(mktemp)"
+          tree="$(mktemp -d)"
+          pkgs="$(flux pull artifact "oci://ghcr.io/${ORG}/cozystack/cozystack-packages:nightly" --output "$tree" >/dev/null \
+            && ./hack/retention-packages.sh "$tree")" || {
+            echo "::error::Could not resolve the ${ORG} container packages to sweep."
+            pkgs=""
           }
-          # grep's exit 1 now means only what it says: nothing matched.
-          pkgs="$(printf '%s\n' "$all_pkgs" | grep '^cozystack/' || true)"
           if [ -z "$pkgs" ]; then
-            # Fail-closed before the early exit. The flag set here means this
-            # listing or a protection source above went unresolved, and there is
-            # no sweep left to run that could carry the run to the guard below —
-            # so this is the last place the flag can still be honoured.
-            [ "$promotion_retention_blocked" -eq 0 ] || {
-              echo "::error::candidate protection could not be resolved and nothing was swept; refusing to report success."
-              exit 1
-            }
-            echo "No cozystack/* container packages found."
-            exit 0
+            echo "::error::No package names resolved; skipping the nightly sweep."
+            sweep_failed=1
+          else
+            echo "Sweeping $(printf '%s\n' "$pkgs" | wc -l | tr -d ' ') package(s):"
+            printf '%s\n' "$pkgs" | sed 's/^/  /'
           fi
-
-          printf '%s\n' "$pkgs" | while IFS= read -r pkg; do
+          while IFS= read -r pkg; do
             [ -n "$pkg" ] || continue
             enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
+
+            # DELETE_TOKEN was shown to delete from a package linked to this
+            # repository; one linked elsewhere is not attempted, only named in
+            # a warning, so it cannot fail every apply run.
+            linked="$(gh api "/orgs/${ORG}/packages/container/${enc}" --jq '.repository.full_name // ""' 2>"$gh_err")" || {
+              echo "::error::Could not read ${pkg}; not swept: $(cat "$gh_err")"
+              sweep_failed=1
+              continue
+            }
+            if [ "$linked" != "$GITHUB_REPOSITORY" ]; then
+              unlinked="${unlinked:+${unlinked} }${pkg}"
+              continue
+            fi
+            linked_count=$((linked_count + 1))
 
             # Version ids whose tags are non-empty AND every tag is a dated
             # nightly (so the floating `nightly` tag and any release tag exclude
@@ -231,28 +262,29 @@ jobs:
             # array per page, so length/slicing break once a package spans
             # multiple pages. Slurp the raw pages and merge with `jq -s add`
             # first, then count and slice the combined array.
-            ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+            ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" 2>"$gh_err" \
               | jq -s '[add[]
                 | select((.metadata.container.tags | length) > 0)
                 | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}(\\.[0-9]+)*$")))
-                | .id]')"
+                | .id]')" || {
+              echo "::error::Could not read ${pkg} versions; not swept: $(cat "$gh_err")"
+              sweep_failed=1
+              continue
+            }
 
             total="$(printf '%s' "$ids" | jq 'length')"
             [ "$total" -gt "$KEEP" ] || { echo "── ${pkg}: ${total} nightlies (<= ${KEEP}); nothing to prune"; continue; }
             drop_ids="$(printf '%s' "$ids" | jq -r ".[${KEEP}:][]")"
             echo "── ${pkg}: ${total} nightlies, keep ${KEEP}, drop $((total - KEEP))"
 
-            printf '%s\n' "$drop_ids" | while IFS= read -r id; do
-              [ -n "$id" ] || continue
-              if [ "$APPLY" = "true" ]; then
-                echo "  ✗ deleting ${pkg} version ${id}"
-                gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
-                  || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
-              else
-                echo "  • would delete ${pkg} version ${id}"
-              fi
-            done
-          done
+            printf '%s\n' "$drop_ids" | xargs ./hack/retention-delete.sh "$pkg" version || sweep_failed=1
+          done <<< "$pkgs"
+          [ -z "$unlinked" ] || echo "::warning::not linked to ${GITHUB_REPOSITORY}, skipped: ${unlinked}"
+          # One unlinked package is expected; all of them means nothing was swept.
+          if [ -n "$pkgs" ] && [ "$linked_count" -eq 0 ]; then
+            echo "::error::None of the resolved packages is linked to ${GITHUB_REPOSITORY}; the nightly sweep pruned nothing."
+            sweep_failed=1
+          fi
 
           # Anything unresolved above means the protected set is incomplete, so
           # no candidate can be called abandoned. Skip this sweep entirely and
@@ -273,24 +305,24 @@ jobs:
           pkg='cozystack/cozystack-packages'
           enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
           cutoff="$(date -u -d "${PROMOTION_TTL_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
-          promotion_ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+          promotion_ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" 2>"$gh_err" \
             | jq -s --arg cutoff "$cutoff" --arg protected "$protected_promotion_digests" '[add[]
               | .name as $digest
               | select((.metadata.container.tags | length) > 0)
               | select(.metadata.container.tags | all(test("^promotion-v[0-9]+\\.[0-9]+\\.[0-9]+-from-v[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+-run-[0-9]+-[0-9]+$")))
               | select(.updated_at < $cutoff)
               | select(($protected | split(" ") | index($digest)) == null)
-              | .id]')"
+              | .id]')" || {
+            echo "::error::Could not read ${pkg} versions; promotion candidates not swept: $(cat "$gh_err")"
+            sweep_failed=1
+            promotion_ids='[]'
+          }
           promotion_total="$(printf '%s' "$promotion_ids" | jq 'length')"
           echo "── ${pkg}: ${promotion_total} abandoned promotion candidate(s) older than ${PROMOTION_TTL_DAYS} days"
-          printf '%s' "$promotion_ids" | jq -r '.[]' | while IFS= read -r id; do
-            [ -n "$id" ] || continue
-            if [ "$APPLY" = "true" ]; then
-              echo "  ✗ deleting ${pkg} promotion candidate version ${id}"
-              gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
-                || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
-            else
-              echo "  • would delete ${pkg} promotion candidate version ${id}"
-            fi
-          done
+          printf '%s' "$promotion_ids" | jq -r '.[]' \
+            | xargs ./hack/retention-delete.sh "$pkg" "promotion candidate version" || sweep_failed=1
+          if [ "$sweep_failed" -eq 1 ]; then
+            echo "::error::some versions could not be read or deleted; see the errors above."
+            exit 1
+          fi
           echo "Done."
