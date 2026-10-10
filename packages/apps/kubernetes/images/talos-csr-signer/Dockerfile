@@ -10,7 +10,7 @@
 # To bump the upstream version, update COMMIT below to the desired master
 # SHA and rerun `make image-talos-csr-signer` in packages/apps/kubernetes;
 # the regenerated images/talos-csr-signer.tag must be committed alongside.
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602 AS builder
 ARG GOPROXY
 
 # Upstream is at clastix/talos-csr-signer. Pin to a master SHA so rebuilds
