@@ -132,7 +132,7 @@ func HandleMutatePods(w http.ResponseWriter, r *http.Request) {
 	writeResponse(w, admissionReviewResp)
 }
 
-func getNamespaceAnnotations(namespace string) (map[string]string, error) {
+var getNamespaceAnnotations = func(namespace string) (map[string]string, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
