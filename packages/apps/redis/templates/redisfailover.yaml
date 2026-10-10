@@ -89,6 +89,22 @@ spec:
       - appendonly no
       - save ""
       {{- end }}
+      {{- /* A master with `replicas` pods has replicas-1 replicas, so a requirement of
+             `replicas` or more can never be met and the master would refuse every write. */}}
+      {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (ge (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}
+      {{- fail (printf "minReplicasToWrite (%d) must be below replicas (%d): the master has replicas-1 replicas, so the master would refuse every write" (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}
+      {{- end }}
+      {{- if not (kindIs "invalid" .Values.minReplicasToWrite) }}
+      - min-replicas-to-write {{ .Values.minReplicasToWrite | int }}
+      {{- end }}
+      {{- /* Redis treats 0 in either directive as "check disabled" (redis.conf), so a lag of 0
+             next to a replica requirement would silently turn the protection off. */}}
+      {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (gt (.Values.minReplicasToWrite | int) 0) (not (kindIs "invalid" .Values.minReplicasMaxLag)) (le (.Values.minReplicasMaxLag | int) 0) }}
+      {{- fail "minReplicasMaxLag must be at least 1 when minReplicasToWrite is set: Redis treats 0 as disabling the check" }}
+      {{- end }}
+      {{- if not (kindIs "invalid" .Values.minReplicasMaxLag) }}
+      - min-replicas-max-lag {{ .Values.minReplicasMaxLag | int }}
+      {{- end }}
   {{- if .Values.authEnabled }}
   auth:
     secretPath: {{ .Release.Name }}-auth
