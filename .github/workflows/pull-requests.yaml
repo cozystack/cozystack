@@ -437,6 +437,8 @@ jobs:
           buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Record image references before the build
+        run: sh -c '. hack/lib/image-refs.sh; collect_image_refs packages' | sort -u > "$RUNNER_TEMP/image-refs-before"
       - name: Build ${{ matrix.pkg }}
         run: |
           mkdir -p _out/oci
@@ -466,6 +468,18 @@ jobs:
           # against the package dir — the archive would land in <pkg>/_out/oci and
           # miss the repo-root _out/oci the upload reads.
           OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
+      # Fork PR images exist only as OCI archives at this point, so there is
+      # nothing to pull.
+      - name: Smoke-test the images this job built
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          COZYTEST_TRACE: '0'
+        run: |
+          sh -c '. hack/lib/image-refs.sh; collect_image_refs packages' | sort -u > "$RUNNER_TEMP/image-refs-after"
+          comm -13 "$RUNNER_TEMP/image-refs-before" "$RUNNER_TEMP/image-refs-after" > "$RUNNER_TEMP/image-refs-built"
+          cat "$RUNNER_TEMP/image-refs-built"
+          IMAGE_SMOKE_REFS_FILE="$RUNNER_TEMP/image-refs-built" hack/cozytest.sh hack/image-smoke.bats
       - name: Capture digest patch fragment
         id: frag
         env:
