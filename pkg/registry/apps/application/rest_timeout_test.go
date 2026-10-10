@@ -19,11 +19,11 @@ const (
 	testGlobalUpgradeTimeout = 10 * time.Minute
 )
 
-// newRESTForTimeout builds a REST struct focused on the per-Application
-// HelmInstallTimeout annotation override path. Global HelmRelease* defaults
-// are populated with production-shaped values so the unset-annotation case
-// exercises "global default applies". The full spec contract is covered by
-// rest_helmrelease_spec_test.go.
+// newRESTForTimeout builds a REST struct focused on the kind-wide
+// ApplicationDefinition HelmInstallTimeout override path. Global HelmRelease*
+// defaults are populated with production-shaped values so the unset-annotation
+// case exercises "global default applies". The full spec contract is covered
+// by rest_helmrelease_spec_test.go.
 func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *REST {
 	return &REST{
 		kindName: kind,
@@ -137,10 +137,11 @@ func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.
 	}
 }
 
-// HelmUpgradeTimeout (the per-Application release.cozystack.io/helm-upgrade-timeout
-// annotation override) overrides only Upgrade.Timeout, and wins over the
-// Upgrade.Timeout value HelmInstallTimeout would otherwise apply. This lets a
-// kind carry an asymmetric budget — e.g. a short install but a long upgrade.
+// HelmUpgradeTimeout (the kind-wide ApplicationDefinition
+// release.cozystack.io/helm-upgrade-timeout override) changes only
+// Upgrade.Timeout and wins over the value HelmInstallTimeout would otherwise
+// apply. This lets a kind carry an asymmetric budget — e.g. a short install but
+// a long upgrade.
 func TestConvertApplicationToHelmRelease_UpgradeTimeoutAnnotation(t *testing.T) {
 	cases := []struct {
 		name           string
