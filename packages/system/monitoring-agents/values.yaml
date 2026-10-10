@@ -416,7 +416,7 @@ fluent-bit:
           Host vlinsert-generic.{{ .Values.global.target }}.svc
           port 9481
           compress gzip
-          uri /insert/jsonline?_stream_fields=log_source,reason,meatdata_namespace,metadata_name&_msg_field=message&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,reason,metadata_namespace,metadata_name&_msg_field=message&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
