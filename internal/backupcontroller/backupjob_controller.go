@@ -35,6 +35,10 @@ type BackupJobReconciler struct {
 	Scheme            *runtime.Scheme
 	Recorder          record.EventRecorder
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader, through which Reconcile
+	// re-reads the BackupJob before dispatching to a driver. Wired in
+	// SetupWithManager.
+	APIReader client.Reader
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -59,6 +63,24 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// apiserver.
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 		logger.V(1).Info("BackupJob already terminal, skipping", "phase", j.Status.Phase)
+		return ctrl.Result{}, nil
+	}
+
+	// The cache can trail this reconciler's own writes. A pass that stamps
+	// StartedAt and then fails the job has already requeued it through the
+	// first write, so the next pass can start before the informer has seen
+	// Failed, retry the step that failed, and create a driver object for a
+	// job that is over and that nothing will track. Re-read the job past the
+	// cache; the check above only spares finished jobs the extra request.
+	if err := r.apiReader().Get(ctx, req.NamespacedName, j); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "failed to re-read BackupJob")
+		return ctrl.Result{}, err
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob terminal on the apiserver ahead of the cache, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 
@@ -230,6 +252,7 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
@@ -245,6 +268,16 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
 		Complete(r)
+}
+
+// apiReader returns the uncached reader. Reconcilers built by hand in unit
+// tests have none and fall back to their fake Client, which has no cache to
+// bypass.
+func (r *BackupJobReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // handleProjectionError classifies a credentials-projection error as
