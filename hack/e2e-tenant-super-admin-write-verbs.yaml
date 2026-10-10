@@ -1,0 +1,43 @@
+# Write verbs a tenant super-admin may hold in its own namespace, read by the
+# "Tenant super-admin holds no write verb outside the allowlist" test in
+# hack/e2e-install-cozystack.bats. One "resource names verb" entry per verb, in
+# the form that test derives from `kubectl auth can-i --list`: the resource as
+# can-i prints it, "-" for no resource names, any verb other than get, list
+# and watch. Adding an entry is a reviewed decision that the write is
+# accounted for. apps.cozystack.io is listed whole because every write to it
+# goes through the aggregated apiserver rather than straight to a workload.
+writeVerbs:
+- "*.apps.cozystack.io - *"
+- "backupjobs.backups.cozystack.io - create"
+- "backupjobs.backups.cozystack.io - delete"
+- "backupjobs.backups.cozystack.io - patch"
+- "backupjobs.backups.cozystack.io - update"
+- "endpoints - delete"
+- "events - delete"
+- "persistentvolumes - delete"
+- "plans.backups.cozystack.io - create"
+- "plans.backups.cozystack.io - delete"
+- "plans.backups.cozystack.io - patch"
+- "plans.backups.cozystack.io - update"
+- "pods - delete"
+- "restorejobs.backups.cozystack.io - create"
+- "restorejobs.backups.cozystack.io - delete"
+- "restorejobs.backups.cozystack.io - patch"
+- "restorejobs.backups.cozystack.io - update"
+- "securitygroups.sdn.cozystack.io - create"
+- "securitygroups.sdn.cozystack.io - delete"
+- "securitygroups.sdn.cozystack.io - patch"
+- "securitygroups.sdn.cozystack.io - update"
+- "services - delete"
+- "virtualmachineinstances.subresources.kubevirt.io/portforward - update"
+- "virtualmachines.subresources.kubevirt.io/restart - update"
+- "virtualmachines.subresources.kubevirt.io/start - update"
+- "virtualmachines.subresources.kubevirt.io/stop - update"
+- "vmimportsources.forklift.cozystack.io - create"
+- "vmimportsources.forklift.cozystack.io - delete"
+- "vmimportsources.forklift.cozystack.io - patch"
+- "vmimportsources.forklift.cozystack.io - update"
+- "vmimporttasks.forklift.cozystack.io - create"
+- "vmimporttasks.forklift.cozystack.io - delete"
+- "vmimporttasks.forklift.cozystack.io - patch"
+- "vmimporttasks.forklift.cozystack.io - update"

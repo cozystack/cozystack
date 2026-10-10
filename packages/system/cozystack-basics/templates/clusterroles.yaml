@@ -310,11 +310,19 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
 rules:
+{{- /* Read-only. A VirtualMachine written directly is sized outside any
+     application, and every legitimate change already has a route: VMInstance
+     values for size, disks and networking, the subresources granted at the use
+     level for power and console. watch backs the dashboard's live power state,
+     which watches the VM rather than polling it. (Go-template comment, stripped
+     at render.) */}}
 - apiGroups: ["kubevirt.io"]
   resources:
   - virtualmachines
   verbs:
-  - '*'
+  - get
+  - list
+  - watch
 - apiGroups: ["apps.cozystack.io"]
   resources:
   - '*'
