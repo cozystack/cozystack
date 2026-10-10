@@ -185,6 +185,36 @@ func isDataVolumeReady(dv *unstructured.Unstructured) bool {
 	return !dataVolumeInFlightPhases[phase]
 }
 
+// dataVolumeFailureMessage returns why the DataVolume's pod is not running, or
+// "" when nothing says so. A source that keeps failing (404, DNS) never moves
+// the phase off ImportInProgress, because CDI only fails the import on a fatal
+// error and restarts the pod otherwise (updateStatusPhase in
+// pkg/controller/datavolume/import-controller.go). The Running condition holds
+// the clean error text: CDI keeps it through the back-off between restarts and
+// clears it while the pod runs, and Bound repeats it behind PVC details.
+// Unknown is not a failure, so only False is read. For a host-assisted clone
+// CDI joins the target and source messages as "<target> and <source>"
+// (updateWithTargetNotRunning in pkg/controller/datavolume/conditions.go), so
+// empty halves are dropped instead of reporting " and ".
+func dataVolumeFailureMessage(dv *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok || cond["type"] != "Running" || cond["status"] != "False" {
+			continue
+		}
+		message, _ := cond["message"].(string)
+		var parts []string
+		for _, part := range strings.Split(message, " and ") {
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return strings.Join(parts, " and ")
+	}
+	return ""
+}
+
 // dataVolumeAPIServed treats a NoMatch as not served and returns any other
 // discovery error, so the caller retries instead of concluding CDI is absent.
 func dataVolumeAPIServed(mapper meta.RESTMapper) (bool, error) {
@@ -315,11 +345,14 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		}
 		notReady[dv.GetName()] = true
 		phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+		entry := fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase)
 		if phase == "" {
-			stuck = append(stuck, fmt.Sprintf("DataVolume %s has no phase", dv.GetName()))
-		} else {
-			stuck = append(stuck, fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase))
+			entry = fmt.Sprintf("DataVolume %s has no phase", dv.GetName())
 		}
+		if cause := dataVolumeFailureMessage(dv); cause != "" {
+			entry += ": " + cause
+		}
+		stuck = append(stuck, entry)
 	}
 	sort.Strings(stuck)
 	return strings.Join(stuck, "; "), notReady, true, nil

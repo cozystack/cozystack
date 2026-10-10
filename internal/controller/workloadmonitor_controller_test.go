@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1645,6 +1646,101 @@ func TestReconcile_DataVolumeMessageNamesTheDiskAndPhase(t *testing.T) {
 				t.Errorf("Reason = %q, want %q", got.Status.Reason, wantReason)
 			}
 		})
+	}
+}
+
+func withRunningCondition(dv *unstructured.Unstructured, status, reason, message string) *unstructured.Unstructured {
+	_ = unstructured.SetNestedSlice(dv.Object, []any{map[string]any{
+		"type":    "Running",
+		"status":  status,
+		"reason":  reason,
+		"message": message,
+	}}, "status", "conditions")
+	return dv
+}
+
+func TestReconcile_DataVolumeMessageCarriesTheImporterError(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "vm-disk-test"}
+	phase := func(p string) *string { return &p }
+	// Running conditions CDI v1.64 wrote for importers that kept failing; only
+	// the host name is changed. v1.66 builds the condition the same way for a
+	// single-container importer.
+	const (
+		http404 = "Unable to connect to http data source: expected status code 200, got 404. Status: 404 Not Found"
+		noHost  = `Unable to connect to http data source: HTTP request errored: Get "http://image.example.invalid/disk.img": dial tcp: lookup image.example.invalid on 10.96.0.10:53: no such host`
+	)
+	cases := []struct {
+		name                    string
+		phase                   *string
+		status, reason, message string
+		want                    string
+	}{
+		{"404 from the source", phase("ImportInProgress"), "False", "Error", http404,
+			"DataVolume vm-disk-test is ImportInProgress: " + http404},
+		{"unresolvable host", phase("ImportInProgress"), "False", "Error", noHost,
+			"DataVolume vm-disk-test is ImportInProgress: " + noHost},
+		{"unschedulable importer", phase("ImportScheduled"), "False", "Unschedulable", "Importer pod cannot be scheduled",
+			"DataVolume vm-disk-test is ImportScheduled: Importer pod cannot be scheduled"},
+		{"fatal checksum error", phase("Failed"), "False", "ChecksumError", "checksum mismatch",
+			"DataVolume vm-disk-test is Failed: checksum mismatch"},
+		{"no phase", nil, "False", "Error", http404,
+			"DataVolume vm-disk-test has no phase: " + http404},
+		{"importer not started yet", phase("ImportScheduled"), "False", "", "",
+			"DataVolume vm-disk-test is ImportScheduled"},
+		{"importer running", phase("ImportInProgress"), "True", "Pod is running", "transferring",
+			"DataVolume vm-disk-test is ImportInProgress"},
+		{"source state unknown", phase("CloneInProgress"), "Unknown", "Pending and Unknown", "Pod Pending and source state unknown",
+			"DataVolume vm-disk-test is CloneInProgress"},
+		{"clone pods both waiting without a message", phase("CloneInProgress"), "False", "ContainerCreating and ContainerCreating", " and ",
+			"DataVolume vm-disk-test is CloneInProgress"},
+		{"only the source pod has a message", phase("CloneInProgress"), "False", "ContainerCreating and Error", " and source unreachable",
+			"DataVolume vm-disk-test is CloneInProgress: source unreachable"},
+		{"both clone pods have a message", phase("CloneInProgress"), "False", "Pending and Pending", "Pod Pending and Pod Pending",
+			"DataVolume vm-disk-test is CloneInProgress: Pod Pending and Pod Pending"},
+		{"populated", phase("Succeeded"), "False", "Completed", "Import Complete", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dv := withRunningCondition(newDataVolume("vm-disk-test", selected, tc.phase), tc.status, tc.reason, tc.message)
+			got := reconcileDataVolumeMonitor(t, true, nil, dv)
+			if got.Status.Message != tc.want {
+				t.Errorf("Message = %q, want %q", got.Status.Message, tc.want)
+			}
+		})
+	}
+
+	t.Run("only the Running condition is read", func(t *testing.T) {
+		dv := withRunningCondition(newDataVolume("vm-disk-test", selected, phase("ImportInProgress")), "True", "Pod is running", "")
+		conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+		conditions = append([]any{map[string]any{
+			"type": "Bound", "status": "False", "reason": "Pending",
+			"message": "target PVC vm-disk-test Pending and [prime-1] : " + http404,
+		}}, conditions...)
+		_ = unstructured.SetNestedSlice(dv.Object, conditions, "status", "conditions")
+		got := reconcileDataVolumeMonitor(t, true, nil, dv)
+		if want := "DataVolume vm-disk-test is ImportInProgress"; got.Status.Message != want {
+			t.Errorf("Message = %q, want %q", got.Status.Message, want)
+		}
+	})
+}
+
+// The fixture is a DataVolume read off a CDI v1.64 cluster after its importer
+// had restarted 1988 times on a 404; only names and the URL are changed. For a
+// single-container importer failing like this one, the pinned v1.66 differs
+// only in requiring every container to run before it reports Running=True.
+func TestReconcile_LiveStuckImportNamesTheSourceError(t *testing.T) {
+	raw, err := os.ReadFile("testdata/datavolume-http-404.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dv := &unstructured.Unstructured{}
+	if err := dv.UnmarshalJSON(raw); err != nil {
+		t.Fatal(err)
+	}
+	got := reconcileDataVolumeMonitor(t, true, nil, dv)
+	const want = "DataVolume vm-disk-test is ImportInProgress: Unable to connect to http data source: expected status code 200, got 404. Status: 404 Not Found"
+	if *got.Status.Operational || got.Status.Message != want {
+		t.Errorf("Operational=%v Message=%q, want false and %q", *got.Status.Operational, got.Status.Message, want)
 	}
 }
 
