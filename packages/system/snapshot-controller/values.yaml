@@ -2,6 +2,13 @@ snapshot-controller:
   controller:
     replicaCount: 2
     revisionHistoryLimit: 10
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
   webhook:
     replicaCount: 2
     revisionHistoryLimit: 10
@@ -11,3 +18,10 @@ snapshot-controller:
       certManagerIssuerRef:
         name: selfsigned-cluster-issuer
         kind: ClusterIssuer
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
