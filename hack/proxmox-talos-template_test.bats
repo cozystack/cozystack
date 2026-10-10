@@ -83,6 +83,8 @@ EOF
   [ "$rc" -ne 0 ]
   rc=0; COZY_TEMPLATE_TAGS="talos,it's" "$SCRIPT" print 9002 main-pool >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ]
+  rc=0; COZY_TEMPLATE_TAGS="talos-v1.${nl}13,cozystack" "$SCRIPT" print 9002 main-pool >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
 }
 
 @test "a pre-release Talos version the chart accepts gets a template" {
@@ -99,10 +101,10 @@ EOF
   rc=0
   out="$("$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh 2>&1)" || rc=$?
   calls="$(cat "$stub/calls")"
-  rm -rf "$stub"
   [ "$rc" -ne 0 ]
   case "$out" in *"already carries"*"9000 (old) on pve1"*) ;; *) echo "$out" >&2; exit 1 ;; esac
   [ -z "$calls" ] || { echo "$calls" >&2; exit 1; }
+  rm -rf "$stub"
 }
 
 @test "a template whose tags are a superset does not count, and the template is built" {
@@ -112,11 +114,11 @@ EOF
     "$(chart schematicID | cut -c1-8)" > "$stub/resources.json"
   "$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh >/dev/null
   calls="$(cat "$stub/calls")"
-  rm -rf "$stub"
   printf '%s\n' "$calls" | grep -q '^curl .*/nocloud-amd64.raw.xz$'
   printf '%s\n' "$calls" | grep -qE '^qm create 9002 .*--scsi0 main-pool:0,import-from=[^ ]*/disk.raw,'
   printf '%s\n' "$calls" | grep -qx 'qm disk resize 9002 scsi0 20G'
   printf '%s\n' "$calls" | grep -qx 'qm template 9002'
+  rm -rf "$stub"
 }
 
 @test "a VM left behind by a failed conversion is named with the command that removes it" {
@@ -127,10 +129,10 @@ EOF
   rc=0
   out="$("$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh 2>&1)" || rc=$?
   calls="$(cat "$stub/calls")"
-  rm -rf "$stub"
   [ "$rc" -ne 0 ]
   printf '%s\n' "$calls" | grep -qx 'qm template 9002'
   case "$out" in *"remove it with: qm destroy 9002"*) ;; *) echo "$out" >&2; exit 1 ;; esac
+  rm -rf "$stub"
 }
 
 @test "create runs the printed program on the hypervisor over ssh and prints the pool's selector" {
@@ -140,11 +142,11 @@ EOF
   out="$(PATH="$stub:$PATH" COZY_PVE_SSH=root@pve "$SCRIPT" create 9002 main-pool)"
   args="$(cat "$stub/args")"
   sent="$(cat "$stub/stdin")"
-  rm -rf "$stub"
   case "$args" in *"root@pve sh -s") ;; *) echo "$args" >&2; exit 1 ;; esac
   [ "$sent" = "$("$SCRIPT" print 9002 main-pool)" ]
   printf '%s' "$out" | grep -qxF '      - "talos-'"$(chart version)"'"'
   printf '%s' "$out" | grep -qxF '    schematicID: "'"$(chart schematicID)"'"'
+  rm -rf "$stub"
 }
 
 @test "create fails when the hypervisor program fails, and prints no selector" {
@@ -153,7 +155,7 @@ EOF
   chmod +x "$stub/ssh"
   rc=0
   out="$(PATH="$stub:$PATH" COZY_PVE_SSH=root@pve "$SCRIPT" create 9002 main-pool 2>&1)" || rc=$?
-  rm -rf "$stub"
   [ "$rc" -ne 0 ]
   case "$out" in *templateTags*) echo "$out" >&2; exit 1 ;; esac
+  rm -rf "$stub"
 }

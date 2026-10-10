@@ -96,7 +96,10 @@ matches "$CPU" '[A-Za-z0-9_.+-]+' || die "cpu type $CPU is not a Proxmox CPU mod
 
 # capmox lowercases the selector and compares it with the template's tags as a
 # set, so the tags are normalised the same way before they are checked and
-# written, and the selector printed at the end is exactly what will match.
+# written, and the selector printed at the end is exactly what will match. The
+# split is on commas only: a newline would split a tag the operator meant whole.
+case $TAGS in *'
+'*) die "template tags are comma-separated and may not contain a newline" ;; esac
 TAG_SET=$(printf '%s\n' "$TAGS" | tr ',' '\n' | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | LC_ALL=C sort -u)
 [ -n "$TAG_SET" ] || die "the template needs at least one tag"
 bad=$(printf '%s\n' "$TAG_SET" | grep -Evx '[a-z0-9_][a-z0-9_+.-]*' || true)
