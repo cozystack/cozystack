@@ -19,9 +19,9 @@ templates:
 # That logic is exercised by the cozystack-basics secret test for the
 # root tenant (cozystack-values-secret_test.yaml) plus by the
 # controller-level reconciler tests for the cross-namespace attach
-# flow — helm-unittest cannot mock the `lookup` call namespace.yaml
-# uses for ownerReferences, so the chart-level pin here covers only
-# the HelmRelease render side.
+# flow. This suite covers only the HelmRelease render side; the
+# ownerReferences that namespace.yaml derives from its `lookup` are
+# covered, found and not-found, in namespace_owner_reference_test.yaml.
 
 release:
   name: tenant-alice
