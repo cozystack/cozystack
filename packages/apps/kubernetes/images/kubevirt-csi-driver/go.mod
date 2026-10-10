@@ -15,7 +15,7 @@ require (
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	kubevirt.io/api v1.2.2
 	kubevirt.io/containerized-data-importer-api v1.59.0
-	kubevirt.io/csi-driver v0.0.0-20260424143118-bee6c348c004
+	kubevirt.io/csi-driver v0.0.0-20260924151015-cb4770e4e475
 )
 
 require (
