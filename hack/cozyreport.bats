@@ -690,11 +690,18 @@ STUB
     cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
 
   grep -q 'srv2 | Ye' "$tmp/out/nodes.txt"
-  grep -q '^# \[cozyreport\] TRUNCATED' "$tmp/out/nodes.txt" || {
+  grep -q '^# \[cozyreport\] EXIT 1 after this output' "$tmp/out/nodes.txt" || {
     echo "FAIL: a partial table that failed on its own terms carries no marker, or not in the shared form"
     cat "$tmp/out/nodes.txt"
     false
   }
+  # Nor does it claim a cut. kubectl exec passes the remote status through, and a
+  # command that lists everything it can and then exits 1 is complete; the status
+  # alone cannot separate that from a stream that broke.
+  if grep -q 'TRUNCATED' "$tmp/out/nodes.txt"; then
+    echo "FAIL: a non-zero exit after output is asserted to be a cut"; false; fi
+  if grep -q 'only what was streamed before' "$tmp/out/COLLECTION-FAILED.txt"; then
+    echo "FAIL: the note beside the table asserts a cut"; false; fi
   # And it does not borrow the timeout branch's wording, which names a clock that
   # did not fire.
   if grep -q 'killed at exit' "$tmp/out/nodes.txt"; then
@@ -707,7 +714,7 @@ STUB
   # the read is killed before the command writes a byte, so there is no stdout to
   # mark and no stderr to copy. Left alone, `linstor/nodes.txt` ships at zero
   # length and reads as a cluster with no nodes -- and unlike the two archive
-  # reads, these four have no call-site emptiness check to remove it.
+  # reads, the tables have no call-site emptiness check to remove it.
   tmp=$(mktemp -d)
   exec_stub_dir "$tmp"
 
@@ -5084,3 +5091,262 @@ STUB
     false
   fi
 }
+
+# Stub PATH for the linstor module: `kubectl exec` runs the command after `--` on
+# this machine, where `linstor`, `zpool` and `zfs` are stubs that print what they
+# were asked, and the real `jq` reads the stub's storage-pool JSON. That runs the
+# shells the controller and satellite execs actually send, rather than matching
+# their text.
+linstor_module_stub_dir() {
+  _ld=$1
+  mkdir -p "$_ld/bin"
+  cat > "$_ld/bin/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  "get deploy -n cozy-linstor linstor-controller") exit 0 ;;
+  *"get pods -l app.kubernetes.io/component=linstor-satellite -o name") echo pod/linstor-satellite-a; exit 0 ;;
+  *"get pod/linstor-satellite-a -o jsonpath="*) [ -z "${STUB_NODENAME_FAIL:-}" ] || exit 1; printf 'srv1'; exit 0 ;;
+esac
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ $# -gt 0 ] || exit 1
+shift
+exec "$@"
+STUB
+  cat > "$_ld/bin/linstor" <<'STUB'
+#!/bin/sh
+case "$*" in
+  "--machine-readable sp l")
+    [ -z "${STUB_SP_FAIL:-}" ] || { echo 'ERROR: unable to connect to linstor://localhost:3370' >&2; exit 10; }
+    printf '%s\n' "$STUB_SP_JSON" ;;
+  *) echo "linstor $*" ;;
+esac
+STUB
+  cat > "$_ld/bin/zpool" <<'STUB'
+#!/bin/sh
+echo "zpool $*"
+for a; do :; done; echo "zpool last argument: <$a>"
+for a; do [ "$a" != "${STUB_MISSING:-}" ] || { echo "cannot open '$a': no such pool" >&2; exit 1; }; done
+STUB
+  cat > "$_ld/bin/zfs" <<'STUB'
+#!/bin/sh
+[ -z "${STUB_ZFS_FAIL:-}" ] || { echo 'cannot open dataset: permission denied' >&2; exit 1; }
+echo "zfs $*"
+for a; do :; done; echo "zfs last argument: <$a>"
+[ -z "${STUB_MISSING:-}" ] || for a; do
+  case $a in "$STUB_MISSING"|"$STUB_MISSING"/*) echo "cannot open '$a': dataset does not exist" >&2; exit 1 ;; esac
+done
+STUB
+  chmod +x "$_ld/bin/kubectl" "$_ld/bin/linstor" "$_ld/bin/zpool" "$_ld/bin/zfs"
+}
+
+# The storage pools one cluster reports: a thick ZFS pool on srv1, a thin one
+# backed by a dataset inside a zpool rather than a whole zpool, a diskless pool,
+# an LVM pool whose backing name zpool and zfs must never see, and srv2's own
+# pool, which srv1's listing must not carry. The backing name is under
+# StorDriver/StorPoolName, the one key the controller keeps: its REST layer
+# renames StorDriver/ZPool and StorDriver/ZPoolThin to it on create.
+LINSTOR_SP_JSON='[[
+ {"storage_pool_name":"DfltDisklessStorPool","node_name":"srv1","provider_kind":"DISKLESS","props":{}},
+ {"storage_pool_name":"data","node_name":"srv1","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":"data-srv1"}},
+ {"storage_pool_name":"thin","node_name":"srv1","provider_kind":"ZFS_THIN","props":{"StorDriver/StorPoolName":"tank/thin"}},
+ {"storage_pool_name":"lvm","node_name":"srv1","provider_kind":"LVM_THIN","props":{"StorDriver/StorPoolName":"vg/thin"}},
+ {"storage_pool_name":"data","node_name":"srv2","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":"data-srv2"}}
+]]'
+
+@test "the linstor module lists the datasets of the zfs pools linstor uses on each node" {
+  # Only the dataset list names what holds a pool's space. Exact bytes and
+  # `avail`, so the sizes of leftover datasets can be summed against the pool
+  # root's `avail`; a rounded size hides a sub-GiB difference on a 100 GiB pool.
+  # It is taken on green jobs too, so a red one has a listing to compare.
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  [ -n "$body" ] || { echo "FAIL: could not locate the linstor module"; false; }
+
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  ( export STUB_SP_JSON="$LINSTOR_SP_JSON" COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+
+  grep -qx 'linstor --no-color v l' "$REPORT_DIR/linstor/volumes.txt" 2>/dev/null || {
+    echo "FAIL: the LINSTOR volume list was not recorded"; false; }
+  out="$REPORT_DIR/linstor/zfs/srv1.txt"
+  grep -qx 'zpool get -p freeing,leaked,allocated,free data-srv1 tank' "$out" 2>/dev/null || {
+    echo "FAIL: the pool totals and pending frees of srv1's pools were not read exactly"
+    cat "$out" 2>/dev/null
+    false
+  }
+  grep -qx 'zfs list -p -t all -o name,used,avail,refer,origin,creation -r data-srv1 tank/thin' "$out" || {
+    echo "FAIL: srv1's pools were not listed in exact bytes with every dataset type and avail"
+    cat "$out"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "a pool name with a space reaches zpool and zfs as one argument" {
+  # ZFS allows a space in pool and dataset names, so such a pool must be read,
+  # and its name must not be split on the way to the satellite.
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  spaced='[[{"storage_pool_name":"data","node_name":"srv1","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":"tank data/thin"}}]]'
+  ( export STUB_SP_JSON="$spaced" COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+
+  out="$REPORT_DIR/linstor/zfs/srv1.txt"
+  grep -qx 'zpool last argument: <tank data>' "$out" 2>/dev/null || {
+    echo "FAIL: zpool did not get the spaced pool as one argument"
+    cat "$out" 2>/dev/null
+    false
+  }
+  grep -qx 'zfs last argument: <tank data/thin>' "$out" || {
+    echo "FAIL: zfs did not get the spaced dataset as one argument"
+    cat "$out"
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "a node linstor names no zfs pool for gets a note and no zfs read" {
+  # `zfs list -r` with no pool argument lists every pool on the machine, so a
+  # node with nothing to scope it to must not reach zfs at all.
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  # srv1's ZFS rows carry no backing name, an empty one or a blank one, and
+  # none may become a blank pool argument.
+  only_srv2='[[{"storage_pool_name":"odd","node_name":"srv1","provider_kind":"ZFS","props":{}},
+ {"storage_pool_name":"empty","node_name":"srv1","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":""}},
+ {"storage_pool_name":"space","node_name":"srv1","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":" "}},
+ {"storage_pool_name":"tab","node_name":"srv1","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":"\t"}},
+ {"storage_pool_name":"data","node_name":"srv2","provider_kind":"ZFS","props":{"StorDriver/StorPoolName":"data-srv2"}}]]'
+  ( export STUB_SP_JSON="$only_srv2" COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+
+  out="$REPORT_DIR/linstor/zfs/srv1.txt"
+  grep -q 'names no ZFS pool for node srv1' "$out" 2>/dev/null || {
+    echo "FAIL: a node without a ZFS pool in LINSTOR did not say so"
+    cat "$out" 2>/dev/null
+    false
+  }
+  if grep -q '^zfs \|^zpool ' "$out"; then
+    echo "FAIL: zfs or zpool ran with no pool to scope it"; false
+  fi
+
+  # The storage-pool read itself failing leaves the same note, and its own
+  # file carries LINSTOR's message rather than an empty table.
+  rm -rf "$REPORT_DIR"
+  ( export STUB_SP_FAIL=1 COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+  grep -q 'unable to connect to linstor' "$REPORT_DIR/linstor/zfs-pools.txt" 2>/dev/null || {
+    echo "FAIL: a failed storage-pool read left no message in its file"
+    cat "$REPORT_DIR/linstor/zfs-pools.txt" 2>/dev/null
+    false
+  }
+  grep -q 'names no ZFS pool for node srv1' "$REPORT_DIR/linstor/zfs/srv1.txt" 2>/dev/null || {
+    echo "FAIL: a failed storage-pool read left the node without a note"; false; }
+
+  # Output that is not JSON fails the read with jq's status, rather than
+  # passing as an empty table.
+  rm -rf "$REPORT_DIR"
+  ( export STUB_SP_JSON='not json' COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+  grep -q 'zfs-pools.txt' "$REPORT_DIR/linstor/COLLECTION-FAILED.txt" 2>/dev/null || {
+    echo "FAIL: a storage-pool listing jq could not parse was not recorded as a failed read"
+    cat "$REPORT_DIR/linstor/COLLECTION-FAILED.txt" 2>/dev/null
+    false
+  }
+  grep -q 'names no ZFS pool for node srv1' "$REPORT_DIR/linstor/zfs/srv1.txt" 2>/dev/null || {
+    echo "FAIL: an unparsable storage-pool listing left the node without a note"; false; }
+  rm -rf "$tmp"
+}
+
+@test "a satellite whose node name cannot be read says so instead of blaming the pool map" {
+  # The fallback key is the pod name, which never matches a LINSTOR node, so the
+  # note must name the unread spec.nodeName rather than send the reader to a
+  # zfs-pools.txt that does list the node. The module does not run under set -e,
+  # so neither does this.
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  ( set +e; export STUB_SP_JSON="$LINSTOR_SP_JSON" STUB_NODENAME_FAIL=1 COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+
+  out="$REPORT_DIR/linstor/zfs/linstor-satellite-a.txt"
+  grep -q 'spec.nodeName of pod/linstor-satellite-a could not be read' "$out" 2>/dev/null || {
+    echo "FAIL: an unread node name was not named as the reason for the missing listing"
+    cat "$out" 2>/dev/null
+    false
+  }
+  if grep -q 'names no ZFS pool' "$out"; then
+    echo "FAIL: an unread node name was blamed on zfs-pools.txt"; false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a pool that cannot be opened costs neither the other pools' listing nor a cut-short marker" {
+  # zpool and zfs both go on past a pool they cannot open, list the rest and exit
+  # 1. That is about the satellite, not about which pools LINSTOR uses, and the
+  # listing of the pools that are fine is complete.
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  ( export STUB_SP_JSON="$LINSTOR_SP_JSON" STUB_MISSING=tank COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+
+  out="$REPORT_DIR/linstor/zfs/srv1.txt"
+  if grep -q 'names no ZFS pool' "$out" 2>/dev/null; then
+    echo "FAIL: a failing zpool was reported as a node without a pool"
+    cat "$out"
+    false
+  fi
+  grep -q "cannot open 'tank': no such pool" "$out" 2>/dev/null || {
+    echo "FAIL: the failing zpool's message was not recorded in the listing"
+    cat "$out"
+    false
+  }
+  grep -qx 'zfs list -p -t all -o name,used,avail,refer,origin,creation -r data-srv1 tank/thin' "$out" || {
+    echo "FAIL: a failing zpool get dropped the dataset listing"
+    cat "$out"
+    false
+  }
+  if grep -q 'TRUNCATED' "$out"; then
+    echo "FAIL: a whole listing was marked as cut short because one pool could not be opened"
+    cat "$out"
+    false
+  fi
+  grep -q '^# \[cozyreport\] EXIT 1 after this output' "$out" || {
+    echo "FAIL: zfs list's non-zero exit was not marked in the listing"
+    cat "$out"
+    false
+  }
+  grep -q '^# \[cozyreport\] zpool get exited 1' "$out" || {
+    echo "FAIL: zpool get's status was not recorded in the listing"
+    cat "$out"
+    false
+  }
+  grep -q "cannot open 'tank/thin': dataset does not exist" "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null || {
+    echo "FAIL: the dataset zfs list could not open was not recorded beside the listing"
+    cat "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null
+    false
+  }
+  rm -rf "$tmp"
+}
+
+@test "a zfs list that fails is recorded as a failed read" {
+  tmp=$(mktemp -d)
+  linstor_module_stub_dir "$tmp"
+  body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
+  REPORT_DIR="$tmp/report"
+  export REPORT_DIR
+  ( export STUB_SP_JSON="$LINSTOR_SP_JSON" STUB_ZFS_FAIL=1 COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+  grep -q 'cannot open dataset: permission denied' "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null || {
+    echo "FAIL: a failing zfs list was not recorded as a failed read"
+    cat "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null
+    false
+  }
+  rm -rf "$tmp"
+}
+
