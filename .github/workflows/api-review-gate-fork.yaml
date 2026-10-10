@@ -1,0 +1,102 @@
+name: API Review Gate (fork)
+
+# Privileged publisher for the "API Review Gate" merge gate on FORK pull
+# requests, mirroring the split e2e-fork.yaml uses for "E2E Tests"
+# (docs/agents/e2e-testing.md §10).
+#
+# A fork PR cannot publish its own merge gate: the GITHUB_TOKEN is read-only for
+# pull requests from a fork on BOTH the `pull_request` and the
+# `pull_request_review` trigger, so no run of api-review-gate.yaml can call
+# createCommitStatus for a fork — the read-only restriction is not specific to
+# `pull_request`. This workflow runs from the DEFAULT branch after that run
+# completes, so it holds a write-capable token, and concludes the status on the
+# PR head SHA.
+#
+# Nothing untrusted runs here, and nothing needs to: the evaluation already
+# happened in the unprivileged run. The only inputs are that run's conclusion and
+# its head SHA — base-repo payload data a fork cannot forge — so this workflow
+# checks nothing out, builds nothing, and executes no fork-authored code. That is
+# the whole reason the gate is not a `pull_request_target` run, which would hand
+# fork code a privileged token to reach the same result.
+#
+# Same-repo PRs are published by api-review-gate.yaml's `api-gate-report` job;
+# this workflow no-ops for them (see the job guard), so the two publishers are
+# mutually exclusive and can never clobber each other.
+
+on:
+  workflow_run:
+    workflows: ["API Review Gate"]
+    types: [completed]
+
+# Supersede a stale publish when the fork pushes again. Keyed by fork repo plus
+# branch because the PR number is not available at workflow level. Safe to cancel:
+# statuses are per-SHA, and a newer gate run publishes its own.
+concurrency:
+  group: api-review-gate-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Report fork API review gate status
+    # Fork PRs only: the head repository differs from the base repository.
+    if: >-
+      ${{ github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Report "API Review Gate" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          GATE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        with:
+          script: |
+            const { HEAD_SHA, CONCLUSION, GATE_RUN_URL } = process.env;
+            const { owner, repo } = context.repo;
+
+            // Validate before the SHA flows into a status target.
+            if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
+              core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
+              return;
+            }
+
+            // Publish only a real verdict. A `commented` review skips every job in
+            // the gate run (conclusion `skipped`); a run cancelled by the
+            // concurrency group never evaluated; a fork run still awaiting
+            // maintainer approval concludes `action_required`. In every one of those
+            // cases the previous status on this SHA is still the correct one, and
+            // writing over it would either invent a pass or clobber a green.
+            // Declining to post is also fail-closed: on a SHA that never got a
+            // status the required context stays "Expected" and blocks the merge.
+            if (CONCLUSION !== 'success' && CONCLUSION !== 'failure') {
+              core.info(`gate run concluded '${CONCLUSION}' — posting nothing`);
+              return;
+            }
+
+            // A workflow_run payload carries no job outputs, so unlike the
+            // same-repo `api-gate-report` this cannot separate "needs an API owner
+            // approval" from "the evaluation broke". target_url points at the gate
+            // run, whose job summary spells the verdict out.
+            const state = CONCLUSION === 'success' ? 'success' : 'failure';
+            const description = state === 'success'
+              ? 'API review gate satisfied'
+              : 'API review gate not satisfied — see the gate run';
+
+            try {
+              await github.rest.repos.createCommitStatus({
+                owner, repo, sha: HEAD_SHA, state,
+                context: 'API Review Gate', description, target_url: GATE_RUN_URL,
+              });
+            } catch (err) {
+              // Fail loudly and fail-closed: an unposted required status stays
+              // "Expected", which blocks the merge.
+              core.setFailed(`Failed to report API Review Gate status: ${err}`);
+              return;
+            }
+            core.info(`API Review Gate → ${state}: ${description}`);
