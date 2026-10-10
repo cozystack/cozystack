@@ -36,6 +36,10 @@ func HandleMutatePods(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not unmarshal request", http.StatusBadRequest)
 		return
 	}
+	if admissionReviewReq.Request == nil {
+		http.Error(w, "admission review has no request", http.StatusBadRequest)
+		return
+	}
 
 	admissionReviewResp := admissionv1.AdmissionReview{
 		TypeMeta: admissionReviewReq.TypeMeta,
