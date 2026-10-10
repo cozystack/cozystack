@@ -92,11 +92,17 @@ extraEnv: []
 # Project: https://github.com/cozystack/keycloak-kms-proxy
 #
 # OPERATIONAL CAVEATS — read before enabling:
-#   * Availability downgrade. The proxy runs as a single replica (HA needs a
-#     shared wrapped DEK set, tracked as a follow-up). Keycloak itself runs HA
-#     (2 replicas); with encryption on, both replicas funnel their DB traffic
-#     through this one pod, so any proxy restart — node drain, rollout, image
-#     pull, OOM — briefly drops the database connection for the entire IdP.
+#   * Availability downgrade. The proxy runs as a single replica by default.
+#     Keycloak itself runs HA (2 replicas); with encryption on, both replicas
+#     funnel their DB traffic through this one pod, so any proxy restart — node
+#     drain, rollout, image pull, OOM — briefly drops the database connection
+#     for the entire IdP. Set encryption.replicas to run more than one.
+#   * A persistent DEK set is required. Unless fields is "disabled", the chart
+#     refuses to render without deksetSecretName: without it the proxy would
+#     mint a new DEK on every start and lose access to everything it encrypted
+#     before a restart. With kms.backend=static, deploy once with
+#     fields: disabled (passthrough) so the KEK Secret exists, mint the DEK set
+#     with that KEK, then set deksetSecretName and switch fields on.
 #   * Existing data is NOT migrated automatically. Flipping enabled:true on a
 #     populated database leaves the pre-existing PII as plaintext; logins that
 #     match on the deterministic columns (username/email) then fail until the
@@ -124,10 +130,10 @@ encryption:
   # DEK set) so every replica encrypts deterministic columns under one key.
   replicas: 1
   # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
-  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
-  # an existing populated database — the proxy must reuse the DEK the backfill
-  # encrypted rows with — and to run more than one replica. When empty the proxy
-  # mints an ephemeral DEK at startup, which is only safe on a fresh, empty DB.
+  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED unless
+  # fields is "disabled": the proxy must load the same DEKs on every start to
+  # read what it encrypted before, and the backfill and every replica must
+  # share them. Back it up together with the KEK.
   deksetSecretName: ""
   deksetSecretKey: dekset.json
   kms:
