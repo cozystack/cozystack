@@ -166,6 +166,15 @@ networking:
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
+  # Resources of the kube-multus container, merged over the defaults in
+  # packages/system/multus/values.yaml, which also say why there is no CPU limit.
+  # Unset keeps those defaults. The multus chart refuses to render without a
+  # memory limit and a memory request. Set on a running cluster the same way as
+  # stageCniPlugins above.
+  # multus:
+  #   resources:
+  #     limits:
+  #       memory: 8Gi
 
 # Service publishing and ingress configuration
 publishing:

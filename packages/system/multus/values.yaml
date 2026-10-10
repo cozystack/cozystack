@@ -8,6 +8,9 @@
 stageCniPlugins: false
 
 ## @param resources resources of the kube-multus container
+## Set this through the platform, not here: networking.multus.resources on the cozystack-platform
+## Package. See packages/core/platform/values.yaml.
+##
 ## Every pod sandbox on the node waits on this container, which is why there is no CPU limit:
 ## after a CNI outage left ~600 dead sandboxes for 220 pods on one node, multus at 100m answered
 ## slower than kubelet's two-minute CRI deadline, every call was retried and the queue only grew.

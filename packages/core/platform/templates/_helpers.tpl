@@ -160,6 +160,31 @@ false
 {{- end }}
 
 {{/*
+Values of the cozystack.multus Package. Call as (list $ <stageCniPlugins default>);
+emits YAML. networking.multus.resources is passed only when set, so an unset key
+leaves the multus chart default in charge.
+*/}}
+{{- define "cozystack.platform.multus.values" -}}
+{{- $root := index . 0 -}}
+{{- $values := dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" .) "true") -}}
+{{- $multus := index ($root.Values.networking | default dict) "multus" -}}
+{{- if kindIs "invalid" $multus -}}
+{{- $multus = dict -}}
+{{- end -}}
+{{- if not (kindIs "map" $multus) -}}
+{{- fail (printf "networking.multus: expected a map, got %s" (kindOf $multus)) -}}
+{{- end -}}
+{{- $resources := index $multus "resources" -}}
+{{- if not (kindIs "invalid" $resources) -}}
+{{- if not (kindIs "map" $resources) -}}
+{{- fail (printf "networking.multus.resources: expected a map, got %s" (kindOf $resources)) -}}
+{{- end -}}
+{{- $_ := set $values "resources" $resources -}}
+{{- end -}}
+{{- toYaml $values -}}
+{{- end }}
+
+{{/*
 Common system packages shared between the isp-full, isp-full-generic, isp-slim and
 isp-slim-generic bundles.
 Does NOT include the packages each variant emits itself: networking (variant
