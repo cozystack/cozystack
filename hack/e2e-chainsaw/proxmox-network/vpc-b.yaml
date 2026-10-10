@@ -1,0 +1,8 @@
+# Helm values of tenant B's VPC: one Proxmox-backed subnet in the shared zone.
+subnets:
+- name: private
+  cidr: 10.231.128.0/24
+  proxmox:
+    zone: pxnet-e2e
+egress:
+  enabled: false

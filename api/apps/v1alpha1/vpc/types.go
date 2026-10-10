@@ -22,9 +22,23 @@ type ConfigSpec struct {
 	// VPC peering connections (bidirectional declaration required)
 	// +kubebuilder:default:={}
 	Peers []Peer `json:"peers,omitempty"`
+	// Outbound access for Proxmox-backed subnets.
+	// +kubebuilder:default:={}
+	Egress Egress `json:"egress"`
 	// Static routes for the VPC
 	// +kubebuilder:default:={}
 	Routes []Route `json:"routes,omitempty"`
+}
+
+type Egress struct {
+	// Route traffic from the Proxmox-backed subnets to destinations outside the VPC through a VPC egress gateway that SNATs it onto the zone's transit network. Needed by Proxmox-backed Kubernetes workers to reach their control plane and image registries. A route to anything narrower than 0.0.0.0/0, such as a peered VPC, keeps its next hop.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Optional CIDR (a /29 is enough) for a dedicated overlay subnet that holds the gateway pods' primary interface. By default they sit on the first Proxmox-backed subnet. Must not overlap any other subnet in the cluster.
+	InternalCidr string `json:"internalCidr,omitempty"`
+	// Egress gateway pods.
+	// +kubebuilder:default:=1
+	Replicas int `json:"replicas,omitempty"`
 }
 
 type Peer struct {
@@ -37,15 +51,24 @@ type Peer struct {
 type Route struct {
 	// Destination CIDR
 	Cidr string `json:"cidr"`
-	// Next hop IP address
+	// Next hop IP address. Must lie inside one of this VPC's subnets, or in 169.254.0.0/16 when peers are declared.
 	NextHopIP string `json:"nextHopIP"`
 }
 
 type Subnet struct {
-	// Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM
+	// Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM. Overlay subnets only: a Proxmox-backed subnet is not private and refuses it.
 	AllowSubnets []string `json:"allowSubnets,omitempty"`
 	// IP address range
 	Cidr string `json:"cidr,omitempty"`
 	// Subnet name
 	Name string `json:"name"`
+	// Back this subnet with a Proxmox VLAN so Proxmox VMs, including Proxmox-backed Kubernetes workers, can attach to it. IPv4 only, prefix /8 to /28.
+	Proxmox SubnetProxmox `json:"proxmox,omitempty"`
+}
+
+type SubnetProxmox struct {
+	// Address range Proxmox VMs take addresses from, as first-last, inside the CIDR and after the gateway. Kube-OVN never hands these addresses to pods. Defaults to the middle half of the subnet.
+	VmRange string `json:"vmRange,omitempty"`
+	// ProxmoxNetworkZone the VLAN comes from. Empty selects the only zone and fails when there are several.
+	Zone string `json:"zone,omitempty"`
 }

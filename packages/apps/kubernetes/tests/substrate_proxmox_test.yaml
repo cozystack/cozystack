@@ -126,7 +126,7 @@ tests:
         dnsServers: ["8.8.8.8"]
     asserts:
       - failedTemplate:
-          errorMessage: "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode"
+          errorMessage: "substrate proxmox requires proxmox.ipv4Config.addresses, or proxmox.network.vpc and proxmox.network.subnet: capmox allocates static addresses and has no DHCP mode"
 
   - it: rejects an unknown substrate
     template: templates/cluster.yaml

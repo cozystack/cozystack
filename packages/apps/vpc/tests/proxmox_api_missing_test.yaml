@@ -1,0 +1,27 @@
+suite: VPC on a cluster without the proxmox-network package
+# Helm's lookup fails the whole render on an API group the cluster does not
+# serve. The chart must not look anything up for an overlay-only VPC, and must
+# say what is missing when a subnet asks for Proxmox.
+templates:
+  - templates/vpc.yaml
+release:
+  name: virtualprivatecloud-myvpc
+  namespace: tenant-test
+tests:
+  - it: renders an overlay-only VPC without touching the proxmox API
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: names the missing package when a subnet asks for Proxmox
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "the proxmox.cozystack.io API is not installed"

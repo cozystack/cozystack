@@ -1,0 +1,142 @@
+proxmoxNetworkController:
+  # Set by `make image`. Left empty here, the chart refuses to render, so a
+  # package enabled without a built image fails visibly instead of pulling
+  # nothing.
+  image: ""
+  # The allocator is race-free only with one active instance; a second
+  # replica waits on the leader lease.
+  replicas: 1
+  # [{name: regcred}] when the image lives in a private registry.
+  imagePullSecrets: []
+  debug: false
+  # How long a deleted subnet may stay listed on its Vlan before the VLAN is
+  # released anyway, as a Go duration ("30m"). Empty keeps the controller's
+  # default (10m). Raise it above twice the longest Kube-OVN or OVN NB outage
+  # you expect (docs/proxmox-networking.md, section 6.3).
+  subnetPruneTimeout: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# The VPC gateway of the Proxmox networks. Kube-OVN's OVN drops ARP requests
+# for a router port's addresses that arrive through a localnet port unless
+# the router port is a distributed gateway port, so a VM on a Proxmox VLAN
+# gets no answer from its gateway. With manageGatewayChassis the controller
+# gives each network's router port an OVN HA chassis group ("px-<vpc>-<subnet>",
+# external_ids owner=proxmox-network) of the zone's trunk nodes, written
+# straight to the OVN northbound database, and a network is Ready only once
+# it has one (condition GatewayReady). Off, VMs have no VPC gateway unless
+# the groups are made by hand.
+ovn:
+  manageGatewayChassis: true
+  # OVSDB address(es) of the OVN NB, comma-separated, tried in order. Writes
+  # must reach the RAFT leader: Kube-OVN's ovn-nb Service selects it. A
+  # Service name is resolved through the cluster's search domains, so no
+  # cluster domain is written here.
+  nbAddress: ssl:ovn-nb.cozy-kubeovn.svc:6641
+  # Kube-OVN's client TLS material (keys cacert, cert, key). The controller
+  # reads this one secret through the API: a Role in its namespace grants get
+  # on it by name and nothing else.
+  tlsSecret:
+    namespace: cozy-kubeovn
+    name: kube-ovn-tls
+
+# The Kube-OVN ProviderNetwork that carries the zone's VLAN trunk to the
+# cluster nodes. Each node it selects needs one extra NIC with no address,
+# plugged into the zone bridge as a trunk of the zone's VLAN ranges.
+providerNetwork:
+  create: false
+  # Kube-OVN limits a ProviderNetwork name to 12 characters.
+  name: pxtenant
+  defaultInterface: ens19
+  # [{interface: ens20, nodes: [worker-3]}]
+  customInterfaces: []
+  # Nodes that carry no trunk. A pod attached to a Proxmox-backed subnet can
+  # only run on a node that does.
+  excludeNodes: []
+  nodeSelector: {}
+
+# ProxmoxNetworkZones. See docs/proxmox-networking.md for every field.
+zones: []
+# - name: default
+#   bridge: vmbr70
+#   providerNetwork: pxtenant
+#   vlanRanges: ["101-199"]
+#   reservedVLANs: []
+#   mtu: 1500
+#   namespaceSelector: {}
+#   staticAssignments: []
+#   egress:
+#     externalSubnet: px-transit
+#   # The outer VLAN that carries the zone bridge between hypervisors
+#   # (bond0.70 -> vmbr70). Admission refuses it as the tag of a machine NIC
+#   # on any other bridge, which would reach the trunk under the zone bridge
+#   # with any inner tag the guest picks. Admission only, not part of the
+#   # zone object; unset leaves that path open.
+#   uplinkVLAN: 70
+#   # Every other bridge that enslaves the uplink's parent device itself
+#   # (vmbr0 over bond0). Admission refuses any machine NIC on them: an
+#   # untagged one is a trunk on which the guest sets the uplink VLAN as the
+#   # outer tag, whether the bridge is VLAN-aware or not. Admission only; a
+#   # bridge left out, and any VM created outside Cluster API, stays a way
+#   # into the zone until the hypervisor drops guest VLAN tags there.
+#   uplinkBridges: [vmbr0]
+
+# A platform transit network on the same trunk. VPC egress gateways attach
+# their external NIC here; the gateway address is a router outside the
+# cluster that forwards to the control-plane LoadBalancer range and the
+# Internet and has no route back into any VPC.
+transit:
+  enabled: false
+  name: px-transit
+  vlan: 100
+  cidr: 10.70.0.0/24
+  gateway: 10.70.0.1
+  # Addresses the router side keeps, in Kube-OVN notation ("a..b").
+  excludeIps: []
+  # MTU of the egress gateways' transit interface; match the zones' mtu.
+  # Empty leaves it to Kube-OVN (the provider NIC's MTU).
+  mtu: ""
+
+admission:
+  # proxmox-network-machine-binding, on CREATE of ProxmoxMachine and
+  # ProxmoxMachineTemplate in every namespace: a NIC on a zone bridge must be
+  # one of the namespace's own networks, a NIC on any other bridge may not be
+  # tagged with a zone's uplinkVLAN, and no NIC may sit on a zone's
+  # uplinkBridges. All three are taken from `zones` above, so a zone created
+  # outside these values is not protected by it.
+  enabled: true
+  # For every policy of this package.
+  validationActions: [Deny]
+  # The two attachment policies below hold outside cozy-*, kube-system, this
+  # release's namespace, the zones' egress gateway namespaces and
+  # exemptNamespaces. Each is switched on its own, independent of `enabled`.
+  #
+  # proxmox-network-vm-attachments: a KubeVirt VM or VMI attaches only
+  # NetworkAttachmentDefinitions and Kube-OVN subnets of its own namespace,
+  # through spec networks and through the annotations KubeVirt copies onto
+  # the virt-launcher pod (k8s.v1.cni.cncf.io/networks,
+  # v1.multus-cni.io/default-network, *.kubernetes.io/logical_switch). A
+  # multus default network must be written <namespace>/<name>: Multus looks
+  # an unqualified one up in kube-system.
+  vmNetworkNamespace: true
+  # proxmox-network-pod-attachments: the same annotation rule on pods, which
+  # also covers pods other controllers create from tenant objects (CDI
+  # importers, workloads).
+  #
+  # Both refuse Kube-OVN logical switch pins other than the namespace's
+  # default switch, even to the namespace's own subnets, in every namespace
+  # they hold (with or without Proxmox networks): such subnets are reached
+  # through NetworkAttachmentDefinitions. A copy of a running pod that keeps
+  # the switches kube-ovn wrote (kubectl debug --copy-to, a restored backup)
+  # is refused for the same reason.
+  podNetworkNamespace: true
+  # Namespaces both attachment policies skip, on top of the platform's own.
+  exemptNamespaces: []
+
+alerts:
+  enabled: true

@@ -39,6 +39,7 @@ build: build-deps
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/securitygroup-controller image
+	make -C packages/system/proxmox-network image
 	make -C packages/system/grafana-operator image
 	make -C packages/system/monitoring image
 	make -C packages/system/redis-operator image

@@ -1,0 +1,23 @@
+# The trunk of the zones below, as a Kube-OVN ProviderNetwork that selects no
+# node. The e2e cluster's nodes have one NIC each and no Proxmox bridge to
+# trunk to, so there is nothing for kube-ovn-cni to put into an OVS bridge.
+# Selecting no node keeps it from touching any of them: kube-ovn-cni only
+# labels each node excluded, and removes the label again when this object is
+# deleted.
+#
+# Kube-OVN never marks a provider network with no selected node Ready, so the
+# zones stay Ready=False/ProviderNetworkNotReady for the whole suite. That is
+# the point of the suite rather than a gap in it: everything asserted here is
+# the part of the controller that needs no trunk. The datapath is the
+# proxmox-network-env suite's.
+apiVersion: kubeovn.io/v1
+kind: ProviderNetwork
+metadata:
+  # Kube-OVN limits the name to 12 characters.
+  name: pxe2e
+spec:
+  # Required by the CRD. No node has it, and no node is asked to.
+  defaultInterface: pxe2e0
+  nodeSelector:
+    matchLabels:
+      e2e.proxmox.cozystack.io/trunk: "never-set"

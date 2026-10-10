@@ -101,7 +101,12 @@ spec:
           readOnlyRootFilesystem: true
       containers:
         - name: cloud-controller-manager
-          image: ghcr.io/sergelogvinov/proxmox-cloud-controller-manager:v0.15.0
+          {{- /* v0.16.1, not v0.15.0: the v0.15.0 release binary carries
+                gitVersion "0.15.0" without the leading v, and component-base
+                v0.37 panics on it in init() — the Pod never starts. v0.16
+                builds with goreleaser and sets v{{.Version}}. The capmox
+                provider-id format (proxmox://<SMBIOS UUID>) is unchanged. */}}
+          image: ghcr.io/sergelogvinov/proxmox-cloud-controller-manager:v0.16.1
           args:
             - --v=4
             - --cloud-provider=proxmox

@@ -89,6 +89,10 @@ host: ""
 ## @immutable
 substrate: kubevirt
 
+## @typedef {struct} ProxmoxClusterNetwork - A Proxmox-backed subnet of a VPC in this namespace that the cluster's workers live on.
+## @field {string} [vpc] - Name of a VirtualPrivateCloud application in this namespace.
+## @field {string} [subnet] - Name of a Proxmox-backed subnet of `vpc`. Worker addresses then come from that subnet's IP pool, and `ipv4Config` must stay empty. Point every KubernetesNodes pool of the cluster at a subnet of the same VPC with `proxmox.network.vpc`/`subnet`.
+
 ## @typedef {struct} ProxmoxIPv4 - Address range capmox allocates worker addresses from.
 ## @field {[]string} addresses - Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
 ## @field {string} gateway - Default gateway for the workers.
@@ -113,7 +117,8 @@ substrate: kubevirt
 ## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 ## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 ## @field {bool} [insecure] - Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
-## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+## @field {ProxmoxClusterNetwork} [network] - Place the workers on a Proxmox-backed VPC subnet instead of a raw address range.
+## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required unless `network.subnet` is set.
 ## @field {ProxmoxCCM} [ccm] - Proxmox cloud-controller-manager settings.
 ## @field {ProxmoxCSI} [csi] - Proxmox CSI driver settings.
 
@@ -128,6 +133,9 @@ proxmox:
     enabled: true
     credentialsSecretName: ""
     storageClasses: []
+  network:
+    vpc: ""
+    subnet: ""
   ipv4Config:
     addresses: []
     gateway: ""

@@ -342,6 +342,37 @@
         "network"
       ],
       "properties": {
+        "additionalNetworks": {
+          "description": "Extra NICs, each on a Proxmox-backed VPC subnet of this namespace. Changing the list rolls the pool.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "subnet",
+              "vpc"
+            ],
+            "properties": {
+              "mtu": {
+                "description": "NIC MTU. Defaults to the zone's MTU.",
+                "type": "integer"
+              },
+              "name": {
+                "description": "Device name, `net1` to `net31`, unique within the pool.",
+                "type": "string"
+              },
+              "subnet": {
+                "description": "Name of a Proxmox-backed subnet of `vpc`; the NIC takes its address from that subnet's pool.",
+                "type": "string"
+              },
+              "vpc": {
+                "description": "Name of a VirtualPrivateCloud application in this namespace.",
+                "type": "string"
+              }
+            }
+          }
+        },
         "dnsServers": {
           "description": "Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.",
           "type": "array",
@@ -356,25 +387,30 @@
           "default": false
         },
         "network": {
-          "description": "NIC configuration.",
+          "description": "NIC configuration of net0.",
           "type": "object",
           "default": {},
-          "required": [
-            "bridge"
-          ],
           "properties": {
             "bridge": {
-              "description": "Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.",
+              "description": "Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox` and no `subnet` is set.",
               "type": "string",
               "default": ""
             },
             "mtu": {
-              "description": "NIC MTU. Omitted when unset.",
+              "description": "NIC MTU. Omitted when unset; with `subnet`, defaults to the zone's MTU.",
               "type": "integer"
             },
+            "subnet": {
+              "description": "Name of a Proxmox-backed subnet of `vpc`.",
+              "type": "string"
+            },
             "vlan": {
-              "description": "L2 VLAN tag. Omitted when unset.",
+              "description": "L2 VLAN tag. Omitted when unset. Not allowed with `subnet`, whose VLAN is allocated by the platform.",
               "type": "integer"
+            },
+            "vpc": {
+              "description": "Name of a VirtualPrivateCloud application in this namespace. With `subnet`, the NIC is placed on that subnet: bridge, VLAN and IP pool come from the subnet's ProxmoxNetwork, and every worker takes its address from the subnet's pool. Cannot be combined with `bridge` or `vlan`.",
+              "type": "string"
             }
           }
         },

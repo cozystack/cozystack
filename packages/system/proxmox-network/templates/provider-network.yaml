@@ -1,0 +1,25 @@
+{{- with .Values.providerNetwork }}
+{{- if .create }}
+{{- if gt (len .name) 12 }}
+{{- fail (printf "providerNetwork.name %q is longer than the 12 characters Kube-OVN allows" .name) }}
+{{- end }}
+apiVersion: kubeovn.io/v1
+kind: ProviderNetwork
+metadata:
+  name: {{ .name }}
+spec:
+  defaultInterface: {{ .defaultInterface | quote }}
+  {{- with .customInterfaces }}
+  customInterfaces:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .excludeNodes }}
+  excludeNodes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

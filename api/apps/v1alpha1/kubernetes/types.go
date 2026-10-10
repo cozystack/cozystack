@@ -300,9 +300,12 @@ type Proxmox struct {
 	// Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
 	// +kubebuilder:default:=false
 	Insecure bool `json:"insecure,omitempty"`
-	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required unless `network.subnet` is set.
 	// +kubebuilder:default:={}
 	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+	// Place the workers on a Proxmox-backed VPC subnet instead of a raw address range.
+	// +kubebuilder:default:={}
+	Network ProxmoxClusterNetwork `json:"network,omitempty"`
 }
 
 type ProxmoxCCM struct {
@@ -321,6 +324,15 @@ type ProxmoxCSI struct {
 	// StorageClasses to create in the tenant.
 	// +kubebuilder:default:={}
 	StorageClasses []ProxmoxStorageClass `json:"storageClasses,omitempty"`
+}
+
+type ProxmoxClusterNetwork struct {
+	// Name of a Proxmox-backed subnet of `vpc`. Worker addresses then come from that subnet's IP pool, and `ipv4Config` must stay empty. Point every KubernetesNodes pool of the cluster at a subnet of the same VPC with `proxmox.network.vpc`/`subnet`.
+	// +kubebuilder:default:=""
+	Subnet string `json:"subnet,omitempty"`
+	// Name of a VirtualPrivateCloud application in this namespace.
+	// +kubebuilder:default:=""
+	Vpc string `json:"vpc,omitempty"`
 }
 
 type ProxmoxIPv4 struct {

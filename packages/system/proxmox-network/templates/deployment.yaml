@@ -1,0 +1,82 @@
+{{- if not .Values.proxmoxNetworkController.image }}
+{{- fail "proxmoxNetworkController.image is empty: build it with `make image` or set it explicitly" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxmox-network-controller
+  labels:
+    app: proxmox-network-controller
+spec:
+  replicas: {{ .Values.proxmoxNetworkController.replicas }}
+  selector:
+    matchLabels:
+      app: proxmox-network-controller
+  template:
+    metadata:
+      labels:
+        app: proxmox-network-controller
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: proxmox-network-controller
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: proxmox-network-controller
+      {{- with .Values.proxmoxNetworkController.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: proxmox-network-controller
+        image: "{{ .Values.proxmoxNetworkController.image }}"
+        args:
+        - --leader-elect
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
+        - --zap-log-level={{ ternary "debug" "info" .Values.proxmoxNetworkController.debug }}
+        {{- with .Values.proxmoxNetworkController.subnetPruneTimeout }}
+        - --subnet-prune-timeout={{ . }}
+        {{- end }}
+        - --manage-gateway-chassis={{ .Values.ovn.manageGatewayChassis }}
+        {{- if .Values.ovn.manageGatewayChassis }}
+        - --ovn-nb-address={{ required "ovn.nbAddress is required while ovn.manageGatewayChassis is on" .Values.ovn.nbAddress }}
+        - --ovn-tls-secret={{ include "proxmox-network.ovnTLSSecret" . }}
+        {{- end }}
+        ports:
+        - name: metrics
+          containerPort: 8080
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        {{- with .Values.proxmoxNetworkController.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}

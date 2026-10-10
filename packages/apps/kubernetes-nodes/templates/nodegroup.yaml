@@ -54,8 +54,30 @@
 {{-   if not $.Values.proxmox.templateTags }}
 {{-     fail "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on" }}
 {{-   end }}
-{{-   if not $.Values.proxmox.network.bridge }}
-{{-     fail "substrate proxmox requires proxmox.network.bridge" }}
+{{-   $pxnet := $.Values.proxmox.network }}
+{{-   if or $pxnet.vpc $pxnet.subnet }}
+{{- /* A VPC subnet carries its own bridge and VLAN, allocated by the platform.
+         A raw value next to it would either be ignored or override the
+         allocation, and the second is exactly how a tenant would reach a VLAN
+         that is not theirs. Refuse the mix. */}}
+{{-     if or $pxnet.bridge $pxnet.vlan }}
+{{-       fail "proxmox.network: set either vpc/subnet or bridge/vlan, not both; a VPC subnet's bridge and VLAN come from the platform" }}
+{{-     end }}
+{{-   else if not $pxnet.bridge }}
+{{-     fail "substrate proxmox requires proxmox.network.bridge, or proxmox.network.vpc and proxmox.network.subnet" }}
+{{-   end }}
+{{-   $seenNics := dict "net0" true }}
+{{-   range $.Values.proxmox.additionalNetworks }}
+{{-     if not (regexMatch "^net([1-9]|[12][0-9]|3[01])$" (.name | default "")) }}
+{{-       fail (printf "proxmox.additionalNetworks: name %q must be net1..net31" (.name | default "")) }}
+{{-     end }}
+{{-     if hasKey $seenNics .name }}
+{{-       fail (printf "proxmox.additionalNetworks: %s is used twice" .name) }}
+{{-     end }}
+{{-     $_ := set $seenNics .name true }}
+{{-     if not (and .vpc .subnet) }}
+{{-       fail (printf "proxmox.additionalNetworks[%s]: set vpc and subnet; extra NICs only attach to Proxmox-backed VPC subnets" .name) }}
+{{-     end }}
 {{-   end }}
 {{-   if not $.Values.proxmox.dnsServers }}
 {{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
@@ -160,16 +182,53 @@ spec:
   {{- with .group.proxmox.pool }}
   pool: {{ . | quote }}
   {{- end }}
+  {{- $net := .group.proxmox.network }}
   network:
     default:
-      bridge: {{ .group.proxmox.network.bridge | quote }}
+      {{- if $net.subnet }}
+      {{- /* bridge, VLAN and pool are read from the subnet's ProxmoxNetwork in
+            this namespace. capmox claims every worker's address from that
+            pool, which is the only allocator for the subnet's VM range; the
+            ProxmoxCluster's own ipv4Config is a sentinel with nothing to
+            allocate (see the kubernetes chart). */}}
+      {{- $px := include "cozy-lib.proxmox.network" (dict "namespace" .Release.Namespace "vpc" $net.vpc "subnet" $net.subnet "field" "proxmox.network") | fromYaml }}
+      bridge: {{ $px.bridge | quote }}
       model: virtio
-      {{- with .group.proxmox.network.vlan }}
-      vlan: {{ . }}
-      {{- end }}
-      {{- with .group.proxmox.network.mtu }}
+      vlan: {{ $px.vlan }}
+      {{- with ($net.mtu | default $px.mtu) }}
       mtu: {{ . }}
       {{- end }}
+      ipv4PoolRef:
+        apiGroup: ipam.cluster.x-k8s.io
+        kind: InClusterIPPool
+        name: {{ $px.pool }}
+      {{- else }}
+      bridge: {{ $net.bridge | quote }}
+      model: virtio
+      {{- with $net.vlan }}
+      vlan: {{ . }}
+      {{- end }}
+      {{- with $net.mtu }}
+      mtu: {{ . }}
+      {{- end }}
+      {{- end }}
+    {{- with .group.proxmox.additionalNetworks }}
+    additionalDevices:
+      {{- range . }}
+      {{- $px := include "cozy-lib.proxmox.network" (dict "namespace" $.Release.Namespace "vpc" .vpc "subnet" .subnet "field" (printf "proxmox.additionalNetworks[%s]" .name)) | fromYaml }}
+      - name: {{ .name }}
+        bridge: {{ $px.bridge | quote }}
+        model: virtio
+        vlan: {{ $px.vlan }}
+        {{- with (.mtu | default $px.mtu) }}
+        mtu: {{ . }}
+        {{- end }}
+        ipv4PoolRef:
+          apiGroup: ipam.cluster.x-k8s.io
+          kind: InClusterIPPool
+          name: {{ $px.pool }}
+      {{- end }}
+    {{- end }}
 {{- end }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:

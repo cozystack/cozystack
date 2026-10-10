@@ -1,0 +1,73 @@
+{{- if .Values.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: proxmox-network
+  labels:
+    app.kubernetes.io/name: proxmox-network
+spec:
+  groups:
+  - name: proxmox-network.rules
+    rules:
+    - alert: ProxmoxNetworkNotReady
+      expr: max by (namespace, network, zone) (cozy_proxmox_network_ready == 0) and on (namespace, network) (max by (namespace, network) (cozy_proxmox_network_deleting) == 0)
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Proxmox network {{`{{ $labels.namespace }}/{{ $labels.network }}`}} is not Ready"
+        description: "kubectl -n {{`{{ $labels.namespace }}`}} get proxmoxnetwork {{`{{ $labels.network }}`}} -o yaml shows the failing condition."
+    - alert: ProxmoxNetworkGatewayNotReady
+      expr: max by (namespace, network) (cozy_proxmox_network_gateway_ready == 0) and on (namespace, network) (max by (namespace, network) (cozy_proxmox_network_deleting) == 0)
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "VMs on Proxmox network {{`{{ $labels.namespace }}/{{ $labels.network }}`}} have no VPC gateway"
+        description: "The network's router port has no OVN HA chassis group, or the controller cannot tell because the OVN NB has not answered for a while; without the group Kube-OVN's OVN drops the VMs' ARP requests for the gateway. The GatewayReady condition of kubectl -n {{`{{ $labels.namespace }}`}} get proxmoxnetwork {{`{{ $labels.network }}`}} -o yaml names the reason (NoTrunkNodes, RouterPortMissing, NBUnavailable, ForeignGroup)."
+    - alert: ProxmoxNetworkGatewayNBErrors
+      expr: sum(increase(cozy_proxmox_gateway_nb_errors_total[10m])) > 0
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "proxmox-network-controller cannot reach or update the OVN northbound database"
+        description: "Gateway passes keep failing. Networks whose gateway was up stay Ready for 10 minutes, then turn GatewayReady=False/NBUnavailable, and deleted networks hold their VLAN (GatewayReleasePending). Check the controller's log, the ovn-nb Service, the OVN TLS secret and the Role that grants it."
+    - alert: ProxmoxNetworkPoolNearlyFull
+      expr: |
+        max by (namespace, network) (cozy_proxmox_network_ippool_addresses{state="used"})
+          / max by (namespace, network) (cozy_proxmox_network_ippool_addresses{state="total"}) > 0.9
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "IP pool of Proxmox network {{`{{ $labels.namespace }}/{{ $labels.network }}`}} is over 90% used"
+    - alert: ProxmoxNetworkZoneExhausted
+      expr: max by (zone) (cozy_proxmox_zone_vlans_free) == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Proxmox network zone {{`{{ $labels.zone }}`}} has no free VLAN"
+    - alert: ProxmoxNetworkOrphanedVLANs
+      expr: max by (zone) (cozy_proxmox_orphaned_vlans) > 0
+      for: 30m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Zone {{`{{ $labels.zone }}`}} has Vlans whose network is gone but a subnet still uses them"
+    - alert: ProxmoxNetworkStuckDeleting
+      expr: max by (namespace, network) (cozy_proxmox_network_deleting) == 1
+      for: 1h
+      labels:
+        severity: informational
+      annotations:
+        summary: "Proxmox network {{`{{ $labels.namespace }}/{{ $labels.network }}`}} waits for VMs that still hold addresses"
+    - alert: ProxmoxNetworkControllerDown
+      expr: absent(up{job=~".*proxmox-network-controller.*"} == 1)
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "proxmox-network-controller is not scraped; VLAN allocation and release are stopped"
+{{- end }}

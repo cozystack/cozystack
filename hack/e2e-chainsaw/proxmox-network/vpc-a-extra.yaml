@@ -1,0 +1,28 @@
+# Tenant A's VPC from vpc-a.yaml with one more Proxmox-backed subnet in the
+# shared zone, which is full by then: the new network must wait with
+# ZoneExhausted, and take the VLAN tenant B releases later. The other subnets
+# are unchanged; the chart refuses an upgrade that drops a Proxmox-backed one.
+subnets:
+- name: private
+  cidr: 10.231.64.0/24
+  proxmox:
+    zone: pxnet-e2e
+- name: data
+  cidr: 10.231.65.0/24
+  proxmox:
+    zone: pxnet-e2e
+- name: locked
+  cidr: 10.231.66.0/24
+  proxmox:
+    zone: pxnet-e2e-locked
+- name: pods
+  cidr: 10.231.67.0/24
+  allowSubnets:
+  - 10.231.64.0/24
+  - 10.231.65.0/24
+- name: extra
+  cidr: 10.231.68.0/24
+  proxmox:
+    zone: pxnet-e2e
+egress:
+  enabled: false

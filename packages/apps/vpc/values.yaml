@@ -2,10 +2,15 @@
 ## @section Common parameters
 ##
 
+## @typedef {struct} SubnetProxmox - Extends the subnet onto a Proxmox VLAN. The platform allocates the VLAN and carries it to the cluster nodes; Proxmox VMs on the subnet and pods attached to it share one L2 network, routed by this VPC only.
+## @field {string} [zone] - ProxmoxNetworkZone the VLAN comes from. Empty selects the only zone and fails when there are several.
+## @field {string} [vmRange] - Address range Proxmox VMs take addresses from, as first-last, inside the CIDR and after the gateway. Kube-OVN never hands these addresses to pods. Defaults to the middle half of the subnet.
+
 ## @typedef {struct} Subnet - Subnet of a VPC
 ## @field {string} name - Subnet name
 ## @field {string} [cidr] - IP address range
-## @field {[]string} [allowSubnets] - Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM
+## @field {[]string} [allowSubnets] - Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM. Overlay subnets only: a Proxmox-backed subnet is not private and refuses it.
+## @field {SubnetProxmox} [proxmox] - Back this subnet with a Proxmox VLAN so Proxmox VMs, including Proxmox-backed Kubernetes workers, can attach to it. IPv4 only, prefix /8 to /28.
 
 ## @param {[]Subnet} subnets - Subnets of a VPC
 subnets: []
@@ -17,6 +22,9 @@ subnets: []
 ##     cidr: "172.16.1.0/24"
 ##     allowSubnets:
 ##       - "192.168.1.0/24"
+##   - name: proxmox-workers
+##     cidr: "10.208.64.0/24"
+##     proxmox: {}
 
 ## @typedef {struct} Peer - VPC peering target
 ## @field {string} vpcName - Logical name of the remote VPC (without "virtualprivatecloud-" prefix)
@@ -29,9 +37,19 @@ peers: []
 ##   - vpcName: "other-vpc"
 ##     tenantNamespace: "tenant-other"
 
+## @typedef {struct} Egress - Outbound access for the Proxmox-backed subnets.
+## @field {bool} enabled - Route traffic from the Proxmox-backed subnets to destinations outside the VPC through a VPC egress gateway that SNATs it onto the zone's transit network. Needed by Proxmox-backed Kubernetes workers to reach their control plane and image registries. A route to anything narrower than 0.0.0.0/0, such as a peered VPC, keeps its next hop.
+## @field {int} [replicas] - Egress gateway pods.
+## @field {string} [internalCidr] - Optional CIDR (a /29 is enough) for a dedicated overlay subnet that holds the gateway pods' primary interface. By default they sit on the first Proxmox-backed subnet. Must not overlap any other subnet in the cluster.
+
+## @param {Egress} egress - Outbound access for Proxmox-backed subnets.
+egress:
+  enabled: false
+  replicas: 1
+
 ## @typedef {struct} Route - Static route entry
 ## @field {string} cidr - Destination CIDR
-## @field {string} nextHopIP - Next hop IP address
+## @field {string} nextHopIP - Next hop IP address. Must lie inside one of this VPC's subnets, or in 169.254.0.0/16 when peers are declared.
 
 ## @param {[]Route} routes - Static routes for the VPC
 routes: []

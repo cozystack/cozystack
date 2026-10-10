@@ -1,0 +1,644 @@
+suite: proxmox-network package
+release:
+  name: proxmox-network
+  namespace: cozy-proxmox-network
+set:
+  proxmoxNetworkController:
+    image: "example.invalid/proxmox-network-controller:test"
+tests:
+  - it: refuses to render without an image
+    templates:
+      - templates/deployment.yaml
+    set:
+      proxmoxNetworkController.image: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "proxmoxNetworkController.image is empty"
+
+  - it: runs one leader-elected controller with metrics on 8080
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      # No --subnet-prune-timeout unless set: the controller keeps its default.
+      - lengthEqual:
+          path: spec.template.spec.containers[0].args
+          count: 7
+
+  - it: manages the gateway chassis groups through the OVN NB leader Service by default
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --manage-gateway-chassis=true
+      # No cluster domain: Cozystack defaults to cozy.local, not cluster.local.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ovn-nb-address=ssl:ovn-nb.cozy-kubeovn.svc:6641
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ovn-tls-secret=cozy-kubeovn/kube-ovn-tls
+
+  - it: passes a custom OVN NB address and TLS secret
+    templates:
+      - templates/deployment.yaml
+    set:
+      ovn.nbAddress: ssl:192.0.2.11:6641,ssl:192.0.2.12:6641
+      ovn.tlsSecret:
+        namespace: kube-system
+        name: ovn-client
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ovn-nb-address=ssl:192.0.2.11:6641,ssl:192.0.2.12:6641
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --ovn-tls-secret=kube-system/ovn-client
+
+  - it: switches gateway management off without any OVN argument
+    templates:
+      - templates/deployment.yaml
+    set:
+      ovn.manageGatewayChassis: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --manage-gateway-chassis=false
+      - lengthEqual:
+          path: spec.template.spec.containers[0].args
+          count: 5
+
+  - it: refuses gateway management without a TLS secret name
+    templates:
+      - templates/rbac-ovn.yaml
+    set:
+      ovn.tlsSecret.name: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "ovn.tlsSecret.namespace and ovn.tlsSecret.name are required"
+
+  - it: refuses gateway management without an NB address
+    templates:
+      - templates/deployment.yaml
+    set:
+      ovn.nbAddress: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "ovn.nbAddress is required"
+
+  - it: lets the controller get the one OVN TLS secret and nothing else in its namespace
+    templates:
+      - templates/rbac-ovn.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Role
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: cozy-kubeovn
+        documentIndex: 0
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              resourceNames: ["kube-ovn-tls"]
+              verbs: ["get"]
+        documentIndex: 0
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: cozy-kubeovn
+        documentIndex: 1
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: proxmox-network-controller-ovn-tls
+        documentIndex: 1
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: proxmox-network-controller
+              namespace: cozy-proxmox-network
+        documentIndex: 1
+
+  - it: follows a custom TLS secret with the Role
+    templates:
+      - templates/rbac-ovn.yaml
+    set:
+      ovn.tlsSecret:
+        namespace: kube-system
+        name: ovn-client
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: kube-system
+      - equal:
+          path: rules[0].resourceNames
+          value: ["ovn-client"]
+        documentIndex: 0
+
+  - it: grants no secret access with gateway management off
+    templates:
+      - templates/rbac-ovn.yaml
+    set:
+      ovn.manageGatewayChassis: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: lets the controller read nodes for the trunk chassis, and no secrets cluster-wide
+    templates:
+      - templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes"]
+            verbs: ["get", "list", "watch"]
+      - notMatchRegex:
+          path: rules[*].resources[0]
+          pattern: ^secrets$
+
+  - it: alerts when a network has no VPC gateway for 10 minutes
+    templates:
+      - templates/alerts.yaml
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: ProxmoxNetworkGatewayNotReady
+            expr: max by (namespace, network) (cozy_proxmox_network_gateway_ready == 0) and on (namespace, network) (max by (namespace, network) (cozy_proxmox_network_deleting) == 0)
+            for: 10m
+            labels:
+              severity: warning
+          any: true
+
+  - it: alerts when gateway passes keep failing to reach the OVN NB
+    templates:
+      - templates/alerts.yaml
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: ProxmoxNetworkGatewayNBErrors
+            expr: sum(increase(cozy_proxmox_gateway_nb_errors_total[10m])) > 0
+            for: 10m
+            labels:
+              severity: warning
+          any: true
+
+  - it: passes a subnet prune timeout to the controller only when set
+    templates:
+      - templates/deployment.yaml
+    set:
+      proxmoxNetworkController.subnetPruneTimeout: 30m
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --subnet-prune-timeout=30m
+
+  - it: lets the controller create and delete Vlans, and only patch Subnets
+    templates:
+      - templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubeovn.io"]
+            resources: ["vlans"]
+            verbs: ["get", "list", "watch", "create", "patch", "delete"]
+      # Pinned exactly: a Subnet belongs to the vpc chart, so the controller
+      # may add or drop its finalizer and nothing else.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubeovn.io"]
+            resources: ["subnets"]
+            verbs: ["get", "list", "watch", "patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["ipam.cluster.x-k8s.io"]
+            resources: ["inclusterippools"]
+            verbs: ["get", "list", "watch"]
+
+  - it: gives tenants read access to their networks and nothing more
+    templates:
+      - templates/tenant-clusterroles.yaml
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["proxmox.cozystack.io"]
+              resources: ["proxmoxnetworks"]
+              verbs: ["get", "list", "watch"]
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-view"]
+          value: "true"
+
+  - it: renders zones and points them at the transit network
+    templates:
+      - templates/zones.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    set:
+      transit.enabled: true
+      zones:
+        - name: default
+          bridge: vmbr70
+          vlanRanges: ["101-199"]
+          reservedVLANs: [150]
+    asserts:
+      - equal:
+          path: spec
+          value:
+            bridge: vmbr70
+            providerNetwork: pxtenant
+            vlanRanges: ["101-199"]
+            reservedVLANs: [150]
+            egress:
+              externalSubnet: px-transit
+              gatewayNamespace: cozy-proxmox-network
+
+  - it: isolates egress gateways of different VPCs on the transit network
+    templates:
+      - templates/transit.yaml
+    set:
+      transit.enabled: true
+    documentSelector:
+      path: kind
+      value: Subnet
+    asserts:
+      - equal:
+          path: spec.acls
+          value:
+            - direction: from-lport
+              priority: 2001
+              match: 'inport == "localnet.px-transit"'
+              action: allow
+            - direction: from-lport
+              priority: 2000
+              match: 'ip4 && ip4.dst == 10.70.0.0/24 && ip4.dst != 10.70.0.1'
+              action: drop
+      - equal:
+          path: spec.vlan
+          value: px-transit
+      - equal:
+          path: spec.provider
+          value: px-transit.cozy-proxmox-network.ovn
+      - equal:
+          path: spec.private
+          value: false
+      - notExists:
+          path: spec.mtu
+
+  - it: gives the transit network the configured MTU
+    templates:
+      - templates/transit.yaml
+    set:
+      transit.enabled: true
+      transit.mtu: 8996
+    documentSelector:
+      path: kind
+      value: Subnet
+    asserts:
+      - equal:
+          path: spec.mtu
+          value: 8996
+
+  - it: refuses a provider network name Kube-OVN cannot take
+    templates:
+      - templates/provider-network.yaml
+    set:
+      providerNetwork.create: true
+      providerNetwork.name: tenant-trunk-1
+    asserts:
+      - failedTemplate:
+          errorPattern: "longer than the 12 characters Kube-OVN allows"
+
+  # Document order in admission.yaml: machine-binding policy and binding,
+  # vm-attachments policy and binding, pod-attachments policy and binding.
+  - it: binds every admission policy with the configured actions
+    templates:
+      - templates/admission.yaml
+    set:
+      admission.validationActions: [Warn, Audit]
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: spec.policyName
+          value: proxmox-network-machine-binding
+        documentIndex: 1
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 1
+      - equal:
+          path: spec.policyName
+          value: proxmox-network-vm-attachments
+        documentIndex: 3
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 3
+      - equal:
+          path: spec.policyName
+          value: proxmox-network-pod-attachments
+        documentIndex: 5
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 5
+
+  - it: keeps the attachment policies without the machine policy, each behind its own switch
+    templates:
+      - templates/admission.yaml
+    set:
+      admission.enabled: false
+      admission.podNetworkNamespace: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: proxmox-network-vm-attachments
+        documentIndex: 0
+
+  - it: refuses a zone's uplink VLAN as the tag of a NIC on any other bridge
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], uplinkVLAN: 70}
+        - {name: b, bridge: vmbr71, vlanRanges: ["101-199"], uplinkVLAN: 70}
+        - {name: c, bridge: vmbr72, vlanRanges: ["101-199"]}
+    asserts:
+      - contains:
+          path: spec.variables
+          content:
+            name: uplinkVLANs
+            expression: "[70]"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[2].expression
+          pattern: 'variables\.nics\.all\(n, n\.bridge in variables\.zoneBridges \|\| !has\(n\.vlan\) \|\|\s+!\(n\.vlan in variables\.uplinkVLANs\)\)'
+        documentIndex: 0
+
+  - it: refuses every NIC on a bridge that enslaves a zone uplink's parent device
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], uplinkVLAN: 70, uplinkBridges: [vmbr0]}
+        - {name: b, bridge: vmbr71, vlanRanges: ["101-199"], uplinkBridges: [vmbr0, vmbr1]}
+    asserts:
+      - contains:
+          path: spec.variables
+          content:
+            name: uplinkBridges
+            expression: '["vmbr0","vmbr1"]'
+        documentIndex: 0
+      # Tagged or not: no has(n.vlan) escape.
+      - equal:
+          path: spec.validations[3].expression
+          value: "variables.nics.all(n, !(n.bridge in variables.uplinkBridges))"
+        documentIndex: 0
+
+  - it: renders no uplink VLAN or uplink bridge for zones without one
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"]}
+    asserts:
+      - contains:
+          path: spec.variables
+          content:
+            name: uplinkVLANs
+            expression: "[]"
+        documentIndex: 0
+      - contains:
+          path: spec.variables
+          content:
+            name: uplinkBridges
+            expression: "[]"
+        documentIndex: 0
+
+  - it: refuses a zone bridge listed as an uplink bridge
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"]}
+        - {name: b, bridge: vmbr71, vlanRanges: ["101-199"], uplinkBridges: [vmbr0, vmbr70]}
+    asserts:
+      - failedTemplate:
+          errorPattern: "uplinkBridges lists vmbr70, which is a zone bridge"
+
+  - it: refuses uplink bridges that are not a list
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], uplinkBridges: vmbr0}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\]\\.uplinkBridges must be a list of bridge names"
+
+  - it: refuses an uplink VLAN that is not a VLAN ID
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], uplinkVLAN: 4095}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\]\\.uplinkVLAN must be a VLAN ID"
+
+  - it: keeps the uplink VLAN and bridges out of the zone object, which has no such fields
+    templates:
+      - templates/zones.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], uplinkVLAN: 70, uplinkBridges: [vmbr0]}
+    asserts:
+      - notExists:
+          path: spec.uplinkVLAN
+      - notExists:
+          path: spec.uplinkBridges
+
+  - it: exempts the platform and the zones' gateway namespaces from both attachment policies, and objects being deleted
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"], egress: {externalSubnet: px-transit, gatewayNamespace: px-gw}}
+        - {name: b, bridge: vmbr71, vlanRanges: ["101-199"]}
+      admission.exemptNamespaces: [netprobe, kube-system]
+    asserts:
+      - equal:
+          path: spec.matchConditions
+          value: &exempt
+            - name: not-a-platform-namespace
+              expression: >-
+                !request.namespace.startsWith('cozy-') && !(request.namespace in ["kube-system","cozy-proxmox-network","px-gw","netprobe"])
+            - name: not-being-deleted
+              expression: "!has(object.metadata.deletionTimestamp)"
+        documentIndex: 2
+      - equal:
+          path: spec.matchConditions
+          value: *exempt
+        documentIndex: 4
+
+  - it: judges a VM's spec networks and the network annotations KubeVirt copies onto its pod, new entries only
+    templates:
+      - templates/admission.yaml
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: metadata.name
+          value: proxmox-network-vm-attachments
+      - equal:
+          path: spec.matchConstraints.resourceRules
+          value:
+            - apiGroups: ["kubevirt.io"]
+              apiVersions: ["*"]
+              operations: ["CREATE", "UPDATE"]
+              resources: ["virtualmachines", "virtualmachineinstances"]
+      - matchRegex:
+          path: spec.variables[?(@.name == "annotations")].expression
+          pattern: '(?s)object\.spec\.template\.metadata\.annotations.*object\.metadata\.annotations'
+      - matchRegex:
+          path: spec.variables[?(@.name == "oldAnnotations")].expression
+          pattern: '^oldObject == null \? \{\} :'
+      - matchRegex:
+          path: spec.variables[?(@.name == "oldNetworks")].expression
+          pattern: '^oldObject == null \? \[\] :'
+      # A multus default network must carry its own namespace (Multus looks an
+      # unqualified one up in kube-system); others may be unqualified. An
+      # unchanged (name, default) pair passes.
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignNetworks")].expression
+          pattern: "\\(has\\(m\\.default\\) && m\\.default\\s+\\? !m\\.networkName\\.startsWith\\(request\\.namespace \\+ '/'\\)\\s+: m\\.networkName\\.contains\\('/'\\) && !m\\.networkName\\.startsWith\\(request\\.namespace \\+ '/'\\)\\) &&\\s+!\\(m in variables\\.oldNetworks\\)"
+      - matchRegex:
+          path: spec.variables[?(@.name == "networks")].expression
+          pattern: "\\.map\\(n, n\\.multus\\)$"
+      # Multus annotations in both forms, Kube-OVN logical switches, and an
+      # unchanged entry passes.
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "k == 'k8s\\.v1\\.cni\\.cncf\\.io/networks'\\s+\\? \\(variables\\.annotations\\[k\\] != '' &&"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: ": k == 'v1\\.multus-cni\\.io/default-network'\\s+\\? !variables\\.annotations\\[k\\]\\.matches\\('\\^\\\\\\\\s\\*' \\+ request\\.namespace \\+ '/\\["
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "contains\\('\\\\\\\\'\\)"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "findAll\\('\\(\\?i:\"namespace\"\\)"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "split\\(','\\)\\.all\\(e,"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "\\(k\\.endsWith\\('kubernetes\\.io/logical_switch'\\) &&\\s+!\\(k == 'ovn\\.kubernetes\\.io/logical_switch' && variables\\.annotations\\[k\\] in variables\\.namespaceSwitches\\)\\)"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "!\\(k in variables\\.oldAnnotations && variables\\.oldAnnotations\\[k\\] == variables\\.annotations\\[k\\]\\)\\)$"
+      - equal:
+          path: spec.validations[0].expression
+          value: "variables.foreignNetworks.size() == 0 && variables.foreignAnnotations.size() == 0"
+
+  - it: judges pods on the same annotations, Kube-OVN's logical switches on CREATE only
+    templates:
+      - templates/admission.yaml
+    documentIndex: 4
+    asserts:
+      - equal:
+          path: metadata.name
+          value: proxmox-network-pod-attachments
+      - equal:
+          path: spec.matchConstraints.resourceRules
+          value:
+            - apiGroups: [""]
+              apiVersions: ["v1"]
+              operations: ["CREATE", "UPDATE"]
+              resources: ["pods"]
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "k == 'k8s\\.v1\\.cni\\.cncf\\.io/networks'\\s+\\? \\(variables\\.annotations\\[k\\] != '' &&"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: ": k == 'v1\\.multus-cni\\.io/default-network'\\s+\\? !variables\\.annotations\\[k\\]\\.matches\\('\\^\\\\\\\\s\\*' \\+ request\\.namespace \\+ '/\\["
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: ": request\\.operation == 'CREATE' && \\(k\\.endsWith\\('kubernetes\\.io/logical_switch'\\)"
+      # A pod admitted before the policy keeps its annotations through updates
+      # (kube-ovn's own patch included).
+      - matchRegex:
+          path: spec.variables[?(@.name == "oldAnnotations")].expression
+          pattern: "^oldObject != null && has\\(oldObject\\.metadata\\.annotations\\) \\? oldObject\\.metadata\\.annotations : \\{\\}$"
+      - matchRegex:
+          path: spec.variables[?(@.name == "foreignAnnotations")].expression
+          pattern: "!\\(k in variables\\.oldAnnotations && variables\\.oldAnnotations\\[k\\] == variables\\.annotations\\[k\\]\\)\\)$"
+      - matchRegex:
+          path: spec.variables[?(@.name == "namespaceSwitches")].expression
+          pattern: "namespaceObject\\.metadata\\.annotations\\['ovn\\.kubernetes\\.io/logical_switch'\\]\\.split\\(','\\)"
+      - equal:
+          path: spec.validations[0].expression
+          value: "variables.foreignAnnotations.size() == 0"
+
+  - it: holds every NIC on a zone bridge to the namespace's own networks, in every namespace
+    templates:
+      - templates/admission.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, vlanRanges: ["101-199"]}
+        - {name: b, bridge: vmbr71, vlanRanges: ["101-199"]}
+    asserts:
+      - notExists:
+          path: spec.matchConditions
+        documentIndex: 0
+      - contains:
+          path: spec.variables
+          content:
+            name: zoneBridges
+            expression: '["vmbr70","vmbr71"]'
+        documentIndex: 0
+
+  - it: holds the zones back until the CRD is known, so the first install does not fail
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: default, bridge: vmbr70, vlanRanges: ["101-199"]}
+    asserts:
+      - hasDocuments:
+          count: 0

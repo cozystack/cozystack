@@ -157,15 +157,24 @@ talos:
 ## @immutable
 substrate: kubevirt
 
-## @typedef {struct} ProxmoxNetwork - Network attachment for a Proxmox worker VM.
-## @field {string} bridge - Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
-## @field {int} [vlan] - L2 VLAN tag. Omitted when unset.
-## @field {int} [mtu] - NIC MTU. Omitted when unset.
+## @typedef {struct} ProxmoxNetwork - Network attachment for a Proxmox worker VM's first NIC (net0). Either name a Proxmox-backed subnet of a VPC in this namespace (`vpc` and `subnet`), or give a raw `bridge` and optional `vlan`.
+## @field {string} [vpc] - Name of a VirtualPrivateCloud application in this namespace. With `subnet`, the NIC is placed on that subnet: bridge, VLAN and IP pool come from the subnet's ProxmoxNetwork, and every worker takes its address from the subnet's pool. Cannot be combined with `bridge` or `vlan`.
+## @field {string} [subnet] - Name of a Proxmox-backed subnet of `vpc`.
+## @field {string} [bridge] - Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox` and no `subnet` is set.
+## @field {int} [vlan] - L2 VLAN tag. Omitted when unset. Not allowed with `subnet`, whose VLAN is allocated by the platform.
+## @field {int} [mtu] - NIC MTU. Omitted when unset; with `subnet`, defaults to the zone's MTU.
+
+## @typedef {struct} ProxmoxAdditionalNetwork - An extra NIC on a Proxmox-backed VPC subnet.
+## @field {string} name - Device name, `net1` to `net31`, unique within the pool.
+## @field {string} vpc - Name of a VirtualPrivateCloud application in this namespace.
+## @field {string} subnet - Name of a Proxmox-backed subnet of `vpc`; the NIC takes its address from that subnet's pool.
+## @field {int} [mtu] - NIC MTU. Defaults to the zone's MTU.
 
 ## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
 ## @field {[]string} templateTags - Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. Required when `substrate` is `proxmox`.
 ## @field {bool} [full] - Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
-## @field {ProxmoxNetwork} network - NIC configuration.
+## @field {ProxmoxNetwork} network - NIC configuration of net0.
+## @field {[]ProxmoxAdditionalNetwork} [additionalNetworks] - Extra NICs, each on a Proxmox-backed VPC subnet of this namespace. Changing the list rolls the pool.
 ## @field {string} [storage] - Proxmox storage for the cloned disk; needs `full: true`. A target storage is a full-clone parameter — a linked clone always lives on the template's storage, and Proxmox refuses the pair — so the render refuses it too. Empty keeps the template's storage.
 ## @field {string} [pool] - Proxmox resource pool the worker VMs are added to. Set the same pool on every node pool of a tenant cluster and grant the tenant's tokens their privileges on `/pool/<name>`: that is the one ACL path that follows every VM capmox creates, replacements included. The pool must exist on the hypervisor; capmox does not create it. Empty adds the workers to no pool.
 ## @field {[]string} dnsServers - Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.
@@ -179,6 +188,7 @@ proxmox:
   # not set them.
   network:
     bridge: ""
+  additionalNetworks: []
   storage: ""
   pool: ""
   dnsServers: []

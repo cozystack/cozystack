@@ -1,0 +1,13 @@
+# Aggregated into cozy:tenant:view and every role above it. Tenants read the
+# networks of their namespace (VLAN, bridge, pool usage, conditions) and never
+# write them: the vpc chart is the only writer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:proxmox-networks:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups: ["proxmox.cozystack.io"]
+  resources: ["proxmoxnetworks"]
+  verbs: ["get", "list", "watch"]

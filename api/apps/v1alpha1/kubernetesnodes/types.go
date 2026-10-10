@@ -131,13 +131,16 @@ type Kubelet struct {
 }
 
 type Proxmox struct {
+	// Extra NICs, each on a Proxmox-backed VPC subnet of this namespace. Changing the list rolls the pool.
+	// +kubebuilder:default:={}
+	AdditionalNetworks []ProxmoxAdditionalNetwork `json:"additionalNetworks,omitempty"`
 	// Nameservers written into the worker machineconfig. On kubevirt the workers use the management cluster's CoreDNS, which they reach over the pod network; an off-cluster Proxmox worker cannot, so it needs reachable resolvers of its own. Required when `substrate` is `proxmox`. Keep in sync with the parent kubernetes chart's `proxmox.dnsServers`.
 	// +kubebuilder:default:={}
 	DnsServers []string `json:"dnsServers,omitempty"`
 	// Full clone rather than linked. Default is a linked clone: it costs kilobytes at creation instead of the whole disk, because a ZFS-backed linked clone writes only its own increment (measured: 8K against 10.2G for the same worker full-cloned onto a `sparse 0` pool). The cost is that the clone holds the template's base snapshot, so the template cannot be rotated while any linked clone still references it — which is what the consolidation CronJob resolves 24h after creation. Set true for a pool that must be independent of the template from the first second.
 	// +kubebuilder:default:=false
 	Full bool `json:"full,omitempty"`
-	// NIC configuration.
+	// NIC configuration of net0.
 	// +kubebuilder:default:={}
 	Network ProxmoxNetwork `json:"network"`
 	// Proxmox resource pool the worker VMs are added to. Set the same pool on every node pool of a tenant cluster and grant the tenant's tokens their privileges on `/pool/<name>`: that is the one ACL path that follows every VM capmox creates, replacements included. The pool must exist on the hypervisor; capmox does not create it. Empty adds the workers to no pool.
@@ -151,14 +154,29 @@ type Proxmox struct {
 	TemplateTags []string `json:"templateTags,omitempty"`
 }
 
-type ProxmoxNetwork struct {
-	// Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
-	// +kubebuilder:default:=""
-	Bridge string `json:"bridge"`
-	// NIC MTU. Omitted when unset.
+type ProxmoxAdditionalNetwork struct {
+	// NIC MTU. Defaults to the zone's MTU.
 	Mtu int `json:"mtu,omitempty"`
-	// L2 VLAN tag. Omitted when unset.
+	// Device name, `net1` to `net31`, unique within the pool.
+	Name string `json:"name"`
+	// Name of a Proxmox-backed subnet of `vpc`; the NIC takes its address from that subnet's pool.
+	Subnet string `json:"subnet"`
+	// Name of a VirtualPrivateCloud application in this namespace.
+	Vpc string `json:"vpc"`
+}
+
+type ProxmoxNetwork struct {
+	// Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox` and no `subnet` is set.
+	// +kubebuilder:default:=""
+	Bridge string `json:"bridge,omitempty"`
+	// NIC MTU. Omitted when unset; with `subnet`, defaults to the zone's MTU.
+	Mtu int `json:"mtu,omitempty"`
+	// Name of a Proxmox-backed subnet of `vpc`.
+	Subnet string `json:"subnet,omitempty"`
+	// L2 VLAN tag. Omitted when unset. Not allowed with `subnet`, whose VLAN is allocated by the platform.
 	Vlan int `json:"vlan,omitempty"`
+	// Name of a VirtualPrivateCloud application in this namespace. With `subnet`, the NIC is placed on that subnet: bridge, VLAN and IP pool come from the subnet's ProxmoxNetwork, and every worker takes its address from the subnet's pool. Cannot be combined with `bridge` or `vlan`.
+	Vpc string `json:"vpc,omitempty"`
 }
 
 type Resources struct {

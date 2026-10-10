@@ -1,0 +1,69 @@
+{{- if .Values.transit.enabled }}
+{{- $t := .Values.transit }}
+{{- $provider := printf "%s.%s.ovn" $t.name .Release.Namespace }}
+{{- $localnet := printf "localnet.%s" $t.name }}
+apiVersion: kubeovn.io/v1
+kind: Vlan
+metadata:
+  name: {{ $t.name }}
+spec:
+  id: {{ $t.vlan }}
+  provider: {{ .Values.providerNetwork.name | quote }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ $t.name }}
+spec:
+  config: '{
+      "cniVersion": "0.3.0",
+      "type": "kube-ovn",
+      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+      "provider": "{{ $provider }}"
+    }'
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: {{ $t.name }}
+spec:
+  cidrBlock: {{ $t.cidr | quote }}
+  gateway: {{ $t.gateway | quote }}
+  vlan: {{ $t.name }}
+  provider: {{ $provider | quote }}
+  protocol: IPv4
+  private: false
+  natOutgoing: false
+  logicalGateway: false
+  # The router lives outside the cluster; a gateway pod must not fail to start
+  # because it is briefly unreachable.
+  disableGatewayCheck: true
+  {{- with $t.mtu }}
+  # Egress gateways' transit interface. Unset, Kube-OVN takes the provider
+  # NIC's MTU, which on a QinQ uplink exceeds what an inner-tagged frame can
+  # carry.
+  mtu: {{ . }}
+  {{- end }}
+  {{- with $t.excludeIps }}
+  excludeIps:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  # Egress gateways of different VPCs share this L2. A gateway may talk to the
+  # router and, through it, to the outside, but never to another address on
+  # the transit network, i.e. another VPC's gateway: that would let one VPC
+  # forward packets into another. The rules are from-lport, so they are
+  # evaluated on the sender's chassis with inport set to the gateway's own
+  # port; a to-lport rule cannot tell gateways on different chassis apart,
+  # because the frame arrives there through the localnet port. OVN only tests
+  # inport for equality, so traffic entering from the localnet port (the
+  # router and the outside) is let through by a higher-priority allow.
+  acls:
+  - direction: from-lport
+    priority: 2001
+    match: 'inport == "{{ $localnet }}"'
+    action: allow
+  - direction: from-lport
+    priority: 2000
+    match: 'ip4 && ip4.dst == {{ $t.cidr }} && ip4.dst != {{ $t.gateway }}'
+    action: drop
+{{- end }}

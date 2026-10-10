@@ -13,7 +13,7 @@
         ],
         "properties": {
           "allowSubnets": {
-            "description": "Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM",
+            "description": "Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM. Overlay subnets only: a Proxmox-backed subnet is not private and refuses it.",
             "type": "array",
             "items": {
               "type": "string"
@@ -26,6 +26,20 @@
           "name": {
             "description": "Subnet name",
             "type": "string"
+          },
+          "proxmox": {
+            "description": "Back this subnet with a Proxmox VLAN so Proxmox VMs, including Proxmox-backed Kubernetes workers, can attach to it. IPv4 only, prefix /8 to /28.",
+            "type": "object",
+            "properties": {
+              "vmRange": {
+                "description": "Address range Proxmox VMs take addresses from, as first-last, inside the CIDR and after the gateway. Kube-OVN never hands these addresses to pods. Defaults to the middle half of the subnet.",
+                "type": "string"
+              },
+              "zone": {
+                "description": "ProxmoxNetworkZone the VLAN comes from. Empty selects the only zone and fails when there are several.",
+                "type": "string"
+              }
+            }
           }
         }
       }
@@ -52,6 +66,30 @@
         }
       }
     },
+    "egress": {
+      "description": "Outbound access for Proxmox-backed subnets.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Route traffic from the Proxmox-backed subnets to destinations outside the VPC through a VPC egress gateway that SNATs it onto the zone's transit network. Needed by Proxmox-backed Kubernetes workers to reach their control plane and image registries. A route to anything narrower than 0.0.0.0/0, such as a peered VPC, keeps its next hop.",
+          "type": "boolean",
+          "default": false
+        },
+        "internalCidr": {
+          "description": "Optional CIDR (a /29 is enough) for a dedicated overlay subnet that holds the gateway pods' primary interface. By default they sit on the first Proxmox-backed subnet. Must not overlap any other subnet in the cluster.",
+          "type": "string"
+        },
+        "replicas": {
+          "description": "Egress gateway pods.",
+          "type": "integer",
+          "default": 1
+        }
+      }
+    },
     "routes": {
       "description": "Static routes for the VPC",
       "type": "array",
@@ -68,7 +106,7 @@
             "type": "string"
           },
           "nextHopIP": {
-            "description": "Next hop IP address",
+            "description": "Next hop IP address. Must lie inside one of this VPC's subnets, or in 169.254.0.0/16 when peers are declared.",
             "type": "string"
           }
         }

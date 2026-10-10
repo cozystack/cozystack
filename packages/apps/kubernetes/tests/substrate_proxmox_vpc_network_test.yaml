@@ -1,0 +1,89 @@
+suite: proxmox cluster on a Proxmox-backed VPC subnet
+# With proxmox.network naming a VPC subnet, every worker takes its address from
+# the subnet's InClusterIPPool. capmox v0.7 still insists on an ipv4Config and
+# builds a cluster pool from it, so the chart gives it one that can never
+# allocate: the gateway, which the IPAM provider always excludes.
+templates:
+  - templates/cluster.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+    host: example.org
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    allowedNodes: [prox-home]
+    dnsServers: ["8.8.8.8"]
+    network:
+      vpc: net
+      subnet: private
+# helm-unittest's fake cluster cannot deep-copy plain ints, so the numbers are
+# strings here; the chart converts with int64, and a real lookup returns int64.
+kubernetesProvider:
+  scheme:
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetwork":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworks"
+      namespaced: true
+  objects:
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetwork
+      metadata:
+        name: subnet-b10ab7f7
+        namespace: tenant-test
+      spec: {zone: default, subnet: subnet-b10ab7f7, ipPool: subnet-b10ab7f7}
+      status:
+        vlan: "101"
+        bridge: vmbr70
+        gateway: 10.208.64.1
+        prefix: "24"
+        conditions:
+          - {type: Ready, status: "True", reason: Ready, message: ok}
+tests:
+  - it: gives capmox a cluster pool with nothing to allocate
+    documentSelector:
+      path: kind
+      value: ProxmoxCluster
+    asserts:
+      - equal:
+          path: spec.ipv4Config
+          value:
+            addresses: ["10.208.64.1"]
+            gateway: "10.208.64.1"
+            prefix: 24
+
+  - it: refuses an explicit address pool next to a subnet
+    set:
+      proxmox.ipv4Config.addresses: ["10.208.64.100-10.208.64.110"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox: set either network.vpc/subnet or ipv4Config, not both; a VPC subnet brings its own IP pool"
+
+  - it: refuses a subnet that is not Proxmox-backed
+    set:
+      proxmox.network.subnet: other
+    asserts:
+      - failedTemplate:
+          errorPattern: 'subnet "other" of VPC "net" is not Proxmox-backed'
+
+  - it: keeps the raw ipv4Config path for clusters without a VPC
+    set:
+      proxmox.network: {vpc: "", subnet: ""}
+      proxmox.ipv4Config:
+        addresses: ["10.0.0.160-10.0.0.170"]
+        gateway: "10.0.0.1"
+        prefix: 24
+    documentSelector:
+      path: kind
+      value: ProxmoxCluster
+    asserts:
+      - equal:
+          path: spec.ipv4Config.addresses
+          value: ["10.0.0.160-10.0.0.170"]

@@ -2,6 +2,9 @@
 ## Release.Name == vpc name
 
 {{ $vpcId := print "vpc-" (print .Release.Namespace "/" .Release.Name | sha256sum | trunc 6) }}
+{{- $proxmox := include "vpc.proxmoxSubnets" . | fromYaml }}
+{{- include "vpc.assertRoutesStayInside" . }}
+{{- include "vpc.assertProxmoxSubnetsReleasable" (list . $vpcId $proxmox) }}
 
 ---
 apiVersion: kubeovn.io/v1
@@ -27,12 +30,14 @@ spec:
 {{- $byte1 := int (include "cozy-lib.strings.hexToInt" (substr 2 4 $pairHash)) }}
 {{- $oct3 := int (add (mod $byte0 254) 1) }}
 {{- $base4 := int (mul (mod $byte1 64) 4) }}
+{{- /* The two ends of a /30 link. Kube-OVN parses localConnectIP as a CIDR
+      and fails the whole Vpc reconcile on a bare address. */}}
 {{- if eq $vpcId (index $sorted 0) }}
     - remoteVpc: {{ $remoteVpcId }}
-      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 1)) }}
+      localConnectIP: {{ printf "169.254.%d.%d/30" $oct3 (int (add $base4 1)) }}
 {{- else }}
     - remoteVpc: {{ $remoteVpcId }}
-      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 2)) }}
+      localConnectIP: {{ printf "169.254.%d.%d/30" $oct3 (int (add $base4 2)) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -43,9 +48,14 @@ spec:
       nextHopIP: {{ .nextHopIP | quote }}
 {{- end }}
 {{- end }}
+{{- with include "vpc.egressPolicyRoutes" . | fromYamlArray }}
+  policyRoutes:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
 
 {{- range .Values.subnets }}
 {{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
+{{- $px := get $proxmox .name }}
 ---
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
@@ -74,20 +84,99 @@ metadata:
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
+    {{- if $px }}
+    proxmox.cozystack.io/zone: {{ $px.zone }}
+    {{- end }}
 spec:
   vpc: {{ $vpcId  }}
   cidrBlock: {{ .cidr }}
   provider: "{{ $subnetId }}.{{ $.Release.Namespace }}.ovn"
   protocol: IPv4
   enableLb: false
-  private: true
+  {{- /* A Proxmox-backed subnet is routed by its VPC router: to the VPC's other
+        subnets and, through the egress gateway, out of the VPC. Kube-OVN's
+        private ACL drops every packet whose source or destination is outside
+        the subnet, including that routed traffic and its replies, so these
+        subnets are not private. Tenants stay apart because each VPC has its
+        own router and VLAN; overlay subnets keep private: true and take the
+        Proxmox subnets' CIDRs through allowSubnets when they should be
+        reachable from them. */}}
+  private: {{ not $px }}
+  {{- if $px }}
+  {{- /* The subnet becomes a VLAN-backed logical switch of this VPC's router.
+        The controller creates the Vlan named after the subnet; until it does,
+        Kube-OVN retries the subnet with "failed to get vlan". The router port
+        is the gateway, so Proxmox VMs route through this VPC and nowhere else.
+        The VM range is excluded so Kube-OVN never hands it to a pod: the
+        InClusterIPPool below is the only allocator for it. */}}
+  gateway: {{ $px.gateway | quote }}
+  vlan: {{ $subnetId }}
+  logicalGateway: true
+  excludeIps:
+    - {{ printf "%s..%s" $px.vmFrom $px.vmTo | quote }}
+  {{- with $px.mtu }}
+  {{- /* Pods on the subnet, the VPC egress gateway among them, get the
+        zone's MTU, the one capmox writes into the VM NICs. Without it
+        Kube-OVN gives a logicalGateway subnet the overlay MTU, and a
+        full-size VM packet is dropped at the gateway's interface. */}}
+  mtu: {{ . }}
+  {{- end }}
+  {{- end }}
   {{- with .allowSubnets }}
   allowSubnets:
     {{- range . }}
     - {{ . | quote }}
     {{- end }}
   {{- end }}
+{{- if $px }}
+---
+{{- /* The one allocator for VM addresses on this subnet. Namespaced, so a
+      claim from another tenant's namespace can never resolve it. The metric
+      orders default routes on a VM with NICs on several subnets of this VPC:
+      the subnet listed first wins. */}}
+apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+kind: InClusterIPPool
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    metric: {{ add 100 $px.index | quote }}
+    {{- /* The provider's delete webhook refuses a pool with addresses in
+          use, which leaves an uninstall of this release half done. Its
+          ProtectPool finalizer already holds a deleted pool until the last
+          address is released, so the uninstall can go ahead and the pool
+          follows when the VMs are gone. */}}
+    ipam.cluster.x-k8s.io/skip-validate-delete-webhook: ""
+  labels:
+    cozystack.io/subnetName: {{ .name }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+    proxmox.cozystack.io/zone: {{ $px.zone }}
+spec:
+  addresses:
+    - {{ printf "%s-%s" $px.vmFrom $px.vmTo | quote }}
+  prefix: {{ $px.prefix }}
+  gateway: {{ $px.gateway | quote }}
+---
+apiVersion: proxmox.cozystack.io/v1alpha1
+kind: ProxmoxNetwork
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/subnetName: {{ .name }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+    proxmox.cozystack.io/zone: {{ $px.zone }}
+spec:
+  zone: {{ $px.zone | quote }}
+  subnet: {{ $subnetId }}
+  ipPool: {{ $subnetId }}
 {{- end }}
+{{- end }}
+{{- include "vpc.egressGateway" (list . $vpcId $proxmox) }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -103,6 +192,10 @@ data:
   {{- range .Values.subnets }}
   {{ .name }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
   {{ .name }}.CIDR: {{ .cidr }}
+  {{- end }}
+  {{- range $name, $px := $proxmox }}
+  {{ $name }}.ProxmoxZone: {{ $px.zone | quote }}
+  {{ $name }}.ProxmoxVMRange: {{ printf "%s-%s" $px.vmFrom $px.vmTo | quote }}
   {{- end }}
   {{- range .Values.peers }}
   {{- $remoteRelease := printf "virtualprivatecloud-%s" .vpcName }}

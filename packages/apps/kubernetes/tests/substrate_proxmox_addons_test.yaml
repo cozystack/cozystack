@@ -148,6 +148,11 @@ tests:
       - matchRegex:
           path: spec.template.spec.initContainers[1].command[2]
           pattern: 'provider: capmox'
+      # v0.15.0 panics in init(): its gitVersion "0.15.0" has no leading v
+      # and component-base v0.37 refuses to parse it. The Pod never starts.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ':v0\.15\.0$'
 
   # A blanket `operator: Exists` also matches
   # node.kubernetes.io/unreachable:NoExecute with no tolerationSeconds, which

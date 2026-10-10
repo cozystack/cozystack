@@ -67,3 +67,26 @@ tests:
               privileged: true
               namespace: cozy-cluster-api
               releaseName: capi-providers-ipam-in-cluster
+
+  - it: makes proxmox-network depend on networking and IPAM, and not on capmox
+    documentSelector:
+      path: metadata.name
+      value: cozystack.proxmox-network
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-ipam-in-cluster
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-infra-proxmox
+      # The CRDs install first, so the package's zones render on its first
+      # install rather than on a re-render Flux never performs.
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: proxmox-network-crds
+      - equal:
+          path: spec.variants[0].components[1].install.dependsOn
+          value: [proxmox-network-crds]

@@ -1,0 +1,42 @@
+{{- /* Zones are instances of a CRD the proxmox-network-crds component installs
+      first. The gate only matters when this chart is installed on its own
+      before the CRDs exist: Helm resolves every kind before it applies
+      anything, so an unknown kind would fail the whole release. */}}
+{{- if .Capabilities.APIVersions.Has "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone" }}
+{{- range .Values.zones }}
+---
+apiVersion: proxmox.cozystack.io/v1alpha1
+kind: ProxmoxNetworkZone
+metadata:
+  name: {{ required "zones[].name is required" .name }}
+spec:
+  bridge: {{ required "zones[].bridge is required" .bridge | quote }}
+  providerNetwork: {{ .providerNetwork | default $.Values.providerNetwork.name | quote }}
+  vlanRanges:
+    {{- required "zones[].vlanRanges is required" .vlanRanges | toYaml | nindent 4 }}
+  {{- with .reservedVLANs }}
+  reservedVLANs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .mtu }}
+  mtu: {{ . }}
+  {{- end }}
+  {{- with .namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .staticAssignments }}
+  staticAssignments:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .egress }}
+  egress:
+    externalSubnet: {{ .egress.externalSubnet | quote }}
+    gatewayNamespace: {{ .egress.gatewayNamespace | default $.Release.Namespace | quote }}
+  {{- else if $.Values.transit.enabled }}
+  egress:
+    externalSubnet: {{ $.Values.transit.name | quote }}
+    gatewayNamespace: {{ $.Release.Namespace | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

@@ -18,7 +18,9 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`.
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`, `proxmox-network`.
+
+Suites parked as `chainsaw-test.yaml.disabled` are registered nowhere and no lane selects them: `backup` (opt-in, see its `README.md`), and two that need a Proxmox VE environment, `kubernetes-proxmox` (run by `.github/workflows/e2e-proxmox.yaml`) and `proxmox-network-env` (run by hand, see its `README.md`).
 
 ## What Chainsaw buys over the BATS suite
 
@@ -38,6 +40,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 - **kuberture** — `jq` on Service annotations + external-dns split-horizon log assertions.
 - **vminstance** — a server-side dry-run eviction of the VM's launcher pod, checked against the VMI's `LiveMigratable` condition.
 - **gateway** — admission-rejection cases that need `kubectl --as` impersonation or error-message greps; the tenant apex is read from the namespace `namespace.cozystack.io/host` label at runtime so they pass on any host.
+- **proxmox-network** — installs the vpc chart from the checkout with `helm --wait=false` (the application's release would wait on a Proxmox network that cannot become Ready without a trunk), then checks VLAN, Vlan, Subnet and OVN relations with `jq`, and admission with server-side dry runs.
 - **kubernetes-latest/previous** — wrap `_lib/run-kubernetes.sh` (Kamaji bringup, port-forward, LB/NFS/ouroboros). The script `cd`s to the repo root (the test dir is `hack/e2e-chainsaw/<suite>`, so repo root is `../../..`).
 
 ## Conventions / gotchas (Chainsaw v0.2.15)
@@ -55,7 +58,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`foundationdb`/`securitygroup`/`computeplane`/`kubernetes-latest`/`kubernetes-previous`/`vminstance` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`foundationdb`/`securitygroup`/`computeplane`/`kubernetes-latest`/`kubernetes-previous`/`vminstance` need `jq`; `proxmox-network` needs `jq` and `helm`, and the `cozystack.proxmox-network` package enabled (`hack/e2e-platform-packages.sh` enables it).
 
 ```bash
 # install chainsaw

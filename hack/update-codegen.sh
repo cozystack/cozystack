@@ -53,6 +53,7 @@ COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
 BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
 MIGRATION_CRDDIR=packages/system/migration-controller/definitions
+PROXMOX_NETWORK_CRDDIR=packages/system/proxmox-network-crds/definitions
 
 trap 'rm -rf ${TMPDIR}' EXIT
 
@@ -91,8 +92,8 @@ kube::codegen::gen_client \
     --boilerplate "${SCRIPT_ROOT}/hack/boilerplate.go.txt" \
     "${SCRIPT_ROOT}/pkg/apis"
 
-$CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/internalapi/..." paths="./api/migration/..." output:crd:artifacts:config=${TMPDIR}
+$CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..." paths="./internal/proxmoxnetworkcontroller/..."
+$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/internalapi/..." paths="./api/migration/..." paths="./api/proxmox/..." output:crd:artifacts:config=${TMPDIR}
 
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
@@ -103,6 +104,7 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
 mv ${TMPDIR}/forklift.cozystack.io*.yaml ${MIGRATION_CRDDIR}/
+mv ${TMPDIR}/proxmox.cozystack.io*.yaml ${PROXMOX_NETWORK_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
 

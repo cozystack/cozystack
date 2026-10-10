@@ -40,11 +40,18 @@
        these fields and has no DHCP mode, so an unset pool is not a default —
        it is a ProxmoxCluster that never reaches Ready and worker Machines that
        wait on it forever. Refuse at render time instead. */}}
+{{- $pxnet := .Values.proxmox.network | default dict }}
+{{- if or $pxnet.vpc $pxnet.subnet }}
+{{- if .Values.proxmox.ipv4Config.addresses }}
+{{- fail "proxmox: set either network.vpc/subnet or ipv4Config, not both; a VPC subnet brings its own IP pool" }}
+{{- end }}
+{{- else }}
 {{- if not .Values.proxmox.ipv4Config.addresses }}
-{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode" }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses, or proxmox.network.vpc and proxmox.network.subnet: capmox allocates static addresses and has no DHCP mode" }}
 {{- end }}
 {{- if not .Values.proxmox.ipv4Config.gateway }}
 {{- fail "substrate proxmox requires proxmox.ipv4Config.gateway" }}
+{{- end }}
 {{- end }}
 {{- if not .Values.proxmox.dnsServers }}
 {{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
@@ -916,10 +923,27 @@ spec:
   {{- end }}
   dnsServers:
     {{- toYaml .Values.proxmox.dnsServers | nindent 4 }}
+  {{- $pxnet := .Values.proxmox.network | default dict }}
+  {{- if $pxnet.subnet }}
+  {{- /* capmox v0.7 refuses a ProxmoxCluster without an ipv4Config and builds
+        an InClusterIPPool from it. Every worker of a VPC-backed cluster names
+        the subnet's own pool in network.default.ipv4PoolRef, so the cluster
+        pool must never hand out an address: its only address is the gateway,
+        which the IPAM provider always excludes. A machine that somehow lacks
+        a pool reference then waits on an empty pool instead of taking an
+        address the subnet pool may hand out too. */}}
+  {{- $px := include "cozy-lib.proxmox.network" (dict "namespace" .Release.Namespace "vpc" $pxnet.vpc "subnet" $pxnet.subnet "field" "proxmox.network") | fromYaml }}
+  ipv4Config:
+    addresses:
+      - {{ $px.gateway | quote }}
+    gateway: {{ $px.gateway | quote }}
+    prefix: {{ $px.prefix }}
+  {{- else }}
   ipv4Config:
     addresses:
       {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
     gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
     prefix: {{ .Values.proxmox.ipv4Config.prefix }}
+  {{- end }}
 {{- end }}
 {{- end }}

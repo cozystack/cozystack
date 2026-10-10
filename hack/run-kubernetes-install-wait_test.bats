@@ -1578,9 +1578,15 @@ EOF
   # all the same, which is why it is named here rather than excluded — a reader
   # asking "what creates a tenant cluster in this tree" gets both answers. The
   # suite that applies it ships `.disabled`, so nothing runs it in CI today.
+  #
+  # run-proxmox-network.sh is the third, named for the same reason and not
+  # governed by these rules either: it is the imperative half of the parked
+  # proxmox-network-env suite, which needs a Proxmox environment. It creates a
+  # Proxmox-backed cluster per tenant, waits for a worker to join before its
+  # checks, and the suite asserts each cluster's HelmRelease Ready after them.
   found="$(_kind_creators "$REPO_ROOT/hack/e2e-chainsaw" \
     | sed "s|^$REPO_ROOT/||" | tr '\n' ' ')"
-  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml "
+  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh hack/e2e-chainsaw/_lib/run-proxmox-network.sh hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml "
   if [ "$found" != "$want" ]; then
     echo "scripts under hack/e2e-chainsaw creating a Kubernetes CR: [$found]" >&2
     echo "Check first whether the new file APPLIES the kind or only asserts on" >&2
