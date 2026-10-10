@@ -1,0 +1,23 @@
+suite: RBAC of the Velero restore preparation
+
+# prepareForRestore reads every DataVolume back after deleting it and holds
+# the Velero Restore until it is gone. The read goes through the dynamic
+# client, which the Go unit tests run with no authorization, so a missing verb
+# only shows up on a cluster, where it fails every in-place VM restore.
+
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "ClusterRole can read and delete DataVolumes"
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cdi.kubevirt.io"]
+            resources: ["datavolumes"]
+            verbs: ["get", "delete"]
