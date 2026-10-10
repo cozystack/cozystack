@@ -92,8 +92,6 @@ spec:
             - name: s3-ca
               mountPath: /etc/ssl/rabbitmq-backup-ca
               readOnly: true
-          # command is load-bearing: the reused platform-migrations image's
-          # ENTRYPOINT is run-migrations.sh.
           command: ["/bin/sh", "-c"]
           args:
             - |
