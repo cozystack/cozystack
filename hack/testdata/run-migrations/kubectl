@@ -6,6 +6,8 @@
 #
 #   FAKE_STATE      file holding the stamped version; absent => no ConfigMap
 #   FAKE_READ_FAIL  non-empty => reading .data.version exits 1 with this stderr
+#   FAKE_EXIST_FAIL non-empty => the existence check exits 1 with this stderr,
+#                   --ignore-not-found or not, as a real non-NotFound error does
 set -u
 
 case "$*" in
@@ -20,8 +22,13 @@ case "$*" in
     cat "$FAKE_STATE"
     ;;
   *"get configmap"*"cozystack-version"*)
-    [ -f "$FAKE_STATE" ] || { echo 'Error from server (NotFound): configmaps "cozystack-version" not found' >&2; exit 1; }
-    echo "cozystack-version"
+    if [ -n "${FAKE_EXIST_FAIL:-}" ]; then echo "$FAKE_EXIST_FAIL" >&2; exit 1; fi
+    if [ ! -f "$FAKE_STATE" ]; then
+      case "$*" in *--ignore-not-found*) exit 0 ;; esac
+      echo 'Error from server (NotFound): configmaps "cozystack-version" not found' >&2
+      exit 1
+    fi
+    echo "configmap/cozystack-version"
     ;;
   *)
     echo "fake kubectl: unexpected call: $*" >&2
