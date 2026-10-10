@@ -276,7 +276,7 @@ Its contributor onboarding, `contributors/README.md`, restates this repository's
 
 ### Not a downstream repository
 
-`cozystack-ui` is archived. The console was vendored into `packages/system/dashboard/images/console`, so a UI change belongs in this repo, in the same PR. Note that the console still hardcodes the marketplace category list, so an `ApplicationDefinition` with a brand-new `spec.dashboard.category` renders in the marketplace but gets no sidebar entry.
+`cozystack-ui` is archived. The console was vendored into `packages/system/dashboard/images/console`, so a UI change belongs in this repo, in the same PR.
 
 `boot-to-talos` converts a running OS to Talos. It pins the Talos image this repo publishes, but Renovate carries that tag for it, so nothing you change here forces a change there. Renaming the image path would, and nothing would catch it.
 

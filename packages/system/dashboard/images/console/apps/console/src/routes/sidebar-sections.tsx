@@ -29,7 +29,8 @@ import {
 } from "../lib/sidebar-icons.tsx"
 import type { ComponentType } from "react"
 
-const MARKETPLACE_CATEGORIES = ["IaaS", "PaaS", "NaaS"]
+// Lives in the Admin portal; any other category, tapped ones included, gets an entry.
+const ADMIN_CATEGORY = "Administration"
 const CATEGORY_ICON: Record<string, LucideIcon> = {
   IaaS: Cloud,
   PaaS: Database,
@@ -38,7 +39,8 @@ const CATEGORY_ICON: Record<string, LucideIcon> = {
 
 /**
  * Marketplace sidebar: a flat list of filters — "All applications" followed
- * by the three categories. Category links rely on pathname-based matching
+ * by every category in {@link groupByCategory} order (IaaS, PaaS, NaaS, then
+ * the rest alphabetically), Administration excepted. Category links rely on pathname-based matching
  * (`/marketplace/c/<category>`) so NavLink correctly highlights the active
  * entry; see MarketplaceList for the counterpart.
  */
@@ -47,10 +49,9 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
   const grouped = useMemo(() => groupByCategory(data), [data])
 
   return useMemo<SidebarSection[]>(() => {
-    const available = grouped
+    const ordered = grouped
       .map((g) => g.category)
-      .filter((c) => MARKETPLACE_CATEGORIES.includes(c))
-    const ordered = MARKETPLACE_CATEGORIES.filter((c) => available.includes(c))
+      .filter((c) => c !== ADMIN_CATEGORY)
 
     return [
       {
@@ -70,7 +71,8 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
 
 /**
  * Console sidebar: every non-module, non-Tenant ApplicationDefinition in the
- * cluster as a separate entry grouped by IaaS / PaaS / NaaS, plus the per-tenant
+ * cluster as a separate entry grouped by category in {@link groupByCategory}
+ * order, Administration excepted, plus the per-tenant
  * Backups section. Administration (Info, Modules, External IPs, Tenants) now
  * lives in the Admin portal — see {@link useAdminSidebarSections}.
  */
@@ -79,13 +81,7 @@ export function useConsoleSidebarSections(): SidebarSection[] {
   const grouped = useMemo(() => groupByCategory(data), [data])
 
   return useMemo<SidebarSection[]>(() => {
-    const sorted = [...grouped]
-      .filter(({ category }) => MARKETPLACE_CATEGORIES.includes(category))
-      .sort(
-        (a, b) =>
-          MARKETPLACE_CATEGORIES.indexOf(a.category) -
-          MARKETPLACE_CATEGORIES.indexOf(b.category),
-      )
+    const sorted = grouped.filter(({ category }) => category !== ADMIN_CATEGORY)
 
     const categorySections: SidebarSection[] = sorted.map(({ category, items }) => ({
       title: category,

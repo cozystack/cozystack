@@ -24,9 +24,12 @@ const emptyAppDefList: K8sList<unknown> = {
 
 // The admin gates issue two SSARs (nodes/list for Cluster Usage,
 // backupclasses/update for Backup Classes); answer each by requested resource.
-function makeClient(allow: Record<string, boolean | "pending">): K8sClient {
+function makeClient(
+  allow: Record<string, boolean | "pending">,
+  appDefs: K8sList<unknown> = emptyAppDefList,
+): K8sClient {
   const client = new K8sClient()
-  vi.spyOn(client, "list").mockResolvedValue(emptyAppDefList as K8sList<unknown>)
+  vi.spyOn(client, "list").mockResolvedValue(appDefs as K8sList<unknown>)
   vi.spyOn(client, "create").mockImplementation(async (_g, _v, _p, body) => {
     const resource =
       (body as SelfSubjectAccessReview).spec?.resourceAttributes?.resource ?? ""
@@ -106,6 +109,59 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
     expect(findItem(result.current, "Sources")?.to).toBe("/console/migration/vmimportsources")
     expect(findItem(result.current, "Imports")?.to).toBe("/console/migration/vmimporttasks")
     expect(result.current.some((s) => s.title === "Migration")).toBe(true)
+  })
+})
+
+function appDef(name: string, kind: string, category: string, module = false) {
+  return {
+    apiVersion: "cozystack.io/v1alpha1",
+    kind: "ApplicationDefinition",
+    metadata: { name },
+    spec: {
+      application: { kind, plural: `${name}s` },
+      dashboard: { category, ...(module ? { module: true } : {}) },
+    },
+  }
+}
+
+// A tapped repository brings its own category next to the built-in ones.
+const tappedAppDefs: K8sList<unknown> = {
+  ...emptyAppDefList,
+  items: [
+    appDef("postgres", "Postgres", "PaaS"),
+    appDef("vminstance", "VMInstance", "IaaS"),
+    appDef("oberonvm", "OberonVM", "Paleocomputing"),
+    appDef("ingress", "Ingress", "Administration", true),
+    appDef("seaweedfs", "SeaweedFS", "Administration"),
+  ],
+}
+
+describe("custom categories from tapped repositories", () => {
+  it("lists a tapped category in the marketplace sidebar after the built-in ones", async () => {
+    const client = makeClient({}, tappedAppDefs)
+    const { result } = renderHook(() => useMarketplaceSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() =>
+      expect(findItem(result.current, "Paleocomputing")?.to).toBe(
+        "/marketplace/c/Paleocomputing",
+      ),
+    )
+    const labels = result.current[0].items.map((i) => i.label)
+    expect(labels).toEqual(["Marketplace", "IaaS", "PaaS", "Paleocomputing"])
+  })
+
+  it("gives a tapped category its own console section and keeps Administration out", async () => {
+    const client = makeClient({}, tappedAppDefs)
+    const { result } = renderHook(() => useConsoleSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(sectionIndex(result.current, "Paleocomputing")).not.toBe(-1))
+    expect(hasItemTo(result.current, "/console/oberonvms")).toBe(true)
+    expect(sectionIndex(result.current, "PaaS")).toBeLessThan(
+      sectionIndex(result.current, "Paleocomputing"),
+    )
+    expect(sectionIndex(result.current, "Administration")).toBe(-1)
   })
 })
 
