@@ -67,6 +67,7 @@ jobs:
           done
 
       - name: Stage credentials
+        id: stage
         env:
           KUBECONFIG_B64: ${{ secrets.COZY_KUBECONFIG }}
           PVE_SSH_KEY: ${{ secrets.PROXMOX_SSH_KEY }}
@@ -78,8 +79,19 @@ jobs:
           set -eu
           umask 077
           printf '%s' "$KUBECONFIG_B64" | base64 -d > "$GITHUB_WORKSPACE/.kubeconfig"
+          # Unless the current context resolves to a server, client-go either
+          # fails or falls back to its defaults, in-cluster credentials among
+          # them, and the calls below would reach a cluster other than the
+          # stand's. Tear down repeats this check.
+          server=$(kubectl --kubeconfig "$GITHUB_WORKSPACE/.kubeconfig" config view --minify \
+            -o jsonpath='{.clusters[0].cluster.server}' 2>"$RUNNER_TEMP/kubeconfig-check.err" || true)
+          if [ -z "$server" ]; then
+            echo "COZY_KUBECONFIG does not resolve to a server" >&2
+            # Empty when the context resolves to a cluster with no server.
+            cat "$RUNNER_TEMP/kubeconfig-check.err" >&2
+            exit 1
+          fi
           printf '%s' "$PVE_SSH_KEY" > "$COZY_PVE_SSH_KEY"
-          echo "KUBECONFIG=$GITHUB_WORKSPACE/.kubeconfig" >> "$GITHUB_ENV"
 
           # The credentials the management-side CSI controller and CCM read. A
           # Secret rather than values so no token is ever written into a
@@ -101,6 +113,8 @@ jobs:
                hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml
 
       - name: Run the Proxmox suite
+        env:
+          KUBECONFIG: ${{ github.workspace }}/.kubeconfig
         run: |
           chainsaw test \
             --config hack/e2e-chainsaw/.chainsaw.yaml \
@@ -111,11 +125,35 @@ jobs:
         # a leaked tenant leaves VMs on the hypervisor and the next run inherits
         # them.
         if: always() && !inputs.keep_tenant
+        env:
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
         run: |
           set -eu
-          kubectl delete kubernetesnodes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
-          kubectl delete kubernetes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found
-          kubectl delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found
+          kc="$GITHUB_WORKSPACE/.kubeconfig"
+          # The suite runs only after Stage succeeds, so without that this run
+          # created no tenant.
+          if [ "$STAGE_OUTCOME" != success ]; then
+            echo "::notice::Tear down skipped: Stage credentials ended $STAGE_OUTCOME, so this run created no tenant"
+            exit 0
+          fi
+          # The check Stage makes. Every call names the file, so none falls back
+          # to this self-hosted runner's own kubeconfig. Failing it here means
+          # the file broke after Stage, and the tenant may still be live.
+          server=$(kubectl --kubeconfig "$kc" config view --minify \
+            -o jsonpath='{.clusters[0].cluster.server}' 2>"$RUNNER_TEMP/kubeconfig-check.err" || true)
+          if [ -z "$server" ]; then
+            echo "::error::Tear down did not run: $kc no longer resolves to a server, so tenant e2eproxmox and its VMs may still be live"
+            cat "$RUNNER_TEMP/kubeconfig-check.err"
+            exit 1
+          fi
+          # A failed delete must not stop the ones after it: stopping there leaves
+          # behind exactly the VMs this step exists to remove. The step still
+          # fails at the end.
+          rc=0
+          kubectl --kubeconfig "$kc" delete kubernetesnodes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found || rc=1
+          kubectl --kubeconfig "$kc" delete kubernetes.apps.cozystack.io -n "$COZY_PROXMOX_NS" --all --ignore-not-found || rc=1
+          kubectl --kubeconfig "$kc" delete tenant.apps.cozystack.io e2eproxmox -n tenant-root --ignore-not-found || rc=1
+          exit "$rc"
 
       - name: Remove staged credentials
         if: always()
