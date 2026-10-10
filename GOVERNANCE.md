@@ -35,7 +35,7 @@ Two things about this organisation are worth stating plainly rather than leaving
 
 **Four repositories are private**, and none of them contributes to the distribution: `security-scanner` (automated CVE monitoring, private because it holds pre-disclosure vulnerability state), `infrastructure` (the organisation's own CI infrastructure-as-code, private because it holds cloud credentials and account topology), one GitHub-created security-advisory workspace, and `talos-preboot-iso`, an archived prototype. Nothing an adopter installs is built from a repository they cannot read.
 
-**Telemetry is received by a component adopters do not install.** [cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) runs as project infrastructure, but clusters report to it by default, so it is named here rather than omitted as out-of-scope. What is collected, why, and how to turn it off is documented on the [Telemetry](https://cozystack.io/docs/operations/configuration/telemetry/) page.
+**Telemetry is received by a component adopters do not install.** [cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) runs as project infrastructure, but clusters report to it by default, so it is named here rather than omitted as out-of-scope. What is collected, why, and how to turn it off is documented on the [Telemetry](https://cozystack.io/docs/v1.6/operations/configuration/telemetry/) page.
 
 ## Third-party Dependencies
 
