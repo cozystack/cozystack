@@ -45,6 +45,9 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+	// +kubebuilder:default:={}
+	Sentinel Sentinel `json:"sentinel,omitempty"`
 }
 
 type Resources struct {
@@ -52,6 +55,13 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type Sentinel struct {
+	// Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.
+	Resources Resources `json:"resources,omitempty"`
+	// Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.
+	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 
 type TLS struct {

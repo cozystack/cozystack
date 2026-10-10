@@ -1,0 +1,175 @@
+suite: Sentinel sizing
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  # Instances created before the sentinel block existed must render the same
+  # Sentinel sizing after an upgrade.
+  - it: "an empty sentinel block sizes Sentinel like Redis"
+    set:
+      resourcesPreset: u1.small
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits
+          value:
+            cpu: "1"
+            memory: 4Gi
+            ephemeral-storage: 2Gi
+      - equal:
+          path: spec.redis.resources.limits.memory
+          value: 4Gi
+
+  - it: "an empty sentinel block keeps explicit Redis resources on Sentinel"
+    set:
+      resources:
+        cpu: "2"
+        memory: 3Gi
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits.memory
+          value: 3Gi
+      - equal:
+          path: spec.sentinel.resources.limits.cpu
+          value: "2"
+
+  # Mirrors the top-level rule: an empty resources map counts as unset, so it
+  # must not stop the inheritance.
+  - it: "an empty sentinel.resources map counts as unset"
+    set:
+      resources:
+        cpu: "2"
+        memory: 3Gi
+      sentinel:
+        resources: {}
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits.memory
+          value: 3Gi
+      - equal:
+          path: spec.sentinel.resources.limits.cpu
+          value: "2"
+
+  # Explicit Redis resources must not leak into a Sentinel that has its own
+  # preset: the preset alone decides.
+  - it: "sentinel.resourcesPreset sizes Sentinel independently of Redis"
+    set:
+      resources:
+        memory: 4Gi
+      sentinel:
+        resourcesPreset: t1.nano
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits
+          value:
+            cpu: 250m
+            memory: 128Mi
+            ephemeral-storage: 2Gi
+      - equal:
+          path: spec.redis.resources.limits.memory
+          value: 4Gi
+
+  - it: "sentinel.resources wins over the presets"
+    set:
+      resourcesPreset: u1.small
+      sentinel:
+        resources:
+          cpu: 100m
+          memory: 64Mi
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits
+          value:
+            cpu: 100m
+            memory: 64Mi
+            ephemeral-storage: 2Gi
+      - equal:
+          path: spec.redis.resources.limits.memory
+          value: 4Gi
+
+  - it: "keys sentinel.resources leaves unset come from sentinel.resourcesPreset"
+    set:
+      resourcesPreset: u1.small
+      sentinel:
+        resources:
+          memory: 64Mi
+        resourcesPreset: t1.micro
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.limits
+          value:
+            cpu: 500m
+            memory: 64Mi
+            ephemeral-storage: 2Gi
+
+  - it: "the Sentinel WorkloadMonitor carries the Sentinel preset"
+    set:
+      resourcesPreset: u1.small
+      sentinel:
+        resourcesPreset: t1.nano
+    documentSelector:
+      path: metadata.name
+      value: my-redis-sentinel
+    asserts:
+      - equal:
+          path: metadata.labels["workloads.cozystack.io/resource-preset"]
+          value: t1.nano
+
+  - it: "the Redis WorkloadMonitor keeps the Redis preset"
+    set:
+      resourcesPreset: u1.small
+      sentinel:
+        resourcesPreset: t1.nano
+    documentSelector:
+      path: metadata.name
+      value: my-redis-redis
+    asserts:
+      - equal:
+          path: metadata.labels["workloads.cozystack.io/resource-preset"]
+          value: u1.small
+
+  - it: "the Sentinel WorkloadMonitor follows resourcesPreset when the sentinel block is empty"
+    set:
+      resourcesPreset: u1.small
+    documentSelector:
+      path: metadata.name
+      value: my-redis-sentinel
+    asserts:
+      - equal:
+          path: metadata.labels["workloads.cozystack.io/resource-preset"]
+          value: u1.small
+
+  - it: "an unknown sentinel.resourcesPreset is refused"
+    set:
+      sentinel:
+        resourcesPreset: huge
+    asserts:
+      - failedTemplate: {}
