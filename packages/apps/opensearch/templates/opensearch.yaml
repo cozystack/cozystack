@@ -41,9 +41,6 @@ spec:
     nodes to drain whatever the replica count.
     */}}
     drainDataNodes: {{ and .Values.nodeRoles.data (gt (int .Values.replicas) 2) }}
-    {{- if gt (len .Values.images.opensearch) 0 }}
-    image: {{ .Values.images.opensearch }}
-    {{- end }}
   bootstrap:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   security:
