@@ -1,0 +1,58 @@
+suite: flux-plunger Deployment
+# On SIGTERM flux-plunger stops its manager (up to 10s) and then gives up the
+# uninstall fences it holds (DrainFences). The kubelet kills it once
+# terminationGracePeriodSeconds is spent, so stop and drain together have to end
+# inside that grace period. The next flux-plunger starts while this one is still
+# terminating, so it is leader election that keeps a single writer meanwhile.
+release:
+  name: flux-plunger
+  namespace: cozy-fluxcd
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: gives the shutdown drain a deadline inside the termination grace period
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 90
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shutdown-drain-timeout=65s
+
+  - it: derives both from one value
+    set:
+      shutdownGracePeriodSeconds: 120
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 120
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shutdown-drain-timeout=95s
+
+  - it: runs under leader election, the one thing that keeps the next pod from writing during the drain
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+
+  - it: refuses a grace period that leaves the drain no time
+    set:
+      shutdownGracePeriodSeconds: 39
+    asserts:
+      - failedTemplate:
+          errorPattern: shutdownGracePeriodSeconds must be between 40 and 140
+
+  - it: refuses a grace period that is not a whole number of seconds
+    set:
+      shutdownGracePeriodSeconds: 90.7
+    asserts:
+      - failedTemplate:
+          errorPattern: shutdownGracePeriodSeconds must be a whole number of seconds
+
+  - it: refuses a grace period the pre-delete hook cannot wait out inside its deadline
+    set:
+      shutdownGracePeriodSeconds: 141
+    asserts:
+      - failedTemplate:
+          errorPattern: shutdownGracePeriodSeconds must be between 40 and 140
