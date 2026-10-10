@@ -284,9 +284,9 @@ spec:
     # expires, but it captures stdout and stderr through pipes, and Go's exec
     # waits for every holder of the write end to close it -- the orphaned
     # kubectl is one, so the run goes silent until the job ceiling instead of
-    # failing. Both engine images carry /usr/bin/timeout; expiry reports 143
-    # on the sentinel's busybox and 124 on the data pods' coreutils, and
-    # neither is zero, which is all these checks read.
+    # failing. Sentinel and data pods run the same Debian-based engine image,
+    # whose coreutils /usr/bin/timeout reports 124 on expiry; that is not
+    # zero, which is all these checks read.
     #
     # bash for pipefail: base64 -d exits 0 on empty input, so without it a
     # failed Secret read below takes the decoder's status and is reported as

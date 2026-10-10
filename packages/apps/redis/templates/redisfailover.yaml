@@ -1,3 +1,5 @@
+{{- /* One image for the data pods and the Sentinels, resolved once so they cannot drift apart. */}}
+{{- $redisImage := printf "redis:%s" (include "redis.versionMap" $) }}
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
@@ -44,15 +46,16 @@ spec:
       secretName: {{ .Release.Name }}.tls
   {{- end }}
   sentinel:
-    # Pin the sentinel engine. The freshworks-oss operator's compiled-in default
-    # moved 6.2.6→7.2.4; the data pods run a deliberate versionMap image below,
-    # but the sentinels were on the old 6.2.6 default and must not silently jump
-    # on upgrade. Bump as a deliberate, separate change.
-    image: redis:6.2.6-alpine
+    # Sentinels run the same image as the data pods. Pinned explicitly because
+    # the operator's compiled-in default (redis:7.2.4-alpine in freshworks-oss
+    # v3.3.5) would otherwise move them on an operator upgrade. Unlike the data
+    # pods they keep no RDB, only a sentinel.conf the init container rewrites
+    # on every start, so a chart rollback to an older engine is safe here.
+    image: {{ $redisImage | quote }}
     replicas: 3
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   redis:
-    image: "redis:{{ include "redis.versionMap" $ }}"
+    image: {{ $redisImage | quote }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
     {{- with .Values.size }}

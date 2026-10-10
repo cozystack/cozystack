@@ -1,0 +1,45 @@
+suite: Sentinel image follows the Redis version
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  # An empty spec.sentinel.image would hand the choice to the operator's
+  # compiled-in default, which moves with operator releases. The patterns pin
+  # the major version only, so a patch bump in files/versions.yaml does not
+  # need a test change.
+  - it: "the default version runs Sentinel on the data pods' image"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - matchRegex:
+          path: spec.sentinel.image
+          pattern: ^redis:8\.[0-9]+\.[0-9]+$
+      - matchRegex:
+          path: spec.redis.image
+          pattern: ^redis:8\.[0-9]+\.[0-9]+$
+
+  - it: "version v7 moves Sentinel to the v7 image too"
+    set:
+      version: v7
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - matchRegex:
+          path: spec.sentinel.image
+          pattern: ^redis:7\.[0-9]+\.[0-9]+$
+      - matchRegex:
+          path: spec.redis.image
+          pattern: ^redis:7\.[0-9]+\.[0-9]+$
