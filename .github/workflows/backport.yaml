@@ -139,7 +139,7 @@ jobs:
     steps:
       - name: Check which labels are present
         id: labels
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -161,7 +161,7 @@ jobs:
       
       - name: Determine target branches
         id: branches
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             // Enumerate the real release-X.Y branches rather than deriving them
@@ -254,15 +254,13 @@ jobs:
       # means an earlier run already delivered this change to the target — a
       # second label event (e.g. backport-previous added after backport
       # already merged) would re-enter this job and cherry-pick commits the
-      # target branch already has. Git reports that as an empty pick (exit 1)
-      # rather than a conflict, which draft_commit_conflicts below misreads
-      # as a real conflict and reports as a failed backport on the original
-      # PR. Skipping here avoids the false report; it does not touch the
-      # empty-pick behavior itself, which lives in the action.
+      # target branch already has. backport-action skips such commits and
+      # reports the target as skipped on the original PR; skipping here keeps
+      # a run for an already delivered backport from posting anything.
       - name: Check for existing merged backport
         id: guard
         if: steps.target.outcome == 'success'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const targetBranch = '${{ steps.target.outputs.branch }}';
@@ -282,13 +280,13 @@ jobs:
       # 3. Checkout (required by backport‑action)
       - name: Checkout repository
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # 4. Create the back‑port pull request
       - name: Create back‑port PR
         id: backport
         if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
-        uses: korthout/backport-action@0193454f0c5947491d348f33a275c119f30eb736 # v3.2.1
+        uses: korthout/backport-action@8560fb503c275d433c56f05a2f64850093baa9f7 # v4.7.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           label_pattern: '' # don't read labels for targets

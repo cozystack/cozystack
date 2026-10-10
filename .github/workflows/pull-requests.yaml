@@ -111,7 +111,7 @@ jobs:
         # still gets posted by `e2e-report`, and a run that dies before that
         # leaves the merge blocked either way.
         continue-on-error: true
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -127,7 +127,7 @@ jobs:
               description: 'e2e in progress — this run has not reported yet',
               target_url: RUN_URL,
             });
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # e2e-fork.yaml pushes a fork's images only under names the base tree
@@ -222,14 +222,14 @@ jobs:
       # The default pull_request checkout is GitHub's prospective merge commit,
       # not just the head branch. That makes base-branch package drift visible.
       - name: Checkout prospective merge
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       # Execute the verifier from the trusted base SHA. An older rc-derived head
       # may not contain it, and a PR must not be able to weaken its own guard.
       - name: Checkout release tooling from base
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling
@@ -245,7 +245,7 @@ jobs:
       # upstream setup action, which checksums the release tarball.
       # promote-rc.yaml's copy of this step carries the full reasoning for both.
       - name: Set up flux
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Set up promotion toolchain (yq)
@@ -263,7 +263,7 @@ jobs:
           fi
 
       - name: Login to registry (GHCR)
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -300,7 +300,7 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # The module cache is restored from the key build-main.yaml writes on
@@ -367,7 +367,7 @@ jobs:
         run: make bats-unit-tests
       - name: Upload unit test report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bats-unit-report
           path: _out/test-reports/
@@ -395,14 +395,14 @@ jobs:
         pkg: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
       # installer is built in finalize, but some package image targets shell out
       # to flux.
       - name: Set up flux
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Set up Docker config
@@ -412,7 +412,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -431,7 +431,7 @@ jobs:
       # OCIR auth) so buildx forwards push/cache auth to the container builder.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -494,7 +494,7 @@ jobs:
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
       - name: Upload patch fragment
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch-fragment-${{ steps.frag.outputs.safe }}
           path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
@@ -503,7 +503,7 @@ jobs:
       # (OCI_EXPORT_DIR above). Upload them for e2e-fork.yaml to push by digest.
       - name: Upload OCI image archives (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-${{ steps.frag.outputs.safe }}
           path: _out/oci/*.oci.tar
@@ -542,7 +542,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -553,7 +553,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -565,7 +565,7 @@ jobs:
       # anonymous-pull rate limit; see the build job for the full rationale.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -593,7 +593,7 @@ jobs:
           git diff --binary HEAD > _out/fragments/talos.patch
           echo "Talos fragment:"; git --no-pager diff --stat HEAD
       - name: Upload Talos patch fragment
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch-fragment-talos
           path: _out/fragments/talos.patch
@@ -601,7 +601,7 @@ jobs:
       # Fork PR only: upload the Talos image OCI archive for e2e-fork.yaml.
       - name: Upload Talos OCI image archive (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-talos
           path: _out/oci/*.oci.tar
@@ -632,16 +632,16 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
       - name: Set up flux
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Download patch fragments
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pr-patch-fragment-*
           merge-multiple: true
@@ -668,7 +668,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -788,7 +788,7 @@ jobs:
       # anonymous-pull rate limit; see the build job for the full rationale.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -822,7 +822,7 @@ jobs:
       # Fork PR only: upload the operator image OCI archive for e2e-fork.yaml.
       - name: Upload installer OCI image archive (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-installer
           path: _out/oci/*.oci.tar
@@ -835,7 +835,7 @@ jobs:
           git diff --binary HEAD > _out/assets/pr.patch
           echo "Final pr.patch:"; git --no-pager diff --stat HEAD
       - name: Upload git diff patch
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch
           path: _out/assets/pr.patch
@@ -863,7 +863,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -873,7 +873,7 @@ jobs:
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -881,7 +881,7 @@ jobs:
       - name: Extract tag from PR branch (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: get_tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -900,7 +900,7 @@ jobs:
       # asset's presence is still checked in e2e-tag.yaml and promote-rc.yaml.
       - name: Verify draft release exists (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -989,7 +989,7 @@ jobs:
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -998,7 +998,7 @@ jobs:
       #   lane consumes no nocloud asset and waits on no Talos build.
       - name: Download PR patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-patch
           path: _out/assets
@@ -1219,7 +1219,7 @@ jobs:
 
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chainsaw-report
           path: _out/chainsaw-report.xml
@@ -1272,7 +1272,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport
           path: _out/cozyreport.tgz
@@ -1284,7 +1284,7 @@ jobs:
 
       - name: Upload image list
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-list
           path: _out/images.txt
@@ -1430,7 +1430,7 @@ jobs:
       statuses: write
     steps:
       - name: Report "E2E Tests" commit status
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}

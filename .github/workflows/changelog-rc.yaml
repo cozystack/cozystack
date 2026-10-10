@@ -67,7 +67,7 @@ jobs:
       # parse-rc-tag.sh lives in the tree, so overlay the dispatch ref's hack/
       # before calling it. Gitignored; nothing in this job commits.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling
@@ -165,7 +165,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -177,7 +177,7 @@ jobs:
       # parse job (before generation), so it is not re-checked here — a checkout
       # failure for a branch deleted in the meantime is a rare, self-evident race.
       - name: Checkout rc staging branch
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.parse.outputs.rc_branch }}
           fetch-depth: 0
@@ -188,7 +188,7 @@ jobs:
       # hack/validate-changelog.sh. Overlay the current tooling from the dispatch
       # ref, exactly as promote-rc and changelog-generate do. Gitignored.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling
@@ -198,7 +198,7 @@ jobs:
           persist-credentials: false
 
       - name: Download changelog artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: changelog-v${{ needs.parse.outputs.stable_version }}
           path: docs/changelogs

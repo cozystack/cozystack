@@ -51,7 +51,7 @@ jobs:
       packages: read
     steps:
       - name: Set up flux
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Set up toolchain (oras)
@@ -81,7 +81,7 @@ jobs:
           echo "Installing nightly ${rev:-<no revision annotation>}, packages ${digest}"
 
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -174,7 +174,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport-isp-hosted
           path: _out/cozyreport.tgz

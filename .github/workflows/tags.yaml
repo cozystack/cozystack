@@ -44,7 +44,7 @@ jobs:
       # rebuilt, which is the safe direction.
       - name: Check if release already exists
         id: check_release
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
@@ -59,7 +59,7 @@ jobs:
 
       - name: Checkout code
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -73,7 +73,7 @@ jobs:
 
       - name: Login to GHCR
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -83,7 +83,7 @@ jobs:
 
       - name: Login to OCIR (build cache)
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -97,7 +97,7 @@ jobs:
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         if: steps.check_release.outputs.release_exists == 'false'
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -174,7 +174,7 @@ jobs:
       #     the draft and skips straight to changelog/website.
       - name: Check if release already exists
         id: check_release
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
@@ -199,7 +199,7 @@ jobs:
       - name: Parse tag
         if: steps.check_release.outputs.release_exists == 'false'
         id: tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc.1
@@ -234,7 +234,7 @@ jobs:
       - name: Get base branch
         if: steps.check_release.outputs.release_exists == 'false'
         id: get_base
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const baseRef = context.payload.base_ref;
@@ -252,7 +252,7 @@ jobs:
 
       - name: Checkout code
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags:  true
@@ -262,13 +262,13 @@ jobs:
       # shells out to.
       - name: Set up flux
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
 
       - name: Login to GHCR
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -282,7 +282,7 @@ jobs:
       # cold (the persistent runner used to warm-start from local buildkit state).
       - name: Login to OCIR (build cache)
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -295,7 +295,7 @@ jobs:
       - name: Set up Buildx for matchbox (docker-container driver)
         if: steps.check_release.outputs.release_exists == 'false'
         id: matchbox_buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -356,7 +356,7 @@ jobs:
 
       - name: Upload the stamped tree and the pushed tags
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-tree
           path: ${{ runner.temp }}/release-tree/
@@ -369,7 +369,7 @@ jobs:
       # talos image and are not release assets.
       - name: Upload the assets
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: |
@@ -403,7 +403,7 @@ jobs:
       - name: Generate GitHub App token
         if: needs.build-amd64.outputs.release_exists == 'false'
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -411,7 +411,7 @@ jobs:
 
       - name: Checkout code
         if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags:  true
@@ -420,7 +420,7 @@ jobs:
       # the tree with mikefarah yq; the republish needs flux and helm.
       - name: Set up flux
         if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Set up build toolchain
@@ -433,7 +433,7 @@ jobs:
 
       - name: Login to GHCR
         if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -443,14 +443,14 @@ jobs:
 
       - name: Download the amd64 build
         if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-tree
           path: ${{ runner.temp }}/release-tree
 
       - name: Download the assets
         if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: _out/assets
@@ -502,7 +502,7 @@ jobs:
       - name: Create / reuse draft release
         if: needs.build-amd64.outputs.release_exists == 'false'
         id: release
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tag      = '${{ needs.build-amd64.outputs.tag }}';
@@ -548,7 +548,7 @@ jobs:
       # draft status. prerelease:true keeps it off the "Latest release" pointer.
       - name: Publish rc release
         if: needs.build-amd64.outputs.release_exists == 'false' && needs.build-amd64.outputs.is_rc == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -675,7 +675,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -687,7 +687,7 @@ jobs:
       # regardless of whether the agent follows the prompt's instructions.
       - name: Generate read-only GitHub App token
         id: app-token-read
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -698,7 +698,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -719,7 +719,7 @@ jobs:
       # contents. The Create changelog branch step below resets the file
       # onto a fresh branch from origin/main for the PR.
       - name: Checkout release tag
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
@@ -776,7 +776,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.check_changelog.outputs.exists == 'false' && steps.check_changelog.outputs.at_tag == 'false'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -849,7 +849,7 @@ jobs:
 
       - name: Create PR for changelog
         if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -933,7 +933,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -941,7 +941,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -955,7 +955,7 @@ jobs:
             core.setOutput('version', version);  // 0.22.0
 
       - name: Checkout website repo
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: cozystack/website
           token: ${{ steps.app-token.outputs.token }}

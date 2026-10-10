@@ -94,7 +94,7 @@ jobs:
       # pull-requests.yaml's e2e-report and docs/agents/e2e-testing.md §10.
       - name: Resolve fork PR and post "E2E Tests" status
         id: r
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           HEAD_SHA:   ${{ github.event.workflow_run.head_sha }}
           RUN_ID:     ${{ github.event.workflow_run.id }}
@@ -350,7 +350,7 @@ jobs:
       packages_digest: ${{ steps.push.outputs.packages_digest }}
     steps:
       - name: Set up flux
-        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
         with:
           version: "2.8.6"
       - name: Set up toolchain (skopeo)
@@ -359,12 +359,12 @@ jobs:
       # The base repo's own merge ref — safe to fetch, not fork-controlled code
       # execution. pr.patch is applied as DATA below; nothing from the tree runs.
       - name: Checkout PR merge ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
-          # checkout v4.4.0 and later refuse a fork's code under workflow_run
+          # checkout v7 and later refuse a fork's code under workflow_run
           # without this opt-in. The boundary is the one the header describes:
           # no fork-authored script runs in `publish`, and `e2e` holds no push
           # token.
@@ -380,7 +380,7 @@ jobs:
           got="$(git rev-parse HEAD^2)"
           [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
       - name: Download pr.patch
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-patch
           path: _out/assets
@@ -389,7 +389,7 @@ jobs:
       - name: Apply pr.patch (reconstruct digest-pinned tree)
         run: git apply --3way _out/assets/pr.patch
       - name: Download OCI image archives
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pr-oci-*
           merge-multiple: true
@@ -558,7 +558,7 @@ jobs:
       SANDBOX_NAME: cozy-e2e-sandbox-fork-${{ github.run_id }}
     steps:
       - name: Checkout PR merge ref
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
@@ -586,7 +586,7 @@ jobs:
             rm -f "$yq_bin"
           fi
       - name: Download pr.patch
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-patch
           path: _out/assets
@@ -755,7 +755,7 @@ jobs:
             _out/chainsaw-report.xml || true
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chainsaw-report
           path: _out/chainsaw-report.xml
@@ -766,7 +766,7 @@ jobs:
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport
           path: _out/cozyreport.tgz
@@ -809,7 +809,7 @@ jobs:
       statuses: write
     steps:
       - name: Report "E2E Tests" commit status
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PUBLISH_RESULT: ${{ needs.publish.result }}
           E2E_RESULT:     ${{ needs.e2e.result }}
