@@ -21,7 +21,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: velero/velero-plugin-for-aws:v1.14.1
+          value: velero/velero-plugin-for-aws:v1.14.4
 
   # The release build stamps its own rebuild over the upstream ref, so only the
   # repository name is common to both.
