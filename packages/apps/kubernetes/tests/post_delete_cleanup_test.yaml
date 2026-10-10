@@ -1,0 +1,83 @@
+suite: post-delete cleanup of uninstall orphans
+
+# Two objects outlive `helm uninstall` for different reasons: the
+# <release>-talos-ca / <release>-talos-tls-cert Secrets, which cert-manager
+# issues without an ownerReference back to their Certificate, and the
+# <release>-oidc-bootstrap Job, a Helm hook whose delete policy is
+# before-hook-creation only so nothing removes it at uninstall. These tests pin
+# the cleanup that removes both, and the post-delete placement that keeps
+# cert-manager from re-issuing the Secrets: in a pre-delete hook the
+# Certificates are still present, and deleting their Secret is the documented
+# way to force a re-issue.
+
+templates:
+  - templates/post-delete.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+values:
+  - values-ci.yaml
+
+tests:
+  - it: cleanup runs as post-delete, after the Certificates are gone
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+
+  - it: post-delete Job deletes both Talos Secrets by name
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete secret \\\n\s+test-k8s-talos-ca test-k8s-talos-tls-cert'
+
+  - it: post-delete Job deletes the orphaned OIDC bootstrap Job
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete job \\\n\s+test-k8s-oidc-bootstrap'
+
+  - it: post-cleanup Role can delete only the orphans this chart created
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - ""
+              resources:
+                - secrets
+              resourceNames:
+                - test-k8s-talos-ca
+                - test-k8s-talos-tls-cert
+              verbs:
+                - get
+                - delete
+            - apiGroups:
+                - "batch"
+              resources:
+                - jobs
+              resourceNames:
+                - test-k8s-oidc-bootstrap
+              verbs:
+                - get
+                - delete
+
+  - it: post-delete Job runs under its own ServiceAccount
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: test-k8s-post-cleanup
