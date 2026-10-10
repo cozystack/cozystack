@@ -1,4 +1,5 @@
 {{- $tlsEnabled := (include "postgres.tls.enabled" .) | eq "true" -}}
+{{- $tlsRequired := (include "postgres.tls.required" .) | eq "true" -}}
 {{- $autoscaling := (include "postgres.autoscaling.active" .) | eq "true" -}}
 ---
 apiVersion: postgresql.cnpg.io/v1
@@ -269,6 +270,38 @@ spec:
   {{- end }}
   {{- end }}
   postgresql:
+    {{- if $tlsRequired }}
+    {{- /*
+      CloudNativePG offers TLS (ssl=on) but its built-in last rule, host all all
+      all, also accepts plaintext, so a client choosing sslmode=disable gets an
+      unencrypted session. User rules go after the operator's fixed rules
+      (local peer, streaming_replica cert) and before that default rule, and the
+      first match wins, so these two lines make remote sessions TLS-only.
+      https://cloudnative-pg.io/documentation/current/postgresql_conf/#the-pg_hba-section
+    */}}
+    {{- /*
+      Same password method as CloudNativePG's own default rule: md5 before
+      PostgreSQL 14 (where password_encryption defaults to md5, and md5 also
+      accepts SCRAM verifiers), scram-sha-256 from 14 on.
+      pkg/management/postgres/configuration.go in cloudnative-pg.
+    */}}
+    {{- $pgMajor := trimPrefix "v" .Values.version | atoi }}
+    {{- $authMethod := ternary "md5" "scram-sha-256" (lt $pgMajor 14) }}
+    {{- /*
+      With ssl turned off, hostssl never matches and the reject rule would refuse
+      every remote session; stop with an actionable error instead.
+    */}}
+    {{- $sslParam := "" }}
+    {{- if and .Values.postgresql .Values.postgresql.parameters }}
+    {{- $sslParam = toString (dig "ssl" "" .Values.postgresql.parameters) | lower }}
+    {{- end }}
+    {{- if has $sslParam (list "off" "false" "0" "no") }}
+    {{- fail "postgresql.parameters.ssl is off while tls.required is in effect (external: true or tls.required: true): enable ssl or set tls.required: false" }}
+    {{- end }}
+    pg_hba:
+      - hostssl all all all {{ $authMethod }}
+      - host all all all reject
+    {{- end }}
     {{- /*
       Preloading is exposed as a closed allowlist rather than through the blocked
       shared_preload_libraries parameter. The parameter is free text and accepts a
