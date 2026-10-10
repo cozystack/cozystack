@@ -1,8 +1,9 @@
-suite: vm-disk refuses to clone a golden image that is missing or failed
-# A golden that is missing or whose import Failed is never populated, and CDI
-# holds a clone of it forever, so a new disk on it would sit pending with
-# nothing pointing at the image. A golden still importing is safe to clone
-# because CDI waits for it, and helm template has no cluster to look it up in.
+suite: vm-disk refuses to clone a golden image that is missing, failed or stuck
+# A golden that is missing, whose import Failed, or whose importer keeps
+# crashing is not populated, and CDI holds a clone of it until it is, so a new
+# disk on it would sit pending with nothing pointing at the image. A golden
+# still importing is safe to clone because CDI waits for it, and helm template
+# has no cluster to look it up in.
 release:
   name: test-vm-disk
   namespace: tenant-test
@@ -185,3 +186,135 @@ tests:
       - equal:
           path: spec.source.pvc
           value: {name: vm-default-images-ubuntu, namespace: cozy-public}
+
+  - it: refuses a new disk on a golden whose importer keeps failing
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: &stuck
+            phase: ImportInProgress
+            # A string: helm-unittest's lookup cannot deep-copy an int, and | int takes either.
+            restartCount: "3"
+            conditions:
+              - {type: Bound, status: "True"}
+              - {type: Running, status: "False", reason: Error}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "vm-default-images-ubuntu" in cozy-public keeps failing to import \(3 importer restarts\).*lifts by itself.*a recreated importer pod counts as not running until its container starts'
+
+  - it: clones a golden that restarted but is downloading again
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status:
+            phase: ImportInProgress
+            restartCount: "5"
+            conditions:
+              - {type: Running, status: "True", reason: Pod is running}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones a golden whose importer failed fewer than three times
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status:
+            phase: ImportInProgress
+            restartCount: "2"
+            conditions:
+              - {type: Running, status: "False", reason: Error}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones a golden that Succeeded after its importer restarted
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status:
+            phase: Succeeded
+            restartCount: "4"
+            conditions:
+              - {type: Running, status: "False", reason: Completed}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves an existing disk alone when its golden is stuck
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: *stuck
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 5Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: clones a golden whose importer restarted and reports no Running condition
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: {phase: ImportInProgress, restartCount: "3"}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+    asserts:
+      - notFailedTemplate: {}

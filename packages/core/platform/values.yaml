@@ -718,10 +718,10 @@ backupStrategyController: {}
 # cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
 # opt-in and this key alone does not enable it. The two knobs that decide
 # whether the feature is usable at all are imageFactoryURL (an air-gapped or
-# rate-limited cluster must repoint the single import) and storageClass (CDI
-# cannot clone across StorageClasses, so a cluster whose worker pools are not on
-# `replicated` must move the golden onto their class). Empty (the default)
-# forwards nothing and keeps the child chart defaults.
+# rate-limited cluster must repoint the single import) and storageClass (a
+# worker pool refuses a golden on another StorageClass, so a cluster whose
+# worker pools are not on `replicated` must move the golden onto their class).
+# Empty (the default) forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:

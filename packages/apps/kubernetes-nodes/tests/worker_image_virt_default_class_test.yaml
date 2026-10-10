@@ -1,0 +1,183 @@
+suite: osImage.builtin default-StorageClass selection with a virtualization default
+
+# CDI resolves a DataVolume with no class and contentType kubevirt to the class
+# annotated storageclass.kubevirt.io/is-default-virt-class before it looks at the
+# Kubernetes default, so a cluster that carries both binds the golden and the
+# worker disks on the virtualization default. The clone guard has to resolve an
+# empty class the same way, or it compares the golden against a class it is not
+# on.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: ""
+  roles: [ingress-nginx]
+  osImage:
+    builtin: {}
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+    "v1/PersistentVolumeClaim":
+      gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    # The Kubernetes default, created after the virtualization default so that
+    # creation order alone would pick it.
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: kube-default
+        creationTimestamp: "2026-06-01T00:00:00Z"
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata:
+        name: virt-default
+        creationTimestamp: "2026-01-01T00:00:00Z"
+        annotations:
+          storageclass.kubevirt.io/is-default-virt-class: "true"
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        namespace: cozy-public
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: virt-default
+      status: {phase: Succeeded}
+
+tests:
+  - it: resolves an empty pool storageClass to the virtualization default
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: virt-default
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: takes the most recently created of two virtualization defaults
+    kubernetesProvider:
+      objects:
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: virt-newer
+            creationTimestamp: "2026-03-01T00:00:00Z"
+            annotations:
+              storageclass.kubevirt.io/is-default-virt-class: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "virt-newer" differs from golden image .* storageClass "virt-default".* An empty storageClass was resolved to "virt-newer"'
+
+  - it: ignores a virtualization default annotation that is not "true"
+    kubernetesProvider:
+      objects:
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: virt-off
+            creationTimestamp: "2026-05-01T00:00:00Z"
+            annotations:
+              storageclass.kubevirt.io/is-default-virt-class: "false"
+    asserts:
+      - notFailedTemplate: {}
+
+  # Before the virtualization default was read, a pool that has not cloned a
+  # disk yet resolved to the Kubernetes default here and rendered.
+  - it: refuses a pool whose golden is on the Kubernetes default instead
+    set:
+      osImage:
+        builtin: {schematicID: kube, version: v1.0.0}
+    kubernetesProvider:
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: talos-worker-kube-v1.0.0
+            namespace: cozy-public
+          spec:
+            storage:
+              resources: {requests: {storage: 6Gi}}
+              storageClassName: kube-default
+          status: {phase: Succeeded}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "virt-default" differs from golden image .* storageClass "kube-default".* An empty storageClass was resolved to "virt-default"'
+
+  # A pool that already cloned reads its class back from its own disk's claim
+  # and never reaches the default lookup.
+  - it: keeps rendering a pool that already cloned from a golden on the Kubernetes default
+    set:
+      osImage:
+        builtin: {schematicID: kube, version: v1.0.0}
+    kubernetesProvider:
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: talos-worker-kube-v1.0.0
+            namespace: cozy-public
+          spec:
+            storage:
+              resources: {requests: {storage: 6Gi}}
+              storageClassName: kube-default
+          status: {phase: Succeeded}
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: disk-system-kubernetes-myk8s-md0-abcde
+            namespace: tenant-test
+            annotations:
+              kubernetes-worker-image.cozystack.io/golden: talos-worker-kube-v1.0.0
+              kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+          status: {phase: Succeeded}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: disk-system-kubernetes-myk8s-md0-abcde, namespace: tenant-test}
+          spec: {storageClassName: kube-default}
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: kube-default
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}

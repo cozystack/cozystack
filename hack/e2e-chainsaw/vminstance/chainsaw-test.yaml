@@ -91,6 +91,29 @@ spec:
             (conditions[?type == 'WorkloadsReady']):
             - status: "False"
               reason: DataVolumeNotReady
+  # The golden image guards in the vm-disk and kubernetes-nodes charts and the
+  # image option list call an import failing once its importer has restarted
+  # three times and is not running, because CDI keeps an unreachable URL in
+  # progress instead of moving it to Failed. This pins that CDI does report
+  # both. The default kubelet back-off before the third restart adds up to 70s
+  # (10s, 20s, 40s), and the timeout leaves room for the importer's own runs on
+  # top of that. The count is compared as a string, because Chainsaw v0.2.15
+  # mis-evaluates numeric literals; 'null' in the list makes an absent count,
+  # which CDI omits at zero, fail too.
+  - name: wait-importer-restarts
+    try:
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-unreachable
+          status:
+            phase: ImportInProgress
+            (contains(['null', '0', '1', '2'], to_string(restartCount))): false
+            (conditions[?type == 'Running']):
+            - status: "False"
 ---
 # VMDisk clone paths: source.image clones a golden image from cozy-public, and
 # source.disk clones that disk in turn, so only the golden image downloads.

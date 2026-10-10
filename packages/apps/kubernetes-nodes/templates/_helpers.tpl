@@ -403,18 +403,25 @@ dict the result is written into), groupName (named in every error message).
 {{- end -}}
 
 {{- /*
-Name of the cluster's default StorageClass, or the empty string when there is
-none (and always under `helm template`, which has no cluster to read).
+Name of the StorageClass CDI binds a kubevirt-content DataVolume on when it
+names no class, or the empty string when there is none (and always under `helm
+template`, which has no cluster to read). CDI takes a class annotated
+storageclass.kubevirt.io/is-default-virt-class first and only then the
+Kubernetes default (GetStorageClassByNameWithVirtFallback in CDI's
+pkg/controller/common/util.go), and both the goldens and the worker disks are
+kubevirt content.
 
 An empty storageClass is a documented, schema-valid setting on both a worker pool
 and a worker image catalog entry, and it means "the cluster default". Without
 resolving it the golden-versus-pool StorageClass comparison simply skips whenever
-either side is empty, which is the one corner where skipping is worst: CDI then
-falls back to a host-assisted copy over the pod network, silently, and that copy
-is the transfer the clone path exists to remove.
+either side is empty, and lets a cross-class clone through unchecked.
 
-Both the current annotation and its beta predecessor count, because clusters
-provisioned years apart carry different ones and Kubernetes still honours both.
+The beta predecessor of the Kubernetes annotation is read last, only when no
+class carries the current one. CDI does not read it: with neither of the other
+two defaults it creates no claim at all for a DataVolume that names no class
+and no access modes (pvcFromStorage, ErrStorageClassNotFound). Read here, it
+still gives a pool on such a cluster a class, written onto the worker disk
+explicitly.
 
 More than one class may carry the annotation at once. Kubernetes permits that --
 it is the normal state midway through swapping a cluster's default -- and
@@ -425,16 +432,21 @@ that is actually in force. Timestamps are RFC3339 in UTC, so comparing them as
 strings is comparing them chronologically.
 */ -}}
 {{- define "kubernetes-nodes.defaultStorageClassName" -}}
-{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- $classes := dig "items" (list) ((lookup "storage.k8s.io/v1" "StorageClass" "" "") | default dict) -}}
 {{- $name := "" -}}
-{{- $createdAt := "" -}}
-{{- range (dig "items" (list) ($classes | default dict)) -}}
-{{-   $annotations := dig "metadata" "annotations" (dict) . -}}
-{{-   if or (eq (dig "storageclass.kubernetes.io/is-default-class" "" $annotations | toString) "true") (eq (dig "storageclass.beta.kubernetes.io/is-default-class" "" $annotations | toString) "true") -}}
-{{-     $at := dig "metadata" "creationTimestamp" "" . | toString -}}
-{{-     if or (not $name) (gt $at $createdAt) -}}
-{{-       $name = dig "metadata" "name" "" . | toString -}}
-{{-       $createdAt = $at -}}
+{{- range list "storageclass.kubevirt.io/is-default-virt-class" "storageclass.kubernetes.io/is-default-class" "storageclass.beta.kubernetes.io/is-default-class" -}}
+{{-   $key := . -}}
+{{-   $createdAt := "" -}}
+{{-   if not $name -}}
+{{-     range $classes -}}
+{{-       $annotations := dig "metadata" "annotations" (dict) . -}}
+{{-       if eq (dig $key "" $annotations | toString) "true" -}}
+{{-         $at := dig "metadata" "creationTimestamp" "" . | toString -}}
+{{-         if or (not $name) (gt $at $createdAt) -}}
+{{-           $name = dig "metadata" "name" "" . | toString -}}
+{{-           $createdAt = $at -}}
+{{-         end -}}
+{{-       end -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}
