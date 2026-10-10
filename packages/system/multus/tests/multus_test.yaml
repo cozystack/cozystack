@@ -35,13 +35,117 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.limits.memory
-          value: 1Gi
+          value: 4Gi
       - equal:
           path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.requests.memory
           value: 100Mi
       - equal:
           path: spec.template.spec.initContainers[?(@.name=="install-multus-binary")].resources.limits.memory
           value: 128Mi
+
+  # Every pod sandbox on the node goes through kube-multus, so a CPU limit
+  # throttles the whole node's CNI queue: after a CNI outage the backlog
+  # outgrows kubelet's retry interval and never drains.
+  - it: kube-multus has a CPU request but no CPU limit
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.requests.cpu
+          value: 100m
+      - notExists:
+          path: spec.template.spec.containers[?(@.name=="kube-multus")].resources.limits.cpu
+
+  - it: kube-multus resources are overridable from values
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      resources:
+        limits:
+          cpu: "2"
+          memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="kube-multus")].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 100Mi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+
+  # Deep-merge keeps both memory keys for every partial override; only an
+  # explicit null drops them. Every case below must stop the render.
+  - it: refuses to render without a memory limit
+    set:
+      resources:
+        limits:
+          memory: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.limits.memory must be set: without it the pod cgroup has no memory.max and the Talos OOM handler may evict multus on any node'
+
+  - it: refuses to render with resources.limits cleared
+    set:
+      resources:
+        limits: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.limits.memory must be set: without it the pod cgroup has no memory.max and the Talos OOM handler may evict multus on any node'
+
+  - it: refuses to render with resources cleared
+    set:
+      resources: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources: expected a map, got invalid'
+
+  - it: refuses to render with resources that are not a map
+    set:
+      resources: big
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources: expected a map, got string'
+
+  - it: refuses resources.limits that are not a map
+    set:
+      resources:
+        limits: 4Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.limits: expected a map, got string'
+
+  - it: refuses resources.requests that are not a map
+    set:
+      resources:
+        requests: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.requests: expected a map, got bool'
+
+  # An absent request defaults to the limit, so every node would reserve 4Gi
+  # and one with less allocatable memory would be left without multus.
+  - it: refuses to render without a memory request
+    set:
+      resources:
+        requests:
+          memory: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.requests.memory must be set: without it the request defaults to the limit and a node with less allocatable memory is left without multus'
+
+  - it: refuses to render with resources.requests cleared
+    set:
+      resources:
+        requests: null
+    asserts:
+      - failedTemplate:
+          errorMessage: 'resources.requests.memory must be set: without it the request defaults to the limit and a node with less allocatable memory is left without multus'
 
   # Guards the cozystack CNI-ordering fix (multusMasterCNI pinned to the cilium
   # conflist) so multus does not auto-detect kube-ovn ahead of cilium at node
