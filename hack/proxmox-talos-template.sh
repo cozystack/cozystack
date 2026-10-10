@@ -60,7 +60,14 @@ chart_talos() {
   ' "$VALUES"
 }
 
-matches() { printf '%s' "$1" | grep -Eqx "$2"; }
+# grep -x matches line by line, so a value with a newline in it would pass on
+# any one of its lines and carry the rest into the program as commands of their
+# own. Such a value is refused before grep sees it.
+matches() {
+  case $1 in *'
+'*) return 1 ;; esac
+  printf '%s' "$1" | grep -Eqx "$2"
+}
 
 [ $# -eq 3 ] || usage
 MODE=$1
@@ -80,7 +87,8 @@ TAGS=${COZY_TEMPLATE_TAGS:-cozystack,talos,talos-$VERSION,schematic-$(printf '%s
 # hypervisor, so each is held to the shape it is expected to have.
 matches "$VMID" '[1-9][0-9]{2,8}' || die "vmid $VMID is not a Proxmox VM id (100-999999999)"
 matches "$STORAGE" '[A-Za-z][A-Za-z0-9_.-]*' || die "storage $STORAGE is not a Proxmox storage id"
-matches "$VERSION" 'v[0-9]+\.[0-9]+\.[0-9]+' || die "Talos version '$VERSION' is not vMAJOR.MINOR.PATCH"
+# The shape the chart's render accepts for talos.version, pre-releases included.
+matches "$VERSION" 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-z.]+)?' || die "Talos version '$VERSION' is not vMAJOR.MINOR.PATCH with an optional pre-release suffix"
 matches "$SCHEMATIC" '[0-9a-f]{64}' || die "schematic '$SCHEMATIC' is not an Image Factory schematic id"
 matches "$FACTORY" 'https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?' || die "factory URL '$FACTORY' is not a plain http(s) URL"
 matches "$DISK_SIZE" '[1-9][0-9]*G' || die "disk size $DISK_SIZE is not a whole number of gigabytes such as 20G"
@@ -148,8 +156,12 @@ qm create "$VMID" --name "$NAME" --tags "$TAGS" --ostype l26 \
   --scsi0 "$STORAGE:0,import-from=$work/disk.raw,cache=none,discard=on,ssd=1" \
   --boot order=scsi0 --serial0 socket --vga std \
   --agent enabled=1
-qm disk resize "$VMID" scsi0 "$DISK_SIZE"
-qm template "$VMID"
+# A failure from here on leaves a VM holding the id, and the nextid check above
+# stops the next run until it is gone.
+qm disk resize "$VMID" scsi0 "$DISK_SIZE" && qm template "$VMID" || {
+  echo "VM $VMID was created but is not a template; remove it with: qm destroy $VMID" >&2
+  exit 1
+}
 qm config "$VMID"
 EOF
 }

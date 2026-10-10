@@ -4,7 +4,8 @@
 # the script writes is pinned here: the image is the chart's own talos.* in its
 # nocloud flavour, the agent the default schematic waits for is enabled, and the
 # tag set capmox selects on is checked before anything is downloaded.
-# (hack/cozytest.sh runs these as POSIX sh: no `run`, no [[ ]].)
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 SCRIPT="$REPO_ROOT/hack/proxmox-talos-template.sh"
@@ -38,7 +39,7 @@ EOF
   out="$("$SCRIPT" print 9002 main-pool)"
   url="$(chart imageFactoryURL)/image/$(chart schematicID)/$(chart version)/nocloud-amd64.raw.xz"
   printf '%s' "$out" | grep -qxF "URL='$url'"
-  ! printf '%s' "$out" | grep -q openstack
+  if printf '%s' "$out" | grep -q openstack; then echo "FAIL: the template must not be the openstack image"; false; fi
 }
 
 @test "the template enables the guest agent whose port the default schematic waits for" {
@@ -63,7 +64,10 @@ EOF
 }
 
 @test "values that would land in the root program unchecked are refused" {
-  for pair in "9002;id|main-pool" "99|main-pool" "9002|main pool" "9002|main'pool"; do
+  nl='
+'
+  for pair in "9002;id|main-pool" "99|main-pool" "9002|main pool" "9002|main'pool" \
+    "9002${nl}id|main-pool" "9002|main-pool${nl}id"; do
     vmid="${pair%%|*}"
     storage="${pair#*|}"
     rc=0
@@ -75,8 +79,16 @@ EOF
   [ "$rc" -ne 0 ]
   rc=0; COZY_TALOS_SCHEMATIC_ID='ce4c9805' "$SCRIPT" print 9002 main-pool >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ]
+  rc=0; COZY_TEMPLATE_DISK_SIZE="20G${nl}id" "$SCRIPT" print 9002 main-pool >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
   rc=0; COZY_TEMPLATE_TAGS="talos,it's" "$SCRIPT" print 9002 main-pool >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ]
+}
+
+@test "a pre-release Talos version the chart accepts gets a template" {
+  out="$(COZY_TALOS_VERSION=v1.13.6-beta.1 "$SCRIPT" print 9002 main-pool)"
+  printf '%s' "$out" | grep -qF "/v1.13.6-beta.1/nocloud-amd64.raw.xz'"
+  printf '%s' "$out" | grep -qxF "NAME='talos-v1.13.6-beta.1-$(chart schematicID | cut -c1-8)'"
 }
 
 @test "a template already carrying the same tag set stops the program before the download" {
@@ -105,6 +117,20 @@ EOF
   printf '%s\n' "$calls" | grep -qE '^qm create 9002 .*--scsi0 main-pool:0,import-from=[^ ]*/disk.raw,'
   printf '%s\n' "$calls" | grep -qx 'qm disk resize 9002 scsi0 20G'
   printf '%s\n' "$calls" | grep -qx 'qm template 9002'
+}
+
+@test "a VM left behind by a failed conversion is named with the command that removes it" {
+  stub="$(mktemp -d)"
+  stub_pve "$stub"
+  printf '#!/bin/sh\necho "qm $*" >> "%s/calls"\n[ "$1" != template ]\n' "$stub" > "$stub/qm"
+  echo '[]' > "$stub/resources.json"
+  rc=0
+  out="$("$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh 2>&1)" || rc=$?
+  calls="$(cat "$stub/calls")"
+  rm -rf "$stub"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$calls" | grep -qx 'qm template 9002'
+  case "$out" in *"remove it with: qm destroy 9002"*) ;; *) echo "$out" >&2; exit 1 ;; esac
 }
 
 @test "create runs the printed program on the hypervisor over ssh and prints the pool's selector" {
