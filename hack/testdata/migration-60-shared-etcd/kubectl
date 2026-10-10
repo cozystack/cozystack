@@ -1,0 +1,43 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-60-shared-etcd-report.bats. It serves only
+# the calls migration 60 and lib/cozystack-version.sh make, and logs each one
+# to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG     file to append a one-line record of each call to
+#   FAKE_STATE      directory holding kcps.json and datastores.json
+#   FAKE_NO_KAMAJI  non-empty => the KamajiControlPlane CRD is absent
+#   FAKE_LIST_FAIL  non-empty => listing KamajiControlPlanes exits 1 with this stderr
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+case "$*" in
+  *"apply --filename -"*|*"apply -f -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        exit 0
+        ;;
+    esac
+    printf 'fake kubectl: unmodelled apply\n' >&2
+    exit 1
+    ;;
+  *"get crd kamajicontrolplanes.controlplane.cluster.x-k8s.io"*)
+    [ -n "${FAKE_NO_KAMAJI:-}" ] || echo "customresourcedefinition.apiextensions.k8s.io/kamajicontrolplanes.controlplane.cluster.x-k8s.io"
+    exit 0
+    ;;
+  *"get kamajicontrolplanes.controlplane.cluster.x-k8s.io"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then printf '%s\n' "$FAKE_LIST_FAIL" >&2; exit 1; fi
+    cat "$FAKE_STATE/kcps.json"
+    exit 0
+    ;;
+  *"get datastores.kamaji.clastix.io"*)
+    cat "$FAKE_STATE/datastores.json"
+    exit 0
+    ;;
+esac
+printf 'fake kubectl: unmodelled call: %s\n' "$*" >&2
+exit 1

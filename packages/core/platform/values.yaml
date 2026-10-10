@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 60
+  targetVersion: 61
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -723,6 +723,15 @@ backupStrategyController: {}
 # `replicated` must move the golden onto their class). Empty (the default)
 # forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
+# StorageClasses for the etcd each tenant Kubernetes cluster runs for its control
+# plane, chosen by its member count. Three members already replicate through
+# Raft, so a node-local class avoids replicating the data a second time; a single
+# member has nothing but its volume, so a replicated class lets it outlive its
+# node. Empty leaves the namespace default StorageClass. A cluster's etcd reads
+# this once, when it is created: the class of an existing etcd cannot change.
+kubernetesEtcd:
+  storageClassLocal: ""
+  storageClassReplicated: ""
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

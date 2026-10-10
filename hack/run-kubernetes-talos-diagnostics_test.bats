@@ -471,6 +471,7 @@ assert_file_lacks_pattern() {
 @test "cleanup deletes diagnostic Certificate before its Pod and Secret" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   cozy_wait_linstor_pool_baseline() { return 0; }
+  cozy_wait_etcd_reaped() { return 0; }
   tmp=$(mktemp -d)
   kubectl_calls="$tmp/kubectl.calls"
 

@@ -41,6 +41,9 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
+	// Dedicated etcd for this cluster's control plane, rendered with the cluster and deleted with it. Clusters that already run on their tenant's shared etcd keep it, and this section does not apply to them.
+	// +kubebuilder:default:={}
+	Etcd Etcd `json:"etcd"`
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
@@ -158,6 +161,14 @@ type CoreDNSAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type Etcd struct {
+	// Number of etcd members: `3` keeps quorum through the loss of one member, `1` runs a single member with no failover. Only `1` and `3` are accepted. The StorageClass is picked by the platform for each of the two shapes and fixed when the etcd is first created, so changing the count later keeps the class it started with.
+	// +kubebuilder:default:=3
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3
+	Replicas int `json:"replicas"`
 }
 
 type GPUOperatorAddon struct {

@@ -950,6 +950,23 @@
         }
       }
     },
+    "etcd": {
+      "description": "Dedicated etcd for this cluster's control plane, rendered with the cluster and deleted with it. Clusters that already run on their tenant's shared etcd keep it, and this section does not apply to them.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "replicas"
+      ],
+      "properties": {
+        "replicas": {
+          "description": "Number of etcd members: `3` keeps quorum through the loss of one member, `1` runs a single member with no failover. Only `1` and `3` are accepted. The StorageClass is picked by the platform for each of the two shapes and fixed when the etcd is first created, so changing the count later keeps the class it started with.",
+          "type": "integer",
+          "default": 3,
+          "maximum": 3,
+          "minimum": 1
+        }
+      }
+    },
     "images": {
       "description": "Optional image overrides for air-gapped or rate-limited registries.",
       "type": "object",

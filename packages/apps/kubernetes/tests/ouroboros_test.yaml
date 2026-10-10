@@ -459,23 +459,3 @@ tests:
             name: RELEASE-NAME-gateway-api-crds
             namespace: NAMESPACE
 
-  - it: should not render when _namespace.etcd is empty (addon HelmReleases gate on the tenant root namespace presence)
-    set:
-      _namespace:
-        etcd: ""
-        ingress: ""
-        seaweedfs: ""
-        host: ""
-        monitoring: ""
-      addons:
-        ouroboros:
-          enabled: true
-          valuesOverride: {}
-        ingressNginx:
-          enabled: true
-          hosts: []
-          valuesOverride: {}
-    asserts:
-      - hasDocuments:
-          count: 0
-

@@ -47,3 +47,17 @@ KubernetesNodes pool `roles: [ingress-nginx]`, otherwise the controller has
 nowhere to run and ingress stays unavailable (the chart no longer fails the
 render for this — it is a runtime requirement).
 {{- end }}
+{{- $sharedDataStore := include "kubernetes.etcd.sharedDataStore" . }}
+
+{{- if $sharedDataStore }}
+
+This cluster keeps its control-plane state on the shared DataStore
+{{ $sharedDataStore }}, which it ran on before Cozystack gave each cluster its
+own etcd. Nothing moves it off that DataStore automatically.
+{{- else }}
+
+This cluster keeps its control-plane state in its own etcd,
+EtcdCluster/{{ include "kubernetes.etcd.name" . }}: {{ .Values.etcd.replicas }} member(s) of
+1000m CPU / 512Mi memory limits and a 4Gi volume each, counted against this
+tenant's resource quota.
+{{- end }}

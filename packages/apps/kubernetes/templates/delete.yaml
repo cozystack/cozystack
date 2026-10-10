@@ -404,6 +404,18 @@ spec:
                 --field-selector spec.type=LoadBalancer \
                 --ignore-not-found=true --wait=false
 
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+              {{- /* Helm deletes this cluster's etcd and DataStore as soon as
+                    this hook exits 0, and Kamaji cannot finish deleting a
+                    TenantControlPlane whose datastore no longer answers: its
+                    finalizer then stays until removed by hand. Failing here
+                    keeps the etcd up and makes Flux retry the uninstall. */}}
+              if [ "$tcp_lookup" != 0 ] || [ -n "$tcp" ]; then
+                echo "TenantControlPlane {{ .Release.Name }} is not confirmed gone; failing so that its etcd is not deleted while Kamaji still needs it, and the uninstall is retried" >&2
+                exit 1
+              fi
+{{- end }}
+
               if [ -n "$residue_from" ]; then
                 echo "Cleanup incomplete; residue left by: $residue_from" >&2
                 echo "Objects named in the warnings above may need removing by hand; exiting 0 so the release can still be uninstalled" >&2

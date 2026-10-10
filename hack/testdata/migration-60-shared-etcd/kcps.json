@@ -1,0 +1,6 @@
+{"items": [
+  {"metadata": {"namespace": "tenant-a", "name": "kubernetes-legacy"}, "spec": {"dataStoreName": "tenant-root"}},
+  {"metadata": {"namespace": "tenant-a", "name": "kubernetes-own"}, "spec": {"dataStoreName": "tenant-a.kubernetes-own"}},
+  {"metadata": {"namespace": "tenant-b", "name": "kubernetes-nearer"}, "spec": {"dataStoreName": "tenant-b"}},
+  {"metadata": {"namespace": "tenant-b", "name": "kubernetes-borrowed"}, "spec": {"dataStoreName": "tenant-a.kubernetes-own"}}
+]}

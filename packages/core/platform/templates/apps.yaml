@@ -289,6 +289,12 @@ stringData:
       cpu-allocation-ratio: {{ .Values.resources.cpuAllocationRatio | quote }}
       memory-allocation-ratio: {{ .Values.resources.memoryAllocationRatio | quote }}
       ephemeral-storage-allocation-ratio: {{ .Values.resources.ephemeralStorageAllocationRatio | quote }}
+      {{- with (.Values.kubernetesEtcd | default dict).storageClassLocal }}
+      etcd-storage-class-local: {{ . | quote }}
+      {{- end }}
+      {{- with (.Values.kubernetesEtcd | default dict).storageClassReplicated }}
+      etcd-storage-class-replicated: {{ . | quote }}
+      {{- end }}
       {{- with .Values.scheduling }}
       scheduling:
         {{- . | toYaml | nindent 8 }}

@@ -29,7 +29,6 @@ cilium:
   {{- end }}
 {{- end }}
 
-{{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -97,9 +96,8 @@ that the admission webhook becomes reachable.
 
 The mismatch is detectable here rather than in the guest cluster, because this
 HelmRelease's values are assembled on the management cluster, so the beacon is
-emitted next to the release that carries the override. Same mechanism and same
-reasoning as the -awaiting-etcd beacon in ../cluster.yaml: a ConfigMap an
-operator and an alert can both see. It is a diagnostic for an unsupported
+emitted next to the release that carries the override: a ConfigMap an operator
+and an alert can both see. It is a diagnostic for an unsupported
 override, not an alternative compatibility mode.
 
 Absence is not a warning: the value is unset in both the override and
@@ -137,5 +135,4 @@ data:
 
     Clear the override or set cilium.kubeProxyReplacement back to true. Disabling
     the webhook policy does not make this networking configuration supported.
-{{- end }}
 {{- end }}

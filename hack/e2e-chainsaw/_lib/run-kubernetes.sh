@@ -147,6 +147,56 @@ cozy_oidc_bindings() {
   printf '%s' "${bindings}" | sort
 }
 
+# The cluster runs on an etcd of its own: the control plane names the DataStore
+# the chart renders for this release, and that etcd reports Available. The e2e
+# install leaves tenant-root's etcd off, so a cluster that fell back on a
+# shared one would not have come up at all; this names what it runs on instead.
+cozy_assert_own_etcd() {
+  local release="kubernetes-$1"
+  local datastore
+  datastore=$(kubectl -n tenant-test get kamajicontrolplanes.controlplane.cluster.x-k8s.io "${release}" -o jsonpath='{.spec.dataStoreName}')
+  if [ "${datastore}" != "tenant-test.${release}" ]; then
+    echo "FAIL: ${release} runs on DataStore '${datastore}', not on its own tenant-test.${release}" >&2
+    false
+  fi
+  kubectl get datastores.kamaji.clastix.io "tenant-test.${release}" -o name
+  kubectl_wait_retry etcdclusters.etcd-operator.cozystack.io -n tenant-test "${release}-etcd" --timeout=2m --for=condition=Available
+}
+
+# The cluster's etcd goes with it: the EtcdCluster and DataStore with the
+# release, the member PVCs by garbage collection, and the cert-manager Secrets
+# by the chart's post-delete Job. Anything left behind holds storage and quota
+# in the tenant namespace for good.
+cozy_wait_etcd_reaped() {
+  local release="kubernetes-$1"
+  local _timeout="${2:-180}"
+  local _deadline=$(( $(date +%s) + _timeout ))
+  local _left
+  while :; do
+    # Each query exits the subshell on failure by hand: errexit is off inside a
+    # function its caller runs under ||, which cozy_cleanup does. An empty label
+    # list goes to stderr as "No resources found", hence the 2>/dev/null.
+    _left=$(
+      kubectl -n tenant-test get etcdclusters.etcd-operator.cozystack.io "${release}-etcd" -o name --ignore-not-found || exit 1
+      kubectl get datastores.kamaji.clastix.io "tenant-test.${release}" -o name --ignore-not-found || exit 1
+      kubectl -n tenant-test get pvc -l "etcd-operator.cozystack.io/cluster=${release}-etcd" -o name 2>/dev/null || exit 1
+      for _s in peer-ca ca server peer client; do
+        kubectl -n tenant-test get secret "${release}-etcd-${_s}-tls" -o name --ignore-not-found || exit 1
+      done
+    ) || _left="${_left:+${_left} }(a query failed)"
+    if [ -z "${_left}" ]; then
+      echo "» ${release} etcd, DataStore, PVCs and Secrets are gone"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "${_deadline}" ]; then
+      echo "» ERROR: ${release} etcd leftovers after ${_timeout}s:" >&2
+      printf '%s\n' "${_left}" | sed 's/^/  etcd-leftover: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 cozy_assert_oidc_apiserver_flags() {
   local release="$1"
   local extra_args
@@ -673,6 +723,11 @@ cozy_cleanup() {
   # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
   # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
   # starts on a freed sandbox -- the root cause of the node-join flake.
+  if [ -n "${test_name}" ] && [ "$child_drained" -eq 1 ]; then
+    if ! cozy_wait_etcd_reaped "${test_name}" 180; then
+      cleanup_failed=1
+    fi
+  fi
   if [ -n "${test_name}" ]; then
     if ! cozy_wait_tenant_drained "${test_name}" 300; then
       echo "» ERROR: scoped tenant resources did not drain" >&2
@@ -6591,6 +6646,8 @@ EOF
   # the CR apply classifies the HelmReleases on the way out, so the history the
   # guard below would have read is printed anyway.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
+
+  cozy_assert_own_etcd "${test_name}"
 
   # The two old OIDC suites created control-plane-only clusters whose useful
   # assertions took seconds and whose pre-delete hooks then spent two full

@@ -7,9 +7,8 @@ suite: tenant cilium kube-proxy-replacement override beacon
 # the override does not imply that the webhook becomes reachable.
 #
 # The override is assembled on the MANAGEMENT cluster, in this chart, which is
-# why the mismatch is detectable here at all. Same beacon mechanism as the
-# -awaiting-etcd ConfigMap in templates/cluster.yaml: something an operator and
-# an alert can both see. It diagnoses an unsupported override rather than
+# why the mismatch is detectable here at all: a ConfigMap is something an
+# operator and an alert can both see. It diagnoses an unsupported override rather than
 # defining an alternative compatibility mode.
 templates:
   - templates/helmreleases/cilium.yaml

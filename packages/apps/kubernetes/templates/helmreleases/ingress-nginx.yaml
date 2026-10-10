@@ -20,7 +20,7 @@ ingress-nginx:
     node-role.kubernetes.io/ingress-nginx: ""
 {{- end }}
 
-{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd }}
+{{- if .Values.addons.ingressNginx.enabled }}
 {{- /* The ingress-nginx controller DaemonSet pins itself to nodes labelled
        node-role.kubernetes.io/ingress-nginx (see cozystack.defaultIngressValues
        nodeSelector). Since Phase 2 moved worker pools into the separate

@@ -9,8 +9,8 @@
 #
 # The module runs in its own tenant, tenant-cplane, so turning it on and off
 # never touches the tenant-test that the other suites share. It is a child of
-# tenant-root rather than of tenant-test because a tenant two levels down cannot
-# reach the etcd it inherits from tenant-root (#4726).
+# tenant-root, and needs no etcd module there: the wrapped cluster brings its
+# own.
 #
 # The suite supplies its own worker pool. The default md0 the module renders
 # for an empty nodeGroups puts its disk on the `replicated` StorageClass, which

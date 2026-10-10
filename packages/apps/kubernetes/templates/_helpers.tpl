@@ -307,3 +307,67 @@ string this admits parses to a positive duration.
 {{- define "kubernetes.proxmoxControllerVmID" -}}
 {{- add 100000 (mod (atoi (adler32sum (printf "%s/%s" .Release.Namespace .Release.Name))) 800000) -}}
 {{- end -}}
+
+{{/*
+Name of the EtcdCluster this cluster owns. The operator derives two DNS
+labels from it, the member Pods (<name>-xxxxx) and the <name>-client
+Service, so it must leave seven of the 63 characters free. The app name is
+capped well inside that today; the guard holds the line if the cap moves.
+*/}}
+{{- define "kubernetes.etcd.name" -}}
+{{- $name := printf "%s-etcd" .Release.Name -}}
+{{- if gt (len $name) 56 -}}
+{{- fail (printf "etcd cluster name %q is longer than 56 characters, which leaves no room for the names etcd-operator derives from it" $name) -}}
+{{- end -}}
+{{- $name -}}
+{{- end }}
+
+{{/*
+Name of the DataStore this cluster owns. DataStore is cluster-scoped, and
+Kamaji copies the name into a pod label value, so it must be unique across
+the cluster and at most 63 characters. A namespace cannot contain a dot, so
+<namespace>.<release> never collides with another cluster's DataStore nor
+with a tenant's shared one, which the etcd chart names after its namespace.
+*/}}
+{{- define "kubernetes.etcd.dataStoreName" -}}
+{{- $name := printf "%s.%s" .Release.Namespace .Release.Name -}}
+{{- if gt (len $name) 63 -}}
+{{- $name = printf "%s-%s" (trunc 54 $name | trimSuffix "-" | trimSuffix ".") (sha256sum $name | trunc 8) -}}
+{{- end -}}
+{{- $name -}}
+{{- end }}
+
+{{/*
+The shared DataStore a pre-existing cluster runs on, or empty when the
+cluster owns its etcd. Changing a live cluster's dataStoreName starts a
+Kamaji datastore migration — tenant writes frozen while it copies, every
+worker kubelet needing a restart afterwards — so a chart upgrade must never
+cause one. The live KamajiControlPlane is the record of which datastore a
+cluster uses. _namespace.etcd is not: tenant-root publishes it to every
+tenant whether or not an etcd runs behind it, and a tenant switching its own
+etcd on would otherwise move every cluster below it.
+*/}}
+{{- define "kubernetes.etcd.sharedDataStore" -}}
+{{- $kcp := lookup "controlplane.cluster.x-k8s.io/v1alpha1" "KamajiControlPlane" .Release.Namespace .Release.Name | default dict -}}
+{{- $live := dig "spec" "dataStoreName" "" $kcp -}}
+{{- if and $live (ne $live (include "kubernetes.etcd.dataStoreName" .)) -}}
+{{- $live -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+spec.storage.storageClassName is immutable on an EtcdCluster, so the class
+is chosen once, from the replica count, and read back from the live object
+on every render after that. Unset platform keys leave it to the namespace
+default StorageClass.
+*/}}
+{{- define "kubernetes.etcd.storageClass" -}}
+{{- $live := lookup "etcd-operator.cozystack.io/v1alpha2" "EtcdCluster" .Release.Namespace (include "kubernetes.etcd.name" .) -}}
+{{- if $live -}}
+{{- dig "spec" "storage" "storageClassName" "" $live -}}
+{{- else if eq (int .Values.etcd.replicas) 1 -}}
+{{- index (.Values._cluster | default dict) "etcd-storage-class-replicated" | default "" -}}
+{{- else -}}
+{{- index (.Values._cluster | default dict) "etcd-storage-class-local" | default "" -}}
+{{- end -}}
+{{- end }}
