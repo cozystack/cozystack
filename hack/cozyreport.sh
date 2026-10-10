@@ -772,10 +772,10 @@ cozyreport_read_object() {
 # have happened inside a pod. This path states the ambiguity instead of resolving
 # it, and never reaches that helper; a test holds both halves.
 #
-# The note goes BESIDE the output, never into it, and kubectl's own message goes
-# with it. Two of the calls here stream a gzipped tarball, and a line of prose
-# appended to one is an archive no reader can open -- one rule for every exec is
-# worth more than a rule that changes with the output format.
+# The note goes BESIDE the output, and kubectl's own message goes with it. A
+# table also gets a one-line marker inside; an archive never does, because two of
+# the calls here stream a gzipped tarball, and a line of prose appended to one is
+# an archive no reader can open.
 #
 # A cut-off bundle is EITHER kept and truncated (the call site's check asks for a
 # first member, which a truncated gzip still lists) OR removed as zero bytes when
@@ -871,17 +871,18 @@ cozyreport_read_exec() {
     # this prefix to every non-YAML target since before this reader existed, and
     # two readers marking the same file type two ways means a triager grepping
     # `^# [cozyreport]` across the tarball gets half of it and cannot tell.
-    # A partial table that died on the command's own terms, not on the clock,
-    # gets the same in-file marker: a `linstor n l` that streams three rows and
-    # exits 1 is a three-node listing to anyone who opens it. The timeout branch
-    # above marks its own case and the object reader marks this one; leaving it
-    # out here had the two readers disagree about the same shape.
+    # Output followed by a failure off the clock gets an in-file marker too: a
+    # `linstor n l` that streams three rows and exits 1 is a three-node listing to
+    # anyone who opens it. It does not say TRUNCATED, which the object reader can:
+    # kubectl exec passes the remote status through, and a command that lists
+    # what it can and exits 1 for what it could not -- `zfs list` over one pool it
+    # cannot open -- wrote a complete listing.
     if [ "$_cre_prose" -eq 1 ] && [ "$_cre_had_stdout" -eq 1 ]; then
       cozyreport_append_note "$_cre_file" \
-        "# [cozyreport] TRUNCATED: this output ends here because the read exited $_cre_rc part way through, not because the command finished"
+        "# [cozyreport] EXIT $_cre_rc after this output: the status does not say whether the command finished with an error or was cut short -- see COLLECTION-FAILED.txt beside this file"
     fi
     {
-      printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read exited $_cre_rc, so its output holds only what was streamed before that."
+      printf '%s\n' "[cozyreport] $(basename "$_cre_file"): the read exited $_cre_rc; the status does not say whether the command finished with an error or its output was cut short."
       if [ "$_cre_said" -eq 1 ]; then
         # WHOLE, not the last line. `kubectl exec` appends `command terminated
         # with exit code N` after whatever the remote command said, so the last
@@ -2133,11 +2134,10 @@ if cozyreport_probe "linstor" kubectl get deploy -n cozy-linstor linstor-control
     # dataset inside a pool, so `zpool` gets the pool part of each name and
     # `zfs` the whole name. `zpool get` goes on past a pool it cannot open and
     # only sets its status, so its message and status go into the listing and
-    # `zfs list` runs either way; the read's own status is left to `zfs list`.
-    # A dataset it cannot open still lets it list the rest and exit 1, which the
-    # reader marks TRUNCATED like any non-zero exit after output. A node with
-    # no pool gets a note and no read: `zfs list -r` with no pool argument lists
-    # every pool on the machine.
+    # `zfs list` runs either way; the read's own status is left to `zfs list`,
+    # which also lists the rest past a dataset it cannot open and exits 1. A
+    # node with no pool gets a note and no read: `zfs list -r` with no pool
+    # argument lists every pool on the machine.
     if [ -z "$node" ]; then
       node=$(basename "$pod")
       pools=""

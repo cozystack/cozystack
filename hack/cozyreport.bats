@@ -688,11 +688,18 @@ STUB
     cozyreport_read_exec "$tmp/out/nodes.txt" kubectl exec -n ns deploy/c -- linstor n l
 
   grep -q 'srv2 | Ye' "$tmp/out/nodes.txt"
-  grep -q '^# \[cozyreport\] TRUNCATED' "$tmp/out/nodes.txt" || {
+  grep -q '^# \[cozyreport\] EXIT 1 after this output' "$tmp/out/nodes.txt" || {
     echo "FAIL: a partial table that failed on its own terms carries no marker, or not in the shared form"
     cat "$tmp/out/nodes.txt"
     false
   }
+  # Nor does it claim a cut. kubectl exec passes the remote status through, and a
+  # command that lists everything it can and then exits 1 is complete; the status
+  # alone cannot separate that from a stream that broke.
+  if grep -q 'TRUNCATED' "$tmp/out/nodes.txt"; then
+    echo "FAIL: a non-zero exit after output is asserted to be a cut"; false; fi
+  if grep -q 'only what was streamed before' "$tmp/out/COLLECTION-FAILED.txt"; then
+    echo "FAIL: the note beside the table asserts a cut"; false; fi
   # And it does not borrow the timeout branch's wording, which names a clock that
   # did not fire.
   if grep -q 'killed at exit' "$tmp/out/nodes.txt"; then
@@ -5114,15 +5121,18 @@ esac
 STUB
   cat > "$_ld/bin/zpool" <<'STUB'
 #!/bin/sh
-[ -z "${STUB_ZPOOL_FAIL:-}" ] || { echo 'The ZFS modules cannot be auto-loaded.' >&2; exit 1; }
 echo "zpool $*"
 for a; do :; done; echo "zpool last argument: <$a>"
+for a; do [ "$a" != "${STUB_MISSING:-}" ] || { echo "cannot open '$a': no such pool" >&2; exit 1; }; done
 STUB
   cat > "$_ld/bin/zfs" <<'STUB'
 #!/bin/sh
 [ -z "${STUB_ZFS_FAIL:-}" ] || { echo 'cannot open dataset: permission denied' >&2; exit 1; }
 echo "zfs $*"
 for a; do :; done; echo "zfs last argument: <$a>"
+[ -z "${STUB_MISSING:-}" ] || for a; do
+  case $a in "$STUB_MISSING"|"$STUB_MISSING"/*) echo "cannot open '$a': dataset does not exist" >&2; exit 1 ;; esac
+done
 STUB
   chmod +x "$_ld/bin/kubectl" "$_ld/bin/linstor" "$_ld/bin/zpool" "$_ld/bin/zfs"
 }
@@ -5273,15 +5283,16 @@ LINSTOR_SP_JSON='[[
   rm -rf "$tmp"
 }
 
-@test "a zpool that fails is not reported as a node without a pool" {
-  # The satellite's own zpool failing (no module, no /dev/zfs) is about the
-  # satellite, not about which pools LINSTOR uses; its message is the finding.
+@test "a pool that cannot be opened costs neither the other pools' listing nor a cut-short marker" {
+  # zpool and zfs both go on past a pool they cannot open, list the rest and exit
+  # 1. That is about the satellite, not about which pools LINSTOR uses, and the
+  # listing of the pools that are fine is complete.
   tmp=$(mktemp -d)
   linstor_module_stub_dir "$tmp"
   body=$(awk '/^# -- linstor module/,/^# -- sandbox-host module/' "$SCRIPT" | sed '$d' | fold_source /dev/stdin)
   REPORT_DIR="$tmp/report"
   export REPORT_DIR
-  ( export STUB_SP_JSON="$LINSTOR_SP_JSON" STUB_ZPOOL_FAIL=1 COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
+  ( export STUB_SP_JSON="$LINSTOR_SP_JSON" STUB_MISSING=tank COZYREPORT_BOUND="" PATH="$tmp/bin:$PATH"; eval "$body" ) >/dev/null 2>&1
 
   out="$REPORT_DIR/linstor/zfs/srv1.txt"
   if grep -q 'names no ZFS pool' "$out" 2>/dev/null; then
@@ -5289,27 +5300,34 @@ LINSTOR_SP_JSON='[[
     cat "$out"
     false
   fi
-  grep -q 'The ZFS modules cannot be auto-loaded' "$out" 2>/dev/null || {
+  grep -q "cannot open 'tank': no such pool" "$out" 2>/dev/null || {
     echo "FAIL: the failing zpool's message was not recorded in the listing"
     cat "$out"
     false
   }
-  # zpool get goes on past a pool it cannot open and only sets its status, so a
-  # failure there must not cost the dataset listing of the pools that are fine,
-  # nor mark that whole listing as cut short.
   grep -qx 'zfs list -p -t all -o name,used,avail,refer,origin,creation -r data-srv1 tank/thin' "$out" || {
     echo "FAIL: a failing zpool get dropped the dataset listing"
     cat "$out"
     false
   }
   if grep -q 'TRUNCATED' "$out"; then
-    echo "FAIL: a whole listing was marked as cut short because zpool get failed"
+    echo "FAIL: a whole listing was marked as cut short because one pool could not be opened"
     cat "$out"
     false
   fi
+  grep -q '^# \[cozyreport\] EXIT 1 after this output' "$out" || {
+    echo "FAIL: zfs list's non-zero exit was not marked in the listing"
+    cat "$out"
+    false
+  }
   grep -q '^# \[cozyreport\] zpool get exited 1' "$out" || {
     echo "FAIL: zpool get's status was not recorded in the listing"
     cat "$out"
+    false
+  }
+  grep -q "cannot open 'tank/thin': dataset does not exist" "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null || {
+    echo "FAIL: the dataset zfs list could not open was not recorded beside the listing"
+    cat "$REPORT_DIR/linstor/zfs/COLLECTION-FAILED.txt" 2>/dev/null
     false
   }
   rm -rf "$tmp"
