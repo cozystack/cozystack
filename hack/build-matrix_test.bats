@@ -110,7 +110,7 @@ load test_helper
   tmp=$(mktemp)
   echo "packages/system/seaweedfs/values.yaml" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
-  [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  [ "$out" = '["packages/system/seaweedfs","packages/system/objectstorage-controller"]' ]
   rm -f "$tmp"
 }
 
@@ -118,7 +118,7 @@ load test_helper
   tmp=$(mktemp)
   printf 'packages/system/seaweedfs/values.yaml\npackages/system/objectstorage-controller/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
-  [ "$out" = '["packages/system/objectstorage-controller"]' ]
+  [ "$out" = '["packages/system/seaweedfs","packages/system/objectstorage-controller"]' ]
   rm -f "$tmp"
 }
 
