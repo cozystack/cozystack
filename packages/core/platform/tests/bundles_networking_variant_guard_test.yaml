@@ -1,0 +1,230 @@
+suite: networking variant change guard (lookup of the live cozystack.networking Package)
+
+# A new networking variant is not a migration. The operator reconciles the
+# Package against the new variant and deletes every HelmRelease of the Package
+# that the new variant does not install: isp-full -> isp-hosted (noop) removes
+# cilium and kubeovn, isp-full -> isp-slim (cilium) removes kubeovn. The guard
+# reads the live Package and is inert where lookup returns nothing (helm
+# template, client-side dry-run, fresh install).
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+set:
+  bundles:
+    system:
+      enabled: true
+      variant: isp-full
+tests:
+  - it: refuses isp-full -> isp-hosted on a live kubeovn-cilium cluster and names the acknowledge value
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+    kubernetesProvider:
+      scheme: &scheme
+        "cozystack.io/v1alpha1/Package":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "packages"}
+          namespaced: false
+      objects: &liveKubeovnCilium
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.networking}
+          spec: {variant: kubeovn-cilium}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cozystack.networking Package runs variant "kubeovn-cilium".*render would switch it to "noop".*restore the previous spec.variant of the cozystack.cozystack-platform Package.*networking.acknowledgeVariantChange: "noop" in its spec.components.platform.values'
+
+  - it: refuses isp-full -> isp-slim on a live kubeovn-cilium cluster
+    set:
+      bundles:
+        system:
+          variant: isp-slim
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs variant "kubeovn-cilium".*switch it to "cilium".*networking.acknowledgeVariantChange: "cilium"'
+
+  # Nothing is deleted on this switch, so the error must not say otherwise.
+  - it: refuses isp-hosted -> isp-full on a live noop cluster
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.networking}
+          spec: {variant: noop}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs variant "noop".*switch it to "kubeovn-cilium".*deletes any HelmRelease of that Package the new variant does not install \(none if it installs everything the current one does\)'
+
+  - it: treats a live Package without spec.variant as the default variant
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.networking}
+          spec: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs variant "default".*switch it to "kubeovn-cilium"'
+
+  # No bundle renders cilium-kilo, so a live one was set by hand. Acknowledging
+  # lets the render write the bundle's variant over it, so the error has to
+  # point such a cluster at disabledPackages instead.
+  - it: points a hand-set live variant at disabledPackages
+    kubernetesProvider:
+      scheme: *scheme
+      objects: &liveCiliumKilo
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.networking}
+          spec: {variant: cilium-kilo}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs variant "cilium-kilo".*restore the previous spec.variant of the cozystack.cozystack-platform Package.*networking.acknowledgeVariantChange: "kubeovn-cilium".*If the live variant was set by hand and has to stay, add cozystack.networking to bundles.disabledPackages: acknowledging lets this render replace it'
+
+  - it: lets an acknowledged switch replace a hand-set live variant
+    set:
+      networking:
+        acknowledgeVariantChange: kubeovn-cilium
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveCiliumKilo
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+
+  - it: renders when the live variant matches the rendered one
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+
+  - it: renders the change when acknowledgeVariantChange names the new variant
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+      networking:
+        acknowledgeVariantChange: noop
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: noop
+
+  # The acknowledgement is bound to one target, so a value left behind after
+  # one switch does not wave through the next one.
+  - it: still refuses when acknowledgeVariantChange names a different variant
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+      networking:
+        acknowledgeVariantChange: cilium
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    asserts:
+      - failedTemplate:
+          errorPattern: 'networking.acknowledgeVariantChange: "noop"'
+
+  - it: still refuses when acknowledgeVariantChange is a bare boolean
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+      networking:
+        acknowledgeVariantChange: true
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    asserts:
+      - failedTemplate:
+          errorPattern: 'networking.acknowledgeVariantChange: "noop"'
+
+  # A Package left out of the render is not re-rendered, so Helm does not
+  # touch its variant; helm.sh/resource-policy: keep leaves it as it is.
+  - it: renders when cozystack.networking is in bundles.disabledPackages
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+        disabledPackages:
+          - cozystack.networking
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubeovnCilium
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+        not: true
+
+  - it: renders offline (no live Package) for isp-hosted
+    set:
+      bundles:
+        system:
+          variant: isp-hosted
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: noop
+
+  - it: renders offline (no live Package) for isp-slim
+    set:
+      bundles:
+        system:
+          variant: isp-slim
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: cilium
+
+  - it: renders on a cluster that has other Packages but no cozystack.networking yet
+    set:
+      bundles:
+        system:
+          variant: isp-full-generic
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.cert-manager}
+          spec: {variant: default}
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium-generic

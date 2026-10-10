@@ -99,6 +99,17 @@ networking:
   # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
+  # Confirms a change of the cozystack.networking Package variant on a running
+  # cluster. Changing the variant of the cozystack.cozystack-platform Package
+  # can change that variant (isp-full runs kubeovn-cilium, isp-slim runs cilium,
+  # isp-hosted runs noop), and the operator then deletes the networking
+  # HelmReleases the new variant does not install: isp-full -> isp-hosted
+  # removes Cilium and Kube-OVN. The platform render refuses such a change
+  # while the live Package has another variant, unless this is set to the NEW
+  # networking variant, as named in the render error. It confirms that one
+  # switch only; a leftover value does not cover a later switch to a different
+  # variant.
+  acknowledgeVariantChange: ""
   # In-cluster (east-west) transport encryption. Opt-in, OFF by default.
   #
   # When enabled, pod-to-pod traffic that crosses nodes is encrypted at the

@@ -8,6 +8,9 @@
 {{- end -}}
 {{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
 {{- if not (has $name $disabled) -}}
+{{- if eq $name "cozystack.networking" -}}
+{{- include "cozystack.platform.networking.variantGuard" (list $root $variant) -}}
+{{- end }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: Package
@@ -23,6 +26,29 @@ spec:
 {{- end }}
 {{- end }}
 {{ end }}
+
+{{/*
+Refuses to change the variant of a live cozystack.networking Package. The
+operator deletes every HelmRelease of a Package that its new variant does not
+install, so isp-full -> isp-hosted removes cilium and kubeovn and leaves the
+cluster without a CNI. The acknowledgement names the target variant rather than
+being a boolean, so a value left set after one switch does not cover the next.
+Inert where lookup returns nothing: helm template, client-side dry-run, first
+install.
+Call as (list $ <variant about to be rendered>).
+*/}}
+{{- define "cozystack.platform.networking.variantGuard" -}}
+{{- $root := index . 0 -}}
+{{- $variant := index . 1 -}}
+{{- $live := lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.networking" -}}
+{{- if $live -}}
+{{- $liveVariant := default "default" (dig "spec" "variant" "" $live) -}}
+{{- $ack := dig "acknowledgeVariantChange" "" ($root.Values.networking | default dict) | toString -}}
+{{- if and (ne $liveVariant $variant) (ne $ack $variant) -}}
+{{- fail (printf "the live cozystack.networking Package runs variant %q and this render would switch it to %q (bundles.system.variant: %s). The operator then deletes any HelmRelease of that Package the new variant does not install (none if it installs everything the current one does): isp-full to isp-hosted removes Cilium and Kube-OVN and leaves every pod without networking, isp-full to isp-slim removes Kube-OVN. Either restore the previous spec.variant of the cozystack.cozystack-platform Package, or, once the cluster has another CNI or no longer needs the removed one, set networking.acknowledgeVariantChange: %q in its spec.components.platform.values to confirm this exact switch. If the live variant was set by hand and has to stay, add cozystack.networking to bundles.disabledPackages: acknowledging lets this render replace it." $liveVariant $variant $root.Values.bundles.system.variant $variant) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 
 {{- define "cozystack.platform.package.default" -}}
 {{- $name := index . 0 -}}
