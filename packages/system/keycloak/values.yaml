@@ -45,6 +45,25 @@ themes: []
 # arrives via _cluster.branding, so no per-package values plumbing is required.
 
 imagePullSecrets: []
+
+# Placement of the Keycloak pods. Empty leaves it to the scheduler, which is
+# free to put both replicas in one failure domain; a StatefulSet does not
+# replace a pod stuck on an unreachable node, so that domain's loss then takes
+# every replica with it. Example spreading one replica per zone:
+#
+#   topologySpreadConstraints:
+#     - maxSkew: 1
+#       topologyKey: topology.kubernetes.io/zone
+#       whenUnsatisfiable: DoNotSchedule
+#       # Leave out nodes the pod cannot run on (an unreachable zone carries
+#       # the unreachable NoSchedule taint), so the constraint does not count
+#       # a lost zone as a domain the replacement pod must balance against.
+#       nodeTaintsPolicy: Honor
+#       labelSelector:
+#         matchLabels:
+#           app: keycloak-ha
+affinity: {}
+topologySpreadConstraints: []
 # - name: my-registry-secret
 
 # Extra environment variables to inject into the Keycloak container.
@@ -102,6 +121,11 @@ encryption:
   # Number of proxy replicas. >1 requires deksetSecretName (a shared wrapped
   # DEK set) so every replica encrypts deterministic columns under one key.
   replicas: 1
+  # Placement of the proxy pods, same shape as the top-level affinity and
+  # topologySpreadConstraints (the label is app: keycloak-kms-proxy). With more
+  # than one replica a PodDisruptionBudget keeps one of them up through drains.
+  affinity: {}
+  topologySpreadConstraints: []
   # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
   # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
   # an existing populated database — the proxy must reuse the DEK the backfill
@@ -161,6 +185,38 @@ encryption:
       cpu: 50m
     limits:
       memory: 256Mi
+
+# Placement of the keycloak-db instances (the CloudNativePG Cluster). Empty leaves
+# it to the scheduler, which is free to put both instances in one failure domain:
+# losing that domain then loses the database and every login with it. `affinity`
+# takes the CloudNativePG affinity shape (nodeAffinity, podAntiAffinityType, ...),
+# `topologySpreadConstraints` the Kubernetes one; the labelSelector for
+# cnpg.io/cluster: keycloak-db is added to each constraint that has none. When
+# topologySpreadConstraints is set it replaces the cluster-wide
+# _cluster.scheduling.globalAppTopologySpreadConstraints for this database.
+# Example, one instance per zone on nodes of two zones only:
+#
+#   database:
+#     affinity:
+#       nodeAffinity:
+#         requiredDuringSchedulingIgnoredDuringExecution:
+#           nodeSelectorTerms:
+#             - matchExpressions:
+#                 - key: topology.kubernetes.io/zone
+#                   operator: In
+#                   values: [zone-a, zone-b]
+#     topologySpreadConstraints:
+#       - maxSkew: 1
+#         topologyKey: topology.kubernetes.io/zone
+#         whenUnsatisfiable: DoNotSchedule
+#         nodeTaintsPolicy: Honor
+#
+# Placement applies to instances created from now on; CloudNativePG does not
+# move a running instance, so an existing cluster has to be rebuilt one instance
+# at a time (scale out, then remove the misplaced one).
+database:
+  affinity: {}
+  topologySpreadConstraints: []
 
 # Scheduled S3 backup of the Keycloak CNPG database (keycloak-db).
 # Disabled by default; enabling it configures WAL archiving + base backups
