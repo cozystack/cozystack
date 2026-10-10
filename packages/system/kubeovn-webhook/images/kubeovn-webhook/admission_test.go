@@ -175,3 +175,10 @@ func TestMutatePodsRejectsMalformedBody(t *testing.T) {
 		t.Fatalf("status %d, want 400", rec.Code)
 	}
 }
+
+func TestMutatePodsRejectsReviewWithoutRequest(t *testing.T) {
+	rec, _ := mutate(t, []byte(`{"apiVersion":"admission.k8s.io/v1","kind":"AdmissionReview"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+}
