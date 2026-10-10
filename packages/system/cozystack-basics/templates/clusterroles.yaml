@@ -310,11 +310,6 @@ metadata:
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
 rules:
-- apiGroups: ["kubevirt.io"]
-  resources:
-  - virtualmachines
-  verbs:
-  - '*'
 - apiGroups: ["apps.cozystack.io"]
   resources:
   - '*'
