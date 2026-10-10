@@ -1,0 +1,46 @@
+suite: VMAlert selects VMRules only from namespaces its own metrics come from
+
+# A tenant VMAlert queries the tenant's own vmselect. Left with
+# selectAllByDefault and no selector it also picks up infrastructure VMRules
+# from cozy-monitoring, cozy-kubevirt-cdi and friends, and those are written as
+# absent(up{job="..."} == 1) -- so they fire in the tenant precisely because the
+# series is absent there (issue #2775). Scoping by the
+# namespace.cozystack.io/monitoring label mirrors how vmagent.yaml scopes
+# scrapes. Root keeps selectAllByDefault, because the infrastructure namespaces
+# carry no such label and a selector would silence the platform's own alerts.
+
+set:
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    expose-ingress: ingress
+    host: example.org
+
+tests:
+  - it: keeps the cluster-wide selection for root monitoring
+    release:
+      name: monitoring-system
+      namespace: tenant-root
+    templates:
+      - templates/vm/vmalert.yaml
+    asserts:
+      - equal:
+          path: spec.selectAllByDefault
+          value: true
+      - notExists:
+          path: spec.ruleNamespaceSelector
+
+  - it: scopes a tenant to the namespaces its monitoring stack covers
+    release:
+      name: monitoring-system
+      namespace: tenant-foo
+    templates:
+      - templates/vm/vmalert.yaml
+    asserts:
+      - equal:
+          path: spec.selectAllByDefault
+          value: false
+      - equal:
+          path: spec.ruleNamespaceSelector.matchLabels["namespace.cozystack.io/monitoring"]
+          value: tenant-foo
