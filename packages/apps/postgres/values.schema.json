@@ -157,6 +157,10 @@
         "enabled": {
           "description": "Tri-state switch controlling whether the chart injects the external hostnames into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects them if `external: true` and skips them otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = \"off\"` at the CNPG layer.",
           "type": "boolean"
+        },
+        "required": {
+          "description": "Tri-state switch controlling whether the server refuses sessions that are not encrypted. When omitted, it is on if `external: true` and off otherwise. When on, the chart renders `spec.postgresql.pg_hba` with `hostssl all all all scram-sha-256` (`md5` on PostgreSQL 13, matching CloudNativePG's default rule) followed by `host all all all reject`, so a client that connects with `sslmode=disable` is refused instead of getting a plaintext session; in-cluster clients are held to the same rule, since the pod network cannot be told apart from an external client. Set to `false` to keep accepting plaintext sessions on an external instance, or to `true` to require TLS on an in-cluster one. Rendering fails if `postgresql.parameters.ssl` is off while this is in effect.",
+          "type": "boolean"
         }
       }
     },
