@@ -45,14 +45,24 @@ a failure there leaves the Secrets in place.
 {{- if empty $secrets -}}
 {{- fail "cozy-lib.hooks.deleteSecrets: secrets is empty, and an RBAC rule with no resourceNames grants delete on every Secret in the namespace" -}}
 {{- end -}}
+{{- /* The names go into the Job's shell script inside double quotes, where a
+       character such as $ or a backquote would still be expanded, so only
+       what Kubernetes accepts as a resource name gets through. */ -}}
+{{- $resourceName := `^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$` -}}
 {{- range $secrets -}}
 {{- if not (and (kindIs "string" .) .) -}}
 {{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of secrets must be a non-empty string, got %v" .) -}}
+{{- end -}}
+{{- if or (gt (len .) 253) (not (regexMatch $resourceName .)) -}}
+{{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of secrets must be a Kubernetes resource name, got %q" .) -}}
 {{- end -}}
 {{- end -}}
 {{- range $certificates -}}
 {{- if not (and (kindIs "string" .) .) -}}
 {{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of certificates must be a non-empty string, got %v" .) -}}
+{{- end -}}
+{{- if or (gt (len .) 253) (not (regexMatch $resourceName .)) -}}
+{{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of certificates must be a Kubernetes resource name, got %q" .) -}}
 {{- end -}}
 {{- end -}}
 {{- $name := printf "%s-secrets-cleanup" $root.Release.Name -}}
