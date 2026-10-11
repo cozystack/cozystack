@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,21 +87,72 @@ func TestDecodeSessionRejectsForgedCookie(t *testing.T) {
 	}
 }
 
-// The session read back from a signed cookie carries its times as int64, which
-// the refresh does not recognise, so a signed session is never refreshed.
-func TestRefreshedCookieNeverFiresForASignedSession(t *testing.T) {
-	sc := testCodec()
-	now := time.Now()
-	issued := now.Add(-2 * time.Hour)
-	enc, err := encodeSession(sc, "tok", now.Add(time.Hour).Unix(), issued.Unix())
+func signedSession(t *testing.T, sc *securecookie.SecureCookie, expires, issued time.Time) (string, map[string]any) {
+	t.Helper()
+	enc, err := encodeSession(sc, "tok", expires.Unix(), issued.Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, sess, err := decodeSession(sc, enc, now)
+	token, sess, err := decodeSession(sc, enc, issued)
 	if err != nil || token != "tok" {
 		t.Fatalf("decodeSession = %q, %v", token, err)
 	}
+	return token, sess
+}
+
+// A refreshed cookie gets a new issued time and keeps the token's expiry, so
+// refreshing never lets the cookie outlive the token.
+func TestRefreshedCookieReissuesASignedSessionUntilTokenExpiry(t *testing.T) {
+	sc := testCodec()
+	now := time.Now()
+	expires := now.Add(time.Hour)
+	token, sess := signedSession(t, sc, expires, now.Add(-2*time.Hour))
+
+	c := refreshedCookie(sc, token, sess, time.Hour, now)
+	if c == nil {
+		t.Fatal("refreshedCookie = nil for a session older than the refresh interval")
+	}
+	if c.Expires.Unix() != expires.Unix() {
+		t.Errorf("cookie Expires = %v, want the token expiry %v", c.Expires, expires)
+	}
+	if c.Name != cookieName || c.Path != "/" || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+		t.Errorf("cookie = %+v, want %s on / HttpOnly SameSite=Lax", c, cookieName)
+	}
+	_, got, err := decodeSession(sc, c.Value, now)
+	if err != nil {
+		t.Fatalf("decode refreshed cookie: %v", err)
+	}
+	if got["issued"] != now.Unix() || got["expires"] != expires.Unix() {
+		t.Errorf("refreshed session = %v, want issued %d and expires %d", got, now.Unix(), expires.Unix())
+	}
+}
+
+func TestRefreshedCookieWaitsForTheInterval(t *testing.T) {
+	sc := testCodec()
+	now := time.Now()
+	token, sess := signedSession(t, sc, now.Add(time.Hour), now.Add(-30*time.Minute))
 	if c := refreshedCookie(sc, token, sess, time.Hour, now); c != nil {
-		t.Fatalf("refreshedCookie = %+v, want nil", c)
+		t.Errorf("refreshed a session younger than the interval: %+v", c)
+	}
+	token, sess = signedSession(t, sc, now.Add(time.Hour), now.Add(-2*time.Hour))
+	if c := refreshedCookie(sc, token, sess, 0, now); c != nil {
+		t.Errorf("refreshed with refresh disabled: %+v", c)
+	}
+}
+
+// securecookie refuses a value longer than its MaxLength, which a large token
+// reaches; no half-written cookie may come out of that.
+func TestSessionCookieReportsAnEncodingFailure(t *testing.T) {
+	sc := testCodec().MaxLength(64)
+	if c, err := sessionCookie(sc, strings.Repeat("t", 512), time.Now().Add(time.Hour).Unix(), time.Now().Unix()); err == nil {
+		t.Fatalf("sessionCookie = %+v, want an error", c)
+	}
+}
+
+func TestRefreshedCookieSkipsASessionItCannotEncode(t *testing.T) {
+	now := time.Now()
+	token, sess := signedSession(t, testCodec(), now.Add(time.Hour), now.Add(-2*time.Hour))
+	if c := refreshedCookie(testCodec().MaxLength(64), token, sess, time.Hour, now); c != nil {
+		t.Fatalf("refreshedCookie = %+v, want nil when the session cannot be encoded", c)
 	}
 }
