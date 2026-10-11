@@ -72,6 +72,10 @@ spec:
               # then cascade-removes the cm-acme-http-solver-* solver objects it
               # owns. The release's TLS Certificate is named after the secret it
               # populates ({{ .Release.Name }}-ui-tls).
+              # A leftover ACME object is clutter and only warns, but a Secret
+              # left behind keeps the private key of the bucket host, so that
+              # one fails the hook at the end and the Job keeps its log.
+              key_left=0
               if kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false; then
                 # cert-manager writes the Secret without an owner reference, so
                 # it outlives the Certificate together with the private key of
@@ -80,10 +84,13 @@ spec:
                 # again. cert-manager puts no finalizer on a Certificate (v1.20
                 # sets one only on ACME Challenges), so it is gone once the
                 # delete above returns.
-                kubectl delete secret {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false \
-                  || echo "WARNING: failed to delete Secret {{ .Release.Name }}-ui-tls, the private key of the bucket host may remain" >&2
+                if ! kubectl delete secret {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false; then
+                  echo "ERROR: failed to delete Secret {{ .Release.Name }}-ui-tls, the private key of the bucket host may remain" >&2
+                  key_left=1
+                fi
               else
-                echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}, so Secret {{ .Release.Name }}-ui-tls is left as well and orphaned ACME resources may remain" >&2
+                echo "ERROR: cert-manager cleanup failed for {{ .Release.Name }}, so Secret {{ .Release.Name }}-ui-tls is left as well and orphaned ACME resources may remain" >&2
+                key_left=1
               fi
               # Orders are owned by the Certificate and are removed by the cascade
               # above; Challenges carry no labels and are reaped by the
@@ -118,6 +125,10 @@ spec:
                 kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found --wait=false \
                   || echo "WARNING: failed to delete solver ingress $ing for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
               done
+              if [ "$key_left" -ne 0 ]; then
+                echo "ACME cleanup FAILED for {{ .Release.Name }}, Secret {{ .Release.Name }}-ui-tls may still hold its private key." >&2
+                exit 1
+              fi
               echo "ACME cleanup complete."
           volumeMounts:
             - name: tmp

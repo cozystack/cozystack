@@ -5,6 +5,7 @@
 #
 #   packages/apps/qdrant/templates/hooks/cleanup-pvc.yaml
 #   packages/apps/harbor/templates/hooks/cleanup.yaml
+#   packages/apps/bucket/templates/hooks/cleanup-acme.yaml
 #   packages/extra/bootbox/templates/hooks/cleanup-secrets.yaml, which is the
 #   cozy-lib.hooks.deleteSecrets helper given a Certificate as well as a Secret
 #
@@ -36,6 +37,7 @@ load test_helper
 
 QDRANT_CHART=packages/apps/qdrant
 HARBOR_CHART=packages/apps/harbor
+BUCKET_CHART=packages/apps/bucket
 BOOTBOX_CHART=packages/extra/bootbox
 
 # render_hook <chart> <release> <namespace> <job-name> <out> [extra helm args…]
@@ -735,6 +737,132 @@ line_of() {
   if grep -q 'Secret cleanup complete' "$tmp/out"; then
     echo "FAIL: hook reported completion after a failed delete"
     cat "$tmp/out"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "bucket hook deletes the UI TLS Secret after its Certificate and exits 0" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BUCKET_CHART" my-bucket tenant-root my-bucket-cleanup-acme "$tmp/hook.sh" \
+    --set '_namespace.host=example.org'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST=''
+  export SOLVER_LIST=''
+  export EXISTING='my-bucket-ui-tls'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc when every delete succeeded"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  cert=$(line_of "$tmp/calls" 'delete certificate my-bucket-ui-tls')
+  secret=$(line_of "$tmp/calls" 'delete secret my-bucket-ui-tls')
+  if [ -z "$cert" ] || [ -z "$secret" ] || [ "$secret" -lt "$cert" ]; then
+    echo "FAIL: the Certificate and then the Secret were not both deleted, in that order"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "bucket hook keeps the UI TLS Secret and fails when its Certificate could not be deleted" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BUCKET_CHART" my-bucket tenant-root my-bucket-cleanup-acme "$tmp/hook.sh" \
+    --set '_namespace.host=example.org'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST=''
+  export SOLVER_LIST=''
+  export EXISTING='my-bucket-ui-tls'
+  export FAIL_DELETE='certificate'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the private key may remain"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if grep -q 'delete secret' "$tmp/calls"; then
+    echo "FAIL: the Secret was deleted while its Certificate may still exist"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "bucket hook fails when the UI TLS Secret delete fails and still sweeps the ACME solvers" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BUCKET_CHART" my-bucket tenant-root my-bucket-cleanup-acme "$tmp/hook.sh" \
+    --set '_namespace.host=example.org'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST='my-bucket-cert-1 '
+  export SOLVER_LIST=''
+  export EXISTING='my-bucket-ui-tls my-bucket-cert-1'
+  export FAIL_DELETE='secret'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the Secret delete failed"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^ERROR: failed to delete Secret my-bucket-ui-tls' "$tmp/err"; then
+    echo "FAIL: the failed Secret delete was not reported by name"
+    cat "$tmp/err"
+    false
+  fi
+  if ! grep -q 'delete challenge .*my-bucket-cert-1' "$tmp/calls"; then
+    echo "FAIL: the failed Secret delete stopped the ACME sweep after it"
+    cat "$tmp/calls"
+    false
+  fi
+  if grep -q 'ACME cleanup complete' "$tmp/out"; then
+    echo "FAIL: hook reported completion although the private key may remain"
+    cat "$tmp/out"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "bucket hook still only warns about an ACME object it could not delete" {
+  # Leftover ACME objects are clutter rather than key material, so they keep
+  # the warning they always had and the hook still succeeds.
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BUCKET_CHART" my-bucket tenant-root my-bucket-cleanup-acme "$tmp/hook.sh" \
+    --set '_namespace.host=example.org'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST='my-bucket-cert-1 '
+  export SOLVER_LIST=''
+  export EXISTING='my-bucket-ui-tls my-bucket-cert-1'
+  export FAIL_DELETE='challenge'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc for a leftover Challenge alone"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^WARNING: failed to delete challenge my-bucket-cert-1' "$tmp/err"; then
+    echo "FAIL: the failed Challenge delete was not reported"
+    cat "$tmp/err"
+    false
+  fi
+  if ! grep -q 'delete secret my-bucket-ui-tls' "$tmp/calls"; then
+    echo "FAIL: the Secret delete did not run"
+    cat "$tmp/calls"
     false
   fi
   rm -rf "$tmp"

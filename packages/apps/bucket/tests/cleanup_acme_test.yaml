@@ -111,7 +111,12 @@ tests:
       # issued again.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'if kubectl delete certificate my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*kubectl delete secret my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false[\s\S]*else\s+echo "WARNING: cert-manager cleanup failed for my-bucket, so Secret my-bucket-ui-tls is left as well'
+          pattern: 'if kubectl delete certificate my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*if ! kubectl delete secret my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*key_left=1[\s\S]*else\s+echo "ERROR: cert-manager cleanup failed for my-bucket, so Secret my-bucket-ui-tls is left as well[^"]*" >&2\s+key_left=1'
+      # Leftover ACME objects only warn, but a Secret that may still hold the
+      # private key fails the Job, after the sweeps, so its log is kept.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$key_left" -ne 0 \]; then\s+echo "ACME cleanup FAILED for my-bucket[^"]*" >&2\s+exit 1\s+fi\s+echo "ACME cleanup complete\."'
 
   - it: sets resource requests and limits on the cleanup container
     documentIndex: 0
