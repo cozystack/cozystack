@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
-# Behavioural tests for the two post-delete cleanup hooks that reclaim storage
-# and ACME objects when an app release is uninstalled:
+# Behavioural tests for the post-delete cleanup hooks that reclaim storage,
+# ACME objects and the Secrets cert-manager writes when an app release is
+# uninstalled:
 #
 #   packages/apps/qdrant/templates/hooks/cleanup-pvc.yaml
 #   packages/apps/harbor/templates/hooks/cleanup.yaml
+#   packages/extra/bootbox/templates/hooks/cleanup-secrets.yaml, which is the
+#   cozy-lib.hooks.deleteSecrets helper given a Certificate as well as a Secret
 #
 # The scripts are extracted from the rendered charts and RUN against a fake
 # kubectl, because the property under test is the container's exit code and no
@@ -18,6 +21,9 @@
 #   * an object that is already gone stays a success, so a re-run over an
 #     already-clean namespace exits 0;
 #   * a listing that FAILED is distinguishable from one that returned nothing.
+#   * a TLS Secret goes only after its Certificate, and stays when the
+#     Certificate delete failed, because cert-manager issues the Secret of a
+#     live Certificate again.
 #
 # Run from the repo root through `make bats-unit-tests`; relative paths resolve
 # against that cwd. The file also remains compatible with the legacy
@@ -30,6 +36,7 @@ load test_helper
 
 QDRANT_CHART=packages/apps/qdrant
 HARBOR_CHART=packages/apps/harbor
+BOOTBOX_CHART=packages/extra/bootbox
 
 # render_hook <chart> <release> <namespace> <job-name> <out> [extra helm args…]
 # Extract the named Job's shell script from the rendered chart into <out>. The
@@ -509,6 +516,224 @@ persistentvolumeclaim/db-qdrant-test-0'
   fi
   if grep -q 'Cleanup complete' "$tmp/out"; then
     echo "FAIL: hook reported completion after a failed listing"
+    cat "$tmp/out"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+# line_of <file> <pattern> prints the number of the first line matching
+# <pattern>, or nothing. Used to compare the order of two calls in $KLOG.
+line_of() {
+  grep -n -e "$2" "$1" | head -n 1 | cut -d: -f1
+} # line_of
+
+@test "harbor hook deletes the TLS Secret of the Ingress Certificate, after that Certificate" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$HARBOR_CHART" harbor-test tenant-test harbor-test-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST=''
+  export SOLVER_LIST=''
+  export EXISTING='harbor-test-ingress-tls'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc when every delete succeeded"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  cert=$(line_of "$tmp/calls" 'delete certificate .*harbor-test-ingress-tls')
+  secret=$(line_of "$tmp/calls" 'delete secret .*harbor-test-ingress-tls')
+  if [ -z "$secret" ]; then
+    echo "FAIL: the TLS Secret of the Ingress Certificate was never deleted"
+    cat "$tmp/calls"
+    false
+  fi
+  if [ -z "$cert" ] || [ "$secret" -lt "$cert" ]; then
+    echo "FAIL: the Secret was deleted before its Certificate"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "harbor hook leaves the TLS Secret and fails when its Certificate could not be deleted" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$HARBOR_CHART" harbor-test tenant-test harbor-test-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST=''
+  export SOLVER_LIST=''
+  export EXISTING='harbor-test-ingress-tls'
+  export FAIL_DELETE='certificate'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the Certificate delete failed"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if grep -q 'delete secret' "$tmp/calls"; then
+    echo "FAIL: the Secret was deleted while its Certificate may still exist"
+    cat "$tmp/calls"
+    false
+  fi
+  if ! grep -q '^ERROR: .*Certificate tenant-test/harbor-test-ingress-tls, so its Secret is left as well' "$tmp/err"; then
+    echo "FAIL: the hook did not say the Secret was left with the Certificate"
+    cat "$tmp/err"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "harbor hook reports a failed TLS Secret delete by name and still runs the later sweeps" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$HARBOR_CHART" harbor-test tenant-test harbor-test-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export CHALLENGE_LIST='harbor-test-cert-1 '
+  export SOLVER_LIST=''
+  export EXISTING='harbor-test-ingress-tls harbor-test-cert-1'
+  export FAIL_DELETE='secret'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the Secret delete failed"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^ERROR: .*Secret tenant-test/harbor-test-ingress-tls' "$tmp/err"; then
+    echo "FAIL: the failed Secret delete was not reported by name"
+    cat "$tmp/err"
+    false
+  fi
+  if ! grep -q 'delete challenge .*harbor-test-cert-1' "$tmp/calls"; then
+    echo "FAIL: the failed Secret delete stopped the ACME sweep after it"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a Secret cleanup hook deletes its Certificate before its Secret and exits 0" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BOOTBOX_CHART" bootbox tenant-root bootbox-secrets-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_namespace.ingress=tenant-root' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export EXISTING='bootbox-tls'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc when both deletes succeeded"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q 'Secret cleanup complete' "$tmp/out"; then
+    echo "FAIL: hook did not report completion"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  cert=$(line_of "$tmp/calls" 'delete certificates.cert-manager.io .*bootbox-tls')
+  secret=$(line_of "$tmp/calls" 'delete secret .*bootbox-tls')
+  if [ -z "$cert" ] || [ -z "$secret" ] || [ "$secret" -lt "$cert" ]; then
+    echo "FAIL: the Certificate and then the Secret were not both deleted, in that order"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a Secret cleanup hook exits 0 when the Certificate and the Secret are already gone" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BOOTBOX_CHART" bootbox tenant-root bootbox-secrets-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_namespace.ingress=tenant-root' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export EXISTING=''
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "FAIL: hook exited $rc on an already-clean namespace"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q 'delete secret .*bootbox-tls' "$tmp/calls"; then
+    echo "FAIL: the Secret delete was never attempted"
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a Secret cleanup hook leaves the Secret and fails when the Certificate delete fails" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BOOTBOX_CHART" bootbox tenant-root bootbox-secrets-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_namespace.ingress=tenant-root' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export EXISTING='bootbox-tls'
+  export FAIL_DELETE='certificates.cert-manager.io'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the Certificate delete failed"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if grep -q 'delete secret' "$tmp/calls"; then
+    echo "FAIL: the Secret was deleted while its Certificate may still exist"
+    cat "$tmp/calls"
+    false
+  fi
+  if ! grep -q '^ERROR: failed to delete Certificates of bootbox in tenant-root' "$tmp/err"; then
+    echo "FAIL: the failed Certificate delete was not reported"
+    cat "$tmp/err"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "a Secret cleanup hook fails and says so when the Secret delete fails" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$BOOTBOX_CHART" bootbox tenant-root bootbox-secrets-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set '_namespace.ingress=tenant-root' --set '_cluster.solver=http01'
+
+  export KLOG="$tmp/calls"
+  export EXISTING='bootbox-tls'
+  export FAIL_DELETE='secret'
+
+  rc=0
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh" > "$tmp/out" 2> "$tmp/err" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: hook exited 0 although the Secret delete failed"
+    cat "$tmp/out" "$tmp/err"
+    false
+  fi
+  if ! grep -q '^ERROR: failed to delete Secrets of bootbox in tenant-root' "$tmp/err"; then
+    echo "FAIL: the failed Secret delete was not reported"
+    cat "$tmp/err"
+    false
+  fi
+  if grep -q 'Secret cleanup complete' "$tmp/out"; then
+    echo "FAIL: hook reported completion after a failed delete"
     cat "$tmp/out"
     false
   fi
