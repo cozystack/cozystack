@@ -446,26 +446,56 @@ func decodeSession(sc *securecookie.SecureCookie, value string, now time.Time) (
 	return token, sess, nil
 }
 
+// sessionCookie builds the cookie that carries a session until the token
+// expires.
+func sessionCookie(sc *securecookie.SecureCookie, token string, exp, issued int64) (*http.Cookie, error) {
+	enc, err := encodeSession(sc, token, exp, issued)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Cookie{
+		Name:     cookieName,
+		Value:    enc,
+		Path:     "/",
+		Expires:  time.Unix(exp, 0),
+		Secure:   cookieSecure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}, nil
+}
+
 // refreshedCookie re-issues the session cookie once it is older than refresh,
 // keeping the token's expiry. It returns nil when no refresh is due.
 func refreshedCookie(sc *securecookie.SecureCookie, token string, sess map[string]any, refresh time.Duration, now time.Time) *http.Cookie {
 	if refresh <= 0 {
 		return nil
 	}
-	issued, ok := sess["issued"].(float64)
-	if !ok || now.Sub(time.Unix(int64(issued), 0)) <= refresh {
+	issued, ok := unixSeconds(sess["issued"])
+	if !ok || now.Sub(time.Unix(issued, 0)) <= refresh {
 		return nil
 	}
-	enc, _ := encodeSession(sc, token, int64(sess["expires"].(float64)), now.Unix())
-	return &http.Cookie{
-		Name:     cookieName,
-		Value:    enc,
-		Path:     "/",
-		Expires:  time.Unix(int64(sess["expires"].(float64)), 0),
-		Secure:   cookieSecure,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+	expires, ok := unixSeconds(sess["expires"])
+	if !ok {
+		return nil
 	}
+	c, err := sessionCookie(sc, token, expires, now.Unix())
+	if err != nil {
+		log.Printf("session refresh skipped: %v", err)
+		return nil
+	}
+	return c
+}
+
+// unixSeconds reads a session time. The default gob encoding of securecookie
+// returns the int64 it was given; its JSON encoder would return a float64.
+func unixSeconds(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	}
+	return 0, false
 }
 
 /* ----------------------------- main ------------------------------------- */
@@ -537,16 +567,13 @@ func main() {
 			if expTime, ok := verifiedToken.Expiration(); ok && !expTime.IsZero() {
 				exp = expTime.Unix()
 			}
-			session, _ := encodeSession(sc, token, exp, time.Now().Unix())
-			http.SetCookie(w, &http.Cookie{
-				Name:     cookieName,
-				Value:    session,
-				Path:     "/",
-				Expires:  time.Unix(exp, 0),
-				Secure:   cookieSecure,
-				HttpOnly: true,
-				SameSite: http.SameSiteLaxMode,
-			})
+			c, err := sessionCookie(sc, token, exp, time.Now().Unix())
+			if err != nil {
+				log.Printf("session cookie: %v", err)
+				_ = loginTmpl.Execute(w, newLoginData(signIn, "Could not store the session", brandingConfigPath))
+				return
+			}
+			http.SetCookie(w, c)
 			http.Redirect(w, r, "/", http.StatusSeeOther)
 		}
 	})
