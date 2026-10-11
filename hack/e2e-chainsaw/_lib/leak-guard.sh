@@ -23,6 +23,24 @@
 # pod. A leak is charged once, to its own suite: the next suite sees an old
 # root.
 #
+# A Secret that cert-manager wrote is charged too. It holds no requests, but
+# cert-manager runs here without --enable-certificate-owner-ref, so nothing
+# deletes it with its Certificate, and a later release of the same name would
+# find and reuse the private key it holds (cozystack/cozystack#4704). It is
+# charged to a suite when all three hold after the suite's own cleanup:
+#   - it carries the cert-manager.io/certificate-name annotation, which
+#     cert-manager puts on every Secret it issues a Certificate into;
+#   - it was created at or after the suite started, which does for a Secret
+#     what the pod baseline does: one older than the suite is not the suite's;
+#   - the root of its chain was too. A Secret without ownerReferences is walked
+#     as though the Certificate the annotation names owned it, so a platform
+#     Secret re-issued mid-suite traces back to a Certificate the install
+#     created, and one whose Certificate is gone ends the walk at itself. A
+#     Secret with owners of its own, which an operator can patch on, is walked
+#     through them like a pod.
+# Charged Secrets get the same budget and wait as pods, and are reported apart
+# from them, under LEAKED-SECRETS.
+#
 # The start instant comes from an apiserver rather than from this machine. With
 # several control-plane nodes the reading and a root's creationTimestamp may be
 # stamped by different apiservers, so the comparison is across node clocks.
@@ -92,6 +110,23 @@ lg_baseline() {
     local pods
     pods=$(lg_pods) || return 1
     jq -c '[.items[].metadata.uid]' <<<"$pods"
+}
+
+# lg_tls_secrets — every kubernetes.io/tls Secret in the cluster as JSON, cut to
+# the metadata the check reads. cert-manager creates every Secret it issues into
+# with that type, and selecting on it keeps the read from carrying every stored
+# Helm release revision in the cluster with it. The cut is made in the pipe, so the
+# keys these Secrets hold never reach a shell variable, nor the temporary file
+# bash can back a here-string with. A failed read is an error, as for pods.
+lg_tls_secrets() {
+    (
+        set -o pipefail
+        kubectl get secrets --all-namespaces --field-selector type=kubernetes.io/tls --output json \
+            | jq -c '{items: [.items[] | {kind: "Secret", metadata: (.metadata | {
+                namespace, name, creationTimestamp, deletionTimestamp, ownerReferences,
+                annotations: ((.annotations // {}) | with_entries(select(.key == "cert-manager.io/certificate-name")))
+            })}]}'
+    )
 }
 
 # lg_resource APIVERSION KIND — the kubectl resource argument for an owner.
@@ -170,6 +205,44 @@ lg_leaks() {
     done <<<"$cands"
 }
 
+# lg_secret_leaks START — prints one line per cert-manager Secret charged to the
+# suite that started at START. Returns 1 when the Secret list or a link of a
+# chain cannot be read.
+lg_secret_leaks() {
+    local start=$1 secrets cands secret ns root root_ts
+    secrets=$(lg_tls_secrets) || { echo "leak-guard: could not list Secrets" >&2; return 1; }
+    cands=$(jq -c --arg start "$start" '
+        .items[]
+        | select((.metadata.annotations["cert-manager.io/certificate-name"] // "") != "")
+        | select(.metadata.creationTimestamp >= $start)
+        | if (.metadata.ownerReferences // []) == [] then
+            .metadata.ownerReferences = [{apiVersion: "cert-manager.io/v1", kind: "Certificate",
+                name: .metadata.annotations["cert-manager.io/certificate-name"]}]
+          else . end' <<<"$secrets") || {
+        echo "leak-guard: the Secret list could not be parsed" >&2
+        return 1
+    }
+    while IFS= read -r secret; do
+        [ -n "$secret" ] || continue
+        ns=$(jq -r '.metadata.namespace' <<<"$secret")
+        root=$(lg_root "$ns" "$secret") || return 1
+        root_ts=${root%% *}
+        [[ ! "$root_ts" < "$start" ]] || continue
+        jq -r --arg root "${root#* }" --arg rts "$root_ts" \
+            '"  secret/\(.metadata.namespace)/\(.metadata.name) certificate=\(.metadata.annotations["cert-manager.io/certificate-name"]) deleting=\(.metadata.deletionTimestamp // "no") root=\($root) rootCreated=\($rts)"' <<<"$secret"
+    done <<<"$cands"
+}
+
+# lg_all_leaks START BASELINE_JSON — the pods, then the Secrets, charged to the
+# suite that started at START. Returns 1 when either cannot be read.
+lg_all_leaks() {
+    local pods secrets
+    pods=$(lg_leaks "$1" "$2") || return 1
+    secrets=$(lg_secret_leaks "$1") || return 1
+    [ -z "$pods" ] || printf '%s\n' "$pods"
+    [ -z "$secrets" ] || printf '%s\n' "$secrets"
+}
+
 # lg_allowlisted SUITE ALLOWLIST — prints the issue ref when SUITE is listed.
 lg_allowlisted() {
     awk -v s="$1" '$1 !~ /^#/ && $1 == s { print $2; exit }' "$2"
@@ -197,6 +270,39 @@ lg_allowlist_validate() {
     return "$bad"
 }
 
+# lg_print_leaks SUITE KIND STATE DETAIL LINES — the annotation and the marker
+# line for one kind of leftover, then the leftovers. Pods and Secrets keep
+# separate titles and markers, so a log search for LEAKED-PODS finds only pods.
+lg_print_leaks() {
+    local suite=$1 kind=$2 state=$3 detail=$4 lines=$5 title marker noun count
+    [ -n "$lines" ] || return 0
+    case $kind in
+        pods) title=leaked-pods marker=LEAKED-PODS noun=pods ;;
+        secrets) title=leaked-secrets marker=LEAKED-SECRETS noun="cert-manager Secrets" ;;
+    esac
+    count=$(grep -c . <<<"$lines")
+    case $state in
+        allowlisted)
+            echo "::warning title=$title (allowlisted $detail)::suite=$suite count=$count, exempt by hack/e2e-chainsaw/_lib/leak-allowlist.txt"
+            echo "$marker suite=$suite count=$count allowlisted=$detail"
+            ;;
+        inconclusive)
+            # The error goes last and quoted, since it carries spaces.
+            echo "::warning title=$title (inconclusive)::suite=$suite count=$count stopped waiting on a failed read: $detail"
+            echo "$marker suite=$suite count=$count inconclusive=\"$detail\""
+            ;;
+        checked-once)
+            echo "::warning title=$title (suite already failed)::suite=$suite count=$count $noun of this failed suite were present right after its cleanup; checked once, without the ${LG_BUDGET}s wait"
+            echo "$marker suite=$suite checked-once=chainsaw-failed count=$count"
+            ;;
+        leaked)
+            echo "::error title=$title::suite=$suite count=$count $noun created by this suite outlived its cleanup by more than ${LG_BUDGET}s"
+            echo "$marker suite=$suite budget=${LG_BUDGET}s count=$count"
+            ;;
+    esac
+    printf '%s\n' "$lines"
+}
+
 # lg_check_suite SUITE START BASELINE_JSON CHAINSAW_RC ALLOWLIST
 #
 # Returns 1 when SUITE leaked and is not allowlisted, and 2 when the first
@@ -207,16 +313,16 @@ lg_allowlist_validate() {
 # leftovers are reported as a warning: it is red already, and its cleanup may be
 # what failed.
 lg_check_suite() {
-    local suite=$1 start=$2 baseline=$3 crc=$4 allow=$5 ref leaks relist t0 deadline remaining line target out began werr="" timedout=0
+    local suite=$1 start=$2 baseline=$3 crc=$4 allow=$5 ref leaks relist t0 deadline remaining line target kind out began werr="" timedout=0
     ref=$(lg_allowlisted "$suite" "$allow")
     t0=$(date +%s)
     deadline=$((t0 + LG_BUDGET))
-    leaks=$(lg_leaks "$start" "$baseline") || {
+    leaks=$(lg_all_leaks "$start" "$baseline") || {
         echo "::error title=leak-guard::suite=$suite the leak check could not read the cluster"
         return 2
     }
-    # One wait per pod inside what is left of the budget, then a fresh list.
-    # A pod that is already gone returns at once: kubectl's delete condition
+    # One wait per pod or Secret inside what is left of the budget, then a fresh
+    # list. One that is already gone returns at once: kubectl's delete condition
     # reports done on NotFound, and a wait that runs out while watching reports
     # wait.ErrWaitTimeout, "timed out waiting for the condition"
     # (staging/src/k8s.io/kubectl/pkg/cmd/wait/delete.go and
@@ -232,13 +338,14 @@ lg_check_suite() {
     # wait" and fail with "condition not met", which is why a spent budget is
     # caught before calling kubectl rather than passed to it.
     # Three outcomes, nothing retried:
-    #   - a timeout or a spent budget: the pod outlived the budget, and the last
-    #     good list is the verdict, including when the re-list after it fails;
+    #   - a timeout or a spent budget: what it waited on outlived the budget, and
+    #     the last good list is the verdict, including when the re-list after it
+    #     fails;
     #   - any other failure of a wait or of the re-list, before the budget is
     #     spent and before any timeout: the apiserver or the connection rather
-    #     than the pod, so waiting stops and the result is inconclusive, because
-    #     charging a leak on it would make the guard a source of the flaky reds
-    #     it exists to attribute;
+    #     than what it waited on, so waiting stops and the result is
+    #     inconclusive, because charging a leak on it would make the guard a
+    #     source of the flaky reds it exists to attribute;
     #   - a failed first reading after the suite is handled above: unchecked,
     #     and the suite fails.
     if [ -n "$leaks" ] && [ -z "$ref" ] && [ "$crc" -eq 0 ]; then
@@ -246,13 +353,17 @@ lg_check_suite() {
             while IFS= read -r line; do
                 target=${line#  }
                 target=${target%% *}
+                case $target in
+                    secret/*) kind=secret target=${target#secret/} ;;
+                    *) kind=pod ;;
+                esac
                 remaining=$((deadline - $(date +%s)))
                 if [ "$remaining" -le 0 ]; then
                     timedout=1
                     break
                 fi
                 began=$(date +%s)
-                if out=$(kubectl wait --for=delete "pod/${target#*/}" --namespace "${target%%/*}" \
+                if out=$(kubectl wait --for=delete "$kind/${target#*/}" --namespace "${target%%/*}" \
                     --timeout="${remaining}s" 2>&1); then
                     continue
                 fi
@@ -268,10 +379,10 @@ lg_check_suite() {
                 break
             done <<<"$leaks"
             [ -z "$werr" ] || break
-            if relist=$(lg_leaks "$start" "$baseline"); then
+            if relist=$(lg_all_leaks "$start" "$baseline"); then
                 leaks=$relist
             elif [ "$timedout" -eq 0 ]; then
-                werr="the re-list after the waits failed: the pod list or an owner could not be read"
+                werr="the re-list after the waits failed: a pod or Secret list or an owner could not be read"
             fi
         done
     fi
@@ -279,35 +390,23 @@ lg_check_suite() {
         echo "leak-guard: suite=$suite clear after $(($(date +%s) - t0))s"
         return 0
     fi
-    local count
-    count=$(grep -c . <<<"$leaks")
+    local state detail="" rc=0
     if [ -n "$ref" ]; then
-        echo "::warning title=leaked-pods (allowlisted $ref)::suite=$suite count=$count, exempt by hack/e2e-chainsaw/_lib/leak-allowlist.txt"
-        echo "LEAKED-PODS suite=$suite count=$count allowlisted=$ref"
-        printf '%s\n' "$leaks"
-        return 0
+        state=allowlisted detail=$ref
+    elif [ -n "$werr" ]; then
+        # Waiting stopped on a failed read, so whether these would have gone
+        # inside the budget is unknown. Report it, do not charge it.
+        state=inconclusive detail=$werr
+    elif [ "$crc" -ne 0 ]; then
+        # Checked once with no wait, so these may still be tearing down; the
+        # suite is red on its own failure and this adds evidence, not a verdict.
+        state=checked-once
+    else
+        state=leaked rc=1
     fi
-    # Waiting stopped on a failed read, so whether these pods would have gone
-    # inside the budget is unknown. Report it, do not charge it. The error goes
-    # last and quoted, since it carries spaces.
-    if [ -n "$werr" ]; then
-        echo "::warning title=leaked-pods (inconclusive)::suite=$suite count=$count stopped waiting on a failed read: $werr"
-        echo "LEAKED-PODS suite=$suite count=$count inconclusive=\"$werr\""
-        printf '%s\n' "$leaks"
-        return 0
-    fi
-    # Checked once with no wait, so these pods may still be tearing down; the
-    # suite is red on its own failure and this adds evidence, not a verdict.
-    if [ "$crc" -ne 0 ]; then
-        echo "::warning title=leaked-pods (suite already failed)::suite=$suite count=$count pods of this failed suite were present right after its cleanup; checked once, without the ${LG_BUDGET}s wait"
-        echo "LEAKED-PODS suite=$suite checked-once=chainsaw-failed count=$count"
-        printf '%s\n' "$leaks"
-        return 0
-    fi
-    echo "::error title=leaked-pods::suite=$suite count=$count pods created by this suite outlived its cleanup by more than ${LG_BUDGET}s"
-    echo "LEAKED-PODS suite=$suite budget=${LG_BUDGET}s count=$count"
-    printf '%s\n' "$leaks"
-    return 1
+    lg_print_leaks "$suite" pods "$state" "$detail" "$(grep -v '^  secret/' <<<"$leaks")"
+    lg_print_leaks "$suite" secrets "$state" "$detail" "$(grep '^  secret/' <<<"$leaks")"
+    return "$rc"
 }
 
 # lg_merge_reports DIR SUITE... — one JUnit document from the per-suite reports
@@ -332,7 +431,7 @@ lg_merge_reports() {
         fi
         if [ -f "$dir/$key.leaked" ]; then
             lg_synthetic_suite "$suite" leak-guard \
-                "the leak guard failed this suite; see the leaked-pods lines for suite=$suite in the job log" >"$dir/$key.leaked.xml"
+                "the leak guard failed this suite; see the leaked-pods or leaked-secrets lines for suite=$suite in the job log" >"$dir/$key.leaked.xml"
             files+=("$dir/$key.leaked.xml")
         fi
     done
