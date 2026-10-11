@@ -1432,7 +1432,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				Port:          80,
 				Protocol:      gatewayv1.HTTPProtocolType,
 				Hostname:      &wildcardHost,
-				AllowedRoutes: edgeAllowedRoutes,
+				AllowedRoutes: edgeAllowedRoutes.DeepCopy(),
 			},
 			gatewayv1.Listener{
 				Name:          "edge-apex",
