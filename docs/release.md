@@ -325,6 +325,28 @@ A stable `vX.Y.Z` is created only by **promoting an existing release-candidate**
 
 So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. Pushing a stable `vX.Y.Z` tag by hand is **not** a supported path: `tags.yaml` fails fast on a stable tag that has no pre-existing draft ("stable tags come from promote-rc.yaml"), and even so the finalize step would refuse to move a pre-existing tag. Pre-releases (`vX.Y.Z-rc.N`, `-alpha.N`, `-beta.N`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow, which pushes the tag as the CI app; [`tags.yaml`](../.github/workflows/tags.yaml) then fires on that push, builds it, and publishes the pre-release. Cutting via the workflow (rather than a manual `git push`) is what lets repo admins lock `v*` tag creation to the CI app — see the tag-protection note below.
 
+## Release signatures and SBOM
+
+Every release carries three files beside its other assets. [`hack/upload-assets.sh`](../hack/upload-assets.sh) has [`hack/sign-release-assets.sh`](../hack/sign-release-assets.sh) write them before it uploads anything:
+
+- `cozystack-sbom.spdx.json` is an SPDX SBOM, made with syft, of the committed source tree and of the `cozypkg` binaries in the `cozypkg-*.tar.gz` assets.
+- `cozystack-checksums.txt` holds the SHA-256 of every other asset and of the SBOM.
+- `cozystack-checksums.txt.sigstore.json` is a Sigstore bundle with a keyless cosign signature over the checksums. Its certificate names the workflow that published the release: `tags.yaml` for a pre-release, `promote-rc.yaml` for a stable one.
+
+One signature covers every asset through the checksums. To check a download, verify the checksums, then the file against them:
+
+```sh
+cosign verify-blob cozystack-checksums.txt \
+  --bundle cozystack-checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/cozystack/cozystack/\.github/workflows/(tags|promote-rc)\.yaml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --check --ignore-missing cozystack-checksums.txt
+```
+
+The script runs the same `cosign verify-blob` before it returns, so a signature this check would reject fails the job before the first upload, and the release is not published with assets but without a signature. Both jobs that call `make upload_assets`, `tags.yaml::prepare-release` and `promote-rc.yaml::promote`, hold `id-token: write` for the signing identity and install syft and cosign. A stable release gets its own three files rather than its rc's: promotion restamps several assets, so the checksums are recomputed and signed again.
+
+`promote-rc.yaml` runs the `hack/upload-assets.sh` of the rc tree, not the dispatch ref's. A stable release is therefore signed only when its rc was tagged from a tree that has `hack/sign-release-assets.sh`, and a maintenance line starts carrying signatures once that script is backported to its `release-X.Y` branch.
+
 ## Nightly builds
 
 A nightly is an **installable copy of `main` on GHCR — not a rebuild and not a release**. [`build-main.yaml`](../.github/workflows/build-main.yaml) already builds every push to `main` into the CI registry (OCIR); the nightly promotes that build to the public release registry (GHCR) and proves it installs.

@@ -258,6 +258,7 @@ jobs:
       contents: write # push the release-X.Y.Z staging branch, stage the draft release
       packages: write # publish the temporary stable-candidate packages artifact
       pull-requests: write # reserved for parity; the PR is opened in open-pr
+      id-token: write # keyless signing of the release checksums in hack/upload-assets.sh
 
     # open-pr reads these from `promote`, which passes the parse job's validated
     # outputs straight through.
@@ -575,6 +576,15 @@ jobs:
           STABLE_VERSION: ${{ needs.parse.outputs.stable_version }}
         run: |
           make manifests assets-cozypkg openapi-json COZYSTACK_VERSION="${STABLE_VERSION}"
+
+      # The rc tree's hack/upload-assets.sh writes a fresh SBOM with syft and
+      # signs the stable checksums with cosign, keylessly, as this job. An rc
+      # tagged from a tree without hack/sign-release-assets.sh uploads neither,
+      # and the two tools go unused.
+      - name: Set up syft
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Set up cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Create draft stable release and upload assets
         env:
