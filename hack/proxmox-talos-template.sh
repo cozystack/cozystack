@@ -39,6 +39,12 @@
 #                            template has, so this is every worker's system disk.
 #   COZY_TEMPLATE_CPU        default x86-64-v2-AES. Talos needs x86-64-v2, which
 #                            the Proxmox default kvm64 does not provide.
+#   COZY_TALOS_FACTORY_CA    path to a PEM file with the CA certificate(s) of a
+#                            self-hosted factory or mirror served by an internal
+#                            CA, the blocks a kubevirt pool puts in
+#                            talos.imageFactoryCA. curl on the hypervisor trusts
+#                            them on top of the system store, as CDI does, and
+#                            the hypervisor's own trust store is left as it is.
 #   COZY_PVE_SSH_KEY         default ~/.ssh/id_ed25519
 set -eu
 
@@ -58,6 +64,21 @@ chart_talos() {
     in_block && /^[^ #]/ { exit }
     in_block && $1 == key ":" { v = $2; gsub(/"/, "", v); print v; exit }
   ' "$VALUES"
+}
+
+# Prints the certificate blocks of a PEM file and fails unless the file holds
+# complete certificate blocks and nothing else: they are pasted into the root
+# program, and a private key kept in the same file must not travel with them.
+pem_certificates() {
+  tr -d '\r' < "$1" | awk '
+    { sub(/[ \t]+$/, "") }
+    /^-----BEGIN CERTIFICATE-----$/ && !inside { inside = 1; body = 0; print; next }
+    /^-----END CERTIFICATE-----$/ && inside && body { inside = 0; blocks++; print; next }
+    inside && /^[A-Za-z0-9+\/=]+$/ { body = 1; print; next }
+    !inside && /^$/ { next }
+    { bad = 1; exit }
+    END { exit (bad || inside || !blocks) }
+  '
 }
 
 # grep -x matches line by line, so a value with a newline in it would pass on
@@ -81,6 +102,7 @@ FACTORY=${COZY_TALOS_FACTORY_URL:-$(chart_talos imageFactoryURL)}
 FACTORY=${FACTORY%/}
 DISK_SIZE=${COZY_TEMPLATE_DISK_SIZE:-20G}
 CPU=${COZY_TEMPLATE_CPU:-x86-64-v2-AES}
+FACTORY_CA=${COZY_TALOS_FACTORY_CA:-}
 TAGS=${COZY_TEMPLATE_TAGS:-cozystack,talos,talos-$VERSION,schematic-$(printf '%s' "$SCHEMATIC" | cut -c1-8)}
 
 # Every value below is pasted into a program that runs as root on the
@@ -93,6 +115,14 @@ matches "$SCHEMATIC" '[0-9a-f]{64}' || die "schematic '$SCHEMATIC' is not an Ima
 matches "$FACTORY" 'https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?' || die "factory URL '$FACTORY' is not a plain http(s) URL"
 matches "$DISK_SIZE" '[1-9][0-9]*G' || die "disk size $DISK_SIZE is not a whole number of gigabytes such as 20G"
 matches "$CPU" '[A-Za-z0-9_.+-]+' || die "cpu type $CPU is not a Proxmox CPU model name"
+CA_PEM=
+if [ -n "$FACTORY_CA" ]; then
+  case $FACTORY in https://*) ;; *) die "COZY_TALOS_FACTORY_CA is set, but the factory URL '$FACTORY' is not https" ;; esac
+  [ -f "$FACTORY_CA" ] || die "COZY_TALOS_FACTORY_CA: $FACTORY_CA is not a file"
+  [ -r "$FACTORY_CA" ] || die "COZY_TALOS_FACTORY_CA: cannot read $FACTORY_CA"
+  CA_PEM=$(pem_certificates "$FACTORY_CA") ||
+    die "COZY_TALOS_FACTORY_CA: $FACTORY_CA is not a file of complete PEM certificate blocks and nothing else"
+fi
 
 # capmox lowercases the selector and compares it with the template's tags as a
 # set, so the tags are normalised the same way before they are checked and
@@ -147,7 +177,25 @@ fi
 
 work=$(mktemp -d "${TMPDIR:-/var/tmp}/talos-template.XXXXXX")
 trap 'rm -rf "$work"' EXIT
+EOF
+  if [ -z "$CA_PEM" ]; then
+    cat <<'EOF'
 curl -fL --retry 3 -o "$work/disk.raw.xz" "$URL"
+EOF
+  else
+    # The system bundle goes first so that a redirect to a publicly trusted
+    # host still verifies: CDI appends talos.imageFactoryCA to its system pool
+    # the same way. The blank line keeps a bundle without a final newline from
+    # running into the first block. The terminator holds an underscore, which
+    # no line of a checked certificate block can.
+    cat <<EOF
+{ cat /etc/ssl/certs/ca-certificates.crt; echo; cat; } > "\$work/factory-ca.pem" <<'FACTORY_CA_PEM'
+$CA_PEM
+FACTORY_CA_PEM
+curl -fL --retry 3 --cacert "\$work/factory-ca.pem" -o "\$work/disk.raw.xz" "\$URL"
+EOF
+  fi
+  cat <<'EOF'
 xz -d "$work/disk.raw.xz"
 
 # The layout of the templates the Proxmox substrate was verified on. No NIC:

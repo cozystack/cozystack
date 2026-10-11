@@ -93,6 +93,69 @@ EOF
   printf '%s' "$out" | grep -qxF "NAME='talos-v1.13.6-beta.1-$(chart schematicID | cut -c1-8)'"
 }
 
+# Two certificate blocks in the shape the CA checks accept. Only the shape is
+# checked here, so the bodies are base64 text and not real certificates.
+write_ca() {
+  printf '%s\n' '-----BEGIN CERTIFICATE-----' 'MIIBszCCAVmgAwIBAgIUZmFjdG9yeS1jYS1vbmU=' '-----END CERTIFICATE-----' \
+    '' '-----BEGIN CERTIFICATE-----' 'MIIBszCCAVmgAwIBAgIUZmFjdG9yeS1jYS10d28=' 'c2Vjb25kIGxpbmU=' '-----END CERTIFICATE-----' > "$1"
+}
+
+@test "without a factory CA the download trusts the system store alone" {
+  out="$("$SCRIPT" print 9002 main-pool)"
+  printf '%s' "$out" | grep -qx 'curl -fL --retry 3 -o "$work/disk.raw.xz" "$URL"'
+  if printf '%s' "$out" | grep -q -- '--cacert'; then echo "FAIL: no CA was given, so curl must not be handed one"; false; fi
+}
+
+@test "a factory CA is trusted on top of the system store for the download" {
+  stub="$(mktemp -d)"
+  stub_pve "$stub"
+  cat > "$stub/curl" <<EOF
+#!/bin/sh
+echo "curl \$*" >> "$stub/calls"
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --cacert) cp "\$2" "$stub/cacert" ;;
+    -o) : > "\$2" ;;
+  esac
+  shift
+done
+EOF
+  echo '[]' > "$stub/resources.json"
+  printf 'system bundle\n' > "$stub/system.pem"
+  write_ca "$stub/ca.pem"
+  sed 's/$/\r/' "$stub/ca.pem" > "$stub/ca-crlf.pem"
+  COZY_TALOS_FACTORY_URL=https://factory.internal COZY_TALOS_FACTORY_CA="$stub/ca-crlf.pem" \
+    "$SCRIPT" print 9002 main-pool |
+    sed "s|/etc/ssl/certs/ca-certificates.crt|$stub/system.pem|" |
+    PATH="$stub:$PATH" TMPDIR="$stub" sh >/dev/null
+  grep -qE '^curl -fL --retry 3 --cacert [^ ]*/factory-ca.pem -o [^ ]*/disk.raw.xz https://factory.internal/' "$stub/calls"
+  got="$(cat "$stub/cacert")"
+  want="$(printf 'system bundle\n\n'; grep -v '^$' "$stub/ca.pem")"
+  [ "$got" = "$want" ] || { printf 'curl was handed:\n%s\nexpected:\n%s\n' "$got" "$want" >&2; false; }
+  rm -rf "$stub"
+}
+
+@test "a factory CA file that is anything more than certificate blocks is refused" {
+  stub="$(mktemp -d)"
+  write_ca "$stub/ca.pem"
+  { cat "$stub/ca.pem"; printf '%s\n' '-----BEGIN PRIVATE KEY-----' 'MC4CAQAwBQYDK2VwBCIEIA==' '-----END PRIVATE KEY-----'; } > "$stub/with-key.pem"
+  { cat "$stub/ca.pem"; echo 'echo INJECTED'; } > "$stub/trailing.pem"
+  printf '%s\n' '-----BEGIN CERTIFICATE-----' 'MIIBszCCAVmgAwIBAgIU' > "$stub/open.pem"
+  printf '%s\n' '-----BEGIN CERTIFICATE-----' '-----END CERTIFICATE-----' > "$stub/no-body.pem"
+  : > "$stub/empty.pem"
+  for ca in with-key.pem trailing.pem open.pem no-body.pem empty.pem missing.pem .; do
+    rc=0
+    out="$(COZY_TALOS_FACTORY_URL=https://factory.internal COZY_TALOS_FACTORY_CA="$stub/$ca" "$SCRIPT" print 9002 main-pool 2>&1)" || rc=$?
+    [ "$rc" -ne 0 ] || { echo "accepted: $ca" >&2; false; }
+    case "$out" in *"set -eu"*) echo "printed a program for: $ca" >&2; false ;; esac
+  done
+  rc=0
+  out="$(COZY_TALOS_FACTORY_URL=http://factory.internal COZY_TALOS_FACTORY_CA="$stub/ca.pem" "$SCRIPT" print 9002 main-pool 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ]
+  case "$out" in *"is not https"*) ;; *) echo "$out" >&2; false ;; esac
+  rm -rf "$stub"
+}
+
 @test "a template already carrying the same tag set stops the program before the download" {
   stub="$(mktemp -d)"
   stub_pve "$stub"
