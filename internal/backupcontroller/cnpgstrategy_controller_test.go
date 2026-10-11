@@ -3748,7 +3748,7 @@ func newCNPGStrategyTestClient(t *testing.T, objs ...client.Object) client.Clien
 func reconcileCNPGRestoreToTerminal(t *testing.T, ctx context.Context, r *RestoreJobReconciler, c client.Client, backup *backupsv1alpha1.Backup, ns, name string) *backupsv1alpha1.RestoreJob {
 	t.Helper()
 	got := &backupsv1alpha1.RestoreJob{}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		rj := &backupsv1alpha1.RestoreJob{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, rj); err != nil {
 			t.Fatalf("get RestoreJob: %v", err)

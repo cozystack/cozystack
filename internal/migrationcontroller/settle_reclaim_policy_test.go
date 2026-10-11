@@ -344,8 +344,8 @@ func TestFulfillRestoresTheReclaimPolicyBeforeFinishing(t *testing.T) {
 	vm.SetName("test-vm")
 	vm.SetNamespace(settleNS)
 	vm.SetLabels(map[string]string{"plan": "plan-uid"})
-	if err := unstructured.SetNestedSlice(vm.Object, []interface{}{
-		map[string]interface{}{"name": "disk0", "dataVolume": map[string]interface{}{"name": "forklift-claim"}},
+	if err := unstructured.SetNestedSlice(vm.Object, []any{
+		map[string]any{"name": "disk0", "dataVolume": map[string]any{"name": "forklift-claim"}},
 	}, "spec", "template", "spec", "volumes"); err != nil {
 		t.Fatalf("build vm: %v", err)
 	}

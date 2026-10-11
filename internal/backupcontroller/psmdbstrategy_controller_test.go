@@ -994,7 +994,7 @@ func TestBuildMongoDBSystemStorageEntry(t *testing.T) {
 		if entry["type"] != "s3" {
 			t.Fatalf("type = %v, want s3", entry["type"])
 		}
-		s3, ok := entry["s3"].(map[string]interface{})
+		s3, ok := entry["s3"].(map[string]any)
 		if !ok {
 			t.Fatalf("s3 block is not a map: %#v", entry["s3"])
 		}
@@ -1004,7 +1004,7 @@ func TestBuildMongoDBSystemStorageEntry(t *testing.T) {
 		if _, present := s3["forcePathStyle"]; present {
 			t.Errorf("forcePathStyle must be omitted when the pointer is nil; got %v", s3["forcePathStyle"])
 		}
-		for k, want := range map[string]interface{}{
+		for k, want := range map[string]any{
 			"bucket":                "sys-bucket",
 			"endpointUrl":           "https://s3.example",
 			"region":                "us-east-1",
@@ -1025,7 +1025,7 @@ func TestBuildMongoDBSystemStorageEntry(t *testing.T) {
 			ForcePathStyle:        &fps,
 			InsecureSkipTLSVerify: true,
 		})
-		s3 := entry["s3"].(map[string]interface{})
+		s3 := entry["s3"].(map[string]any)
 		if s3["credentialsSecret"] != "custom-creds" {
 			t.Errorf("credentialsSecret = %v, want custom-creds", s3["credentialsSecret"])
 		}
@@ -3471,7 +3471,6 @@ func TestReconcileMongoDB_StorageRaceRetryBudgetExhausted(t *testing.T) {
 	// away, and the fresh CR resolves the storage from a stale cache and errors.
 	operator := func(t *testing.T) {
 		for _, cr := range listCRs(t) {
-			cr := cr
 			if !cr.DeletionTimestamp.IsZero() {
 				base := cr.DeepCopy()
 				cr.Finalizers = nil

@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
@@ -637,9 +638,7 @@ func lineOpenDates() ([]lineOpen, error) {
 	if err != nil {
 		return nil, err
 	}
-	for l, when := range frozen {
-		earliest[l] = when
-	}
+	maps.Copy(earliest, frozen)
 
 	opened := make([]lineOpen, 0, len(earliest))
 	for l, when := range earliest {
@@ -974,12 +973,12 @@ func botAuthor(login string) bool {
 
 // lastHumanComment is the last comment on a PR not written by the backport bot.
 func lastHumanComment(pr backportPR) string {
-	for i := len(pr.Comments) - 1; i >= 0; i-- {
-		login := pr.Comments[i].Author.Login
+	for _, v := range slices.Backward(pr.Comments) {
+		login := v.Author.Login
 		if botAuthor(login) {
 			continue
 		}
-		text := strings.Join(strings.Fields(pr.Comments[i].Body), " ")
+		text := strings.Join(strings.Fields(v.Body), " ")
 		if text == "" {
 			continue
 		}

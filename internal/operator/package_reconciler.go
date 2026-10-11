@@ -1123,10 +1123,8 @@ func (r *PackageReconciler) foreignContainerMemoryPolicy(ctx context.Context, ns
 		if lr.Name == SystemDefaultsLimitRangeName && lr.Labels[managedByLabel] == packageControllerFieldOwner {
 			continue
 		}
-		for _, item := range lr.Spec.Limits {
-			if constrainsMemory(item) {
-				return lr.Name, nil
-			}
+		if slices.ContainsFunc(lr.Spec.Limits, constrainsMemory) {
+			return lr.Name, nil
 		}
 	}
 	return "", nil

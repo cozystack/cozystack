@@ -1464,8 +1464,8 @@ func TestReconcile_PVCStorageClassResourceKey(t *testing.T) {
 		wantKey      string
 	}{
 		{"unset falls back to default", nil, "default.storageclass.storage.k8s.io/requests.storage"},
-		{"empty falls back to default", ptr.To(""), "default.storageclass.storage.k8s.io/requests.storage"},
-		{"explicit class is kept", ptr.To("replicated"), "replicated.storageclass.storage.k8s.io/requests.storage"},
+		{"empty falls back to default", new(""), "default.storageclass.storage.k8s.io/requests.storage"},
+		{"explicit class is kept", new("replicated"), "replicated.storageclass.storage.k8s.io/requests.storage"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1655,7 +1655,7 @@ func TestReconcile_PopulatedDataVolumeClearsTheLastVerdict(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default"},
 		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector, MinReplicas: ptr.To[int32](0)},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 			Message:     "DataVolume vm-disk-test is ImportInProgress",
 			Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 		},
@@ -1830,7 +1830,7 @@ func TestReconcile_UnreadDataVolumesKeepTheLastVerdict(t *testing.T) {
 	for _, withReader := range []bool{true, false} {
 		t.Run(fmt.Sprintf("reader=%v", withReader), func(t *testing.T) {
 			got, _, _ := reconcileWithUnreadableDataVolumes(t, withReader, false, cozyv1alpha1.WorkloadMonitorStatus{
-				Operational: ptr.To(false),
+				Operational: new(false),
 				Message:     stuck,
 				Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 			})
@@ -1847,7 +1847,7 @@ func TestReconcile_UnreadDataVolumesKeepTheLastVerdict(t *testing.T) {
 func TestReconcile_SyncingDataVolumeWatchPublishesAndRequeues(t *testing.T) {
 	const stuck = "DataVolume m is Failed"
 	got, result, events, err := reconcileWithUnreadableDataVolumesEvents(t, false, true, cozyv1alpha1.WorkloadMonitorStatus{
-		Operational: ptr.To(false),
+		Operational: new(false),
 		Message:     stuck,
 		Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 	})
@@ -2040,7 +2040,7 @@ func TestTryStartDataVolumeWatch_UnsyncedSourceLeavesNoReaderAndRetries(t *testi
 	w := &startingWatcher{}
 	informers, fi := dataVolumeInformers(false)
 
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		done, err := r.tryStartDataVolumeWatch(context.Background(), servedMapper(), w, informers, 50*time.Millisecond)
 		if err == nil || done || readerOf(r) != nil {
 			t.Fatalf("informer never synced: done=%v err=%v reader=%v, want an error, not done, no reader", done, err, readerOf(r))
@@ -2117,7 +2117,7 @@ func TestTryStartDataVolumeWatch_StoredVerdictIsRecomputedOnceTheReaderIsInstall
 			MinReplicas: ptr.To[int32](0),
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 			Message:     "DataVolume stuck is ImportInProgress",
 			Reason:      cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady,
 		},
@@ -2125,7 +2125,7 @@ func TestTryStartDataVolumeWatch_StoredVerdictIsRecomputedOnceTheReaderIsInstall
 	noVerdict := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{Name: "no-verdict", Namespace: "default"},
 		Spec:       cozyv1alpha1.WorkloadMonitorSpec{MinReplicas: ptr.To[int32](0)},
-		Status:     cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true)},
+		Status:     cozyv1alpha1.WorkloadMonitorStatus{Operational: new(true)},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(stuck, noVerdict).WithStatusSubresource(stuck, noVerdict).Build()
@@ -2220,14 +2220,14 @@ func TestTryStartDataVolumeWatch_FailedWatchLeavesNoReader(t *testing.T) {
 // While the DataVolume watch syncs, every monitor is requeued every few
 // seconds, so a pass that changes nothing must not write status.
 func TestReconcile_UnchangedStatusIsNotWritten(t *testing.T) {
-	settled := cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true), AvailableReplicas: 1, ObservedReplicas: 1}
+	settled := cozyv1alpha1.WorkloadMonitorStatus{Operational: new(true), AvailableReplicas: 1, ObservedReplicas: 1}
 	for _, tc := range []struct {
 		name   string
 		status cozyv1alpha1.WorkloadMonitorStatus
 		writes int
 	}{
 		{"unchanged", settled, 0},
-		{"changed", cozyv1alpha1.WorkloadMonitorStatus{Operational: ptr.To(true)}, 1},
+		{"changed", cozyv1alpha1.WorkloadMonitorStatus{Operational: new(true)}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestScheme()
@@ -2289,7 +2289,7 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 		{name: "not owned by the DataVolume", phase: "ImportInProgress", reader: true, want: true},
 		{name: "controller of another kind", phase: "ImportInProgress", reader: true, controlled: true, ownerGVK: &schema.GroupVersionKind{Group: dataVolumeGVK.Group, Version: dataVolumeGVK.Version, Kind: "DataSource"}, want: true},
 		{name: "DataVolume kind of another group", phase: "ImportInProgress", reader: true, controlled: true, ownerGVK: &schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: dataVolumeGVK.Kind}, want: true},
-		{name: "unread keeps the stored verdict", phase: "Succeeded", stored: ptr.To(false), controlled: true, want: false},
+		{name: "unread keeps the stored verdict", phase: "Succeeded", stored: new(false), controlled: true, want: false},
 		{name: "unread and new reads bind state", phase: "ImportInProgress", controlled: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2302,7 +2302,7 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 			dv.SetUID("dv-uid")
 			pvc := &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-test", Namespace: "default", Labels: selector},
-				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: ptr.To("replicated")},
+				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: new("replicated")},
 				Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
 			}
 			if tc.controlled {

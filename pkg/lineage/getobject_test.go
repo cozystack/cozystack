@@ -64,7 +64,7 @@ func TestGetUnstructuredObject_CachesSuccess(t *testing.T) {
 	dyn, mapper, gets := newGetFixture(t, nil)
 	cache := NewObjectCache(time.Minute)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := getTestHR(dyn, mapper, cache, "harbor-demo"); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}

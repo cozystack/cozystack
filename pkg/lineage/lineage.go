@@ -138,7 +138,7 @@ func WalkOwnershipGraph(
 	return
 }
 
-func parseWalkMemory(memory []interface{}) (*walkState, error) {
+func parseWalkMemory(memory []any) (*walkState, error) {
 	switch len(memory) {
 	case 0:
 		return &walkState{visited: make(map[ObjectID]bool)}, nil

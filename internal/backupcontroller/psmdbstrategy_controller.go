@@ -903,9 +903,9 @@ func shouldInjectMongoDBSystemStorage(useSystemBucket bool, rendered *strategyv1
 // the forcePathStyle omit-when-nil (a nil pointer must not surface as a
 // forcePathStyle:false the app never chose), and the {"type":"s3","s3":{…}}
 // shape are exercised without a live apiserver.
-func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[string]interface{} {
+func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[string]any {
 	cred := psmdbInjectedCredentialsSecret(s3)
-	s3Cfg := map[string]interface{}{
+	s3Cfg := map[string]any{
 		"bucket":                s3.Bucket,
 		"endpointUrl":           s3.EndpointURL,
 		"region":                s3.Region,
@@ -916,7 +916,7 @@ func buildMongoDBSystemStorageEntry(s3 *strategyv1alpha1.MongoDBStorageS3) map[s
 	if s3.ForcePathStyle != nil {
 		s3Cfg["forcePathStyle"] = *s3.ForcePathStyle
 	}
-	return map[string]interface{}{"type": "s3", "s3": s3Cfg}
+	return map[string]any{"type": "s3", "s3": s3Cfg}
 }
 
 // applyMongoDBSystemStorage SSA-injects the system-bucket S3 storage onto the
@@ -1014,8 +1014,8 @@ func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.Mon
 		return false
 	}
 	var live struct {
-		Type string                 `json:"type"`
-		S3   map[string]interface{} `json:"s3"`
+		Type string         `json:"type"`
+		S3   map[string]any `json:"s3"`
 	}
 	if err := json.Unmarshal(raw.Raw, &live); err != nil {
 		return false
@@ -1024,7 +1024,7 @@ func psmdbStorageEntrySettled(raw runtime.RawExtension, s3 *strategyv1alpha1.Mon
 	if want, _ := desired["type"].(string); live.Type != want {
 		return false
 	}
-	want := desired["s3"].(map[string]interface{})
+	want := desired["s3"].(map[string]any)
 	for k, v := range want {
 		got, ok := live.S3[k]
 		if !ok {

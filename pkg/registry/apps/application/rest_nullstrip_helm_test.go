@@ -172,7 +172,7 @@ func TestRequiredNullHelmCoalescing(t *testing.T) {
 			}
 			at := func(v map[string]any, path string) any {
 				var value any = v
-				for _, key := range strings.Split(path, ".") {
+				for key := range strings.SplitSeq(path, ".") {
 					value = value.(map[string]any)[key]
 				}
 				return value

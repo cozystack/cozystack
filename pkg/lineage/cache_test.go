@@ -95,7 +95,7 @@ func TestParseWalkMemory(t *testing.T) {
 	}
 
 	legacy := map[ObjectID]bool{{Name: "x"}: true}
-	st, err = parseWalkMemory([]interface{}{legacy})
+	st, err = parseWalkMemory([]any{legacy})
 	if err != nil {
 		t.Fatalf("legacy form should accept map[ObjectID]bool, got err=%v", err)
 	}
@@ -104,7 +104,7 @@ func TestParseWalkMemory(t *testing.T) {
 	}
 
 	var nilLegacy map[ObjectID]bool
-	st, err = parseWalkMemory([]interface{}{nilLegacy})
+	st, err = parseWalkMemory([]any{nilLegacy})
 	if err != nil {
 		t.Fatalf("nil legacy map should be tolerated, got err=%v", err)
 	}
@@ -115,7 +115,7 @@ func TestParseWalkMemory(t *testing.T) {
 
 	cache := NewObjectCache(time.Minute)
 	original := &walkState{visited: map[ObjectID]bool{{Name: "y"}: true}, cache: cache}
-	st, err = parseWalkMemory([]interface{}{original})
+	st, err = parseWalkMemory([]any{original})
 	if err != nil {
 		t.Fatalf("walkState form should be accepted, got err=%v", err)
 	}
@@ -123,7 +123,7 @@ func TestParseWalkMemory(t *testing.T) {
 		t.Fatal("walkState should be reused by reference so recursion shares cache")
 	}
 
-	st, err = parseWalkMemory([]interface{}{"oops"})
+	st, err = parseWalkMemory([]any{"oops"})
 	if err == nil {
 		t.Fatal("expected error for unsupported memory type")
 	}
@@ -135,7 +135,7 @@ func TestParseWalkMemory(t *testing.T) {
 func TestObjectCache_EvictionSampleIsBounded(t *testing.T) {
 	c := NewObjectCache(time.Hour)
 
-	for i := 0; i < evictionThreshold+1000; i++ {
+	for i := range evictionThreshold + 1000 {
 		key := cacheKey{apiVersion: "v1", kind: "Pod", namespace: "ns", name: strconv.Itoa(i)}
 		c.items[key] = cacheEntry{
 			obj:       nil,
