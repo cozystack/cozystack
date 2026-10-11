@@ -86,6 +86,21 @@
       "enabled": false
     },
     {
+      "description": "Split golang patch from minor updates for the e2e sandbox builder, so the rule below can drop the minor bump without taking the patch bump with it. By default both land in one non-major bucket and only the newest release is proposed.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "separateMinorPatch": true
+    },
+    {
+      "description": "The e2e sandbox builds a patched chainsaw release with the Go minor upstream shipped that release with. A golang minor or major bump builds it with a toolchain upstream never shipped it with. Patch and digest updates of the same minor still arrive; move the minor by hand together with CHAINSAW_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
       "description": "The seaweedfs rebuild compiles one upstream release with the Go toolchain upstream's docker/Dockerfile.go_build uses at that tag, lays it over the upstream image of that tag, and `make update` in packages/system/seaweedfs re-pins the builder, the base image digest and the source checksum from there. A Renovate bump of any of them builds a combination upstream never shipped, and the next `make update` silently reverts it. Updates are disabled here; all of them move with the SeaweedFS version.",
       "matchManagers": ["dockerfile"],
       "matchFileNames": ["packages/system/seaweedfs/images/seaweedfs/**"],
