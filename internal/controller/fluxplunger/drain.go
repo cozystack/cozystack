@@ -193,11 +193,11 @@ func (r apiEventRecorder) Event(obj runtime.Object, eventtype, reason, message s
 	r.write(obj, eventtype, reason, message)
 }
 
-func (r apiEventRecorder) Eventf(obj runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+func (r apiEventRecorder) Eventf(obj runtime.Object, eventtype, reason, messageFmt string, args ...any) {
 	r.write(obj, eventtype, reason, fmt.Sprintf(messageFmt, args...))
 }
 
-func (r apiEventRecorder) AnnotatedEventf(obj runtime.Object, _ map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
+func (r apiEventRecorder) AnnotatedEventf(obj runtime.Object, _ map[string]string, eventtype, reason, messageFmt string, args ...any) {
 	r.write(obj, eventtype, reason, fmt.Sprintf(messageFmt, args...))
 }
 
