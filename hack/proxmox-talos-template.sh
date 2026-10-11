@@ -187,12 +187,14 @@ EOF
     # host still verifies: CDI appends talos.imageFactoryCA to its system pool
     # the same way. The blank line keeps a bundle without a final newline from
     # running into the first block. The terminator holds an underscore, which
-    # no line of a checked certificate block can.
+    # no line of a checked certificate block can. A CA is accepted only for an
+    # https factory, and redirects are held to https as well, so the image
+    # cannot leave TLS verification halfway.
     cat <<EOF
 { cat /etc/ssl/certs/ca-certificates.crt; echo; cat; } > "\$work/factory-ca.pem" <<'FACTORY_CA_PEM'
 $CA_PEM
 FACTORY_CA_PEM
-curl -fL --retry 3 --cacert "\$work/factory-ca.pem" -o "\$work/disk.raw.xz" "\$URL"
+curl -fL --retry 3 --proto-redir =https --cacert "\$work/factory-ca.pem" -o "\$work/disk.raw.xz" "\$URL"
 EOF
   fi
   cat <<'EOF'

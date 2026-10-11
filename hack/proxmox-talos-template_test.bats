@@ -128,7 +128,7 @@ EOF
     "$SCRIPT" print 9002 main-pool |
     sed "s|/etc/ssl/certs/ca-certificates.crt|$stub/system.pem|" |
     PATH="$stub:$PATH" TMPDIR="$stub" sh >/dev/null
-  grep -qE '^curl -fL --retry 3 --cacert [^ ]*/factory-ca.pem -o [^ ]*/disk.raw.xz https://factory.internal/' "$stub/calls"
+  grep -qE '^curl -fL --retry 3 --proto-redir =https --cacert [^ ]*/factory-ca.pem -o [^ ]*/disk.raw.xz https://factory.internal/' "$stub/calls"
   got="$(cat "$stub/cacert")"
   want="$(printf 'system bundle\n\n'; grep -v '^$' "$stub/ca.pem")"
   [ "$got" = "$want" ] || { printf 'curl was handed:\n%s\nexpected:\n%s\n' "$got" "$want" >&2; false; }
