@@ -89,6 +89,55 @@ If a maintainer is no longer interested in or cannot perform the duties
 listed above, they should move themselves to emeritus status.
 If necessary, this can also occur through the decision-making process outlined below.
 
+### Welcoming new contributors
+
+A first contribution is often the moment someone decides whether to stay.
+When a new contributor opens an issue or a pull request:
+
+* Respond within two working days, even if only to say who will review it
+  and when.
+* Point to the contributing guide and help with the mechanics. If the DCO
+  check fails, explain how to fix it: `git commit --amend --signoff` for the
+  last commit, or `git rebase --signoff main` for several.
+* Before approving CI runs for a first-time contributor, read the diff and
+  make sure it does not touch workflows, secrets or release tooling in a way
+  that could run untrusted code with project credentials.
+* Review against the same standards as any other change, and explain the
+  reason behind each requested change. If the change is not going to be
+  accepted, say so early and say why, rather than leaving it open.
+* Suggest a good next step: a `good first issue`, a related bug, or a
+  documentation gap.
+* Do not ask contributors about their nationality, location or employer.
+  Contributions are judged on their merit.
+
+### Sanctions compliance
+
+Cozystack is a Linux Foundation project and follows the Linux Foundation's
+guidance on US sanctions (OFAC). Maintainers do not screen contributors or
+ask where they live or who they work for; they act only on what is already
+apparent, for example from a GitHub profile, an email domain or a
+`Signed-off-by` line.
+
+If it is apparent that a contributor is on the OFAC SDN list, works for or on
+behalf of an organisation on that list (including organisations 50% or more
+owned by listed parties), or is located in a comprehensively sanctioned
+region:
+
+* Do not work with them back and forth on the change: no joint debugging,
+  no iterative review of their patch, no tailored support.
+* A patch they submitted may still be evaluated on its technical merit,
+  modified and merged by maintainers on their own.
+* Do not grant them project roles (reviewer, approver, maintainer) and do
+  not make payments to them.
+* Do not discuss the case in public. Tell the other maintainers privately
+  and ask the Linux Foundation for advice at legal@linuxfoundation.org.
+
+Public channels stay open to everyone. Answer questions there in general
+terms that are useful to all readers.
+
+See the Linux Foundation guide on OFAC sanctions and open source:
+https://bestpractices.linuxfoundation.org/regulatory/ofac/
+
 ### Becoming a Maintainer
 
 Anyone can become a Cozystack maintainer. Maintainers should be extremely
