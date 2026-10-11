@@ -110,6 +110,22 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
 
+### Test first, failure path first
+
+1. Write the test before the change and watch it fail. A test that has never been red proves nothing, and the red run must fail for the reason the test names, not on a typo or a missing fixture. Then make it green, then refactor under it.
+2. Cover the failure path before the happy path. Every user exercises the happy path; the failure path usually runs for the first time in production. Start with an empty or null value, invalid input, a number where a string is expected, a missing resource, a timeout, an API error, and pin what the code does then: the message it prints, the status it exits with, the state it leaves untouched.
+3. A red test is fixed in the code, not in the test. Do not skip, weaken or delete a test, or silence a linter, to get a green run.
+4. A stub (a not-implemented branch, an empty implementation) lands together with a test that fails on it and states the behaviour expected once it is done.
+5. A bug found along the way that is out of the PR's scope gets an issue and a test pinning the current broken behaviour, marked `FIXME(#N)`. The PR that fixes the bug flips the test to pin the fixed behaviour.
+
+A negated BATS assertion can never be red; see [§11 of `e2e-testing.md`](./e2e-testing.md#11-never-negate-a-bats-assertion-with-).
+
+### Linters
+
+Fix every linter finding before pushing, the cosmetic ones included. When a rule genuinely conflicts with the project, change the linter configuration and state the reason there, instead of suppressing the finding inline.
+
+Markdown follows markdownlint: every code fence names a language (`text` when nothing else fits), table separators have spaces around the pipes (`| --- |`), and there is a blank line before and after every list and after every heading.
+
 ## Conventions
 
 ### Helm Charts
@@ -117,6 +133,15 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - Include upstream charts in `charts/` directory (vendored, not referenced)
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
+- An unquoted numeric value (`name: 123`) reaches a template as a number: `len` on it aborts the render with `len of type int` before any `fail` message is reached, and `if not $v` treats `0` as unset. Coerce with `printf "%v"` before validating a value that may be an unquoted scalar, and test for emptiness with `eq $v ""` after the coercion
+
+### Container images
+
+A new first-party image is built from a `Containerfile`, which the package `Makefile` passes to `docker buildx build` with `--file`. Existing `Dockerfile`s and the files of vendored images stay as they are.
+
+### Examples and fixtures
+
+Addresses and names in docs, examples and test fixtures come from the reserved documentation ranges, never from a routable value that merely looks realistic: IPv4 from RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), IPv6 from RFC 3849 (`2001:db8::/32`), domains from RFC 2606 and RFC 6761 (`example.com`, `.example`, `.test`, `.invalid`), ASNs from RFC 5398 (`64496`–`64511`, `65536`–`65551`), MAC addresses from RFC 7042 (`00:00:5E:00:53:00`–`00:00:5E:00:53:FF`). Where no reserved range exists, use an obviously synthetic placeholder such as `<NODE_IP>`.
 
 ### Go Code
 - Follow standard **Go conventions** and idioms
