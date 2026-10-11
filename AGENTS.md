@@ -51,6 +51,16 @@ This file provides structured guidance for AI coding assistants and agents worki
 - **Follow it exactly.** Do not assume you already know the process, and do not skip steps (`changelog.md` especially). Where the documentation and your instinct disagree, the documentation wins.
 - **[`overview.md`](./docs/agents/overview.md) is the standing reference** for structure and conventions, useful even when no route above points at it.
 
+## Working Principles
+
+These hold for every task, whichever document the routes above point at.
+
+- **A causal claim needs a mechanism.** A failure that appeared after a commit, a bump or a rerun was not thereby caused by it, and matching symptoms prove nothing either: unrelated faults often look identical from outside. Back a root cause with a log line, a reproducer, a bisect, or a ruled-out alternative; without one, name at least two hypotheses and what would tell them apart. Before tying a problem to a change, check whether it predates the change (an older run, a condition's `lastTransitionTime`, `git blame`). When the proof fails, closing the hypothesis as coincidence is a valid verdict, and a better one than carrying it on as a soft suspicion.
+- **Verify, do not recall.** Versions, CLI flags, API fields and defaults drift faster than a model's training data. Check the upstream source, the documentation at the pinned version, or `--help` before writing code or advice that depends on them. When a problem is not solved after two attempts, stop and research it instead of trying a third variation.
+- **Long flag names.** New and changed commands in docs, scripts, CI and PR text spell options out (`--namespace`, `--output`, `--filename`, `--message`), so that a reader does not need to know what `-f` means to this particular tool. An option with no long form is the only exception.
+- **Name the cluster.** Every `kubectl` call an agent makes carries `--context`, because the current context can change between two commands. E2E suites, BATS files that talk to a cluster, and `make apply` run only against a cluster the human named for that purpose.
+- **Public text.** Everything that reaches GitHub (commits, PR and issue bodies, review comments, code comments) is in English. It names no private infrastructure (cluster, customer or internal namespace names) and none of an agent's private tooling (custom skills, slash commands). Nothing is published on someone's behalf without their approval, unless they have delegated it.
+
 ## Project Overview
 
 **Cozystack** is a Kubernetes-based platform for building cloud infrastructure with managed services (databases, VMs, K8s clusters), multi-tenancy, and GitOps delivery.

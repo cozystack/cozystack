@@ -49,7 +49,7 @@ After every change, verify the relevant artifacts before opening the PR:
 Follow [Conventional Commits](https://www.conventionalcommits.org/) with `--signoff`:
 
 ```bash
-git commit --signoff -m "type(scope): brief description"
+git commit --signoff --message "type(scope): brief description"
 ```
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
@@ -66,10 +66,18 @@ The subject is imperative and specific; `fix`, `wip` and `update` are not subjec
 
 **Examples:**
 ```bash
-git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
-git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
-git commit --signoff -m "docs(contributing): add installation guide"
+git commit --signoff --message "feat(dashboard): add config hash annotations to restart pods on config changes"
+git commit --signoff --message "fix(postgres): update operator to version 1.2.3"
+git commit --signoff --message "docs(contributing): add installation guide"
 ```
+
+### One Commit, One Logical Change
+
+A commit is the unit a backport cherry-picks and a revert undoes, so it carries exactly one logical change: one fix, one feature, one refactor, together with the regenerated files and tests that belong to it. When the content of a commit changes during review, rewrite that commit (`git commit --amend`, or a `fixup` in `git rebase --interactive`) rather than stacking a correction on top; the branch should read as if each change had been right the first time.
+
+### References to Commits and Issues
+
+A commit that fixes a defect introduced by an earlier commit carries a kernel-style `Fixes:` trailer with at least 12 characters of the hash and the full subject, on one unbroken line, which `git log -1 --abbrev=12 --format='Fixes: %h ("%s")' <sha>` prints. An issue is referenced as `Closes: #N`, which GitHub also acts on at merge. `Fixes: #N` is not used, so that the `Fixes:` trailer always points at a commit. Reference trailers go after the body and before `Assisted-by:` and `Signed-off-by:`.
 
 ### AI Agent Attribution
 
@@ -148,7 +156,7 @@ If the branch has extra commits, clean it up:
 git fetch upstream
 git checkout -b my-feature upstream/main
 git cherry-pick <your-commit-hash>
-git push -f origin my-feature
+git push --force origin my-feature
 ```
 
 ## Pull Request Body
@@ -164,6 +172,14 @@ cp .github/PULL_REQUEST_TEMPLATE.md /tmp/pr-body.md
 # fill in /tmp/pr-body.md, then:
 gh pr create --draft --title "type(scope): brief description" --body-file /tmp/pr-body.md
 ```
+
+### What Goes in the Commit, What Goes in the PR Body
+
+The commit message is the permanent record: a reader of `git log` or `git blame` years later has it and nothing else. It carries what broke and for whom, the exact error string verbatim so that `git log --grep` finds it, why this design and not the obvious alternative, why it is safe where the diff does not show that, and one line on how it was tested, including the failure path when the change adds one.
+
+The PR body is read once, next to those commits, so it does not repeat them. Its first screen says what is broken, where, and what it costs. After that come one sentence per commit and only what no single commit can carry: results that need the whole series, the environment they came from, decisions the reviewer has to make across commits. Questions to reviewers and open doubts belong in the PR body and never in a commit, where they go stale the day it merges. A fact that fits both goes in the commit.
+
+Size a commit body against accepted commits touching the same files, not against a fixed line cap, which cuts the answers before the narrative. After shortening any of these texts, check that every must-keep fact survived, that every number still sits next to the version or setup it was measured on, that nothing new was added, and that a claim about a set ("every caller", "never happens") is backed by a grep or rewritten as a mechanism.
 
 ## Downstream Repositories
 
@@ -290,6 +306,12 @@ The release process keeps a **separate** list of repositories, in [`changelog.md
 
 - A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
 - Keep the PR description aligned with the template: `## What this PR does` plus the `release-note` block.
+- Before posting a claim about a set ("all callers", "the only user", "never happens"), grep for the counterexample, or state the mechanism instead.
+- Disagreement carries a mechanism: a code path, a number, a spec clause, a failing test. Time spent and urgency are not arguments.
+- A review reply answers the point raised in a few sentences. An essay-shaped reply reads as machine-written and draws exactly that question.
+- Read a terse review literally: answer what was written, not an implied tone, and concede plainly when the reviewer is right.
+- An `@mention` is a notification someone receives. Open a reply to a specific person with their handle; do not re-mention someone already in the thread in every message, do not mention the PR's own author, and do not `cc` bystanders.
+- A nudge restates where the PR stands and asks one concrete question. It is never the word "ping".
 
 ## Fetching Unresolved Review Comments
 
