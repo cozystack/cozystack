@@ -5,3 +5,19 @@ strimzi-kafka-operator:
   resources:
     limits:
       memory: 512Mi
+  # The JDK 17 in the operator image decides whether to read the container
+  # limits by looking at /proc/cgroups, which loses its memory line on kernels
+  # built without CONFIG_MEMCG_V1 (6.12+). The JVM then sizes its heap from
+  # host RAM and the container is OOMKilled. Drop this once the image ships a
+  # JDK with JDK-8347811 (17.0.20, 21.0.10).
+  extraEnvs:
+    - name: CONTAINER_MEMORY_LIMIT
+      valueFrom:
+        resourceFieldRef:
+          resource: limits.memory
+    - name: CONTAINER_CPU_LIMIT
+      valueFrom:
+        resourceFieldRef:
+          resource: limits.cpu
+    - name: JAVA_OPTS
+      value: -XX:MaxRAM=$(CONTAINER_MEMORY_LIMIT) -XX:ActiveProcessorCount=$(CONTAINER_CPU_LIMIT)

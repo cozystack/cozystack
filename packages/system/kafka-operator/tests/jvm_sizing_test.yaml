@@ -1,0 +1,31 @@
+suite: cluster operator JVM is sized from the container limits
+release:
+  name: kafka-operator
+  namespace: cozy-kafka-operator
+templates:
+  - charts/strimzi-kafka-operator/templates/060-Deployment-strimzi-cluster-operator.yaml
+tests:
+  - it: passes the container limits to the JVM, which cannot read them on kernels without cgroup v1 controllers
+    asserts:
+      # $(VAR) expands only from entries earlier in the list.
+      - equal:
+          path: spec.template.spec.containers[0].env[19]
+          value:
+            name: CONTAINER_MEMORY_LIMIT
+            valueFrom:
+              resourceFieldRef:
+                resource: limits.memory
+      - equal:
+          path: spec.template.spec.containers[0].env[20]
+          value:
+            name: CONTAINER_CPU_LIMIT
+            valueFrom:
+              resourceFieldRef:
+                resource: limits.cpu
+      - equal:
+          path: spec.template.spec.containers[0].env[21]
+          value:
+            name: JAVA_OPTS
+            value: -XX:MaxRAM=$(CONTAINER_MEMORY_LIMIT) -XX:ActiveProcessorCount=$(CONTAINER_CPU_LIMIT)
+      - exists:
+          path: spec.template.spec.containers[0].resources.limits.cpu
