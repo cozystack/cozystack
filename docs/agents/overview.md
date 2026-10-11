@@ -117,6 +117,7 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - Include upstream charts in `charts/` directory (vendored, not referenced)
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
+- An app that issues Certificates through cert-manager removes the Secrets they write when the release is deleted, with the `cozy-lib.hooks.deleteSecrets` post-delete hook listing every `secretName` the chart can render. cert-manager runs without `--enable-certificate-owner-ref`, so nothing else reclaims those Secrets or the keys in them
 
 ### Go Code
 - Follow standard **Go conventions** and idioms
