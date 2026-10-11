@@ -1,0 +1,86 @@
+suite: Kafka JVMs are sized from their container limits
+
+templates:
+  - templates/migration-hook.yaml
+  - templates/kafka.yaml
+
+release:
+  name: test-kafka
+  namespace: tenant-test
+
+tests:
+  - it: sizes the heap of every node pool from the default preset
+    template: templates/migration-hook.yaml
+    documentIndex: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "release-namespace: \\$\\{ns\\}\\s+spec:\\s+replicas: \\d+\\s+roles:\\s+- broker\\s+resources:\\s+limits:\\s+cpu: \"1\"\\s+ephemeral-storage: 2Gi\\s+memory: 1Gi\\s+requests:(\\s+\\S+: \\S+)+\\s+jvmOptions:\\s+-Xms: 512m\\s+-Xmx: 512m\\s+storage:"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- controller\\s+resources:\\s+limits:\\s+cpu: \"1\"\\s+ephemeral-storage: 2Gi\\s+memory: 1Gi\\s+requests:(\\s+\\S+: \\S+)+\\s+jvmOptions:\\s+-Xms: 512m\\s+-Xmx: 512m\\s+storage:"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "next-node-ids: \"\\[1000-1099\\]\"\\s+spec:\\s+replicas: \\d+\\s+roles:\\s+- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+\\s+jvmOptions:\\s+-Xms: 512m\\s+-Xmx: 512m\\s+storage:"
+
+  # A -XX option other than the RAM percentages fills KAFKA_JVM_PERFORMANCE_OPTS,
+  # and kafka-run-class.sh then drops its G1 settings.
+  - it: leaves the broker GC options to Kafka
+    template: templates/migration-hook.yaml
+    documentIndex: 3
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "jvmOptions:(\\s+-Xm[sx]: \\S+)*\\s+-XX"
+
+  - it: caps the node pool heap at 5Gi like the Strimzi default
+    template: templates/migration-hook.yaml
+    documentIndex: 3
+    set:
+      kafka.resources:
+        cpu: "4"
+        memory: 16Gi
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+\\s+jvmOptions:\\s+-Xms: 5120m\\s+-Xmx: 5120m\\s+storage:"
+
+  - it: gives a node pool half of a non-round memory limit
+    template: templates/migration-hook.yaml
+    documentIndex: 3
+    set:
+      kafka.resources:
+        cpu: "1"
+        memory: 3Gi
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- controller\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+\\s+jvmOptions:\\s+-Xms: 1536m\\s+-Xmx: 1536m\\s+storage:"
+
+  - it: gives the drain-time Cruise Control a heap that fits its limit
+    template: templates/migration-hook.yaml
+    documentIndex: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "\"cruiseControl\":\\{\"resources\":\\{\"requests\":\\{\"cpu\":\"200m\",\"memory\":\"768Mi\"\\},\"limits\":\\{\"memory\":\"1Gi\"\\}\\},\"jvmOptions\":\\{\"-Xms\":\"768m\",\"-Xmx\":\"768m\"\\}\\}"
+
+  - it: passes the entity operator memory limit to its JVMs
+    template: templates/kafka.yaml
+    asserts:
+      - equal:
+          path: spec.entityOperator.topicOperator.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.entityOperator.topicOperator.jvmOptions
+          value:
+            -XX:
+              MaxRAM: "536870912"
+      - equal:
+          path: spec.entityOperator.userOperator.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.entityOperator.userOperator.jvmOptions
+          value:
+            -XX:
+              MaxRAM: "536870912"

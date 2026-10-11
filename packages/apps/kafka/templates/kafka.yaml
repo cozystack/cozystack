@@ -16,6 +16,7 @@
 {{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
 {{- $kafkaVersion := include "kafka.versionMap" . -}}
+{{- $entityOperatorMemory := "512Mi" -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -75,21 +76,30 @@ spec:
     # The topic-operator and user-operator are JVM processes and OOMKill at
     # that default, leaving the entity-operator in CrashLoopBackOff so
     # KafkaTopics/KafkaUsers never reconcile. Set explicit resources so they
-    # don't inherit the namespace default.
+    # don't inherit the namespace default. MaxRAM hands the same limit to the
+    # JVM, because the JDK in the operator image cannot read it on kernels
+    # built without CONFIG_MEMCG_V1 (JDK-8347811) and sizes its heap from host
+    # RAM instead.
     topicOperator:
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
+      jvmOptions:
+        -XX:
+          MaxRAM: {{ include "cozy-lib.resources.toFloat" $entityOperatorMemory | float64 | int64 | quote }}
     userOperator:
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
+      jvmOptions:
+        -XX:
+          MaxRAM: {{ include "cozy-lib.resources.toFloat" $entityOperatorMemory | float64 | int64 | quote }}
     template:
       # `pod` accepts metadata + a flat set of pod-spec fields
       # (enableServiceLinks, securityContext, affinity, …) directly.

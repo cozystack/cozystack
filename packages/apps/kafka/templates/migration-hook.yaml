@@ -143,6 +143,7 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                jvmOptions: {{- include "kafka.jvmOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml) | nindent 18 }}
                 storage:
                   type: jbod
                   volumes:
@@ -187,6 +188,7 @@ spec:
                 roles:
                   - controller
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                jvmOptions: {{- include "kafka.jvmOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml) | nindent 18 }}
                 storage:
                   type: jbod
                   volumes:
@@ -388,6 +390,7 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                jvmOptions: {{- include "kafka.jvmOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml) | nindent 18 }}
                 storage:
                   type: jbod
                   volumes:
@@ -407,9 +410,11 @@ spec:
               # explicit resources: Cruise Control is a JVM, and a tenant namespace
               # LimitRange defaults containers to 128Mi, which OOMs it before it
               # can produce a proposal (same reason the entity-operator carries
-              # explicit resources in kafka.yaml).
+              # explicit resources in kafka.yaml). The heap is 75% of the limit,
+              # what Strimzi picks when the JDK can read the limit; see
+              # kafka.jvmOptions.
               echo "Enabling Cruise Control for the drain..."
-              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{"spec":{"cruiseControl":{"resources":{"requests":{"cpu":"200m","memory":"768Mi"},"limits":{"memory":"1Gi"}}}}}'
+              kubectl -n "$ns" patch "$kafka" "$name" --type merge -p '{"spec":{"cruiseControl":{"resources":{"requests":{"cpu":"200m","memory":"768Mi"},"limits":{"memory":"1Gi"}},"jvmOptions":{"-Xms":"768m","-Xmx":"768m"}}}}'
 
               # F3: drain all partitions off the "kafka" pool broker IDs.
               kafkaIds=$(kubectl -n "$ns" get "$np" kafka -o jsonpath='{.status.nodeIds}' 2>/dev/null || echo "")
