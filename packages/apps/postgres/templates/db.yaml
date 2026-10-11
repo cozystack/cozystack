@@ -6,6 +6,13 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: {{ .Release.Name }}
+  {{- with .Values.bootstrap.newServerName }}
+  {{- /* Rendered whether or not the barman plugin is: the CNPG restore driver
+         reads it to tell the Cluster its own restore produced from one rendered
+         for an earlier restore. */}}
+  annotations:
+    postgres.cozystack.io/restored-server-name: {{ . | quote }}
+  {{- end }}
 spec:
   {{- if $autoscaling }}
   {{- /* Under active autoscaling KEDA owns the runtime count via the /scale

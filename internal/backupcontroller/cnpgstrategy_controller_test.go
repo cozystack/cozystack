@@ -639,68 +639,108 @@ func TestCNPGPurgeNeeded(t *testing.T) {
 }
 
 // TestCNPGClusterFreshlyRecovered locks in the signal that separates a
-// recovery Cluster THIS restore just produced from one left over by an
-// earlier completed restore. The repeat-in-place-restore bug was exactly a
-// stale recovery Cluster (created before StartedAt) being mistaken for a
-// freshly-recovered one and skipping the purge.
+// recovery Cluster THIS restore just produced from one rendered for another
+// restore. The repeat-in-place-restore bug was a stale recovery Cluster being
+// mistaken for a freshly-recovered one and skipping the purge; a Cluster
+// produced by a concurrent restore, or re-rendered from an earlier restore's
+// values, is created after StartedAt and must still be purged.
 func TestCNPGClusterFreshlyRecovered(t *testing.T) {
 	started := metav1.NewTime(time.Now())
 	after := metav1.NewTime(started.Add(time.Minute))
 	before := metav1.NewTime(started.Add(-time.Hour))
+	const ours = "postgres-app-restore-ours"
+	const other = "postgres-app-restore-other"
 
 	cases := []struct {
-		name        string
-		hasRecovery bool
-		createdAt   *metav1.Time
-		startedAt   *metav1.Time
-		want        bool
+		name      string
+		state     recoveryClusterState
+		appMark   string
+		startedAt *metav1.Time
+		want      bool
 	}{
 		{
-			name:        "no recovery bootstrap: not fresh",
-			hasRecovery: false,
-			createdAt:   &after,
-			startedAt:   &started,
-			want:        false,
+			name:      "no recovery bootstrap: not fresh",
+			state:     recoveryClusterState{createdAt: &after, restoreMark: ours},
+			startedAt: &started,
+			want:      false,
 		},
 		{
-			name:        "recovery cluster created after start (our own purge re-render): fresh",
-			hasRecovery: true,
-			createdAt:   &after,
-			startedAt:   &started,
-			want:        true,
+			name:      "marked by this restore: fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after, restoreMark: ours},
+			startedAt: &started,
+			want:      true,
 		},
 		{
-			name:        "recovery cluster created before start (leftover from previous restore): not fresh",
-			hasRecovery: true,
-			createdAt:   &before,
-			startedAt:   &started,
-			want:        false,
+			name:      "marked by another restore, created after start (concurrent restore or re-render of an earlier restore): not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after, restoreMark: other},
+			startedAt: &started,
+			want:      false,
 		},
 		{
-			name:        "recovery cluster created exactly at start: not fresh (conservative tie -> purge)",
-			hasRecovery: true,
-			createdAt:   &started,
-			startedAt:   &started,
-			want:        false,
+			name:      "marked by another restore, created before start (leftover from previous restore): not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &before, restoreMark: other},
+			startedAt: &started,
+			want:      false,
 		},
 		{
-			name:        "missing cluster creation timestamp: not fresh",
-			hasRecovery: true,
-			createdAt:   nil,
-			startedAt:   &started,
-			want:        false,
+			name:      "marked by this restore with no job start timestamp: fresh, the mark does not need one",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after, restoreMark: ours},
+			startedAt: nil,
+			want:      true,
 		},
 		{
-			name:        "missing job start timestamp: not fresh",
-			hasRecovery: true,
-			createdAt:   &after,
-			startedAt:   nil,
-			want:        false,
+			name:      "unmarked, created after start (our own re-render by an older chart): fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after},
+			appMark:   ours,
+			startedAt: &started,
+			want:      true,
+		},
+		{
+			name:      "unmarked, created after start, values not patched by this restore (manual recovery re-rendered): not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after},
+			appMark:   "",
+			startedAt: &started,
+			want:      false,
+		},
+		{
+			name:      "unmarked, created after start, values patched by another restore: not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after},
+			appMark:   other,
+			startedAt: &started,
+			want:      false,
+		},
+		{
+			name:      "unmarked, created before start (leftover from previous restore): not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &before},
+			appMark:   ours,
+			startedAt: &started,
+			want:      false,
+		},
+		{
+			name:      "unmarked, created exactly at start: not fresh (conservative tie -> purge)",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &started},
+			appMark:   ours,
+			startedAt: &started,
+			want:      false,
+		},
+		{
+			name:      "unmarked, missing cluster creation timestamp: not fresh",
+			state:     recoveryClusterState{hasRecovery: true},
+			appMark:   ours,
+			startedAt: &started,
+			want:      false,
+		},
+		{
+			name:      "unmarked, missing job start timestamp: not fresh",
+			state:     recoveryClusterState{hasRecovery: true, createdAt: &after},
+			appMark:   ours,
+			startedAt: nil,
+			want:      false,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cnpgClusterFreshlyRecovered(tc.hasRecovery, tc.createdAt, tc.startedAt)
+			got := cnpgClusterFreshlyRecovered(tc.state, ours, tc.appMark, tc.startedAt)
 			if got != tc.want {
 				t.Errorf("got %v want %v", got, tc.want)
 			}
@@ -1095,22 +1135,24 @@ func TestRecoveryBootstrapClusterState_TerminatingCluster(t *testing.T) {
 		}
 		c := newCNPGStrategyTestClient(t, cluster)
 		r := &RestoreJobReconciler{Client: c}
-		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
+		got, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got {
-			t.Fatalf("expected false for terminating cluster, got true")
-		}
-		if createdAt != nil {
-			t.Fatalf("expected nil createdAt for terminating cluster, got %v", createdAt)
+		if got != (recoveryClusterState{}) {
+			t.Fatalf("expected the zero state for a terminating cluster, got %+v", got)
 		}
 	})
 
 	t.Run("live recovery cluster reports recovered with creation timestamp", func(t *testing.T) {
 		created := metav1.NewTime(time.Now().Add(-time.Hour))
 		cluster := &cnpgtypes.Cluster{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", CreationTimestamp: created},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:         "tenant",
+				Name:              "postgres-app",
+				CreationTimestamp: created,
+				Annotations:       map[string]string{cnpgRestoredServerNameAnnotation: "postgres-app-restore-0123456789abcdef"},
+			},
 			Spec: cnpgtypes.ClusterSpec{
 				Bootstrap: &cnpgtypes.BootstrapConfiguration{
 					Recovery: &cnpgtypes.RecoverySource{Source: "pg-src"},
@@ -1119,30 +1161,30 @@ func TestRecoveryBootstrapClusterState_TerminatingCluster(t *testing.T) {
 		}
 		c := newCNPGStrategyTestClient(t, cluster)
 		r := &RestoreJobReconciler{Client: c}
-		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
+		got, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !got {
-			t.Fatalf("expected true for live recovery cluster, got false")
+		if !got.hasRecovery {
+			t.Fatalf("expected hasRecovery for live recovery cluster, got false")
 		}
-		if createdAt == nil {
+		if got.createdAt == nil {
 			t.Fatalf("expected non-nil createdAt for live recovery cluster")
+		}
+		if got.restoreMark != "postgres-app-restore-0123456789abcdef" {
+			t.Fatalf("restoreMark = %q, want the %s annotation", got.restoreMark, cnpgRestoredServerNameAnnotation)
 		}
 	})
 
 	t.Run("missing cluster reports not-yet", func(t *testing.T) {
 		c := newCNPGStrategyTestClient(t)
 		r := &RestoreJobReconciler{Client: c}
-		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
+		got, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got {
-			t.Fatalf("expected false for missing cluster, got true")
-		}
-		if createdAt != nil {
-			t.Fatalf("expected nil createdAt for missing cluster, got %v", createdAt)
+		if got != (recoveryClusterState{}) {
+			t.Fatalf("expected the zero state for a missing cluster, got %+v", got)
 		}
 	})
 }
@@ -2729,12 +2771,16 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 		}
 	})
 
-	t.Run("freshly-recovered cluster from this restore is not re-purged", func(t *testing.T) {
+	t.Run("unmarked cluster this restore's values rendered is not re-purged", func(t *testing.T) {
 		backup := mkBackupArtifact(t)
-		// creationTimestamp a minute after StartedAt: this restore's own re-render.
+		// creationTimestamp a minute after StartedAt: this restore's own
+		// re-render by a chart that does not annotate the Cluster.
 		fresh := metav1.NewTime(startedAt.Add(time.Minute))
-		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
-			newPostgresApp(appName, ns), mkRecoveryCluster(fresh))
+		rjSeed := mkRestoreJob()
+		app := newPostgresApp(appName, ns)
+		app.Spec.Bootstrap.NewServerName = restoredServerName(clusterName, rjSeed.UID)
+		c := newCNPGStrategyTestClient(t, backup, rjSeed, strategy, cnpgBackup,
+			app, mkRecoveryCluster(fresh))
 		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
 
 		rj := &backupsv1alpha1.RestoreJob{}
@@ -2754,6 +2800,112 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 		}
 		if !got.DeletionTimestamp.IsZero() {
 			t.Fatalf("freshly-recovered Cluster must not be marked for deletion")
+		}
+	})
+
+	// A manually configured recovery (bootstrap.enabled without
+	// newServerName) renders no annotation. Re-rendered after StartedAt but
+	// before this restore patches the values, it holds the manual recovery
+	// source, not this restore's backup.
+	t.Run("unmarked cluster from values this restore has not patched is purged even when created after start", func(t *testing.T) {
+		backup := mkBackupArtifact(t)
+		fresh := metav1.NewTime(startedAt.Add(time.Minute))
+		app := newPostgresApp(appName, ns)
+		app.Spec.Bootstrap.Enabled = true
+		app.Spec.Bootstrap.OldName = "manual-source"
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
+			app, mkRecoveryCluster(fresh), mkClusterPVC())
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+		err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{})
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("expected the manual recovery Cluster to be purged (NotFound), got err=%v", err)
+		}
+	})
+
+	t.Run("recovery cluster marked by another restore is purged even when created after start", func(t *testing.T) {
+		backup := mkBackupArtifact(t)
+		fresh := metav1.NewTime(startedAt.Add(time.Minute))
+		other := mkRecoveryCluster(fresh)
+		other.Annotations = map[string]string{cnpgRestoredServerNameAnnotation: clusterName + "-restore-0123456789abcdef"}
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
+			newPostgresApp(appName, ns), other, mkClusterPVC())
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+		err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{})
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("expected another restore's Cluster to be purged (NotFound), got err=%v", err)
+		}
+	})
+
+	// The mark the purge decision expects has to be the one the restore patch
+	// writes into bootstrap.newServerName, which the chart renders onto the
+	// Cluster. The Cluster here predates StartedAt, so only a matching mark
+	// keeps it: the creation-time fallback would purge it.
+	t.Run("recovery cluster carrying the mark this restore's patch wrote is not re-purged", func(t *testing.T) {
+		backup := mkBackupArtifact(t)
+		stale := metav1.NewTime(startedAt.Add(-time.Hour))
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
+			newPostgresApp(appName, ns), mkRecoveryCluster(stale), mkClusterPVC())
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: record.NewFakeRecorder(10)}
+
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("first reconcileCNPGRestore: %v", err)
+		}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("first pass should purge the stale Cluster, got err=%v", err)
+		}
+		app := &postgresapp.Postgres{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: appName}, app); err != nil {
+			t.Fatalf("get patched Postgres app: %v", err)
+		}
+		mark := app.Spec.Bootstrap.NewServerName
+		if mark == "" {
+			t.Fatalf("the restore patch left bootstrap.newServerName empty")
+		}
+
+		// The chart re-renders the Cluster from the patched values, and the
+		// TargetPurged status write is lost.
+		rendered := mkRecoveryCluster(stale)
+		rendered.Annotations = map[string]string{cnpgRestoredServerNameAnnotation: mark}
+		if err := c.Create(ctx, rendered); err != nil {
+			t.Fatalf("create re-rendered Cluster: %v", err)
+		}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("reload RestoreJob: %v", err)
+		}
+		apimeta.RemoveStatusCondition(&rj.Status.Conditions, restoreCondTargetPurged)
+		if err := c.Status().Update(ctx, rj); err != nil {
+			t.Fatalf("drop TargetPurged: %v", err)
+		}
+
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("second reconcileCNPGRestore: %v", err)
+		}
+		got := &cnpgtypes.Cluster{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, got); err != nil {
+			t.Fatalf("expected the Cluster this restore rendered to survive, got err=%v", err)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			t.Fatalf("the Cluster this restore rendered must not be marked for deletion")
 		}
 	})
 }

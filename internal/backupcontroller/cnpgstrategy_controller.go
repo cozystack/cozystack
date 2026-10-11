@@ -69,6 +69,10 @@ const (
 	cnpgS3SecretRefKey     = "cnpg.io/s3-secret-ref"
 	cnpgMajorVersionKey    = "cnpg.io/major-version"
 
+	// Annotation the postgres chart renders on the Cluster from
+	// bootstrap.newServerName.
+	cnpgRestoredServerNameAnnotation = "postgres.cozystack.io/restored-server-name"
+
 	// Polling cadence for the CNPG backup/restore lifecycle. Mirrors the
 	// Velero strategy's defaults so behaviour is uniform across drivers.
 	cnpgPollInterval = 5 * time.Second
@@ -521,40 +525,43 @@ func cnpgPurgeNeeded(purgedCondition, liveClusterFreshlyRecovered bool) bool {
 
 // cnpgClusterFreshlyRecovered reports whether a live cnpg.io Cluster that
 // carries spec.bootstrap.recovery was produced by THIS RestoreJob's own purge
-// + chart re-render (its creationTimestamp is strictly after the job's
-// StartedAt) rather than being left over from an earlier, already-completed
-// restore.
+// + chart re-render rather than rendered for some other restore.
 //
-// Only the former is safe to skip re-purging. A leftover recovery Cluster from
-// a prior restore predates StartedAt and still holds the prior data, so it must
-// be purged for the new restore to re-bootstrap from the backup. The fresh
-// Cluster in the status-write-race case is always created after StartedAt (the
-// job sets StartedAt on its first reconcile, long before it purges and the
-// chart re-renders), so the timestamp comparison cleanly separates the two.
+// Only the former is safe to skip re-purging. Any other recovery Cluster holds
+// another restore's data and must be purged for this restore to re-bootstrap
+// from its backup. That includes a Cluster a concurrent RestoreJob produced,
+// and one the chart re-renders from an earlier restore's values after being
+// deleted while this restore waits for the WAL archive: both are created after
+// this job's StartedAt, so a timestamp alone cannot tell them apart.
 //
-// The comparison is strict (created > started), so an exact tie resolves to
-// "not fresh" and the caller purges. That matches the conservative default
-// below: the only classification that must never be wrong is calling a stale
-// leftover "fresh" (which reintroduces the silent no-op), and a fresh Cluster
-// is always created well after StartedAt (see above), never exactly at it.
+// The chart annotates the Cluster with bootstrap.newServerName, which the
+// restore patch sets to restoredServerName(cluster, RestoreJob UID). The value
+// lives on the object the chart renders, not in RestoreJob status, so it
+// survives the failed status write the skip exists for, and it names the
+// restore that rendered the Cluster. When the annotation is present, the
+// Cluster is fresh only if it carries wantMark.
 //
-// An identity-based alternative was considered - recording the purged Cluster's
-// UID on the TargetPurged condition and comparing UIDs on later reconciles -
-// which is immune to clock skew. It was rejected because it leans on the same
-// status write that the status-write-race path (the whole reason this skip
-// exists) assumes can fail, so it cannot cover that case; the timestamp
-// comparison needs no extra persisted state and the fresh-vs-stale gap
-// (a full purge + re-render cycle) always dwarfs any plausible control-plane
-// clock skew.
+// A Cluster without the annotation was rendered either by a chart that
+// predates it or from values with no bootstrap.newServerName (a manually
+// configured recovery). It is fresh only if appMark, the application's current
+// bootstrap.newServerName, is wantMark - this restore has patched the values -
+// and it was created strictly after StartedAt, which separates a Cluster from
+// an earlier completed restore from this restore's own re-render.
 //
 // Returns false when freshness cannot be determined (no recovery bootstrap, or
-// a missing timestamp): the caller then proceeds to purge, which is the safe
-// default for any pre-existing, non-fresh Cluster.
-func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStartedAt *metav1.Time) bool {
-	if !hasRecovery || clusterCreatedAt == nil || restoreStartedAt == nil {
+// a missing timestamp on the fallback path): the caller then purges, which is
+// the safe default.
+func cnpgClusterFreshlyRecovered(state recoveryClusterState, wantMark, appMark string, restoreStartedAt *metav1.Time) bool {
+	if !state.hasRecovery {
 		return false
 	}
-	return clusterCreatedAt.After(restoreStartedAt.Time)
+	if state.restoreMark != "" {
+		return state.restoreMark == wantMark
+	}
+	if appMark != wantMark || state.createdAt == nil || restoreStartedAt == nil {
+		return false
+	}
+	return state.createdAt.After(restoreStartedAt.Time)
 }
 
 // cnpgClusterGVR addresses Clusters on the dynamic client, for reads that must
@@ -1021,17 +1028,16 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// check the live Cluster for bootstrap.recovery: if present, the chart
 	// has already re-rendered after a previous purge, and we must NOT delete
 	// it again.
-	hasRecovery, clusterCreatedAt, err := r.recoveryBootstrapClusterState(ctx, target.Namespace, clusterName)
+	clusterState, err := r.recoveryBootstrapClusterState(ctx, target.Namespace, clusterName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	purgedCondition := apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondTargetPurged)
 	// Only skip the destructive purge for a recovery Cluster THIS restore just
-	// produced (created at/after StartedAt). A recovery Cluster left over from
-	// an earlier completed restore predates StartedAt and still holds the old
-	// data, so it must be purged - otherwise a repeat in-place restore silently
-	// no-ops.
-	freshlyRecovered := cnpgClusterFreshlyRecovered(hasRecovery, clusterCreatedAt, restoreJob.Status.StartedAt)
+	// produced. A recovery Cluster rendered for any other restore still holds
+	// that restore's data, so it must be purged - otherwise a repeat in-place
+	// restore silently no-ops.
+	freshlyRecovered := cnpgClusterFreshlyRecovered(clusterState, restoredServerName(clusterName, restoreJob.UID), targetApp.Spec.Bootstrap.NewServerName, restoreJob.Status.StartedAt)
 	if cnpgPurgeNeeded(purgedCondition, freshlyRecovered) {
 		// A physical restore only opens on the major version that wrote the
 		// data files. Across majors the recovery pods loop on "database files
@@ -1206,7 +1212,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	// Getting the order wrong is not just a cosmetic mislabel - a false Failed
 	// can be resubmitted, and the next RestoreJob's purge guard would then
 	// delete the already-recovered Cluster + PVCs to start over.
-	if hasRecovery {
+	if clusterState.hasRecovery {
 		healthy, herr := r.cnpgClusterHealthy(ctx, target.Namespace, clusterName)
 		if herr != nil {
 			return ctrl.Result{}, herr
@@ -2070,22 +2076,37 @@ func (r *RestoreJobReconciler) readPodContainerLog(ctx context.Context, namespac
 // drops the change and the cluster ends up with the original initdb spec.
 // Holding here forces the caller to requeue until the old CR is fully GC'd
 // and the chart re-creates a fresh one.
-func (r *RestoreJobReconciler) recoveryBootstrapClusterState(ctx context.Context, namespace, clusterName string) (hasRecovery bool, createdAt *metav1.Time, err error) {
+func (r *RestoreJobReconciler) recoveryBootstrapClusterState(ctx context.Context, namespace, clusterName string) (recoveryClusterState, error) {
 	cluster := &cnpgtypes.Cluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil, nil
+			return recoveryClusterState{}, nil
 		}
-		return false, nil, err
+		return recoveryClusterState{}, err
 	}
 	if !cluster.DeletionTimestamp.IsZero() {
-		return false, nil, nil
+		return recoveryClusterState{}, nil
 	}
 	if cluster.Spec.Bootstrap == nil || cluster.Spec.Bootstrap.Recovery == nil {
-		return false, nil, nil
+		return recoveryClusterState{}, nil
 	}
 	created := cluster.CreationTimestamp
-	return true, &created, nil
+	return recoveryClusterState{
+		hasRecovery: true,
+		createdAt:   &created,
+		restoreMark: cluster.Annotations[cnpgRestoredServerNameAnnotation],
+	}, nil
+}
+
+// recoveryClusterState is what the purge decision reads off the live Cluster.
+// The zero value is a Cluster that is absent, terminating, or not bootstrapped
+// from a recovery.
+type recoveryClusterState struct {
+	hasRecovery bool
+	createdAt   *metav1.Time
+	// restoreMark is cnpgRestoredServerNameAnnotation, or "" on a Cluster the
+	// chart rendered before it set the annotation.
+	restoreMark string
 }
 
 // ---------------------------------------------------------------------------

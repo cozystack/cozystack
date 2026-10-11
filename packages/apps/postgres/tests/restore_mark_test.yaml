@@ -1,0 +1,66 @@
+suite: Cluster carries the restore that rendered it
+
+# The CNPG restore driver sets bootstrap.newServerName to a value unique to each
+# RestoreJob and reads it back off the Cluster to decide whether the live
+# recovery Cluster is the one its own purge produced. The barman plugin's
+# serverName is not enough, since the plugin renders only with chart-level S3
+# coordinates, so the chart annotates the Cluster whenever the value is set.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: annotates a restored Cluster with bootstrap.newServerName
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+        endpointURL: https://s3.example:9000
+      bootstrap:
+        enabled: true
+        oldName: pg-test
+        serverName: pg-test
+        newServerName: pg-test-restore-deadbeef
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: metadata.annotations["postgres.cozystack.io/restored-server-name"]
+          value: pg-test-restore-deadbeef
+
+  - it: keeps the annotation when the barman plugin is not rendered
+    set:
+      backup:
+        enabled: false
+      bootstrap:
+        enabled: false
+        newServerName: pg-test-restore-deadbeef
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: spec.plugins
+      - equal:
+          path: metadata.annotations["postgres.cozystack.io/restored-server-name"]
+          value: pg-test-restore-deadbeef
+
+  - it: renders no annotation on a Cluster that was never restored
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - notExists:
+          path: metadata.annotations
