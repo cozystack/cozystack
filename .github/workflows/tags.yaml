@@ -398,6 +398,7 @@ jobs:
       packages: write
       pull-requests: write
       actions: write
+      id-token: write # keyless signing of the release checksums in hack/upload-assets.sh
 
     steps:
       - name: Generate GitHub App token
@@ -531,6 +532,15 @@ jobs:
             }
 
             core.setOutput('upload_url', rel.upload_url);
+
+      # hack/upload-assets.sh writes the release SBOM with syft and signs the
+      # checksums of every asset with cosign, keylessly, as this job.
+      - name: Set up syft
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Set up cosign
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       # The assets were built by build-amd64; the operator manifests are
       # rendered here, from the tree pinned on the index digests.
