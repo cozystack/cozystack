@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/gorilla/securecookie"
 )
@@ -64,5 +65,41 @@ func TestSessionCookieRejectsExpiredTimestamp(t *testing.T) {
 	var sess map[string]any
 	if err := testCodec().MaxAge(-1).Decode(cookieName, enc, &sess); err == nil {
 		t.Fatal("expired cookie decoded")
+	}
+}
+
+func TestDecodeSessionWithoutSecretTakesTheBareToken(t *testing.T) {
+	now := time.Unix(5000, 0)
+	token, sess, err := decodeSession(nil, "tok", now)
+	if err != nil || token != "tok" {
+		t.Fatalf("decodeSession(nil) = %q, %v", token, err)
+	}
+	if sess["issued"] != now.Unix() || sess["expires"] != now.Add(24*time.Hour).Unix() {
+		t.Errorf("session = %v", sess)
+	}
+}
+
+func TestDecodeSessionRejectsForgedCookie(t *testing.T) {
+	if _, _, err := decodeSession(testCodec(), "tok", time.Now()); err == nil {
+		t.Fatal("a bare token decoded as a signed session")
+	}
+}
+
+// The session read back from a signed cookie carries its times as int64, which
+// the refresh does not recognise, so a signed session is never refreshed.
+func TestRefreshedCookieNeverFiresForASignedSession(t *testing.T) {
+	sc := testCodec()
+	now := time.Now()
+	issued := now.Add(-2 * time.Hour)
+	enc, err := encodeSession(sc, "tok", now.Add(time.Hour).Unix(), issued.Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, sess, err := decodeSession(sc, enc, now)
+	if err != nil || token != "tok" {
+		t.Fatalf("decodeSession = %q, %v", token, err)
+	}
+	if c := refreshedCookie(sc, token, sess, time.Hour, now); c != nil {
+		t.Fatalf("refreshedCookie = %+v, want nil", c)
 	}
 }

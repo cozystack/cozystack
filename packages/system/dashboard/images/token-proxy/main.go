@@ -429,6 +429,45 @@ func encodeSession(sc *securecookie.SecureCookie, token string, exp, issued int6
 	return token, nil
 }
 
+// decodeSession reads the token and session out of a cookie value. Without a
+// cookie secret the value is the bare token.
+func decodeSession(sc *securecookie.SecureCookie, value string, now time.Time) (string, map[string]any, error) {
+	if sc == nil {
+		return value, map[string]any{
+			"expires": now.Add(24 * time.Hour).Unix(),
+			"issued":  now.Unix(),
+		}, nil
+	}
+	var sess map[string]any
+	if err := sc.Decode(cookieName, value, &sess); err != nil {
+		return "", nil, err
+	}
+	token, _ := sess["access_token"].(string)
+	return token, sess, nil
+}
+
+// refreshedCookie re-issues the session cookie once it is older than refresh,
+// keeping the token's expiry. It returns nil when no refresh is due.
+func refreshedCookie(sc *securecookie.SecureCookie, token string, sess map[string]any, refresh time.Duration, now time.Time) *http.Cookie {
+	if refresh <= 0 {
+		return nil
+	}
+	issued, ok := sess["issued"].(float64)
+	if !ok || now.Sub(time.Unix(int64(issued), 0)) <= refresh {
+		return nil
+	}
+	enc, _ := encodeSession(sc, token, int64(sess["expires"].(float64)), now.Unix())
+	return &http.Cookie{
+		Name:     cookieName,
+		Value:    enc,
+		Path:     "/",
+		Expires:  time.Unix(int64(sess["expires"].(float64)), 0),
+		Secure:   cookieSecure,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
 /* ----------------------------- main ------------------------------------- */
 
 func main() {
@@ -534,20 +573,10 @@ func main() {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		var token string
-		var sess map[string]any
-		if sc != nil {
-			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			token, _ = sess["access_token"].(string)
-		} else {
-			token = c.Value
-			sess = map[string]any{
-				"expires": time.Now().Add(24 * time.Hour).Unix(),
-				"issued":  time.Now().Unix(),
-			}
+		token, sess, err := decodeSession(sc, c.Value, time.Now())
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 
 		// Re-verify the token to ensure it's still valid
@@ -608,42 +637,14 @@ func main() {
 			http.Redirect(w, r, signIn, http.StatusFound)
 			return
 		}
-		var token string
-		var sess map[string]any
-		if sc != nil {
-			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
-				http.Redirect(w, r, signIn, http.StatusFound)
-				return
-			}
-			token, _ = sess["access_token"].(string)
-		} else {
-			token = c.Value
-			sess = map[string]any{
-				"expires": time.Now().Add(24 * time.Hour).Unix(),
-				"issued":  time.Now().Unix(),
-			}
-		}
-		if token == "" {
+		token, sess, err := decodeSession(sc, c.Value, time.Now())
+		if err != nil || token == "" {
 			http.Redirect(w, r, signIn, http.StatusFound)
 			return
 		}
 
-		// cookie refresh
-		if cookieRefresh > 0 {
-			if issued, ok := sess["issued"].(float64); ok {
-				if time.Since(time.Unix(int64(issued), 0)) > cookieRefresh {
-					enc, _ := encodeSession(sc, token, int64(sess["expires"].(float64)), time.Now().Unix())
-					http.SetCookie(w, &http.Cookie{
-						Name:     cookieName,
-						Value:    enc,
-						Path:     "/",
-						Expires:  time.Unix(int64(sess["expires"].(float64)), 0),
-						Secure:   cookieSecure,
-						HttpOnly: true,
-						SameSite: http.SameSiteLaxMode,
-					})
-				}
-			}
+		if rc := refreshedCookie(sc, token, sess, cookieRefresh, time.Now()); rc != nil {
+			http.SetCookie(w, rc)
 		}
 
 		r.Header.Set("Authorization", "Bearer "+token)
