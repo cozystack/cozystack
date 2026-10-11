@@ -121,9 +121,10 @@
 {{- $group := include "kubernetes-nodes.group" . | fromYaml }}
 {{- define "proxmoxmachinetemplate" -}}
 spec:
-  {{- /* Talos ships neither qemu-guest-agent nor a cloud-init status file, and
-        capmox blocks a Machine on both probes until they answer. Left on, the
-        VM boots, joins nothing, and the provider reports
+  {{- /* Talos carries qemu-guest-agent only when its schematic adds it, and
+        never a cloud-init status file, while capmox blocks a Machine on both
+        probes until they answer. Left on, the VM boots, joins nothing, and the
+        provider reports
         "error waiting for agent: the operation has timed out" forever. This is
         the same class of problem the KubeVirt path solves with
         virtualMachineBootstrapCheck.checkStrategy: none for its SSH probe —
@@ -137,6 +138,15 @@ spec:
         the KubeVirt path uses: capmox injects bootstrap data as a nocloud ISO,
         and an openstack image ignores it exactly as silently as a nocloud image
         ignores configdrive.
+
+        Nor is it the platform release's nocloud-amd64.raw.xz, the bare-metal
+        node image: its zfs extension's service waits for a /dev/zfs no VM has,
+        the boot sequence never completes, and Talos reboots the guest each time
+        the boot timeout runs out. The template carries this pool's
+        talos.schematicID at talos.version, the same build as the installer the
+        machineconfig names. The default schematic's qemu-guest-agent service
+        waits the same way for the agent's virtio port, so the template has the
+        agent enabled. hack/proxmox-talos-template.sh builds it that way.
 
         matchTags is set equality, not containment. capmox sorts both sides and
         compares them with slices.Equal, so a template tagged
