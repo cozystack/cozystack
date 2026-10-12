@@ -9,4 +9,4 @@ storageClasses:
     infraStorageClass: replicated
     default: false
 csiDriver:
-  image: ghcr.io/cozystack/cozystack/kubevirt-csi-driver:v1.6.0@sha256:d6326e343c7932ce3d375c6742b9b9745090a4a26bf5bbc5ad19f5504ea93d65
+  image: ghcr.io/cozystack/cozystack/kubevirt-csi-driver:v1.7.0-rc.1@sha256:1653c9ebf1745656719cb1d56d387ace5dbea3e37dc0796086914c896bde22ce

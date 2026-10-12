@@ -1,1 +1,1 @@
-quay.io/outline/shadowbox:v1.12.3@sha256:545c6f7c7261bb30ae1dffe24a6fca5f8512f5d17c72cfb9e410e7e655444e62
+ghcr.io/cozystack/cozystack/shadowbox:v1.7.0-rc.1@sha256:e0ef5583279ab27d9a7711a20bd443b3e2b1c3dfa0a53552c9e54a05b9d38781

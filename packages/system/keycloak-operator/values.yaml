@@ -4,7 +4,7 @@ keycloak-operator:
     # cannot reach a build registry whose `registry` key holds only part of it.
     registry: ""
     repository: ghcr.io/cozystack/cozystack/keycloak-operator
-    tag: "latest@sha256:27279247dfbd2d1e86fc4e827d34c891880ca65eefd75da1701bc0a1adf865a9"
+    tag: "v1.7.0-rc.1@sha256:298f5b846f8c16f32bae67df4e811194029beabaf80b1d44820e428f2b5940af"
   clusterReconciliationEnabled: true
   resources:
     limits:

@@ -1,7 +1,7 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: v1.6.0@sha256:70ddd1a66fbc1ea58078f4645fc572ab8e2e189dbb4d9a5f9ca43d5663106483
+    tag: v1.7.0-rc.1@sha256:6f66de8c3b04aed7fe152fbd7e128eaada088a1cd978a6cf394a71ad42bedee8
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -99,7 +99,7 @@ linstorCSI:
   strictTopology: true
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: v1.6.0@sha256:ae854423de62e94fb89b59d92c20da8939196e643e83b2d60d9f6915d5b0e55c
+    tag: v1.7.0-rc.1@sha256:760c0e5434927d4995061e932a123b361c974ef1dfd361a58516801120a35dd7
 controller:
   # Resource requests for the linstor-controller JVM. Requests (not limits) are
   # set on purpose: a CPU request guarantees CPU shares so the JVM can answer its
