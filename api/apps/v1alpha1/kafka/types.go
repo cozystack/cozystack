@@ -33,6 +33,9 @@ type ConfigSpec struct {
 	// Kafka configuration.
 	// +kubebuilder:default:={}
 	Kafka Kafka `json:"kafka"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Kafka struct {

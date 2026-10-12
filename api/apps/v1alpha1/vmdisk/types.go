@@ -34,6 +34,9 @@ type ConfigSpec struct {
 	// Provision the volume at disk creation instead of waiting for a consumer.
 	// +kubebuilder:default:=true
 	BindImmediately bool `json:"bindImmediately"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Source struct {
