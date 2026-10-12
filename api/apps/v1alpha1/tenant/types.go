@@ -46,6 +46,9 @@ type ConfigSpec struct {
 	// The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
 	// +kubebuilder:default:=""
 	SchedulingClass string `json:"schedulingClass,omitempty"`
+	// SchedulingClasses an application in this tenant may select through its own `schedulingClass`, in place of the tenant's. Empty allows none, so every application runs under the tenant's class. Inherited from the parent tenant, and not settable here, when the parent has a `schedulingClass` or a non-empty list.
+	// +kubebuilder:default:={}
+	AllowedSchedulingClasses []string `json:"allowedSchedulingClasses,omitempty"`
 	// Define resource quotas for the tenant.
 	// +kubebuilder:default:={}
 	ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas,omitempty"`

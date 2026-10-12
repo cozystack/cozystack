@@ -1,0 +1,82 @@
+suite: tenant allowed scheduling classes
+# The namespace annotation is what the scheduling-class admission policy and
+# the lineage webhook read to decide which SchedulingClass an application may
+# select instead of the tenant's own. A parent that constrains placement must
+# pass its list down unchanged, or a child tenant could allow a class its
+# parent does not.
+templates:
+  - templates/namespace.yaml
+set:
+  _cluster:
+    root-host: example.com
+release:
+  name: tenant-child
+  namespace: tenant-parent
+tests:
+  - it: allows no class by default
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
+      - documentIndex: 1
+        notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: allowedSchedulingClasses
+
+  - it: writes the tenant's own list when the parent constrains nothing
+    set:
+      allowedSchedulingClasses: [co-region-a, co-region-b]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
+          value: co-region-a,co-region-b
+      - documentIndex: 1
+        matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'allowedSchedulingClasses: \["co-region-a","co-region-b"\]'
+
+  - it: ignores the tenant's own list under a parent class with no list
+    set:
+      _namespace:
+        schedulingClass: parent-class
+      allowedSchedulingClasses: [co-region-a]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["scheduler.cozystack.io/scheduling-class"]
+          value: parent-class
+      - documentIndex: 0
+        notExists:
+          path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
+      - documentIndex: 1
+        notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: allowedSchedulingClasses
+
+  - it: inherits the parent's list in place of its own
+    set:
+      _namespace:
+        schedulingClass: parent-class
+        allowedSchedulingClasses: [co-region-a]
+      allowedSchedulingClasses: [co-region-a, co-region-b]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
+          value: co-region-a
+      - documentIndex: 1
+        matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'allowedSchedulingClasses: \["co-region-a"\]'
+
+  - it: inherits the parent's list when the parent has a list but no class
+    set:
+      _namespace:
+        allowedSchedulingClasses: [co-region-a]
+      allowedSchedulingClasses: [co-region-b]
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
+          value: co-region-a
