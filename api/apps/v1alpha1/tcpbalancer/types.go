@@ -38,7 +38,7 @@ type ConfigSpec struct {
 	// List of allowed client networks.
 	// +kubebuilder:default:={}
 	Whitelist []string `json:"whitelist,omitempty"`
-	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:MaxLength=63
 	SchedulingClass string `json:"schedulingClass"`

@@ -47,18 +47,24 @@ Neither lowering the `version` field on a running cluster nor rolling the app ba
 
 ### Kafka configuration
 
-| Name                          | Description                                                                                                                                                                                                       | Type       | Value      |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `kafka`                       | Kafka configuration.                                                                                                                                                                                              | `object`   | `{}`       |
-| `kafka.replicas`              | Number of Kafka replicas.                                                                                                                                                                                         | `int`      | `3`        |
-| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                          | `object`   | `{}`       |
-| `kafka.resources.cpu`         | CPU available to each replica.                                                                                                                                                                                    | `quantity` | `""`       |
-| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                                                                                                                           | `quantity` | `""`       |
-| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                                                                                                                           | `string`   | `c1.small` |
-| `kafka.size`                  | Persistent Volume size for Kafka.                                                                                                                                                                                 | `quantity` | `10Gi`     |
-| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                                                                                                                                        | `string`   | `""`       |
-| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata.                                                                                                                                                             | `quantity` | `5Gi`      |
-| `schedulingClass`             | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`       |
+| Name                          | Description                                                                                              | Type       | Value      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `kafka`                       | Kafka configuration.                                                                                     | `object`   | `{}`       |
+| `kafka.replicas`              | Number of Kafka replicas.                                                                                | `int`      | `3`        |
+| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `kafka.resources.cpu`         | CPU available to each replica.                                                                           | `quantity` | `""`       |
+| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
+| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
+| `kafka.size`                  | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`     |
+| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
+| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata.                                                    | `quantity` | `5Gi`      |
+
+
+### Scheduling parameters
+
+| Name              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Type     | Value |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. If the class is later removed from that list, new pods get the tenant's class. Empty means inherit from the tenant. | `string` | `""`  |
 
 
 ## Parameter examples and reference
