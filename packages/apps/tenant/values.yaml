@@ -31,5 +31,8 @@ computeplane: false
 ## @param {string} [schedulingClass] - The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
 schedulingClass: ""
 
+## @param {[]string} allowedSchedulingClasses - SchedulingClasses an application in this tenant may select through its own `schedulingClass`, in place of the tenant's. Empty allows none, so every application runs under the tenant's class. Inherited from the parent tenant, and not settable here, when the parent has a `schedulingClass` or a non-empty list.
+allowedSchedulingClasses: []
+
 ## @param {map[string]quantity} resourceQuotas - Define resource quotas for the tenant.
 resourceQuotas: {}
