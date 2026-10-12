@@ -55,6 +55,7 @@ Service utilizes the freshworks-oss Redis Operator (a maintained fork of the arc
 | `sentinel.resources.cpu`    | CPU available to each replica.                                                                                                                                                                                                                                                            | `quantity` | `""`  |
 | `sentinel.resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                                                                                                   | `quantity` | `""`  |
 | `sentinel.resourcesPreset`  | Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.                                                                                                                                                                                                                       | `string`   | `{}`  |
+| `schedulingClass`           | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.                                                                         | `string`   | `""`  |
 
 
 ## Parameter examples and reference
