@@ -42,7 +42,7 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 
 ## Invariants
 
-- **Every first-party reference is tag+digest.** A bare tag with no digest is not reproducible and must not be committed. `securitygroup-controller:v0.0.0` is a live violation.
+- **Every first-party reference is tag+digest.** A bare tag with no digest is not reproducible and must not be committed. The one exception is the first commit of a new image: it has no digest until it is built, so it lands as a bare `<repo>:<tag>` that the producing `make image` replaces. PR CI and release preparation both stamp it before anything pulls it, but a tree applied without a build pulls a tag that does not exist.
 - **Exactly one producer stamps each reference.** A reference no `Makefile` writes will never be refreshed by anything, including release preparation.
 - **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `hack/build-matrix_test.bats` computes the set of packages whose Makefile runs `docker buildx build` and fails on any the list misses.
 - **Every consumer of references reads all three storage shapes**, via `hack/lib/image-refs.sh`.
