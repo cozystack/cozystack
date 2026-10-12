@@ -73,6 +73,28 @@ size: 10Gi
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
+##   The LoadBalancer Services are published to external-dns as
+##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>. Releases created
+##   before this naming was introduced were published under the in-cluster domain
+##   instead, which does not resolve outside the cluster. Re-applying publishes the
+##   new name but does NOT withdraw the old record: external-dns is configured
+##   upsert-only here, so it issues no delete. The stale entry keeps pointing at the
+##   LoadBalancer
+##   until it is removed from the zone by hand.
+##   ONLY the cert-manager issuer covers those names. Under tls.issuer cert-manager
+##   (or the same resolved from this field on OpenSearch 2.0.0 and later) each service
+##   gets its own certificate carrying its own external name — they are issued
+##   separately, not as one covering both. Under tls.issuer operator, or the fallback
+##   below 2.0.0, the operator issues a certificate for in-cluster names only, so an
+##   external client reaching the published name cannot verify it and must skip
+##   verification or supply its own certificate out of band.
+##   Changing this on a release already on the cert-manager issuer reissues the
+##   certificate with a different set of names, and the pods do not pick that up on
+##   their own — see the manual step described under tls.
+##   On a platform with no root host the tenant host is empty. External access still
+##   works by LoadBalancer address: no external-dns record is published and the
+##   certificate carries in-cluster names only, since there is no external name to
+##   put in either.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
@@ -90,6 +112,72 @@ topologySpreadPolicy: "soft"
 
 ## @param {Version} version - OpenSearch major version to deploy.
 version: v2
+
+##
+## @section TLS configuration
+##
+
+## @enum {string} TLSIssuer
+## @value operator
+## @value cert-manager
+
+## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
+## @field {TLSIssuer} [issuer] - Who issues the HTTP server certificate: `operator` uses the CA the opster operator manages itself, `cert-manager` gives the release its own CA, covers the external hostname and publishes a trust anchor the tenant can verify against. Unset follows external: `cert-manager` when it is true, `operator` when it is false. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.
+##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
+##   operator (tls.transport.generate: true). Selecting issuer: operator does NOT
+##   disable transport mTLS, which the OpenSearch security plugin requires
+##   unconditionally, and it does not turn HTTP TLS off either. The listener serves
+##   TLS under both issuers; selecting operator only moves the HTTP certificate back
+##   to the one the operator generates for itself.
+##   Under issuer: cert-manager the chart's HTTP CA
+##   (<release>.http-ca, with a dot) is passed to the operator via
+##   spec.security.tls.http.caSecret, so
+##   the operator signs the admin certificate with it and anchors the HTTP listener trust on
+##   it. That puts one CA under both the server certificate the securityadmin job
+##   validates and the admin certificate it presents, so the security configuration
+##   (users, roles, audit policies) from the <release>-security-config Secret applies.
+##   The job reaches the cluster on the operator's DNS base, which the platform sets
+##   from networking.clusterDomain; a package rendered without the platform values
+##   falls back to cluster.local. Transport mTLS stays operator-managed and
+##   independent.
+##   REQUIRES OpenSearch 2.0.0 or later (version v2 or v3). Below that the operator
+##   signs the admin certificate with the transport CA rather than this one, so
+##   securityadmin cannot authenticate. Asking for issuer: cert-manager on such a
+##   version fails the release; leaving it unset resolves to operator
+##   instead, so an external release on an older version keeps working.
+##   The cert-manager certificate is issued by a per-release private CA, so clients must
+##   trust it explicitly. The platform publishes that trust anchor as the key-free Secret
+##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
+##   namespace. Neither service picks up a reissued certificate on its own, so ANY
+##   change to one needs a manual step, not just a deliberate rotation: changing
+##   external, the tenant host or the cluster domain makes cert-manager reissue with
+##   the new names while the pods keep serving the old material, with no error
+##   anywhere. Those three reissue BOTH certificates, so complete it on both sides —
+##   delete <release>-http-server and restart the OpenSearch pods, and, when
+##   Dashboards is enabled, delete <release>-dashboards-server and restart the
+##   Dashboards deployment separately. Doing only the first leaves Dashboards serving
+##   a certificate that no longer matches its own name. Do not delete <release>.http-ca
+##   to do this: that mints a new CA, and until everything restarts the old one is
+##   still what is trusted.
+##   UPGRADE NOTE: an existing external release with this field unset is on the
+##   operator issuer today and moves to cert-manager the first time it is
+##   reconciled after this becomes available. That rolls the cluster and re-anchors it
+##   on a new CA, so anything pinned to the operator's CA must be repointed at
+##   <release>.tenant-ca. Set issuer: operator beforehand to keep the TLS side as it
+##   is; the external-dns name documented under external moves either way.
+##   Moving back to the operator issuer on a release that had cert-manager needs a
+##   manual cleanup, for a narrower reason than the tenant's trust: the projection
+##   carries an owner reference to the sentinel this chart removes with the issuer, so
+##   it is collected with it and nobody is left trusting an anchor for an endpoint that
+##   has gone back to an operator-issued certificate. What does survive is
+##   cert-manager's own Secrets, because the platform leaves enableCertificateOwnerRef
+##   false and removing a Certificate then does not remove its Secret. Those hold the
+##   CA private key and a server key each. Delete <release>.http-ca,
+##   <release>-http-server and, if Dashboards was enabled,
+##   <release>-dashboards-server to complete it.
+
+## @param {TLS} tls - HTTP-layer TLS configuration. Selects who issues the HTTP server certificate; TLS itself is always served.
+tls: {}
 
 ##
 ## @section Image configuration
@@ -140,7 +228,7 @@ users: {}
 ##
 
 ## @typedef {struct} Dashboards - OpenSearch Dashboards deployment configuration.
-## @field {bool} enabled - Enable OpenSearch Dashboards deployment.
+## @field {bool} enabled - Enable OpenSearch Dashboards deployment. The application name is then limited to 41 characters, and to 32 when external access is also on, because the Dashboards Service the operator creates would otherwise exceed the 63-character DNS label limit, and the operator stops upgrading and restarting the release for as long as that Service is refused.
 ## @field {int} replicas - Number of Dashboards replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration for Dashboards.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset for Dashboards.

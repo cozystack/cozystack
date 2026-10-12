@@ -4,25 +4,93 @@ templates:
 release:
   name: kubevirt
   namespace: cozy-kubevirt
+# One entry of the static opt-out block depends on the cluster version, so the
+# suite states the version instead of inheriting whatever helm-unittest
+# defaults to. 1.36 is what the platform's own Talos build ships; the two cases
+# at the bottom pin the branches around the 1.35 boundary.
+capabilities:
+  majorVersion: 1
+  minorVersion: 36
 tests:
   - it: keeps the upstream default feature-gate set and omits permittedHostDevices when values are empty
     asserts:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate
           - CPUManager
           - GPU
           - VMExport
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
       - notExists:
           path: spec.configuration.developerConfiguration.cpuAllocationRatio
       - notExists:
           path: spec.configuration.permittedHostDevices
       - notExists:
           path: spec.configuration.mediatedDevicesConfiguration
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: sets the cluster evictionStrategy to LiveMigrateIfPossible
+    asserts:
+      - equal:
+          path: spec.configuration.evictionStrategy
+          value: LiveMigrateIfPossible
+
+  - it: keeps Evict as the workload update fallback for VMs that cannot migrate
+    asserts:
+      - equal:
+          path: spec.workloadUpdateStrategy.workloadUpdateMethods
+          value:
+          - LiveMigrate
+          - Evict
+
+  - it: omits migrations when explicitly empty
+    set:
+      migrations: {}
+    asserts:
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: omits migrations when explicitly null
+    set:
+      migrations: null
+    asserts:
+      - notExists:
+          path: spec.configuration.migrations
+
+  - it: renders migration limits without changing their values
+    set:
+      migrations:
+        bandwidthPerMigration: 625M
+        parallelMigrationsPerCluster: 2
+        parallelOutboundMigrationsPerNode: 1
+    asserts:
+      - equal:
+          path: spec.configuration.migrations
+          value:
+            bandwidthPerMigration: 625M
+            parallelMigrationsPerCluster: 2
+            parallelOutboundMigrationsPerNode: 1
+
+  - it: preserves false and zero migration values
+    set:
+      migrations:
+        allowAutoConverge: false
+        completionTimeoutPerGiB: 0
+    asserts:
+      - equal:
+          path: spec.configuration.migrations
+          value:
+            allowAutoConverge: false
+            completionTimeoutPerGiB: 0
 
   - it: emits cpuAllocationRatio under developerConfiguration when set
     set:
@@ -41,7 +109,7 @@ tests:
       - equal:
           path: spec.configuration.developerConfiguration.featureGates
           value:
-          - HotplugVolumes
+          - DeclarativeHotplugVolumes
           - ExpandDisks
           - LiveMigration
           - AutoResourceLimitsGate
@@ -50,6 +118,299 @@ tests:
           - VMExport
           - HostDevices
           - WorkloadEncryptionSEV
+
+  # The chart does not enable HotplugVolumes, so naming it off is a plain
+  # opt-out and must not trip the both-lists guard.
+  - it: accepts HotplugVolumes in disabledFeatureGates
+    set:
+      disabledFeatureGates:
+      - HotplugVolumes
+    asserts:
+      - notContains:
+          path: spec.configuration.developerConfiguration.featureGates
+          content: HotplugVolumes
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - HotplugVolumes
+
+  - it: appends disabledFeatureGates after the static opt-outs
+    set:
+      disabledFeatureGates:
+      - ImageVolume
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
+
+  # KubeVirt's update validator refuses a CR that names one gate in both lists,
+  # and the create admitter does not check at all — so an overlap either wedges
+  # the HelmRelease on an existing cluster or silently leaves the gate on for a
+  # fresh one. The render has to be the place it stops.
+  #
+  # The guard walks its own copy of the featureGates list rendered below, which
+  # has to stay a literal list because `make update` anchors the extraFeatureGates
+  # insert on the "- VMExport" line. A gate dropped from that copy therefore
+  # keeps rendering under featureGates while silently leaving the guard. One
+  # case per gate closes that hole: removing any single name from the copy turns
+  # exactly one of the seven red.
+  #
+  # These seven are gates the chart enables itself, so the message says the
+  # entry cannot be disabled from values at all. The three cases further down
+  # that reach featureGates through extraFeatureGates get the message naming
+  # both sides instead, which is the distinction the copy also decides.
+  #
+  # DeclarativeHotplugVolumes is Beta and on by default, so listing it only
+  # matters for this guard: with HotplugVolumes off, disabling it would leave
+  # virt-api refusing every volume hotplug, kubevirt-csi attach included.
+  - it: refuses to render when disabledFeatureGates repeats DeclarativeHotplugVolumes
+    set:
+      disabledFeatureGates:
+      - DeclarativeHotplugVolumes
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "DeclarativeHotplugVolumes" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats ExpandDisks
+    set:
+      disabledFeatureGates:
+      - ExpandDisks
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "ExpandDisks" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats LiveMigration
+    set:
+      disabledFeatureGates:
+      - LiveMigration
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "LiveMigration" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats AutoResourceLimitsGate
+    set:
+      disabledFeatureGates:
+      - AutoResourceLimitsGate
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "AutoResourceLimitsGate" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats CPUManager
+    set:
+      disabledFeatureGates:
+      - CPUManager
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "CPUManager" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats GPU
+    set:
+      disabledFeatureGates:
+      - GPU
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "GPU" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when disabledFeatureGates repeats VMExport
+    set:
+      disabledFeatureGates:
+      - VMExport
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "VMExport" is one this chart enables and cannot be switched off from values: KubeVirt refuses a CR that names the same gate in both lists. Remove it from disabledFeatureGates.'
+
+  - it: refuses to render when the same gate is listed in extraFeatureGates and disabledFeatureGates
+    set:
+      extraFeatureGates:
+      - ImageVolume
+      disabledFeatureGates:
+      - ImageVolume
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "ImageVolume" is named under both featureGates and disabledFeatureGates, which KubeVirt refuses; remove it from extraFeatureGates or from disabledFeatureGates.'
+
+  # Template is the one gate the chart disables unconditionally, so
+  # extraFeatureGates is the only way to ask for it back and the error has to
+  # say that asking is not supported rather than repeat the generic overlap text.
+  - it: refuses to render when extraFeatureGates tries to re-enable the pinned Template gate
+    set:
+      extraFeatureGates:
+      - Template
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the Template feature gate is pinned off by this chart because the platform does not use virt-template, and extraFeatureGates cannot undo that: it would render Template under both featureGates and disabledFeatureGates, which KubeVirt refuses. Remove "Template" from extraFeatureGates.'
+
+  - it: renders both lists when extraFeatureGates and disabledFeatureGates name different gates
+    set:
+      extraFeatureGates:
+      - HostDevices
+      disabledFeatureGates:
+      - ImageVolume
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.featureGates
+          value:
+          - DeclarativeHotplugVolumes
+          - ExpandDisks
+          - LiveMigration
+          - AutoResourceLimitsGate
+          - CPUManager
+          - GPU
+          - VMExport
+          - HostDevices
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
+
+  # Both static entries are written unconditionally, so an operator listing the
+  # gates their cluster declines can name either again without knowing that.
+  # Upstream compares the two lists against each other and nothing else, so the
+  # duplicate is a CR KubeVirt accepts — the render must neither reject it nor
+  # pass it on.
+  - it: renders one entry per static opt-out when disabledFeatureGates repeats them
+    set:
+      disabledFeatureGates:
+      - Template
+      - ExternalNetResourceInjection
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+
+  # The skip is keyed on the name, not on the position, so gates around the
+  # repeats still land.
+  - it: keeps the other entries when disabledFeatureGates repeats a static opt-out
+    set:
+      disabledFeatureGates:
+      - ImageVolume
+      - Template
+      - KubevirtSeccompProfile
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
+          - KubevirtSeccompProfile
+
+  # The second static opt-out has no message of its own: extraFeatureGates is
+  # the only way to collide with it, and the generic text names the gate and
+  # both lists it would land in.
+  - it: refuses to render when extraFeatureGates tries to re-enable the pinned ExternalNetResourceInjection gate
+    set:
+      extraFeatureGates:
+      - ExternalNetResourceInjection
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "ExternalNetResourceInjection" is named under both featureGates and disabledFeatureGates, which KubeVirt refuses; remove it from extraFeatureGates or from disabledFeatureGates.'
+
+  # ImageVolume is the one opt-out that depends on the host: KubeVirt renders
+  # containerDisk images as VolumeSource.Image volumes, and an apiserver with
+  # its own ImageVolume gate off — the default below Kubernetes 1.35 — strips
+  # those volumes and their mounts without an error. The management cluster is
+  # supported from 1.33, so both sides of the boundary are shipped states.
+  - it: disables ImageVolume below Kubernetes 1.35
+    capabilities:
+      majorVersion: 1
+      minorVersion: 34
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
+
+  - it: leaves ImageVolume alone from Kubernetes 1.35 on
+    capabilities:
+      majorVersion: 1
+      minorVersion: 35
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+
+  - it: refuses to render when extraFeatureGates asks for ImageVolume below Kubernetes 1.35
+    capabilities:
+      majorVersion: 1
+      minorVersion: 34
+    set:
+      extraFeatureGates:
+      - ImageVolume
+    asserts:
+      - failedTemplate:
+          errorMessage: 'feature gate "ImageVolume" is named under both featureGates and disabledFeatureGates, which KubeVirt refuses; remove it from extraFeatureGates or from disabledFeatureGates.'
+
+  - it: accepts ImageVolume in extraFeatureGates from Kubernetes 1.35 on
+    capabilities:
+      majorVersion: 1
+      minorVersion: 35
+    set:
+      extraFeatureGates:
+      - ImageVolume
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.featureGates
+          value:
+          - DeclarativeHotplugVolumes
+          - ExpandDisks
+          - LiveMigration
+          - AutoResourceLimitsGate
+          - CPUManager
+          - GPU
+          - VMExport
+          - ImageVolume
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+
+  # The dedupe reads the same conditional list, so a values file naming
+  # ImageVolume renders one entry below the boundary and one entry above it —
+  # the chart's own line in the first case, the operator's in the second.
+  - it: renders a single ImageVolume entry when the values repeat it below Kubernetes 1.35
+    capabilities:
+      majorVersion: 1
+      minorVersion: 34
+    set:
+      disabledFeatureGates:
+      - ImageVolume
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
+
+  - it: takes ImageVolume from the values as an ordinary entry from Kubernetes 1.35 on
+    capabilities:
+      majorVersion: 1
+      minorVersion: 35
+    set:
+      disabledFeatureGates:
+      - ImageVolume
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.disabledFeatureGates
+          value:
+          - Template
+          - ExternalNetResourceInjection
+          - ImageVolume
 
   - it: renders permittedHostDevices verbatim from the values block
     set:
@@ -92,3 +453,27 @@ tests:
           path: spec.configuration.mediatedDevicesConfiguration.mediatedDeviceTypes
           value:
           - nvidia-740
+
+  # virt-operator owns the virt-handler DaemonSet, so resources cannot come from
+  # chart values — customizeComponents.patches is the only seam. virt-handler ran
+  # BestEffort on every node, and the Talos userspace OOM handler (v1.12+) only
+  # kills cgroups with no memory.max, so it was a standing eviction candidate.
+  # Pin the patch: a malformed or dropped entry fails silently at runtime, since
+  # virt-operator simply reconciles the DaemonSet without the resources.
+  - it: patches virt-handler with memory requests and limits
+    asserts:
+      - equal:
+          path: spec.customizeComponents.patches[0].resourceName
+          value: virt-handler
+      - equal:
+          path: spec.customizeComponents.patches[0].resourceType
+          value: DaemonSet
+      - equal:
+          path: spec.customizeComponents.patches[0].type
+          value: strategic
+      - matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"limits":\{"memory":"2Gi"\}'
+      - matchRegex:
+          path: spec.customizeComponents.patches[0].patch
+          pattern: '"requests":\{"cpu":"100m","memory":"128Mi"\}'

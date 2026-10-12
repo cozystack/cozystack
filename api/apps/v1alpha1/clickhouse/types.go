@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
+	// ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.
+	// +kubebuilder:default:="v24.9"
+	Version Version `json:"version"`
 	// Size of Persistent Volume for logs.
 	// +kubebuilder:default:="2Gi"
 	LogStorageSize resource.Quantity `json:"logStorageSize"`
@@ -63,6 +66,9 @@ type Backup struct {
 	// DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.
 	// +kubebuilder:default:=""
 	Endpoint string `json:"endpoint,omitempty"`
+	// CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 	// +kubebuilder:default:="<password>"
 	ResticPassword string `json:"resticPassword,omitempty"`
@@ -107,6 +113,15 @@ type ClickHouseKeeper struct {
 	Size resource.Quantity `json:"size,omitempty"`
 }
 
+type EndpointCA struct {
+	// Key inside the Secret holding the PEM CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:="ca.crt"
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+}
+
 type Resources struct {
 	// CPU available to each replica.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
@@ -144,3 +159,6 @@ type User struct {
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
+
+// +kubebuilder:validation:Enum="v25.8";"v25.3";"v24.9"
+type Version string

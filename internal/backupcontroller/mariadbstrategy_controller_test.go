@@ -300,6 +300,13 @@ func TestEnsureMariaDBBackup_IdempotentByLabel(t *testing.T) {
 	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj-1" {
 		t.Errorf("OwningJobName label missing or wrong: %v", got.Labels)
 	}
+	// The grant table must be excluded from the dump: the operator otherwise
+	// ships mysql.global_priv even for a scoped backup, and a restore into a
+	// copy would then overwrite the target's chart-managed users and root with
+	// the source's hashes, which never match <release>-credentials.
+	if got.Spec.IgnoreGlobalPriv == nil || !*got.Spec.IgnoreGlobalPriv {
+		t.Errorf("IgnoreGlobalPriv: got %v want true", got.Spec.IgnoreGlobalPriv)
+	}
 }
 
 // ---------------------------------------------------------------------------

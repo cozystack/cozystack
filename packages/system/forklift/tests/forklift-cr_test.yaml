@@ -1,0 +1,20 @@
+suite: forklift controller CR
+release:
+  name: forklift
+  namespace: cozy-forklift
+templates:
+  - templates/forklift-cr.yaml
+tests:
+  - it: renders the ForkliftController with the expected feature flags
+    asserts:
+      - isKind:
+          of: ForkliftController
+      - equal:
+          path: spec.feature_validation
+          value: "true"
+      - equal:
+          path: spec.feature_auth_required
+          value: "true"
+      - equal:
+          path: spec.feature_volume_populator
+          value: "true"

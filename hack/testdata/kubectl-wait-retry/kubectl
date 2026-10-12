@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fake kubectl for hack/kubectl-wait-retry_test.bats. Mocks only `kubectl wait`.
+# Env:
+#   FAKE_CMDLOG  path to append one line per invocation (also the call counter)
+#   FAKE_MODE    transient-once: first call fails with an etcd leader-change
+#                message (the wrapper's retry allowlist), later calls succeed
+#                notfound: every call fails NotFound (must NOT be retried)
+echo "wait $*" >> "$FAKE_CMDLOG"
+calls=$(grep -c . "$FAKE_CMDLOG")
+case "${FAKE_MODE:-}" in
+  transient-once)
+    if [ "$calls" -le 1 ]; then
+      echo "Error from server: etcdserver: leader changed" >&2
+      exit 1
+    fi
+    echo "deployment.apps/x condition met"
+    exit 0 ;;
+  notfound)
+    echo 'Error from server (NotFound): deployments.apps "x" not found' >&2
+    exit 1 ;;
+  *)
+    echo "condition met"
+    exit 0 ;;
+esac

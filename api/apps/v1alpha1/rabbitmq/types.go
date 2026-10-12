@@ -20,11 +20,11 @@ type ConfigSpec struct {
 	// Number of RabbitMQ replicas.
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas"`
-	// Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.
+	// Explicit CPU and memory configuration for each RabbitMQ replica. Every resource left unset here is taken from `resourcesPreset`.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
-	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="t1.nano"
+	// Default sizing preset. It supplies every resource `resources` does not set, not only a `resources` left empty entirely.
+	// +kubebuilder:default:="s1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration. TLS is off unless `tls.enabled` is set to true.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// RabbitMQ major.minor version to deploy
 	// +kubebuilder:default:="v4.2"
 	Version Version `json:"version"`
@@ -59,6 +62,13 @@ type Roles struct {
 	Admin []string `json:"admin,omitempty"`
 	// List of readonly users.
 	Readonly []string `json:"readonly,omitempty"`
+}
+
+type TLS struct {
+	// Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.
+	DisableNonTLSListeners bool `json:"disableNonTLSListeners,omitempty"`
+	// Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Plaintext AMQP (5672) and management (15672) keep serving unless `disableNonTLSListeners` is set as well. Moves the `port` key of the `<release>-default-user` Secret from 5672 to 5671, and the metrics port from 15692 to 15691. Defaults to false.
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 type User struct {

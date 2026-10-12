@@ -1,0 +1,182 @@
+suite: cilium owns service load-balancing
+
+# This pins a required service-routing value. Read this before changing
+# kubeProxyReplacement in values.yaml or in any variant values file.
+#
+# packages/system/ingress-nginx and packages/system/kubeovn-webhook each ship a
+# CiliumClusterwideNetworkPolicy that denies pod egress to their admission
+# webhook. Both name only the webhook's BACKEND port (8443) and select the
+# webhook pods by label; neither names the Service frontend, because Cilium
+# cannot express a frontend in a deny rule -- it resolves `toServices` only
+# inside allow rules, and an egressDeny whose sole destination is an unresolved
+# toServices reaches the datapath as a wildcard, denying every destination on
+# that port for every selected pod.
+#
+# Naming the backend alone still covers a pod dialling the ClusterIP, because
+# Cilium translates the service before it enforces egress policy. In Cilium
+# v1.20.2 the chart forces bpf-lb-sock-hostns-only whenever Gateway API is on,
+# so socket LB leaves pod-namespace connections alone and bpf/bpf_lxc.c
+# translates them per packet: it runs __per_packet_lb_svc_xlate_4 and
+# lb4_local() and only then tail-calls CILIUM_CALL_IPV4_FROM_LXC_CONT into
+# handle_ipv4_from_lxc, where policy_can_egress4 evaluates the rule. By that
+# point the destination is the backend pod on 8443, which is what the rules
+# match.
+#
+# That ordering exists only while Cilium is the thing doing the DNAT, and the
+# value asserted below is what makes it so: kubeProxyReplacement, true here
+# against an upstream chart default of "false". Cozystack supplies no supported
+# alternative service load balancer for false; on the kube-ovn management
+# topology kube-proxy is absent and ENABLE_LB is also false. Turning this value
+# off therefore leaves ClusterIP routing without a supported owner and can break
+# Service connectivity. It does not by itself make either webhook reachable.
+#
+# Both policies also carry a target-side ingressDeny on their own webhook pods
+# for the same port, and that half does NOT depend on this value: it is
+# evaluated on the destination's ingress path, after whatever DNAT already
+# happened, so it enforces whoever performs the translation. If a second
+# unsupported configuration change supplied a different translator,
+# kubeProxyReplacement=false would remove the source-side match before DNAT but
+# leave the target-side rules standing. That is defence in depth, not a reason
+# to relax this pin: the source-side form is what still denies while the webhook
+# endpoint's own policy is being recomputed or has overflowed its map, and the
+# target-side form is what survives a different service-LB implementation.
+# Neither subsumes the other, each carries its own cost, and both are argued in
+# the templates next to the rules rather than here.
+#
+# The other half of the guard is behavioural rather than static: the
+# admission-webhook-deny-still-enforced case in
+# hack/e2e-chainsaw/gateway/chainsaw-test.yaml connects to the admission
+# Service's ClusterIP from a pod and requires the connect to fail, so the effect
+# is asserted against a live cluster and not only reasoned about here.
+#
+# Asserted on the rendered ConfigMap key rather than on .Values, so an upstream
+# bump that renames the key or stops honouring our override is caught too --
+# that is silent in exactly the same way, and the same argument the
+# agent_resources_test.yaml suite next door makes for its own assertions.
+#
+# One variant per test, spelling out the valuesFiles combination that
+# packages/core/platform/sources/networking.yaml actually installs, so a future
+# variant file that overrides the value reddens here rather than shipping. Guest
+# clusters install this chart with no variant values file at all
+# (sources/kubernetes-application.yaml), which the defaults case covers.
+release:
+  name: cilium
+  namespace: cozy-cilium
+tests:
+  - it: chart defaults keep Cilium in charge of service load-balancing
+    template: charts/cilium/templates/cilium-configmap.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  - it: the cilium variant keeps it
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  - it: the cilium-kilo variant keeps it
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kilo.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  - it: the cilium-generic variant keeps it
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-apparmor.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  - it: the kubeovn-cilium variant keeps it
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  - it: the kubeovn-cilium-generic variant keeps it
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-apparmor.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["kube-proxy-replacement"]
+          value: "true"
+
+  # The beacon is the only half of this guard that can fire in the field. The
+  # pin above catches a cozystack commit changing the default; nothing in this
+  # repo observes a live cluster's values, so an operator override reaches a
+  # running cluster unobserved. The ConfigMap keeps that unsupported state
+  # visible without making each reconciliation fail to render; it is not an
+  # alternative supported mode.
+  - it: emits no beacon while Cilium owns service load-balancing
+    template: templates/kube-proxy-replacement-beacon.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits a visible beacon when the value is turned off
+    template: templates/kube-proxy-replacement-beacon.yaml
+    set:
+      cilium.kubeProxyReplacement: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: data.status
+          value: kube-proxy-replacement-off
+      - equal:
+          path: data.kubeProxyReplacement
+          value: "false"
+      - matchRegex:
+          path: data.message
+          pattern: "supports this chart only when"
+
+  # The string form is what the upstream chart's own default uses, and the
+  # subchart's value coalesces into the parent, so this is also the shape a
+  # deleted umbrella key falls back to.
+  - it: treats the string form as off too
+    template: templates/kube-proxy-replacement-beacon.yaml
+    set:
+      cilium.kubeProxyReplacement: "false"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: data.kubeProxyReplacement
+          value: "false"

@@ -28,8 +28,10 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -258,8 +260,10 @@ spec:
 # Succeeded, asserts the sentinel round-tripped through S3) -> a point-in-time
 # restore between two marker writes (step 45, asserts the pre-marker survived
 # and the post-marker did not) -> a negative unreachable-target restore
-# (step 46, asserts it fails fast with reason RecoveryTargetUnreachable rather
-# than hanging to the deadline). The in-cluster witness that a barman-cloud
+# (step 46, asserts it terminates Failed with a message attributing it to the PITR
+# target rather than hanging or falsely succeeding; the reason-classification
+# itself is unit-tested, being best-effort against a still-archiving source). The
+# in-cluster witness that a barman-cloud
 # plugin backup is taken, restorable, point-in-time-recoverable, and that a
 # bad target is rejected quickly.
 #
@@ -308,24 +312,26 @@ spec:
   steps:
   - name: run
     try:
-    # The 40m budget is the whole documented flow: bucket provisioning, a
+    # The 66m budget is the whole documented flow: bucket provisioning, a
     # 2-replica source Postgres, the plugin base backup to S3, an empty target
     # app, and THREE sequential purge + re-bootstrap restores against it - the
     # latest-point to-copy restore, the point-in-time restore (step 45), and
     # the negative unreachable-target restore (step 46, which sets a short
-    # restoreTimeoutSeconds and must fail at that deadline with reason
-    # RecoveryTargetUnreachable) (convention 6: justified in-line). The old 25m
-    # budget predated the PITR phases; three restores plus the negative phase
-    # need the larger window. run-all.sh fails fast on terminal
-    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
-    # out the budget.
+    # restoreTimeoutSeconds and must terminate Failed at that deadline, attributed
+    # to the PITR target), and the in-place restore (step 50, the
+    # regression guard for the archive-vs-recovery serverName collision)
+    # (convention 6: justified in-line). The old 25m budget predated the PITR
+    # phases; four restores plus the negative phase need the larger window,
+    # and the 660s bucket and Postgres HR waits in run-all.sh add 16m to it.
+    # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
+    # HelmReleases rather than polling out the budget.
     - script:
-        timeout: 40m
+        timeout: 66m
         content: |
           set -eu
           cd ../../..
           [ -x examples/backups/postgres/run-all.sh ] || { echo "postgres backup example scripts not found at examples/backups/postgres" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
             examples/backups/postgres/run-all.sh
         check:
           ($error == null): true

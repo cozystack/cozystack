@@ -19,3 +19,9 @@ spec:
       install:
         namespace: cozy-redis-operator
         releaseName: redis-operator
+        # The freshworks fork ships an engine-aware CRD (spec.engine, for the
+        # Valkey follow-up). helm-controller defaults CRD upgrades to Skip, so
+        # without this an upgraded cluster keeps the old spotahome schema and
+        # prunes spec.engine on admission. Additive schema diff, so replace is
+        # safe.
+        upgradeCRDs: CreateReplace

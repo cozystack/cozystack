@@ -1,0 +1,103 @@
+suite: Redis min-replicas write safety
+
+# Both settings are opt-in: unset keeps the Redis defaults, so existing
+# instances render the same customConfig as before.
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: "renders neither directive by default"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notContains:
+          path: spec.redis.customConfig
+          content: min-replicas-to-write 1
+      - matchRegex:
+          path: spec.redis.customConfig[0]
+          pattern: ^tcp-keepalive 0$
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 2
+
+  - it: "renders min-replicas-to-write when set"
+    set:
+      minReplicasToWrite: 1
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: min-replicas-to-write 1
+      - notContains:
+          path: spec.redis.customConfig
+          content: min-replicas-max-lag 5
+
+  - it: "renders both directives when both are set"
+    set:
+      minReplicasToWrite: 1
+      minReplicasMaxLag: 5
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: min-replicas-to-write 1
+      - contains:
+          path: spec.redis.customConfig
+          content: min-replicas-max-lag 5
+
+  - it: "renders an explicit 0 so the setting can be disabled"
+    set:
+      minReplicasToWrite: 0
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: min-replicas-to-write 0
+
+  - it: refuses a zero lag next to a replica requirement
+    set:
+      minReplicasToWrite: 1
+      minReplicasMaxLag: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "minReplicasMaxLag must be at least 1 when minReplicasToWrite is set"
+
+  - it: refuses a negative minReplicasToWrite (schema minimum 0)
+    set:
+      minReplicasToWrite: -1
+    asserts:
+      - failedTemplate: {}
+
+  # minReplicasMaxLag alone, so only the schema minimum can refuse it: with
+  # minReplicasToWrite set, the template's lag check would refuse it anyway.
+  - it: refuses a negative minReplicasMaxLag (schema minimum 0)
+    set:
+      minReplicasMaxLag: -1
+    asserts:
+      - failedTemplate: {}
+
+  - it: refuses a requirement that can never be met (minReplicasToWrite >= replicas)
+    set:
+      replicas: 2
+      minReplicasToWrite: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "minReplicasToWrite \\(2\\) must be below replicas \\(2\\)"

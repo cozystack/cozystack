@@ -1,0 +1,25 @@
+suite: opensearch-operator installs as a privileged component
+# The package ships a DaemonSet whose init container raises vm.max_map_count, and
+# that container has to be privileged: the kernel does not namespace vm.*, so no
+# pod can set the value for itself. cozystack-operator labels a namespace
+# enforce=privileged only when some component declares install.privileged, so
+# dropping this field does not fail rendering anywhere; it leaves the DaemonSet
+# inadmissible on any cluster whose PodSecurity default is baseline or stricter.
+# Pin it so the namespace cannot silently lose the level the DaemonSet needs.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: opensearch-operator PackageSource declares its component privileged
+    documentSelector:
+      path: metadata.name
+      value: cozystack.opensearch-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.privileged
+          value: true
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-opensearch-operator

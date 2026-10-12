@@ -45,13 +45,16 @@ jobs:
     # background main-push job, latency is not critical.
     runs-on: oracle-vm-24cpu-96gb-x86-64
     timeout-minutes: 120
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: read
       packages: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -60,12 +63,46 @@ jobs:
           # .git/config where a later build step could read it.
           persist-credentials: false
 
-      # Ephemeral runners lack the flux CLI the installer's image-packages step
-      # shells out to; install if absent (idempotent).
-      - name: Set up build toolchain
+      # Writes the Go module cache pull-requests.yaml's unit test job restores:
+      # an entry saved on main is readable from every PR, while one a PR run
+      # saves is visible to that PR alone. It is saved before the image build so
+      # a cancelled or failed build still leaves it, and none of these steps may
+      # stop the build, which does not use it. Only an exact key is restored: a
+      # partial match saved under the new key would carry every superseded
+      # module version forward forever.
+      - name: Locate Go module cache
+        id: gomodcache
+        continue-on-error: true
+        run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go module cache
+        id: gomod-restore
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+      - name: Download Go modules
+        id: gomod-download
+        if: steps.gomod-restore.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
+            (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
+          done
+      - name: Save Go module cache
+        if: steps.gomod-download.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to.
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
 
       - name: Set up Docker config
         run: |
@@ -106,6 +143,10 @@ jobs:
           # --builder=$(BUILDER)); buildx forwards the OCIR auth from DOCKER_CONFIG
           # to the container builder for cache reads/writes and image pushes.
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
+          # and on this x86-64 runner the arm64 half would be emulated anyway;
+          # CI builds amd64 until arm64 has a native leg of its own.
+          PLATFORM: linux/amd64
           # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
           WRITE_CACHE: '1'
           # Publish a floating :main handle; do not move :latest (releases do).

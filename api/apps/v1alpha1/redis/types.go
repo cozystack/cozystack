@@ -33,15 +33,27 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Enable external access from outside the cluster.
+	// Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// Redis major version to deploy
+	// Redis major version to deploy. The Redis and Sentinel pods run the same image.
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
+	// TLS configuration. TLS is opt-in and is not inferred from `external`.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+	// Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.
+	// +kubebuilder:validation:Minimum=0
+	MinReplicasToWrite *int `json:"minReplicasToWrite,omitempty"`
+	// Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.
+	// +kubebuilder:validation:Minimum=0
+	MinReplicasMaxLag *int `json:"minReplicasMaxLag,omitempty"`
+	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+	// +kubebuilder:default:={}
+	Sentinel Sentinel `json:"sentinel,omitempty"`
 }
 
 type Resources struct {
@@ -50,6 +62,23 @@ type Resources struct {
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
+
+type Sentinel struct {
+	// Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.
+	Resources Resources `json:"resources,omitempty"`
+	// Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.
+	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
+}
+
+type TLS struct {
+	// Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated. `yes` requires a client certificate signed by this release's CA, which the platform does not issue. Changing it restarts the Redis and Sentinel pods, because the directive is read from the config file once at startup.
+	AuthClients AuthClients `json:"authClients,omitempty"`
+	// Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// +kubebuilder:validation:Enum="no";"optional";"yes"
+type AuthClients string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

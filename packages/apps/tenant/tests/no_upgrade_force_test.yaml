@@ -1,12 +1,31 @@
-suite: tenant HelmReleases carry no deprecated upgrade.force
+suite: tenant HelmReleases set no upgrade.force
 
-# Flux v2.8 / helm-controller v1.5 deprecates `upgrade.force: true` and rejects
-# it under Server-Side Apply. The flux-bump PR swept the flag off every tenant
-# HelmRelease; gateway.yaml was missed in the first pass. This suite pins the
-# invariant across all swept HRs so a stray `force: true` cannot creep back in.
+# Every tenant HelmRelease was swept clear of `upgrade.force`, and this suite pins
+# that it stays off. gateway.yaml was missed in the first pass, which is why the
+# cover is per-template rather than one spot check.
+#
+# helm-controller does not deprecate this field. Flux is pinned at 2.8.x in
+# packages/system/fluxcd/values.yaml, and the CRD vendored at
+# internal/fluxinstall/manifests/fluxcd.yaml describes force as "Force forces
+# resource updates through a replacement strategy" with no deprecation marker —
+# `recreate` is the neighbouring field that carries one. Later upstream
+# documentation adds that force "is ignored for server-side apply (which always
+# forces conflicts with other field managers)"; that sentence is not in the
+# pinned CRD, so do not go looking for it there. Either way the flag is a no-op
+# under SSA, and under client-side apply it replaces resources rather than
+# patching them, which is the downtime the sweep removed.
+#
+# Each test pins the HelmRelease name before asserting the absence, because
+# `notExists` on its own is vacuous: it passes on a template that renders no
+# document at all. Rename the value gating one of these releases and it renders
+# nothing, leaving the bare assertion green while the release it guards is gone.
 
-# Restrict rendering to the swept HelmRelease templates so the chart's
-# namespace.yaml `lookup` (which errors under helm-unittest) is not evaluated.
+# Render only the swept templates. The earlier reason given here — that
+# namespace.yaml's `lookup` errors under helm-unittest — is not true; it returns
+# empty offline and the template renders, which is what its own header says and
+# what tests/namespace_ancestor_labels_test.yaml relies on. The list stays for a
+# different reason: it keeps an unrelated template breaking out of this suite's
+# result, so what reddens here is the flag it guards.
 templates:
   - templates/etcd.yaml
   - templates/info.yaml
@@ -14,6 +33,7 @@ templates:
   - templates/monitoring.yaml
   - templates/seaweedfs.yaml
   - templates/gateway.yaml
+  - templates/computeplane.yaml
 
 release:
   name: tenant-test
@@ -29,11 +49,16 @@ set:
   monitoring: true
   seaweedfs: true
   gateway: true
+  computeplane: true
   host: ""
 
 tests:
   - it: etcd HR has no upgrade.force
     asserts:
+      - template: templates/etcd.yaml
+        equal:
+          path: metadata.name
+          value: etcd
       - template: templates/etcd.yaml
         notExists:
           path: spec.upgrade.force
@@ -41,11 +66,19 @@ tests:
   - it: info HR has no upgrade.force
     asserts:
       - template: templates/info.yaml
+        equal:
+          path: metadata.name
+          value: info
+      - template: templates/info.yaml
         notExists:
           path: spec.upgrade.force
 
   - it: ingress HR has no upgrade.force
     asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.name
+          value: ingress
       - template: templates/ingress.yaml
         notExists:
           path: spec.upgrade.force
@@ -53,11 +86,19 @@ tests:
   - it: monitoring HR has no upgrade.force
     asserts:
       - template: templates/monitoring.yaml
+        equal:
+          path: metadata.name
+          value: monitoring
+      - template: templates/monitoring.yaml
         notExists:
           path: spec.upgrade.force
 
   - it: seaweedfs HR has no upgrade.force
     asserts:
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.name
+          value: seaweedfs
       - template: templates/seaweedfs.yaml
         notExists:
           path: spec.upgrade.force
@@ -65,5 +106,19 @@ tests:
   - it: gateway HR has no upgrade.force
     asserts:
       - template: templates/gateway.yaml
+        equal:
+          path: metadata.name
+          value: gateway
+      - template: templates/gateway.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: computeplane HR has no upgrade.force
+    asserts:
+      - template: templates/computeplane.yaml
+        equal:
+          path: metadata.name
+          value: computeplane
+      - template: templates/computeplane.yaml
         notExists:
           path: spec.upgrade.force

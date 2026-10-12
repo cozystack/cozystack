@@ -1,0 +1,104 @@
+suite: worker pool pod CPU limit
+
+# Mirror of the parent kubernetes chart's suite, on the pool-shaped values of
+# this chart. `podCpuLimit` is the only knob that sets
+# `domain.resources.limits.cpu` on a worker VM. KubeVirt otherwise derives that
+# limit from the guest vCPU count whenever the namespace carries a ResourceQuota
+# that limits CPU, and it stops deriving as soon as the VMI declares the limit
+# itself. It is not only the ceiling that moves: KubeVirt copies a declared CPU
+# limit into an undeclared CPU request, so a pool that sets this field alone
+# requests its whole ceiling.
+
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+# Sizing is set per case rather than here, because helm-unittest merges a
+# case's `set` into these values and a case that needs an unsized pool cannot
+# take cpu/memory back out again.
+tests:
+  - it: renders the CPU limit the pool asks for onto the worker VM
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 3
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "3"
+      # This field renders one key. What the container ends up requesting is
+      # then KubeVirt's copy of the limit rather than anything the chart wrote.
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: "2Gi"
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.ephemeral-storage
+          value: "53687091"
+
+  - it: accepts a fractional quantity
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      podCpuLimit: 1500m
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+          value: "1500m"
+
+  - it: leaves the limit to KubeVirt when the pool sets none
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      # Absent, not empty: the KubevirtMachineTemplate is content-hash named, so
+      # a `cpu:` key rendered for a pool that asked for nothing would rename the
+      # template and roll every live worker VM of the pool on upgrade. The
+      # render-parity gate compares those bytes against the parent chart.
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: "2Gi"
+
+  # KubeVirt's instancetype applier reports domain.resources.limits.cpu as a
+  # conflict instead of resolving it, so a VM carrying both is refused at
+  # admission with no Machine and no explanation on the CR. Sizing a pool by
+  # resources is what drops the instancetype from the VM, which is why the limit
+  # is only usable there.
+  - it: refuses the limit on a pool still sized by its instancetype
+    set:
+      instanceType: u1.medium
+      podCpuLimit: 3
+    asserts:
+      # Matched on the message, not on "some render error": a pool carrying half
+      # a size trips the neighbouring resources.cpu / resources.memory guard
+      # first, so a bare failedTemplate here would pass on the wrong error.
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: podCpuLimit cannot be combined with instanceType sizing'

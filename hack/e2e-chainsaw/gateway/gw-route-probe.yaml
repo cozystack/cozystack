@@ -1,3 +1,9 @@
+# Only the Gateway lives here. Its HTTPRoute is created by the
+# create-gateway-and-route step instead: the route sits in a tenant-*
+# namespace, so cozystack-route-hostname-policy requires it to name a
+# hostname inside the tenant apex, and that apex is read from the
+# namespace label at runtime so the suite works on any cluster. A
+# declarative file cannot interpolate it.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -5,27 +11,12 @@ metadata:
 spec:
   gatewayClassName: cilium
   listeners:
+  # No hostname on the listener, so it matches whatever hostname the
+  # route declares. That is what keeps the Accepted and Programmed
+  # assertions independent of the cluster's apex.
   - name: http
     protocol: HTTP
     port: 80
     allowedRoutes:
       namespaces:
         from: Same
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: httproute-probe
-spec:
-  parentRefs:
-  - name: gateway-route-probe
-    sectionName: http
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: kubernetes
-      namespace: default
-      port: 443

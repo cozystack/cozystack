@@ -85,6 +85,14 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          # Serve the branding config.json as a static asset under the web root
+          # so the SPA reads it with no kube-api call — branding then renders
+          # even when the apiserver rejects the session's token, and without the
+          # console-config-reader RBAC the kube-api read otherwise needs.
+          volumeMounts:
+            - name: branding
+              mountPath: /usr/share/nginx/html/branding
+              readOnly: true
       dnsPolicy: ClusterFirst
       enableServiceLinks: false
       hostIPC: false
@@ -95,3 +103,15 @@ spec:
       schedulerName: default-scheduler
       serviceAccountName: cozy-dashboard-console
       terminationGracePeriodSeconds: 30
+      volumes:
+        # optional: without the ConfigMap the SPA falls back to the kube-api,
+        # so a missing branding source is not worth failing the pod on. items
+        # restricts the mount to config.json so no other key the ConfigMap may
+        # grow becomes a file under the public web root.
+        - name: branding
+          configMap:
+            name: cozy-dashboard-console-config
+            optional: true
+            items:
+              - key: config.json
+                path: config.json

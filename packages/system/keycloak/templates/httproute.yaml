@@ -4,6 +4,11 @@
 {{- $adminExposeIngress := (index .Values._cluster "expose-ingress-admin") | default $exposeIngress }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $adminHost := .Values.ingress.adminHost }}
+{{- /* Rendered here, outside the branches that use it, so a malformed
+       ingress.exposedRealms is refused when it is set rather than on the day
+       adminHost or the Gateway mode is turned on. */}}
+{{- $realms := include "keycloak.publishedRealms" . | fromYamlArray }}
+{{- $loginPaths := include "keycloak.loginPaths" . | fromYamlArray }}
 {{- if eq $gatewayEnabled "true" }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -19,21 +24,24 @@ spec:
   - {{ $ingressHost | quote }}
   rules:
   {{- if $adminHost }}
-  # adminHost is set: the public (login) hostname exposes only the
-  # OIDC/login paths. The admin console and Administration REST API are
-  # served exclusively on the dedicated admin route below, so /admin is
-  # not reachable here. See the Keycloak reverse proxy guide,
-  # "Exposed path recommendations".
+  # adminHost is set: the public (login) hostname exposes only the login paths
+  # of the published realms. The admin console and Administration REST API are
+  # served exclusively on the dedicated admin route below, so /admin is not
+  # reachable here. See the Keycloak reverse proxy guide, "Exposed path
+  # recommendations".
+  {{- /* A route rule takes at most 64 path matches (Gateway API CRD), and each
+         realm takes two of them. Beyond that the apiserver rejects the whole
+         HTTPRoute, so say which parameter to shorten and how far. */}}
+  {{- if gt (len $loginPaths) 64 }}
+  {{-   $realmBudget := div (sub 64 (sub (len $loginPaths) (mul 2 (len $realms)))) 2 }}
+  {{-   fail (printf "the login route needs %d path matches but a Gateway API route rule takes at most 64: publish at most %d realms (ingress.exposedRealms plus the platform realm), got %d" (len $loginPaths) $realmBudget (len $realms)) }}
+  {{- end }}
   - matches:
+    {{- range $p := $loginPaths }}
     - path:
-        type: PathPrefix
-        value: /realms
-    - path:
-        type: PathPrefix
-        value: /resources
-    - path:
-        type: PathPrefix
-        value: /.well-known
+        type: {{ if $p.exact }}Exact{{ else }}PathPrefix{{ end }}
+        value: {{ $p.value | quote }}
+    {{- end }}
     backendRefs:
     - name: keycloak-http
       port: 8080

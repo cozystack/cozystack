@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -302,6 +303,10 @@ func (r *BackupJobReconciler) ensureMariaDBBackup(ctx context.Context, j *backup
 			Compression:  rendered.Compression,
 			LogLevel:     rendered.LogLevel,
 			MaxRetention: rendered.MaxRetention.DeepCopy(),
+			// Keep the source's grant table out of the dump so a restore into a
+			// copy leaves the target's chart-managed users and root intact (see
+			// BackupSpec.IgnoreGlobalPriv).
+			IgnoreGlobalPriv: ptr.To(true),
 		},
 	}
 
@@ -745,7 +750,7 @@ func renderMariaDBTemplate(t strategyv1alpha1.MariaDBTemplate, app *mariadbapp.M
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -756,12 +761,12 @@ func renderMariaDBTemplate(t strategyv1alpha1.MariaDBTemplate, app *mariadbapp.M
 // so user-authored go-templates address fields by their JSON names (e.g.
 // .Application.metadata.name). Mirrors the helper in the CNPG controller;
 // scoped here to avoid cross-strategy import.
-func toJSONMapMariaDB(obj interface{}) (map[string]interface{}, error) {
+func toJSONMapMariaDB(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

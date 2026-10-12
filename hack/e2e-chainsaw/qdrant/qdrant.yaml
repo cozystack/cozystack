@@ -9,3 +9,8 @@ spec:
   resourcesPreset: "nano"
   resources: {}
   external: false
+  # TLS is set explicitly rather than through `external`, which would also
+  # allocate a LoadBalancer. With TLS off the chart renders no CA and no
+  # TenantProjection, so the trust-anchor steps would have nothing to check.
+  tls:
+    enabled: true

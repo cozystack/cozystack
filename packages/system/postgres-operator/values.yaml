@@ -1,13 +1,18 @@
 cloudnative-pg:
   crds:
     create: true
-  # Image tag intentionally left to the chart's appVersion (1.28.1). Do NOT pin
-  # image.tag to a version the vendored chart's CRDs don't match: an operator
-  # newer than its CRDs writes status fields the CRD prunes (e.g.
-  # status.instanceID.sessionID, added in CNPG 1.27.3), which makes the operator
-  # believe the instance manager restarted and fail EVERY backup cluster-wide
-  # ("instance manager was restarted during backup"). Bump the chart version in
-  # the Makefile to move the operator + CRDs together.
+  # The vendored chart is 0.29.0 (appVersion 1.30.0), pulled directly by `make update`.
+  # The operator image and its CRDs both come from that published chart, so they are
+  # aligned by construction - there is no patch step. (This replaced
+  # patches/cloudnative-pg-1.28.2.patch, which hand-carried the 1.28 line to appVersion
+  # 1.28.2 because upstream published no chart for that appVersion - charts ship only per
+  # minor .0/.1; chart 0.29.0 carries appVersion 1.30.0 natively, so the patch is gone.)
+  #
+  # Do NOT pin image.tag here: the tag follows the chart's appVersion, so operator and CRDs stay
+  # in lockstep. Pinning image.tag to a version the CRDs do not match makes the operator write
+  # status fields the CRD prunes (e.g. status.instanceID.sessionID, added in CNPG 1.27.3),
+  # failing every backup cluster-wide. To move the operator + CRDs, bump the chart version
+  # in the Makefile.
 
 # CloudNativePG Barman Cloud Plugin (github.com/cloudnative-pg/plugin-barman-cloud).
 # Native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and removed in 1.29,

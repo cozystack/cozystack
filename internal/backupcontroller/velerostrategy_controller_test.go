@@ -3,9 +3,11 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,9 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -108,7 +112,7 @@ func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
 		},
 		Spec: backupsv1alpha1.BackupJobSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr(""),
+				APIGroup: new(""),
 				Kind:     "Pod",
 				Name:     "test-vm",
 			},
@@ -140,7 +144,7 @@ func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
 	// Create ResolvedBackupConfig with parameters
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: stringPtr("strategy.backups.cozystack.io"),
+			APIGroup: new("strategy.backups.cozystack.io"),
 			Kind:     "Velero",
 			Name:     "velero-strategy",
 		},
@@ -218,7 +222,7 @@ func TestResolveRestoreTarget_NoTargetNamespace_InPlace(t *testing.T) {
 		Spec: backupsv1alpha1.RestoreJobSpec{
 			BackupRef: corev1.LocalObjectReference{Name: "my-backup"},
 			TargetApplicationRef: &corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-vm",
 			},
@@ -232,7 +236,7 @@ func TestResolveRestoreTarget_NoTargetNamespace_InPlace(t *testing.T) {
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-vm",
 			},
@@ -275,7 +279,7 @@ func TestResolveRestoreTarget_SameTargetNamespace_InPlace(t *testing.T) {
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-vm",
 			},
@@ -316,7 +320,7 @@ func TestResolveRestoreTarget_DifferentTargetNamespace_Copy(t *testing.T) {
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-vm",
 			},
@@ -400,18 +404,9 @@ func newTestRestoreJobReconciler(t *testing.T, objects ...client.Object) *Restor
 	}
 }
 
-func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
-	ns := "tenant-root"
-
-	// Create a PVC that would be renamed if keepOriginalPVC were true
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vm-disk-ubuntu-source",
-			Namespace: ns,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{},
-	}
-
+// inPlaceVMRestoreWithoutKeep is an in-place VMInstance restore of one disk,
+// vm-disk-ubuntu-source, with keepOriginalPVC=false.
+func inPlaceVMRestoreWithoutKeep(ns string) (*backupsv1alpha1.RestoreJob, *backupsv1alpha1.Backup, *runtime.RawExtension, restoreTarget, RestoreOptions) {
 	restoreJob := &backupsv1alpha1.RestoreJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "restore-test",
@@ -429,21 +424,19 @@ func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-vm",
 			},
 		},
 	}
 
-	// underlyingResources with a DataVolume referencing the PVC
 	urData := vmInstanceResources{
 		DataVolumes: []backupsv1alpha1.DataVolumeResource{
 			{DataVolumeName: "vm-disk-ubuntu-source", ApplicationName: "ubuntu-source"},
 		},
 	}
 	urRaw, _ := json.Marshal(urData)
-	ur := &runtime.RawExtension{Raw: urRaw}
 
 	target := restoreTarget{
 		Namespace: ns,
@@ -452,9 +445,21 @@ func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
 		IsCopy:    false,
 	}
 
-	// keepOriginalPVC = false → PVCs should NOT be renamed
-	opts := RestoreOptions{
-		KeepOriginalPVC: boolPtr(false),
+	return restoreJob, backup, &runtime.RawExtension{Raw: urRaw}, target, RestoreOptions{KeepOriginalPVC: new(false)}
+}
+
+// Velero only restores a PVC it creates: one still in place keeps its old data
+// and blocks the DataVolume the HelmRelease recreates.
+func TestPrepareForRestore_KeepOriginalPVCFalse_DeletesPVC(t *testing.T) {
+	ns := "tenant-root"
+	restoreJob, backup, ur, target, opts := inPlaceVMRestoreWithoutKeep(ns)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-disk-ubuntu-source",
+			Namespace: ns,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{},
 	}
 
 	reconciler := newTestRestoreJobReconciler(t, pvc, restoreJob, backup)
@@ -468,28 +473,269 @@ func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
 		t.Fatal("expected ready=true, got false")
 	}
 
-	// Verify the original PVC still exists with its original name (not renamed)
-	origPVC := &corev1.PersistentVolumeClaim{}
-	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source"}, origPVC)
-	if err != nil {
-		t.Errorf("original PVC should still exist with original name when keepOriginalPVC=false, got error: %v", err)
+	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source"}, &corev1.PersistentVolumeClaim{})
+	if !errors.IsNotFound(err) {
+		t.Errorf("original PVC should be gone before Velero restores it when keepOriginalPVC=false, got error: %v", err)
 	}
 
-	// Verify no -orig PVC was created
 	origSuffix := "-orig-" + shortHash(restoreJob.Name)
-	renamedPVC := &corev1.PersistentVolumeClaim{}
-	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source" + origSuffix}, renamedPVC)
+	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source" + origSuffix}, &corev1.PersistentVolumeClaim{})
 	if err == nil {
 		t.Error("PVC should NOT have been renamed when keepOriginalPVC=false, but found renamed PVC")
 	}
 }
 
+func TestPrepareForRestore_KeepOriginalPVCFalse_WaitsForTerminatingPVC(t *testing.T) {
+	ns := "tenant-root"
+	restoreJob, backup, ur, target, opts := inPlaceVMRestoreWithoutKeep(ns)
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "vm-disk-ubuntu-source",
+			Namespace:  ns,
+			Finalizers: []string{"kubernetes.io/pvc-protection"},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{},
+	}
+
+	reconciler := newTestRestoreJobReconciler(t, pvc, restoreJob, backup)
+
+	ctx := context.Background()
+	ready, result, err := reconciler.prepareForRestore(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("prepareForRestore() error = %v", err)
+	}
+	if ready {
+		t.Fatal("expected ready=false while the PVC is still terminating, got true")
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("expected a requeue while the PVC is still terminating")
+	}
+
+	stuck := &corev1.PersistentVolumeClaim{}
+	if err := reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source"}, stuck); err != nil {
+		t.Fatalf("terminating PVC should still be readable: %v", err)
+	}
+	if stuck.DeletionTimestamp == nil {
+		t.Fatal("PVC should have been marked for deletion")
+	}
+	stuck.Finalizers = nil
+	if err := reconciler.Update(ctx, stuck); err != nil {
+		t.Fatalf("failed to release the PVC finalizer: %v", err)
+	}
+
+	ready, _, err = reconciler.prepareForRestore(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("prepareForRestore() error = %v", err)
+	}
+	if !ready {
+		t.Fatal("expected ready=true once the PVC is gone, got false")
+	}
+}
+
+func makeUnstructuredDataVolume(name, namespace string) *unstructured.Unstructured {
+	dv := &unstructured.Unstructured{}
+	dv.SetAPIVersion("cdi.kubevirt.io/v1beta1")
+	dv.SetKind("DataVolume")
+	dv.SetName(name)
+	dv.SetNamespace(namespace)
+	return dv
+}
+
+// A DataVolume still in place makes CDI recreate the claim under its original
+// name, so the PVC must survive until the DataVolume is confirmed gone.
+func TestPrepareForRestore_KeepOriginalPVCFalse_KeepsPVCWhileDataVolumeRemains(t *testing.T) {
+	tests := []struct {
+		name      string
+		deleteErr error
+		wantErr   bool
+	}{
+		{
+			name:      "DataVolume deletion fails",
+			deleteErr: errors.NewForbidden(dataVolumeGVR.GroupResource(), "vm-disk-ubuntu-source", nil),
+			wantErr:   true,
+		},
+		{
+			name: "DataVolume deletion is still pending",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := "tenant-root"
+			restoreJob, backup, ur, target, opts := inPlaceVMRestoreWithoutKeep(ns)
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-ubuntu-source", Namespace: ns},
+			}
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t,
+				[]runtime.Object{makeUnstructuredDataVolume("vm-disk-ubuntu-source", ns)},
+				pvc, restoreJob, backup)
+			reconciler.Interface.(*dynamicfake.FakeDynamicClient).PrependReactor("delete", "datavolumes",
+				func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, tt.deleteErr
+				})
+
+			ctx := context.Background()
+			ready, result, err := reconciler.prepareForRestore(ctx, restoreJob, backup, ur, target, opts)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error when the DataVolume cannot be deleted")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("prepareForRestore() error = %v", err)
+				}
+				if result.RequeueAfter == 0 {
+					t.Error("expected a requeue while the DataVolume is still present")
+				}
+			}
+			if ready {
+				t.Fatal("expected ready=false while the DataVolume is still present")
+			}
+
+			got := &corev1.PersistentVolumeClaim{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(pvc), got); err != nil {
+				t.Fatalf("original PVC should survive while its DataVolume remains: %v", err)
+			}
+			if got.DeletionTimestamp != nil {
+				t.Error("original PVC should not be marked for deletion while its DataVolume remains")
+			}
+		})
+	}
+}
+
+// keepOriginalPVC=true must never delete the original claim, even when the
+// rename that preserves it fails and leaves it under its original name.
+func TestPrepareForRestore_KeepOriginalPVCTrue_FailedRenameKeepsPVC(t *testing.T) {
+	ns := "tenant-root"
+	restoreJob, backup, ur, target, _ := inPlaceVMRestoreWithoutKeep(ns)
+	opts := RestoreOptions{KeepOriginalPVC: new(true)}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-ubuntu-source", Namespace: ns},
+		// The PV does not exist, so renamePVC fails before touching the claim.
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv-missing"},
+	}
+	reconciler := newTestRestoreJobReconciler(t, pvc, restoreJob, backup)
+
+	ctx := context.Background()
+	if _, _, err := reconciler.prepareForRestore(ctx, restoreJob, backup, ur, target, opts); err != nil {
+		t.Fatalf("prepareForRestore() error = %v", err)
+	}
+
+	if err := reconciler.Get(ctx, client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Errorf("original PVC should survive a failed rename when keepOriginalPVC=true, got error: %v", err)
+	}
+}
+
+// A Backup artifact can outlive its Velero Backup, which Velero garbage-collects
+// at TTL. The restore must fail before it halts the VM or deletes its disks.
+func TestReconcileVeleroRestore_UnusableVeleroBackupTouchesNothing(t *testing.T) {
+	tests := []struct {
+		name         string
+		veleroBackup *velerov1.Backup
+		wantMessage  string
+	}{
+		{
+			name:        "Velero Backup expired",
+			wantMessage: "Velero Backup cozy-velero/vb not found",
+		},
+		{
+			name: "Velero Backup being deleted",
+			veleroBackup: &velerov1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "vb", Namespace: veleroNamespace},
+				Status:     velerov1.BackupStatus{Phase: velerov1.BackupPhaseDeleting},
+			},
+			wantMessage: `Velero Backup cozy-velero/vb is "Deleting"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := "tenant-root"
+			restoreJob, backup, ur, _, opts := inPlaceVMRestoreWithoutKeep(ns)
+			rawOpts, err := json.Marshal(opts)
+			if err != nil {
+				t.Fatalf("marshal options: %v", err)
+			}
+			started := metav1.Now()
+			restoreJob.Spec.Options = &runtime.RawExtension{Raw: rawOpts}
+			restoreJob.Status = backupsv1alpha1.RestoreJobStatus{
+				Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+				StartedAt: &started,
+			}
+			backup.Spec.StrategyRef = corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"}
+			backup.Spec.DriverMetadata = map[string]string{veleroBackupNameMetadataKey: "vb"}
+			backup.Status.UnderlyingResources = ur
+
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-ubuntu-source", Namespace: ns},
+			}
+			strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
+			objs := []client.Object{restoreJob, backup, pvc, strategy}
+			if tt.veleroBackup != nil {
+				objs = append(objs, tt.veleroBackup)
+			}
+
+			vm := &unstructured.Unstructured{}
+			vm.SetAPIVersion("kubevirt.io/v1")
+			vm.SetKind("VirtualMachine")
+			vm.SetName(vmNamePrefix + "test-vm")
+			vm.SetNamespace(ns)
+			if err := unstructured.SetNestedField(vm.Object, "Always", "spec", "runStrategy"); err != nil {
+				t.Fatalf("set runStrategy: %v", err)
+			}
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t,
+				[]runtime.Object{vm, makeUnstructuredDataVolume("vm-disk-ubuntu-source", ns)})
+			testScheme := runtime.NewScheme()
+			_ = scheme.AddToScheme(testScheme)
+			_ = backupsv1alpha1.AddToScheme(testScheme)
+			_ = velerov1.AddToScheme(testScheme)
+			_ = strategyv1alpha1.AddToScheme(testScheme)
+			reconciler.Client = clientfake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(objs...).
+				WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
+				Build()
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, backupsv1alpha1.RestoreJobPhaseFailed)
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil || !strings.Contains(ready.Message, tt.wantMessage) {
+				t.Errorf("Ready condition = %+v, want a message containing %q", ready, tt.wantMessage)
+			}
+
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{}); err != nil {
+				t.Errorf("original PVC should survive a restore that cannot run: %v", err)
+			}
+			if _, err := reconciler.Resource(dataVolumeGVR).Namespace(ns).Get(ctx, "vm-disk-ubuntu-source", metav1.GetOptions{}); err != nil {
+				t.Errorf("DataVolume should survive a restore that cannot run: %v", err)
+			}
+			gotVM, err := reconciler.Resource(virtualMachineGVR).Namespace(ns).Get(ctx, vm.GetName(), metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get VirtualMachine: %v", err)
+			}
+			if rs, _, _ := unstructured.NestedString(gotVM.Object, "spec", "runStrategy"); rs != "Always" {
+				t.Errorf("VirtualMachine runStrategy = %q, want it left at %q", rs, "Always")
+			}
+		})
+	}
+}
+
 func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
 	tests := []struct {
-		name           string
-		targetNS       string
-		wantIsCopy     bool
-		wantNamespace  string
+		name          string
+		targetNS      string
+		wantIsCopy    bool
+		wantNamespace string
 	}{
 		{
 			name:          "VMDisk in-place restore when targetNamespace is omitted",
@@ -515,7 +761,7 @@ func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
 				Spec: backupsv1alpha1.RestoreJobSpec{
 					BackupRef: corev1.LocalObjectReference{Name: "disk-backup"},
 					TargetApplicationRef: &corev1.TypedLocalObjectReference{
-						APIGroup: stringPtr("apps.cozystack.io"),
+						APIGroup: new("apps.cozystack.io"),
 						Kind:     "VMDisk",
 						Name:     "ubuntu-source",
 					},
@@ -529,7 +775,7 @@ func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
 				},
 				Spec: backupsv1alpha1.BackupSpec{
 					ApplicationRef: corev1.TypedLocalObjectReference{
-						APIGroup: stringPtr("apps.cozystack.io"),
+						APIGroup: new("apps.cozystack.io"),
 						Kind:     "VMDisk",
 						Name:     "ubuntu-source",
 					},
@@ -563,7 +809,7 @@ func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
 
 func TestParseRestoreOptions_VMDiskOnlyCommonFields(t *testing.T) {
 	// Simulate a VMDisk restore where only CommonRestoreOptions fields are set
-	raw, _ := json.Marshal(map[string]interface{}{
+	raw, _ := json.Marshal(map[string]any{
 		"targetNamespace":    "tenant-copy",
 		"failIfTargetExists": true,
 	})
@@ -611,7 +857,7 @@ func TestRestoreOptions_Defaults(t *testing.T) {
 	})
 
 	t.Run("empty JSON defaults all bools to true", func(t *testing.T) {
-		raw, _ := json.Marshal(map[string]interface{}{})
+		raw, _ := json.Marshal(map[string]any{})
 		opts, err := parseRestoreOptions(&runtime.RawExtension{Raw: raw})
 		if err != nil {
 			t.Fatalf("parseRestoreOptions({}) error = %v", err)
@@ -629,7 +875,7 @@ func TestRestoreOptions_Defaults(t *testing.T) {
 	})
 
 	t.Run("explicit false overrides defaults", func(t *testing.T) {
-		raw, _ := json.Marshal(map[string]interface{}{
+		raw, _ := json.Marshal(map[string]any{
 			"failIfTargetExists":   false,
 			"keepOriginalPVC":      false,
 			"keepOriginalIpAndMac": false,
@@ -656,7 +902,7 @@ func TestResolveRestoreTarget_IsRenamed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-alpine",
 			},
@@ -669,7 +915,7 @@ func TestResolveRestoreTarget_IsRenamed(t *testing.T) {
 			Spec: backupsv1alpha1.RestoreJobSpec{
 				BackupRef: corev1.LocalObjectReference{Name: "bk"},
 				TargetApplicationRef: &corev1.TypedLocalObjectReference{
-					APIGroup: stringPtr("apps.cozystack.io"),
+					APIGroup: new("apps.cozystack.io"),
 					Kind:     "VMInstance",
 					Name:     "test-alpine",
 				},
@@ -689,7 +935,7 @@ func TestResolveRestoreTarget_IsRenamed(t *testing.T) {
 			Spec: backupsv1alpha1.RestoreJobSpec{
 				BackupRef: corev1.LocalObjectReference{Name: "bk"},
 				TargetApplicationRef: &corev1.TypedLocalObjectReference{
-					APIGroup: stringPtr("apps.cozystack.io"),
+					APIGroup: new("apps.cozystack.io"),
 					Kind:     "VMInstance",
 					Name:     "test-new",
 				},
@@ -742,8 +988,8 @@ func makeUnstructuredHelmRelease(name, namespace string, labels map[string]strin
 func TestPostRestoreRename_RenamesHelmRelease(t *testing.T) {
 	ns := "tenant-foo"
 	sourceHR := makeUnstructuredHelmRelease("vm-instance-test-alpine", ns, map[string]string{
-		appNameLabel:                 "test-alpine",
-		"app.kubernetes.io/instance": "vm-instance-test-alpine",
+		appNameLabel:                  "test-alpine",
+		"app.kubernetes.io/instance":  "vm-instance-test-alpine",
 		"helm.toolkit.fluxcd.io/name": "vm-instance-test-alpine",
 	})
 
@@ -757,7 +1003,7 @@ func TestPostRestoreRename_RenamesHelmRelease(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-alpine",
 			},
@@ -817,7 +1063,7 @@ func TestPostRestoreRename_SkipsWhenSourceNotFound(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-alpine",
 			},
@@ -861,7 +1107,7 @@ func TestPostRestoreRename_IdempotentWhenTargetExists(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     "VMInstance",
 				Name:     "test-alpine",
 			},
@@ -972,7 +1218,7 @@ func makeTestBackup(ns, appName, appKind string) *backupsv1alpha1.Backup {
 		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: ns},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{
-				APIGroup: stringPtr("apps.cozystack.io"),
+				APIGroup: new("apps.cozystack.io"),
 				Kind:     appKind,
 				Name:     appName,
 			},
@@ -1042,7 +1288,7 @@ func TestCreateResourceModifiersConfigMap_Copy_NoOVN(t *testing.T) {
 
 	// Copy restore: keepOriginalIpAndMac=false, no OVN annotations on copy
 	opts := RestoreOptions{
-		KeepOriginalIpAndMac: boolPtr(false),
+		KeepOriginalIpAndMac: new(false),
 	}
 	ur := makeVMInstanceUR("10.0.0.5", "aa:bb:cc:dd:ee:ff", nil)
 	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
@@ -1122,6 +1368,300 @@ func TestHelmReleaseNameForApp(t *testing.T) {
 	}
 }
 
+func TestVeleroRenameSupported(t *testing.T) {
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{vmInstanceKind, true},
+		{vmDiskAppKind, false},
+		{"Postgres", false},
+		{"MariaDB", false},
+		{"ClickHouse", false},
+		{"MongoDB", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			if got := veleroRenameSupported(tt.kind); got != tt.want {
+				t.Errorf("veleroRenameSupported(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReconcileVeleroRestore_RenameGuard covers the fix for a RestoreJob that
+// asked for a new application name via targetApplicationRef.name but whose
+// kind cannot be renamed by postRestoreRename: it used to report Succeeded
+// with the application restored under the source name.
+func TestReconcileVeleroRestore_RenameGuard(t *testing.T) {
+	const (
+		sourceNS = "tenant-src"
+		targetNS = "tenant-dst"
+	)
+
+	tests := []struct {
+		name        string
+		appKind     string
+		targetKind  string // targetApplicationRef.kind; defaults to appKind
+		targetName  string // targetApplicationRef.name; "" omits targetApplicationRef
+		targetNS    string
+		wantPhase   backupsv1alpha1.RestoreJobPhase
+		wantMessage string
+		wantMissing string // a remedy the message must not offer for this kind
+	}{
+		{
+			name:        "postgres cross-namespace rename is rejected",
+			appKind:     "Postgres",
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring Postgres "src" under a different name ("dst") is not supported by the Velero strategy`,
+		},
+		{
+			name:        "postgres rejection points at the engine-native strategy",
+			appKind:     "Postgres",
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: "engine-native strategy",
+		},
+		{
+			name:        "vmdisk cross-namespace rename is rejected",
+			appKind:     vmDiskAppKind,
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
+			wantMissing: "engine-native strategy",
+		},
+		{
+			name:        "vmdisk rename is rejected by the backup kind, not the target kind",
+			appKind:     vmDiskAppKind,
+			targetKind:  vmInstanceKind,
+			targetName:  "dst",
+			targetNS:    targetNS,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `restoring VMDisk "src" under a different name ("dst") is not supported by the Velero strategy`,
+		},
+		{
+			name:        "postgres same-namespace rename keeps the DataUpload message",
+			appKind:     "Postgres",
+			targetName:  "dst",
+			targetNS:    "",
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: "restoring to the same namespace with a different application name is not supported",
+		},
+		{
+			name:       "vminstance cross-namespace rename passes the guard",
+			appKind:    vmInstanceKind,
+			targetName: "dst",
+			targetNS:   targetNS,
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+		{
+			name:       "vmdisk cross-namespace copy keeping the source name passes the guard",
+			appKind:    vmDiskAppKind,
+			targetName: "src",
+			targetNS:   targetNS,
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+		{
+			name:      "vmdisk in-place restore without targetApplicationRef passes the guard",
+			appKind:   vmDiskAppKind,
+			targetNS:  "",
+			wantPhase: backupsv1alpha1.RestoreJobPhaseRunning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-sb", Namespace: sourceNS},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						APIGroup: new("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "src",
+					},
+					StrategyRef: corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+				},
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: sourceNS},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef: corev1.LocalObjectReference{Name: "src-sb"},
+				},
+			}
+			if tt.targetName != "" {
+				targetKind := tt.targetKind
+				if targetKind == "" {
+					targetKind = tt.appKind
+				}
+				restoreJob.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{
+					APIGroup: new("apps.cozystack.io"),
+					Kind:     targetKind,
+					Name:     tt.targetName,
+				}
+			}
+			if tt.targetNS != "" {
+				raw, err := json.Marshal(RestoreOptions{CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: tt.targetNS}})
+				if err != nil {
+					t.Fatalf("marshal options: %v", err)
+				}
+				restoreJob.Spec.Options = &runtime.RawExtension{Raw: raw}
+			}
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup, targetNamespace)
+			reconciler.Client = newRestoreJobTestClient(t, restoreJob, backup, targetNamespace)
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+			if tt.wantMessage == "" {
+				return
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil {
+				t.Fatalf("Ready condition missing, conditions: %+v", got.Status.Conditions)
+			}
+			if !strings.Contains(ready.Message, tt.wantMessage) {
+				t.Errorf("Ready message = %q, want it to contain %q", ready.Message, tt.wantMessage)
+			}
+			if tt.wantMissing != "" && strings.Contains(ready.Message, tt.wantMissing) {
+				t.Errorf("Ready message = %q, must not offer %q", ready.Message, tt.wantMissing)
+			}
+		})
+	}
+}
+
+// TestReconcileVeleroRestore_RenameGuard_InFlight covers a rename RestoreJob
+// that was already Running when the guard was introduced: its Velero Restore
+// has completed under the source name, so the job must fail with a message
+// saying so and release its resource-modifier ConfigMap instead of waiting
+// for the job's deletion. A VMInstance in the same state still succeeds.
+func TestReconcileVeleroRestore_RenameGuard_InFlight(t *testing.T) {
+	const (
+		sourceNS = "tenant-src"
+		targetNS = "tenant-dst"
+	)
+	tests := []struct {
+		name        string
+		appKind     string
+		wantPhase   backupsv1alpha1.RestoreJobPhase
+		wantMessage string
+	}{
+		{
+			name:        "vmdisk in-flight rename fails and names the source-name copy",
+			appKind:     vmDiskAppKind,
+			wantPhase:   backupsv1alpha1.RestoreJobPhaseFailed,
+			wantMessage: `This RestoreJob was already running, so "src" may have been restored into namespace "tenant-dst" under its source name`,
+		},
+		{
+			name:      "vminstance in-flight rename still succeeds",
+			appKind:   vmInstanceKind,
+			wantPhase: backupsv1alpha1.RestoreJobPhaseSucceeded,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := metav1.Now()
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-sb", Namespace: sourceNS},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						APIGroup: new("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "src",
+					},
+					StrategyRef:    corev1.TypedLocalObjectReference{Kind: "Velero", Name: "cozy-default-velero"},
+					DriverMetadata: map[string]string{veleroBackupNameMetadataKey: "vb"},
+				},
+			}
+			raw, err := json.Marshal(RestoreOptions{CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: targetNS}})
+			if err != nil {
+				t.Fatalf("marshal options: %v", err)
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "src-restore", Namespace: sourceNS},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef: corev1.LocalObjectReference{Name: "src-sb"},
+					TargetApplicationRef: &corev1.TypedLocalObjectReference{
+						APIGroup: new("apps.cozystack.io"),
+						Kind:     tt.appKind,
+						Name:     "dst",
+					},
+					Options: &runtime.RawExtension{Raw: raw},
+				},
+				Status: backupsv1alpha1.RestoreJobStatus{
+					Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+					StartedAt: &started,
+				},
+			}
+			owningLabels := map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+			}
+			veleroRestore := &velerov1.Restore{
+				ObjectMeta: metav1.ObjectMeta{Name: "vr", Namespace: veleroNamespace, Labels: owningLabels},
+				Status:     velerov1.RestoreStatus{Phase: velerov1.RestorePhaseCompleted},
+			}
+			modifiers := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "restore-modifiers-tenant-src-src-restore", Namespace: veleroNamespace, Labels: owningLabels},
+			}
+			strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "cozy-default-velero"}}
+			targetNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNS}}
+
+			reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil)
+			testScheme := runtime.NewScheme()
+			_ = scheme.AddToScheme(testScheme)
+			_ = backupsv1alpha1.AddToScheme(testScheme)
+			_ = velerov1.AddToScheme(testScheme)
+			_ = strategyv1alpha1.AddToScheme(testScheme)
+			reconciler.Client = clientfake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(restoreJob, backup, veleroRestore, modifiers, strategy, targetNamespace).
+				WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).
+				Build()
+			ctx := context.Background()
+
+			if _, err := reconciler.reconcileVeleroRestore(ctx, restoreJob, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore() error = %v", err)
+			}
+
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+			if err := reconciler.Get(ctx, client.ObjectKeyFromObject(modifiers), &corev1.ConfigMap{}); !errors.IsNotFound(err) {
+				t.Errorf("resource-modifier ConfigMap should be deleted, get err = %v", err)
+			}
+			if tt.wantMessage == "" {
+				return
+			}
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if ready == nil {
+				t.Fatalf("Ready condition missing, conditions: %+v", got.Status.Conditions)
+			}
+			if !strings.Contains(ready.Message, tt.wantMessage) {
+				t.Errorf("Ready message = %q, want it to contain %q", ready.Message, tt.wantMessage)
+			}
+		})
+	}
+}
+
 func TestTargetHelmReleaseExists_VMDisk(t *testing.T) {
 	ns := "tenant-copy"
 	hr := makeUnstructuredHelmRelease("vm-disk-ubuntu-source", ns, nil)
@@ -1172,7 +1712,7 @@ func TestCreateResourceModifiersConfigMap_Copy_UsesMergePatchForPVC(t *testing.T
 	restoreJob := makeTestRestoreJob(sourceNS, "rj-copy-merge")
 	backup := makeTestBackup(sourceNS, "test-vm", "VMInstance")
 
-	opts := RestoreOptions{KeepOriginalIpAndMac: boolPtr(false)}
+	opts := RestoreOptions{KeepOriginalIpAndMac: new(false)}
 	ur := makeVMInstanceUR("", "", nil)
 	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
 
@@ -1210,4 +1750,308 @@ func containsString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// keepPVCFixture is an in-place VMInstance restore of one disk, whose PVC
+// vm-disk-ubuntu-source is bound to PV pv-current under a Delete policy.
+type keepPVCFixture struct {
+	ns         string
+	restoreJob *backupsv1alpha1.RestoreJob
+	backup     *backupsv1alpha1.Backup
+	ur         *runtime.RawExtension
+	target     restoreTarget
+	opts       RestoreOptions
+	livePVC    *corev1.PersistentVolumeClaim
+	pv         *corev1.PersistentVolume
+	origName   string
+}
+
+func newKeepPVCFixture(t *testing.T) *keepPVCFixture {
+	t.Helper()
+	ns := "tenant-root"
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "restore-test", Namespace: ns, UID: "restore-job-uid"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "my-backup"}},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-backup", Namespace: ns},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: new("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+	urRaw, err := json.Marshal(vmInstanceResources{
+		DataVolumes: []backupsv1alpha1.DataVolumeResource{
+			{DataVolumeName: "vm-disk-ubuntu-source", ApplicationName: "ubuntu-source"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &keepPVCFixture{
+		ns:         ns,
+		restoreJob: restoreJob,
+		backup:     backup,
+		ur:         &runtime.RawExtension{Raw: urRaw},
+		target:     restoreTarget{Namespace: ns, AppName: "test-vm", AppKind: "VMInstance"},
+		opts:       RestoreOptions{KeepOriginalPVC: new(true)},
+		livePVC: &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "vm-disk-ubuntu-source", Namespace: ns, UID: "live-pvc-uid"},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "pv-current"},
+		},
+		pv: &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: "pv-current"},
+			Spec: corev1.PersistentVolumeSpec{
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
+				ClaimRef: &corev1.ObjectReference{
+					Kind: "PersistentVolumeClaim", Namespace: ns, Name: "vm-disk-ubuntu-source", UID: "live-pvc-uid",
+				},
+			},
+		},
+		origName: "vm-disk-ubuntu-source-orig-" + shortHash(restoreJob.Name),
+	}
+}
+
+func (f *keepPVCFixture) reconciler(t *testing.T, objects ...client.Object) *RestoreJobReconciler {
+	t.Helper()
+	dv := &unstructured.Unstructured{}
+	dv.SetAPIVersion("cdi.kubevirt.io/v1beta1")
+	dv.SetKind("DataVolume")
+	dv.SetName("vm-disk-ubuntu-source")
+	dv.SetNamespace(f.ns)
+	return newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{dv},
+		append([]client.Object{f.restoreJob, f.backup}, objects...)...)
+}
+
+func (f *keepPVCFixture) dataVolumeExists(t *testing.T, r *RestoreJobReconciler) bool {
+	t.Helper()
+	_, err := r.Resource(dataVolumeGVR).Namespace(f.ns).Get(context.Background(), "vm-disk-ubuntu-source", metav1.GetOptions{})
+	if err != nil && !errors.IsNotFound(err) {
+		t.Fatalf("get DataVolume: %v", err)
+	}
+	return err == nil
+}
+
+// A -orig PVC this RestoreJob did not create, such as one left by a deleted
+// RestoreJob of the same name, must stop the restore before the DataVolume is
+// deleted: skipping the rename would leave the live disk under its own name
+// for the restore to overwrite.
+func TestPrepareForRestore_KeepOriginalPVC_RefusesForeignOrigPVC(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+	}{
+		{name: "no restore job annotation"},
+		{name: "another restore job with the same name", annotations: map[string]string{origPVCRestoreJobUIDAnnotation: "previous-restore-job-uid"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newKeepPVCFixture(t)
+			foreign := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: f.origName, Namespace: f.ns, Annotations: tc.annotations},
+				Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "pv-previous"},
+			}
+			r := f.reconciler(t, f.livePVC, f.pv, foreign)
+			ctx := context.Background()
+
+			ready, _, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+			if err == nil {
+				t.Errorf("prepareForRestore() = ready %v, nil error; want an error naming %s", ready, f.origName)
+			} else if !strings.Contains(err.Error(), f.origName) {
+				t.Errorf("error %q does not name the taken PVC %s", err, f.origName)
+			}
+
+			if !f.dataVolumeExists(t, r) {
+				t.Error("DataVolume was deleted although the disk could not be kept")
+			}
+			live := &corev1.PersistentVolumeClaim{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(f.livePVC), live); err != nil {
+				t.Fatalf("live PVC is gone: %v", err)
+			}
+			pv := &corev1.PersistentVolume{}
+			if err := r.Get(ctx, client.ObjectKey{Name: "pv-current"}, pv); err != nil {
+				t.Fatal(err)
+			}
+			if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete || pv.Spec.ClaimRef.Name != f.livePVC.Name {
+				t.Errorf("PV was modified: policy %s, claim %s", pv.Spec.PersistentVolumeReclaimPolicy, pv.Spec.ClaimRef.Name)
+			}
+			got := &corev1.PersistentVolumeClaim{}
+			if err := r.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Spec.VolumeName != "pv-previous" {
+				t.Errorf("foreign -orig PVC now points at %q", got.Spec.VolumeName)
+			}
+		})
+	}
+}
+
+// A rename interrupted after the -orig PVC was created must complete on the
+// next reconcile, and a rename already complete must be left alone.
+func TestPrepareForRestore_KeepOriginalPVC_ResumesOwnRename(t *testing.T) {
+	f := newKeepPVCFixture(t)
+	f.pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	f.pv.Annotations = map[string]string{originalReclaimPolicyAnnotation: "Delete"}
+	own := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: f.origName, Namespace: f.ns,
+			Annotations: map[string]string{
+				origPVCRestoreJobUIDAnnotation:  string(f.restoreJob.UID),
+				originalReclaimPolicyAnnotation: "Delete",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pv-current"},
+	}
+	r := f.reconciler(t, f.livePVC, f.pv, own)
+	ctx := context.Background()
+
+	for pass := 1; pass <= 2; pass++ {
+		ready, _, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+		if err != nil || !ready {
+			t.Fatalf("pass %d: prepareForRestore() = ready %v, error %v; want ready", pass, ready, err)
+		}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(f.livePVC), &corev1.PersistentVolumeClaim{}); !errors.IsNotFound(err) {
+			t.Errorf("pass %d: original PVC still exists (err %v)", pass, err)
+		}
+		kept := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, kept); err != nil {
+			t.Fatalf("pass %d: -orig PVC is gone: %v", pass, err)
+		}
+		pv := &corev1.PersistentVolume{}
+		if err := r.Get(ctx, client.ObjectKey{Name: "pv-current"}, pv); err != nil {
+			t.Fatal(err)
+		}
+		if ref := pv.Spec.ClaimRef; ref == nil || ref.Name != f.origName || ref.UID != kept.UID {
+			t.Errorf("pass %d: PV claimRef = %+v, want %s", pass, ref, f.origName)
+		}
+	}
+	if f.dataVolumeExists(t, r) {
+		t.Error("DataVolume was not deleted after the rename completed")
+	}
+}
+
+// The PV goes to Retain so it outlives the original PVC; the policy it had
+// must be recorded, or nobody can set it back on the -orig PVC's PV.
+func TestRenamePVC_RecordsOriginalReclaimPolicy(t *testing.T) {
+	for _, policy := range []corev1.PersistentVolumeReclaimPolicy{
+		corev1.PersistentVolumeReclaimDelete,
+		corev1.PersistentVolumeReclaimRetain,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			f := newKeepPVCFixture(t)
+			f.pv.Spec.PersistentVolumeReclaimPolicy = policy
+			r := f.reconciler(t, f.livePVC, f.pv)
+			ctx := context.Background()
+
+			if err := r.renamePVC(ctx, f.restoreJob, f.ns, f.livePVC.Name, f.origName); err != nil {
+				t.Fatalf("renamePVC() error = %v", err)
+			}
+
+			pv := &corev1.PersistentVolume{}
+			if err := r.Get(ctx, client.ObjectKey{Name: "pv-current"}, pv); err != nil {
+				t.Fatal(err)
+			}
+			if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+				t.Errorf("PV policy = %s, want Retain while the -orig PVC holds it", pv.Spec.PersistentVolumeReclaimPolicy)
+			}
+			if got := pv.Annotations[originalReclaimPolicyAnnotation]; got != string(policy) {
+				t.Errorf("PV %s = %q, want %q", originalReclaimPolicyAnnotation, got, policy)
+			}
+			kept := &corev1.PersistentVolumeClaim{}
+			if err := r.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, kept); err != nil {
+				t.Fatal(err)
+			}
+			if got := kept.Annotations[originalReclaimPolicyAnnotation]; got != string(policy) {
+				t.Errorf("-orig PVC %s = %q, want %q", originalReclaimPolicyAnnotation, got, policy)
+			}
+		})
+	}
+}
+
+// Any failure to keep the disk must hold the restore back before its
+// DataVolume is deleted, not only a taken -orig name, and the retry must
+// finish the rename once the cause is gone.
+func TestPrepareForRestore_KeepOriginalPVC_FailedRenameKeepsDataVolume(t *testing.T) {
+	f := newKeepPVCFixture(t)
+	r := f.reconciler(t, f.livePVC) // PV pv-current is missing
+	ctx := context.Background()
+
+	ready, result, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || ready || result.RequeueAfter == 0 {
+		t.Errorf("prepareForRestore() = ready %v, %+v, error %v; want a requeue without failing the restore", ready, result, err)
+	}
+	if !f.dataVolumeExists(t, r) {
+		t.Fatal("DataVolume was deleted although the disk could not be kept")
+	}
+
+	if err := r.Create(ctx, f.pv); err != nil {
+		t.Fatal(err)
+	}
+	ready, _, err = r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || !ready {
+		t.Fatalf("retry: prepareForRestore() = ready %v, error %v; want ready", ready, err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Errorf("retry: -orig PVC: %v", err)
+	}
+	if f.dataVolumeExists(t, r) {
+		t.Error("retry: DataVolume was not deleted after the rename completed")
+	}
+}
+
+// laggingCacheReconciler serves every cached read from the objects as they
+// were seeded, as an informer that has not caught up with this reconcile's
+// own writes would; APIReader sees the writes.
+func (f *keepPVCFixture) laggingCacheReconciler(t *testing.T, objects ...client.Object) *RestoreJobReconciler {
+	t.Helper()
+	r := f.reconciler(t, objects...)
+	seeded := append([]client.Object{f.restoreJob, f.backup}, objects...)
+	for i, obj := range seeded {
+		seeded[i] = obj.DeepCopyObject().(client.Object)
+	}
+	cache := clientfake.NewClientBuilder().WithScheme(r.Scheme).WithObjects(seeded...).Build()
+	apiServer := r.Client.(client.WithWatch)
+	r.Client = interceptor.NewClient(apiServer, interceptor.Funcs{
+		Get: func(ctx context.Context, _ client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			return cache.Get(ctx, key, obj, opts...)
+		},
+	})
+	r.APIReader = apiServer
+	return r
+}
+
+// On the lab, a two-disk restore failed one disk with "failed to get -orig
+// PVC ...: not found": the PVC had just been created, and the cache had not
+// seen it yet. The rename must not depend on the cache seeing its own writes.
+func TestPrepareForRestore_KeepOriginalPVC_CacheLagsBehindWrites(t *testing.T) {
+	f := newKeepPVCFixture(t)
+	r := f.laggingCacheReconciler(t, f.livePVC, f.pv)
+	ctx := context.Background()
+
+	ready, _, err := r.prepareForRestore(ctx, f.restoreJob, f.backup, f.ur, f.target, f.opts)
+	if err != nil || !ready {
+		t.Fatalf("prepareForRestore() = ready %v, error %v; want ready", ready, err)
+	}
+	kept := &corev1.PersistentVolumeClaim{}
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: f.ns, Name: f.origName}, kept); err != nil {
+		t.Fatalf("-orig PVC: %v", err)
+	}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(f.livePVC), &corev1.PersistentVolumeClaim{}); !errors.IsNotFound(err) {
+		t.Errorf("original PVC still exists (err %v)", err)
+	}
+	pv := &corev1.PersistentVolume{}
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Name: "pv-current"}, pv); err != nil {
+		t.Fatal(err)
+	}
+	if ref := pv.Spec.ClaimRef; ref == nil || ref.Name != f.origName || ref.UID != kept.UID {
+		t.Errorf("PV claimRef = %+v, want %s", ref, f.origName)
+	}
+	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+		t.Errorf("PV policy = %s, want Retain", pv.Spec.PersistentVolumeReclaimPolicy)
+	}
+	if f.dataVolumeExists(t, r) {
+		t.Error("DataVolume was not deleted after the rename completed")
+	}
 }

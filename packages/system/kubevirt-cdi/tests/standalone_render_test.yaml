@@ -1,0 +1,57 @@
+suite: kubevirt-cdi renders with no platform values injected
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+
+# The platform injects _cluster through the cozystack-values Secret, so every
+# case that sets it itself renders fine whether or not values.yaml declares
+# the key. This case supplies nothing. Drop the declaration from values.yaml
+# and the render dies on "index of untyped nil" before a single assert runs;
+# the declaration is the only thing keeping the chart renderable outside a
+# cluster. No suite-level `templates:` list here on purpose: it would narrow
+# the render to the listed files and let a later template reintroduce the
+# same breakage unseen.
+
+tests:
+  - it: exposes no cdi-uploadproxy route when _cluster is absent
+    asserts:
+      - template: templates/cdi-uploadproxy-ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/cdi-uploadproxy-tlsroute.yaml
+        hasDocuments:
+          count: 0
+
+  # Counterpart to the case above: with _cluster populated the way the
+  # platform populates it, both routes have to appear. Without this the
+  # suite only ever asserts absence, and a template that stopped rendering
+  # under every input would still satisfy it.
+  - it: exposes the uploadproxy ingress once _cluster selects the service
+    set:
+      _cluster:
+        root-host: example.com
+        expose-services: cdi-uploadproxy
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/cdi-uploadproxy-ingress.yaml
+        equal:
+          path: spec.rules[0].host
+          value: cdi-uploadproxy.example.com
+      - template: templates/cdi-uploadproxy-tlsroute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: swaps the ingress for a TLSRoute when the gateway is enabled
+    set:
+      _cluster:
+        root-host: example.com
+        expose-services: cdi-uploadproxy
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/cdi-uploadproxy-tlsroute.yaml
+        equal:
+          path: spec.hostnames[0]
+          value: cdi-uploadproxy.example.com
+      - template: templates/cdi-uploadproxy-ingress.yaml
+        hasDocuments:
+          count: 0

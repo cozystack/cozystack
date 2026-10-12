@@ -51,6 +51,50 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
     helm.sh/hook-weight: "0"
 spec:
+  # A pre-delete hook that never finishes is worse than one that fails: helm
+  # returns from Uninstall.Run before it deletes anything, so the release stays
+  # in storage, flux keeps the finalizer, and the same teardown is retried. The
+  # budget for the whole attempt is spec.uninstall.timeout / spec.timeout on the
+  # tenant HelmRelease; cozystack-api generates it with neither, so it is
+  # helm-controller's 300s default.
+  #
+  # 270s, not 300s. This deadline runs from the Job's startTime and helm's
+  # budget from just before it creates the Job, so equal values would have helm
+  # give up first — and it would give up on a Job that is still running, which is
+  # today's behaviour rather than a fix for it. The 90s above the two bounded
+  # waits inside is what a cold image pull gets to spend before the deadline
+  # starts cutting runs that were going to finish.
+  #
+  # The 30s below the budget is not all margin: helm learns of the failure at
+  # the deadline plus the pod's termination period, because since 1.31 the Job
+  # controller withholds the terminal condition until the pods have finished
+  # terminating. terminationGracePeriodSeconds below is set against this number
+  # for that reason, and the two are only meaningful together — raising either
+  # without the other is what puts the failure back outside the budget.
+  #
+  # Some bound is needed regardless of the waits: the waits bound the watch
+  # phase, not the DELETE calls themselves, which carry kubectl's default
+  # --request-timeout of 0.
+  #
+  # What the remainder buys is not exact. Past the SIGKILL there is still the
+  # kubelet status update and the pod object going away before the condition
+  # lands, and none of that is visible from a rendered manifest, so the test
+  # checks deadline + grace against the budget and stops there. Treat the tail
+  # as unmeasured rather than as slack.
+  #
+  # This path also costs the diagnosis: on DeadlineExceeded the Job controller
+  # deletes the active pods, so the wave that hung leaves no log behind. The
+  # expected path is the wave's own --timeout below, where the script exits and
+  # the failed pod keeps its output until ttlSecondsAfterFinished reaps it. The
+  # deadline is the backstop for a kubectl that never returns at all.
+  activeDeadlineSeconds: 270
+  # One attempt, so the script's exit status is the Job's. At the default of 6
+  # the failure never reaches helm inside the budget: the operator gets a bare
+  # "timed out waiting for the condition" instead of the wave that could not
+  # finish. Needed under either restartPolicy — 6 restarts in place under
+  # OnFailure, 6 fresh pods under Never — so it is not implied by the policy
+  # below.
+  backoffLimit: 0
   ttlSecondsAfterFinished: 300
   template:
     metadata:
@@ -59,7 +103,32 @@ spec:
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
       serviceAccountName: {{ include "tenant.name" . }}-cleanup
-      restartPolicy: OnFailure
+      # Never, so that "one attempt" is the truth rather than the intent. Under
+      # OnFailure the pod survives its own failure and the kubelet re-runs the
+      # container in place; the Job controller only learns of it afterwards, by
+      # summing restartCount, and caps the Job then. The script therefore starts
+      # over — re-entering the applications wave that just expired — and is cut
+      # down mid-run once the controller catches up. Never leaves a failed pod
+      # the controller sees directly, with nothing re-executed in between.
+      restartPolicy: Never
+      # Part of the deadline, not a detail of it. Since 1.31 the Job controller
+      # withholds the terminal Failed condition until every pod has finished
+      # terminating, so what helm waits for is the deadline plus however long
+      # this pod takes to die. The default 30s would put that at 270+30 — level
+      # with helm's budget, which is the state activeDeadlineSeconds above is
+      # set 30s under the budget to avoid.
+      #
+      # The full period is spent, not merely bounded by. The SIGTERM goes to
+      # PID 1, which is the /bin/sh below: the script runs several commands, so
+      # the shell never execs into kubectl and stays PID 1 itself. A signal
+      # carrying its default disposition is discarded by the kernel when the
+      # target is PID 1, and a non-interactive shell installs no SIGTERM
+      # handler, so nothing acts on it. kubectl is a child and was not
+      # signalled at all. The pod ends on the SIGKILL that closes this period,
+      # every time. Nothing in the script needs to finish gracefully — the
+      # DELETE calls are already sent, and the process is only watching — so a
+      # short period costs nothing and keeps the failure inside the budget.
+      terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -72,6 +141,19 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+        # Requests, because backoffLimit above removed the second chance this
+        # pod used to have. With no requests it is BestEffort and first in line
+        # under node pressure; previously an eviction was absorbed by a retry
+        # inside the same Job, and now it fails the whole uninstall attempt.
+        # Values match the sibling hook in packages/apps/kubernetes, which runs
+        # the same image doing the same kind of work.
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
         command:
         - /bin/sh
         - -c
@@ -81,14 +163,49 @@ spec:
           
           echo "Cleaning up HelmReleases in namespace: $NAMESPACE"
           
+          # --timeout is not optional here: kubectl reads the default of 0 as
+          # "wait forever" and substitutes a week, so --wait on its own hangs
+          # this hook for as long as any child HelmRelease cannot finalize. Two
+          # bounded waits of 90s leave the rest of the Job's deadline to
+          # scheduling, the image pull and the delete calls themselves.
+          #
+          # 90s is not enough for every tenant, and is not meant to be. An
+          # applications wave holding a nested Tenant, or an app of kind
+          # Kubernetes whose own pre-delete hook spends two 120s waits before it
+          # starts working, expires here on the first attempt and converges
+          # across flux's uninstall retries instead. Neither of those fits the
+          # 300s budget as it stands either, so for them the bound costs
+          # nothing that works today.
+          #
+          # Between the two there is a band that does pay. Every generated child
+          # HelmRelease carries a wait strategy, so a wave inherits its slowest
+          # child; one that settles in, say, 95s completes inside the 300s
+          # budget today and will expire here instead, trading a clean single
+          # attempt for one extra flux retry. That is the price of the bound,
+          # and it is worth it against the alternative — an unbounded wave does
+          # not fail, it consumes the whole budget and leaves helm reporting a
+          # timeout with nothing named in it. If the band turns out to be
+          # populated in practice, raise the waits and the deadline together:
+          # hack/tenant-pre-delete-hook.bats pins their ordering, not their
+          # values.
+          #
+          # Neither is guarded, deliberately. Nothing stands behind these two
+          # deletes — they are the cleanup, not a backstop in front of one — so
+          # a wave that did not finish has to end the run under `set -e` rather
+          # than report success it cannot claim. Ending it also keeps the
+          # ordering the two waves exist for: the tenant modules below are what
+          # the applications above run on, and tearing them out from under
+          # applications that are still deleting makes the namespace harder to
+          # remove, not easier. Whatever did get deleted stays deleted, so the
+          # next uninstall attempt resumes from there.
           echo "Deleting Applications"
           kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
             -l 'apps.cozystack.io/application.kind,internal.cozystack.io/tenantmodule!=true' \
-            --ignore-not-found=true --wait=true
+            --ignore-not-found=true --wait=true --timeout=90s
 
           echo "Deleting Tenant Modules"
           kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
             -l 'apps.cozystack.io/application.kind,internal.cozystack.io/tenantmodule=true' \
-            --ignore-not-found=true --wait=true
+            --ignore-not-found=true --wait=true --timeout=90s
           
           echo "Cleanup completed successfully"

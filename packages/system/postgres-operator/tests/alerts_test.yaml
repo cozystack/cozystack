@@ -1,0 +1,23 @@
+suite: CNPG alert rules
+
+templates:
+  - templates/alerts.yaml
+
+release:
+  name: postgres-operator
+  namespace: cozy-postgres-operator
+
+tests:
+  # The rules reach the cluster only through the .Files.Glob in
+  # templates/alerts.yaml, which drops a file silently if it moves or is renamed.
+  - it: ships the WAL archive backlog rule as a critical alert
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          any: true
+          content:
+            alert: CNPGWALArchiveBacklog
+            labels:
+              severity: critical
+              namespace: "{{ $labels.namespace }}"
+              job: "{{ $labels.job }}"

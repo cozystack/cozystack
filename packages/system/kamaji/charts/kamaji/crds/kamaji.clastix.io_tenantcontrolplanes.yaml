@@ -132,6 +132,74 @@ spec:
                                 Must be 0 if Mode is DaemonSet.
                               format: int32
                               type: integer
+                            resources:
+                              description: |-
+                                Resources define the amount of CPU and memory to allocate to the Konnectivity agent.
+
+                                When unset the agent container declares no requests or limits, which places
+                                its Pod in the BestEffort QoS class. Since the agent tolerates all taints and
+                                commonly runs alongside the cluster's heaviest workloads, BestEffort makes it
+                                the first candidate for CPU starvation and eviction on a busy node, degrading
+                                the very tunnel that `kubectl exec`, `kubectl logs` and `kubectl port-forward`
+                                depend on. Setting requests here promotes the agent to Burstable so it is
+                                scheduled with a guaranteed share of CPU.
+                              properties:
+                                claims:
+                                  description: |-
+                                    Claims lists the names of resources, defined in spec.resourceClaims,
+                                    that are used by this container.
+
+                                    This field depends on the
+                                    DynamicResourceAllocation feature gate.
+
+                                    This field is immutable. It can only be set for containers.
+                                  items:
+                                    description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                                    properties:
+                                      name:
+                                        description: |-
+                                          Name must match the name of one entry in pod.spec.resourceClaims of
+                                          the Pod where this field is used. It makes that resource available
+                                          inside a container.
+                                        type: string
+                                      request:
+                                        description: |-
+                                          Request is the name chosen for a request in the referenced claim.
+                                          If empty, everything from the claim is made available, otherwise
+                                          only the result of this request.
+                                        type: string
+                                    required:
+                                      - name
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-map-keys:
+                                    - name
+                                  x-kubernetes-list-type: map
+                                limits:
+                                  additionalProperties:
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    x-kubernetes-int-or-string: true
+                                  description: |-
+                                    Limits describes the maximum amount of compute resources allowed.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                                requests:
+                                  additionalProperties:
+                                    anyOf:
+                                      - type: integer
+                                      - type: string
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    x-kubernetes-int-or-string: true
+                                  description: |-
+                                    Requests describes the minimum amount of compute resources required.
+                                    If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                                    otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                                    More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                                  type: object
+                              type: object
                             tolerations:
                               default:
                                 - key: CriticalAddonsOnly
@@ -269,6 +337,190 @@ spec:
                                     More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                                   type: object
                               type: object
+                            securityContext:
+                              description: SecurityContext defines the SecurityContext for the Konnectivity server container.
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  type: object
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                  type: object
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                                  type: object
+                              type: object
                             version:
                               description: |-
                                 Container image version of the Konnectivity server.
@@ -369,7 +621,9 @@ spec:
                                           description: Selects a key of a ConfigMap.
                                           properties:
                                             key:
-                                              description: The key to select.
+                                              description: |-
+                                                The key to select from the ConfigMap's Data field.
+                                                Keys in the BinaryData field are not currently propagated to container env vars.
                                               type: string
                                             name:
                                               default: ""
@@ -624,6 +878,11 @@ spec:
                                               Number must be in the range 1 to 65535.
                                               Name must be an IANA_SVC_NAME.
                                             x-kubernetes-int-or-string: true
+                                          protocol:
+                                            description: |-
+                                              Protocol selects the wire protocol for the probe connection.
+                                              Nil defaults to HTTP/1.1.
+                                            type: string
                                           scheme:
                                             description: |-
                                               Scheme to use for connecting to the host.
@@ -730,6 +989,11 @@ spec:
                                               Number must be in the range 1 to 65535.
                                               Name must be an IANA_SVC_NAME.
                                             x-kubernetes-int-or-string: true
+                                          protocol:
+                                            description: |-
+                                              Protocol selects the wire protocol for the probe connection.
+                                              Nil defaults to HTTP/1.1.
+                                            type: string
                                           scheme:
                                             description: |-
                                               Scheme to use for connecting to the host.
@@ -808,6 +1072,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -862,6 +1133,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -1014,6 +1290,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -1068,6 +1351,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -1361,7 +1649,6 @@ spec:
                                       procMount denotes the type of proc mount to use for the containers.
                                       The default value is Default which uses the container runtime defaults for
                                       readonly paths and masked paths.
-                                      This requires the ProcMountType feature flag to be enabled.
                                       Note that this field cannot be set when spec.os.name is windows.
                                     type: string
                                   readOnlyRootFilesystem:
@@ -1510,6 +1797,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -1564,6 +1858,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -1697,10 +1996,20 @@ spec:
                                 items:
                                   description: VolumeMount describes a mounting of a Volume within a container.
                                   properties:
-                                    mountPath:
+                                    bindMountOptions:
                                       description: |-
-                                        Path within the container at which the volume should be mounted.  Must
-                                        not contain ':'.
+                                        bindMountOptions is the list of additional bind mount options to apply when
+                                        mounting this volume into the container. Allowed values are noexec,
+                                        nodev, and nosuid. These are Linux mount options and have no effect on
+                                        Windows nodes.
+                                        This field is not supported with image volumes.
+                                        This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: set
+                                    mountPath:
+                                      description: Path within the container at which the volume should be mounted.
                                       type: string
                                     mountPropagation:
                                       description: |-
@@ -1833,7 +2142,9 @@ spec:
                                           description: Selects a key of a ConfigMap.
                                           properties:
                                             key:
-                                              description: The key to select.
+                                              description: |-
+                                                The key to select from the ConfigMap's Data field.
+                                                Keys in the BinaryData field are not currently propagated to container env vars.
                                               type: string
                                             name:
                                               default: ""
@@ -2088,6 +2399,11 @@ spec:
                                               Number must be in the range 1 to 65535.
                                               Name must be an IANA_SVC_NAME.
                                             x-kubernetes-int-or-string: true
+                                          protocol:
+                                            description: |-
+                                              Protocol selects the wire protocol for the probe connection.
+                                              Nil defaults to HTTP/1.1.
+                                            type: string
                                           scheme:
                                             description: |-
                                               Scheme to use for connecting to the host.
@@ -2194,6 +2510,11 @@ spec:
                                               Number must be in the range 1 to 65535.
                                               Name must be an IANA_SVC_NAME.
                                             x-kubernetes-int-or-string: true
+                                          protocol:
+                                            description: |-
+                                              Protocol selects the wire protocol for the probe connection.
+                                              Nil defaults to HTTP/1.1.
+                                            type: string
                                           scheme:
                                             description: |-
                                               Scheme to use for connecting to the host.
@@ -2272,6 +2593,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -2326,6 +2654,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -2478,6 +2811,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -2532,6 +2872,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -2825,7 +3170,6 @@ spec:
                                       procMount denotes the type of proc mount to use for the containers.
                                       The default value is Default which uses the container runtime defaults for
                                       readonly paths and masked paths.
-                                      This requires the ProcMountType feature flag to be enabled.
                                       Note that this field cannot be set when spec.os.name is windows.
                                     type: string
                                   readOnlyRootFilesystem:
@@ -2974,6 +3318,13 @@ spec:
                                   grpc:
                                     description: GRPC specifies a GRPC HealthCheckRequest.
                                     properties:
+                                      mode:
+                                        description: |-
+                                          mode specifies the connection mode for the gRPC health probe.
+                                          Set to "TLS" to use TLS without certificate verification.
+                                          Set to "Plaintext" to use a plaintext (insecure) connection explicitly.
+                                          If not specified, the probe uses a plaintext (insecure) connection.
+                                        type: string
                                       port:
                                         description: Port number of the gRPC service. Number must be in the range 1 to 65535.
                                         format: int32
@@ -3028,6 +3379,11 @@ spec:
                                           Number must be in the range 1 to 65535.
                                           Name must be an IANA_SVC_NAME.
                                         x-kubernetes-int-or-string: true
+                                      protocol:
+                                        description: |-
+                                          Protocol selects the wire protocol for the probe connection.
+                                          Nil defaults to HTTP/1.1.
+                                        type: string
                                       scheme:
                                         description: |-
                                           Scheme to use for connecting to the host.
@@ -3161,10 +3517,20 @@ spec:
                                 items:
                                   description: VolumeMount describes a mounting of a Volume within a container.
                                   properties:
-                                    mountPath:
+                                    bindMountOptions:
                                       description: |-
-                                        Path within the container at which the volume should be mounted.  Must
-                                        not contain ':'.
+                                        bindMountOptions is the list of additional bind mount options to apply when
+                                        mounting this volume into the container. Allowed values are noexec,
+                                        nodev, and nosuid. These are Linux mount options and have no effect on
+                                        Windows nodes.
+                                        This field is not supported with image volumes.
+                                        This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: set
+                                    mountPath:
+                                      description: Path within the container at which the volume should be mounted.
                                       type: string
                                     mountPropagation:
                                       description: |-
@@ -3254,10 +3620,20 @@ spec:
                               items:
                                 description: VolumeMount describes a mounting of a Volume within a container.
                                 properties:
-                                  mountPath:
+                                  bindMountOptions:
                                     description: |-
-                                      Path within the container at which the volume should be mounted.  Must
-                                      not contain ':'.
+                                      bindMountOptions is the list of additional bind mount options to apply when
+                                      mounting this volume into the container. Allowed values are noexec,
+                                      nodev, and nosuid. These are Linux mount options and have no effect on
+                                      Windows nodes.
+                                      This field is not supported with image volumes.
+                                      This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                  mountPath:
+                                    description: Path within the container at which the volume should be mounted.
                                     type: string
                                   mountPropagation:
                                     description: |-
@@ -3316,10 +3692,20 @@ spec:
                               items:
                                 description: VolumeMount describes a mounting of a Volume within a container.
                                 properties:
-                                  mountPath:
+                                  bindMountOptions:
                                     description: |-
-                                      Path within the container at which the volume should be mounted.  Must
-                                      not contain ':'.
+                                      bindMountOptions is the list of additional bind mount options to apply when
+                                      mounting this volume into the container. Allowed values are noexec,
+                                      nodev, and nosuid. These are Linux mount options and have no effect on
+                                      Windows nodes.
+                                      This field is not supported with image volumes.
+                                      This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                  mountPath:
+                                    description: Path within the container at which the volume should be mounted.
                                     type: string
                                   mountPropagation:
                                     description: |-
@@ -3378,10 +3764,20 @@ spec:
                               items:
                                 description: VolumeMount describes a mounting of a Volume within a container.
                                 properties:
-                                  mountPath:
+                                  bindMountOptions:
                                     description: |-
-                                      Path within the container at which the volume should be mounted.  Must
-                                      not contain ':'.
+                                      bindMountOptions is the list of additional bind mount options to apply when
+                                      mounting this volume into the container. Allowed values are noexec,
+                                      nodev, and nosuid. These are Linux mount options and have no effect on
+                                      Windows nodes.
+                                      This field is not supported with image volumes.
+                                      This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: set
+                                  mountPath:
+                                    description: Path within the container at which the volume should be mounted.
                                     type: string
                                   mountPropagation:
                                     description: |-
@@ -3643,6 +4039,13 @@ spec:
                                       mode, like fsGroup, and the result can be other mode bits set.
                                     format: int32
                                     type: integer
+                                  defaultUser:
+                                    description: |-
+                                      defaultUser is Optional: The owner UID of the created files by default.
+                                      The defaultUser field is only used as a fallback when the item-level user field is unset.
+                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                    format: int64
+                                    type: integer
                                   items:
                                     description: |-
                                       items if unspecified, each key-value pair in the Data field of the referenced
@@ -3675,6 +4078,13 @@ spec:
                                             May not contain the path element '..'.
                                             May not start with the string '..'.
                                           type: string
+                                        user:
+                                          description: |-
+                                            user is Optional: The owner UID of the created file.
+                                            If specified, the item-level user field takes precedence over defaultUser.
+                                            (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                          format: int64
+                                          type: integer
                                       required:
                                         - key
                                         - path
@@ -3758,6 +4168,13 @@ spec:
                                       mode, like fsGroup, and the result can be other mode bits set.
                                     format: int32
                                     type: integer
+                                  defaultUser:
+                                    description: |-
+                                      defaultUser is Optional: The owner UID of the created files by default.
+                                      The defaultUser field is only used as a fallback when the item-level user field is unset.
+                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                    format: int64
+                                    type: integer
                                   items:
                                     description: Items is a list of downward API volume file
                                     items:
@@ -3811,6 +4228,13 @@ spec:
                                             - resource
                                           type: object
                                           x-kubernetes-map-type: atomic
+                                        user:
+                                          description: |-
+                                            user is Optional: The owner UID of the created file.
+                                            If specified, the item-level user field takes precedence over defaultUser.
+                                            (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                          format: int64
+                                          type: integer
                                       required:
                                         - path
                                       type: object
@@ -3829,6 +4253,18 @@ spec:
                                       Must be an empty string (default) or Memory.
                                       More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
                                     type: string
+                                  mode:
+                                    description: |-
+                                      mode specifies the permission bits for the emptyDir directory, in numeric
+                                      notation (e.g., 0755, 01777). Must be a value between 0000 and 01777.
+                                      If not specified, defaults to 0777.
+                                      This might be in conflict with other options that affect the file
+                                      mode, like fsGroup. If fsGroup is specified, the fsGroup permissions
+                                      will override the mode specified here.
+                                      This field has no effect on Windows.
+                                      This field is alpha and requires EmptyDirVolumeMode featuregate to be enabled.
+                                    format: int32
+                                    type: integer
                                   sizeLimit:
                                     anyOf:
                                       - type: integer
@@ -3922,8 +4358,8 @@ spec:
                                               * An existing PVC (PersistentVolumeClaim)
                                               If the provisioner or an external controller can support the specified data source,
                                               it will create a new volume based on the contents of the specified data source.
-                                              When the AnyVolumeDataSource feature gate is enabled, dataSource contents will be copied to dataSourceRef,
-                                              and dataSourceRef contents will be copied to dataSource when dataSourceRef.namespace is not specified.
+                                              dataSource contents will be copied to dataSourceRef, and dataSourceRef contents will be
+                                              copied to dataSource when dataSourceRef.namespace is not specified.
                                               If the namespace is specified, then dataSourceRef will not be copied to dataSource.
                                             properties:
                                               apiGroup:
@@ -3966,7 +4402,6 @@ spec:
                                                 specified.
                                               * While dataSource only allows local objects, dataSourceRef allows objects
                                                 in any namespaces.
-                                              (Beta) Using this field requires the AnyVolumeDataSource feature gate to be enabled.
                                               (Alpha) Using the namespace field of dataSourceRef requires the CrossNamespaceVolumeDataSource feature gate to be enabled.
                                             properties:
                                               apiGroup:
@@ -4313,7 +4748,7 @@ spec:
                                   A failure to resolve or pull the image during pod startup will block containers from starting and may add significant latency. Failures will be retried using normal volume backoff and will be reported on the pod reason and message.
                                   The types of objects that may be mounted by this volume are defined by the container runtime implementation on a host machine and at minimum must include all valid types supported by the container image field.
                                   The OCI object gets mounted in a single directory (spec.containers[*].volumeMounts.mountPath) by merging the manifest layers in the same way as for container images.
-                                  The volume will be mounted read-only (ro) and non-executable files (noexec).
+                                  The volume will be mounted read-only (ro).
                                   Sub path mounts for containers are not supported (spec.containers[*].volumeMounts.subpath) before 1.33.
                                   The field spec.securityContext.fsGroupChangePolicy has no effect on this volume type.
                                 properties:
@@ -4481,8 +4916,7 @@ spec:
                                 description: |-
                                   portworxVolume represents a portworx volume attached and mounted on kubelets host machine.
                                   Deprecated: PortworxVolume is deprecated. All operations for the in-tree portworxVolume type
-                                  are redirected to the pxd.portworx.com CSI driver when the CSIMigrationPortworx feature-gate
-                                  is on.
+                                  are redirected to the pxd.portworx.com CSI driver.
                                 properties:
                                   fsType:
                                     description: |-
@@ -4513,6 +4947,13 @@ spec:
                                       This might be in conflict with other options that affect the file
                                       mode, like fsGroup, and the result can be other mode bits set.
                                     format: int32
+                                    type: integer
+                                  defaultUser:
+                                    description: |-
+                                      defaultUser is Optional: The owner UID of the created files by default.
+                                      The defaultUser field is only used as a fallback when the item-level user field is unset.
+                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                    format: int64
                                     type: integer
                                   sources:
                                     description: |-
@@ -4609,6 +5050,13 @@ spec:
                                                 Mutually-exclusive with name.  The contents of all selected
                                                 ClusterTrustBundles will be unified and deduplicated.
                                               type: string
+                                            user:
+                                              description: |-
+                                                user is Optional: The owner UID of the created file.
+                                                If specified, the item-level user field takes precedence over defaultUser.
+                                                (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                              format: int64
+                                              type: integer
                                           required:
                                             - path
                                           type: object
@@ -4647,6 +5095,13 @@ spec:
                                                       May not contain the path element '..'.
                                                       May not start with the string '..'.
                                                     type: string
+                                                  user:
+                                                    description: |-
+                                                      user is Optional: The owner UID of the created file.
+                                                      If specified, the item-level user field takes precedence over defaultUser.
+                                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                                    format: int64
+                                                    type: integer
                                                 required:
                                                   - key
                                                   - path
@@ -4723,6 +5178,13 @@ spec:
                                                       - resource
                                                     type: object
                                                     x-kubernetes-map-type: atomic
+                                                  user:
+                                                    description: |-
+                                                      user is Optional: The owner UID of the created file.
+                                                      If specified, the item-level user field takes precedence over defaultUser.
+                                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                                    format: int64
+                                                    type: integer
                                                 required:
                                                   - path
                                                 type: object
@@ -4829,6 +5291,13 @@ spec:
                                             signerName:
                                               description: Kubelet's generated CSRs will be addressed to this signer.
                                               type: string
+                                            user:
+                                              description: |-
+                                                user is Optional: The owner UID of the created file.
+                                                If specified, the item-level user field takes precedence over defaultUser.
+                                                (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                              format: int64
+                                              type: integer
                                             userAnnotations:
                                               additionalProperties:
                                                 type: string
@@ -4886,6 +5355,13 @@ spec:
                                                       May not contain the path element '..'.
                                                       May not start with the string '..'.
                                                     type: string
+                                                  user:
+                                                    description: |-
+                                                      user is Optional: The owner UID of the created file.
+                                                      If specified, the item-level user field takes precedence over defaultUser.
+                                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                                    format: int64
+                                                    type: integer
                                                 required:
                                                   - key
                                                   - path
@@ -4931,6 +5407,13 @@ spec:
                                                 path is the path relative to the mount point of the file to project the
                                                 token into.
                                               type: string
+                                            user:
+                                              description: |-
+                                                user is Optional: The owner UID of the created file.
+                                                If specified, the item-level user field takes precedence over defaultUser.
+                                                (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                              format: int64
+                                              type: integer
                                           required:
                                             - path
                                           type: object
@@ -5131,6 +5614,13 @@ spec:
                                       mode, like fsGroup, and the result can be other mode bits set.
                                     format: int32
                                     type: integer
+                                  defaultUser:
+                                    description: |-
+                                      defaultUser is Optional: The owner UID of the created files by default.
+                                      The defaultUser field is only used as a fallback when the item-level user field is unset.
+                                      (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                    format: int64
+                                    type: integer
                                   items:
                                     description: |-
                                       items If unspecified, each key-value pair in the Data field of the referenced
@@ -5163,6 +5653,13 @@ spec:
                                             May not contain the path element '..'.
                                             May not start with the string '..'.
                                           type: string
+                                        user:
+                                          description: |-
+                                            user is Optional: The owner UID of the created file.
+                                            If specified, the item-level user field takes precedence over defaultUser.
+                                            (Alpha) This field requires the AtomicWriteVolumeUserFields feature gate to be enabled.
+                                          format: int64
+                                          type: integer
                                       required:
                                         - key
                                         - path
@@ -6128,6 +6625,565 @@ spec:
                                   x-kubernetes-list-type: atomic
                               type: object
                           type: object
+                        automountServiceAccountToken:
+                          description: AutomountServiceAccountToken allows to enable the automatic mounting of the service account token to the pods of the Control plane deployment
+                          type: boolean
+                        containerSecurityContexts:
+                          description: ContainerSecurityContexts allows to specify the security context for the individual control plane components.
+                          properties:
+                            apiServer:
+                              description: APIServer defines the security context for the kube-apiserver container.
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  type: object
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                  type: object
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                                  type: object
+                              type: object
+                            controllerManager:
+                              description: ControllerManager defines the security context for the kube-controller-manager container.
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  type: object
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                  type: object
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                                  type: object
+                              type: object
+                            scheduler:
+                              description: Scheduler defines the security context for the kube-scheduler container.
+                              properties:
+                                allowPrivilegeEscalation:
+                                  description: |-
+                                    AllowPrivilegeEscalation controls whether a process can gain more
+                                    privileges than its parent process. This bool directly controls if
+                                    the no_new_privs flag will be set on the container process.
+                                    AllowPrivilegeEscalation is true always when the container is:
+                                    1) run as Privileged
+                                    2) has CAP_SYS_ADMIN
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                appArmorProfile:
+                                  description: |-
+                                    appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                                    overrides the pod's appArmorProfile.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile loaded on the node that should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must match the loaded name of the profile.
+                                        Must be set if and only if type is "Localhost".
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of AppArmor profile will be applied.
+                                        Valid options are:
+                                          Localhost - a profile pre-loaded on the node.
+                                          RuntimeDefault - the container runtime's default profile.
+                                          Unconfined - no AppArmor enforcement.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                capabilities:
+                                  description: |-
+                                    The capabilities to add/drop when running containers.
+                                    Defaults to the default set of capabilities granted by the container runtime.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    add:
+                                      description: Added capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                    drop:
+                                      description: Removed capabilities
+                                      items:
+                                        description: Capability represent POSIX capabilities type
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  type: object
+                                privileged:
+                                  description: |-
+                                    Run container in privileged mode.
+                                    Processes in privileged containers are essentially equivalent to root on the host.
+                                    Defaults to false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                procMount:
+                                  description: |-
+                                    procMount denotes the type of proc mount to use for the containers.
+                                    The default value is Default which uses the container runtime defaults for
+                                    readonly paths and masked paths.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: string
+                                readOnlyRootFilesystem:
+                                  description: |-
+                                    Whether this container has a read-only root filesystem.
+                                    Default is false.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  type: boolean
+                                runAsGroup:
+                                  description: |-
+                                    The GID to run the entrypoint of the container process.
+                                    Uses runtime default if unset.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                runAsNonRoot:
+                                  description: |-
+                                    Indicates that the container must run as a non-root user.
+                                    If true, the Kubelet will validate the image at runtime to ensure that it
+                                    does not run as UID 0 (root) and fail to start the container if it does.
+                                    If unset or false, no such validation will be performed.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: boolean
+                                runAsUser:
+                                  description: |-
+                                    The UID to run the entrypoint of the container process.
+                                    Defaults to user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  format: int64
+                                  type: integer
+                                seLinuxOptions:
+                                  description: |-
+                                    The SELinux context to be applied to the container.
+                                    If unspecified, the container runtime will allocate a random SELinux context for each
+                                    container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    level:
+                                      description: Level is SELinux level label that applies to the container.
+                                      type: string
+                                    role:
+                                      description: Role is a SELinux role label that applies to the container.
+                                      type: string
+                                    type:
+                                      description: Type is a SELinux type label that applies to the container.
+                                      type: string
+                                    user:
+                                      description: User is a SELinux user label that applies to the container.
+                                      type: string
+                                  type: object
+                                seccompProfile:
+                                  description: |-
+                                    The seccomp options to use by this container. If seccomp options are
+                                    provided at both the pod & container level, the container options
+                                    override the pod options.
+                                    Note that this field cannot be set when spec.os.name is windows.
+                                  properties:
+                                    localhostProfile:
+                                      description: |-
+                                        localhostProfile indicates a profile defined in a file on the node should be used.
+                                        The profile must be preconfigured on the node to work.
+                                        Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                        Must be set if type is "Localhost". Must NOT be set for any other type.
+                                      type: string
+                                    type:
+                                      description: |-
+                                        type indicates which kind of seccomp profile will be applied.
+                                        Valid options are:
+
+                                        Localhost - a profile defined in a file on the node should be used.
+                                        RuntimeDefault - the container runtime default profile should be used.
+                                        Unconfined - no profile should be applied.
+                                      type: string
+                                  required:
+                                    - type
+                                  type: object
+                                windowsOptions:
+                                  description: |-
+                                    The Windows specific settings applied to all containers.
+                                    If unspecified, the options from the PodSecurityContext will be used.
+                                    If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                    Note that this field cannot be set when spec.os.name is linux.
+                                  properties:
+                                    gmsaCredentialSpec:
+                                      description: |-
+                                        GMSACredentialSpec is where the GMSA admission webhook
+                                        (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                        GMSA credential spec named by the GMSACredentialSpecName field.
+                                      type: string
+                                    gmsaCredentialSpecName:
+                                      description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                      type: string
+                                    hostProcess:
+                                      description: |-
+                                        HostProcess determines if a container should be run as a 'Host Process' container.
+                                        All of a Pod's containers must have the same effective HostProcess value
+                                        (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                        In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                      type: boolean
+                                    runAsUserName:
+                                      description: |-
+                                        The UserName in Windows to run the entrypoint of the container process.
+                                        Defaults to the user specified in image metadata if unspecified.
+                                        May also be set in PodSecurityContext. If set in both SecurityContext and
+                                        PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                      type: string
+                                  type: object
+                              type: object
+                          type: object
                         extraArgs:
                           description: |-
                             ExtraArgs allows adding additional arguments to the Control Plane components,
@@ -6140,6 +7196,10 @@ spec:
                                 type: string
                               type: array
                             controllerManager:
+                              description: |-
+                                ControllerManager extra args. Kamaji sets --bind-address to the IPv6 wildcard "::"
+                                (which also serves IPv4 on a dual-stack pod); on hosts with IPv6 disabled in the
+                                kernel, override it to "0.0.0.0" here.
                               items:
                                 type: string
                               type: array
@@ -6149,6 +7209,10 @@ spec:
                                 type: string
                               type: array
                             scheduler:
+                              description: |-
+                                Scheduler extra args. Kamaji sets --bind-address to the IPv6 wildcard "::"
+                                (which also serves IPv4 on a dual-stack pod); on hosts with IPv6 disabled in the
+                                kernel, override it to "0.0.0.0" here.
                               items:
                                 type: string
                               type: array
@@ -6171,6 +7235,230 @@ spec:
                             labels:
                               additionalProperties:
                                 type: string
+                              type: object
+                          type: object
+                        podSecurityContext:
+                          description: PodSecurityContext allows to specify the security context for the control plane pod.
+                          properties:
+                            appArmorProfile:
+                              description: |-
+                                appArmorProfile is the AppArmor options to use by the containers in this pod.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              properties:
+                                localhostProfile:
+                                  description: |-
+                                    localhostProfile indicates a profile loaded on the node that should be used.
+                                    The profile must be preconfigured on the node to work.
+                                    Must match the loaded name of the profile.
+                                    Must be set if and only if type is "Localhost".
+                                  type: string
+                                type:
+                                  description: |-
+                                    type indicates which kind of AppArmor profile will be applied.
+                                    Valid options are:
+                                      Localhost - a profile pre-loaded on the node.
+                                      RuntimeDefault - the container runtime's default profile.
+                                      Unconfined - no AppArmor enforcement.
+                                  type: string
+                              required:
+                                - type
+                              type: object
+                            fsGroup:
+                              description: |-
+                                A special supplemental group that applies to all containers in a pod.
+                                Some volume types allow the Kubelet to change the ownership of that volume
+                                to be owned by the pod:
+
+                                1. The owning GID will be the FSGroup
+                                2. The setgid bit is set (new files created in the volume will be owned by FSGroup)
+                                3. The permission bits are OR'd with rw-rw----
+
+                                If unset, the Kubelet will not modify the ownership and permissions of any volume.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              format: int64
+                              type: integer
+                            fsGroupChangePolicy:
+                              description: |-
+                                fsGroupChangePolicy defines behavior of changing ownership and permission of the volume
+                                before being exposed inside Pod. This field will only apply to
+                                volume types which support fsGroup based ownership(and permissions).
+                                It will have no effect on ephemeral volume types such as: secret, configmaps
+                                and emptydir.
+                                Valid values are "OnRootMismatch" and "Always". If not specified, "Always" is used.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            runAsGroup:
+                              description: |-
+                                The GID to run the entrypoint of the container process.
+                                Uses runtime default if unset.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence
+                                for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              format: int64
+                              type: integer
+                            runAsNonRoot:
+                              description: |-
+                                Indicates that the container must run as a non-root user.
+                                If true, the Kubelet will validate the image at runtime to ensure that it
+                                does not run as UID 0 (root) and fail to start the container if it does.
+                                If unset or false, no such validation will be performed.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence.
+                              type: boolean
+                            runAsUser:
+                              description: |-
+                                The UID to run the entrypoint of the container process.
+                                Defaults to user specified in image metadata if unspecified.
+                                May also be set in SecurityContext.  If set in both SecurityContext and
+                                PodSecurityContext, the value specified in SecurityContext takes precedence
+                                for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              format: int64
+                              type: integer
+                            seLinuxChangePolicy:
+                              description: |-
+                                seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
+                                It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
+                                Valid values are "MountOption" and "Recursive".
+
+                                "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
+                                This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
+
+                                "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
+                                This requires all Pods that share the same volume to use the same SELinux label.
+                                It is not possible to share the same volume among privileged and unprivileged Pods.
+                                Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
+                                whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
+                                CSIDriver instance. Other volumes are always re-labelled recursively.
+
+                                If not specified, "MountOption" is used.
+
+                                This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
+
+                                All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            seLinuxOptions:
+                              description: |-
+                                The SELinux context to be applied to all containers.
+                                If unspecified, the container runtime will allocate a random SELinux context for each
+                                container.  May also be set in SecurityContext.  If set in
+                                both SecurityContext and PodSecurityContext, the value specified in SecurityContext
+                                takes precedence for that container.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              properties:
+                                level:
+                                  description: Level is SELinux level label that applies to the container.
+                                  type: string
+                                role:
+                                  description: Role is a SELinux role label that applies to the container.
+                                  type: string
+                                type:
+                                  description: Type is a SELinux type label that applies to the container.
+                                  type: string
+                                user:
+                                  description: User is a SELinux user label that applies to the container.
+                                  type: string
+                              type: object
+                            seccompProfile:
+                              description: |-
+                                The seccomp options to use by the containers in this pod.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              properties:
+                                localhostProfile:
+                                  description: |-
+                                    localhostProfile indicates a profile defined in a file on the node should be used.
+                                    The profile must be preconfigured on the node to work.
+                                    Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                                    Must be set if type is "Localhost". Must NOT be set for any other type.
+                                  type: string
+                                type:
+                                  description: |-
+                                    type indicates which kind of seccomp profile will be applied.
+                                    Valid options are:
+
+                                    Localhost - a profile defined in a file on the node should be used.
+                                    RuntimeDefault - the container runtime default profile should be used.
+                                    Unconfined - no profile should be applied.
+                                  type: string
+                              required:
+                                - type
+                              type: object
+                            supplementalGroups:
+                              description: |-
+                                A list of groups applied to the first process run in each container, in
+                                addition to the container's primary GID and fsGroup (if specified).  If
+                                the SupplementalGroupsPolicy feature is enabled, the
+                                supplementalGroupsPolicy field determines whether these are in addition
+                                to or instead of any group memberships defined in the container image.
+                                If unspecified, no additional groups are added, though group memberships
+                                defined in the container image may still be used, depending on the
+                                supplementalGroupsPolicy field.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              items:
+                                format: int64
+                                type: integer
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            supplementalGroupsPolicy:
+                              description: |-
+                                Defines how supplemental groups of the first container processes are calculated.
+                                Valid values are "Merge" and "Strict". If not specified, "Merge" is used.
+                                (Alpha) Using the field requires the SupplementalGroupsPolicy feature gate to be enabled
+                                and the container runtime must implement support for this feature.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              type: string
+                            sysctls:
+                              description: |-
+                                Sysctls hold a list of namespaced sysctls used for the pod. Pods with unsupported
+                                sysctls (by the container runtime) might fail to launch.
+                                Note that this field cannot be set when spec.os.name is windows.
+                              items:
+                                description: Sysctl defines a kernel parameter to be set
+                                properties:
+                                  name:
+                                    description: Name of a property to set
+                                    type: string
+                                  value:
+                                    description: Value of a property to set
+                                    type: string
+                                required:
+                                  - name
+                                  - value
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            windowsOptions:
+                              description: |-
+                                The Windows specific settings applied to all containers.
+                                If unspecified, the options within a container's SecurityContext will be used.
+                                If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                Note that this field cannot be set when spec.os.name is linux.
+                              properties:
+                                gmsaCredentialSpec:
+                                  description: |-
+                                    GMSACredentialSpec is where the GMSA admission webhook
+                                    (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                                    GMSA credential spec named by the GMSACredentialSpecName field.
+                                  type: string
+                                gmsaCredentialSpecName:
+                                  description: GMSACredentialSpecName is the name of the GMSA credential spec to use.
+                                  type: string
+                                hostProcess:
+                                  description: |-
+                                    HostProcess determines if a container should be run as a 'Host Process' container.
+                                    All of a Pod's containers must have the same effective HostProcess value
+                                    (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                                    In addition, if HostProcess is true then HostNetwork must also be set to true.
+                                  type: boolean
+                                runAsUserName:
+                                  description: |-
+                                    The UserName in Windows to run the entrypoint of the container process.
+                                    Defaults to the user specified in image metadata if unspecified.
+                                    May also be set in PodSecurityContext. If set in both SecurityContext and
+                                    PodSecurityContext, the value specified in SecurityContext takes precedence.
+                                  type: string
                               type: object
                           type: object
                         probes:
@@ -6405,7 +7693,7 @@ spec:
                                   type: integer
                               type: object
                             readiness:
-                              description: Readiness defines default parameters for the readiness probe of kube-apiserver.
+                              description: Readiness defines default parameters for readiness probes of all Control Plane components.
                               properties:
                                 failureThreshold:
                                   description: FailureThreshold is the consecutive failure count required to consider the probe failed.
@@ -7383,6 +8671,46 @@ spec:
                               - targetPort
                             type: object
                           type: array
+                        allocateLoadBalancerNodePorts:
+                          description: |-
+                            AllocateLoadBalancerNodePorts defines whether NodePorts are automatically allocated
+                            for the Service when serviceType is LoadBalancer. It maps directly to the Service's
+                            spec.allocateLoadBalancerNodePorts. When nil, the Kubernetes default (true) applies,
+                            preserving existing behaviour. Set to false to expose the Tenant Control Plane only
+                            via the LoadBalancer IP and ClusterIP, without a per-node NodePort. This field is only
+                            valid when serviceType is LoadBalancer; setting it with any other serviceType is
+                            rejected by validation.
+                          type: boolean
+                        ipFamilies:
+                          description: |-
+                            IPFamilies maps directly to the generated Service's spec.ipFamilies. Order is
+                            significant: the first entry is the primary family. When empty, the management
+                            cluster default applies. A Service's IP families cannot be reduced or swapped
+                            after creation (only a single-stack Service may be upgraded to dual-stack);
+                            forbidden transitions are rejected by the API server and surface as a reconcile error.
+                          items:
+                            description: |-
+                              IPFamily represents the IP Family (IPv4 or IPv6). This type is used
+                              to express the family of an IP expressed by a type (e.g. service.spec.ipFamilies).
+                            enum:
+                              - IPv4
+                              - IPv6
+                            type: string
+                          maxItems: 2
+                          type: array
+                        ipFamilyPolicy:
+                          description: |-
+                            IPFamilyPolicy maps directly to the generated Service's spec.ipFamilyPolicy.
+                            When nil, the management cluster default applies, preserving existing behaviour.
+                            PreferDualStack and RequireDualStack describe a dual-stack Service and expect
+                            two entries in ipFamilies; a RequireDualStack policy that cannot be satisfied
+                            (for example with a single family) is rejected by the API server and surfaces
+                            as a reconcile error.
+                          enum:
+                            - SingleStack
+                            - PreferDualStack
+                            - RequireDualStack
+                          type: string
                         serviceType:
                           description: ServiceType allows specifying how to expose the Tenant Control Plane.
                           enum:
@@ -7568,9 +8896,13 @@ spec:
                               - InternalDNS
                               - ExternalDNS
                             type: string
+                          maxItems: 5
                           minItems: 1
                           type: array
-                          x-kubernetes-list-type: set
+                          x-kubernetes-list-type: atomic
+                          x-kubernetes-validations:
+                            - message: preferredAddressTypes entries must be unique
+                              rule: self.all(x, self.exists_one(y, y == x))
                       type: object
                     version:
                       description: Kubernetes Version for the tenant control plane
@@ -7587,6 +8919,22 @@ spec:
                         Address where API server will be exposed.
                         In the case of LoadBalancer Service, this can be empty in order to use the exposed IP provided by the cloud controller manager.
                       type: string
+                    advertiseAddress:
+                      description: |-
+                        AdvertiseAddress is the IP address advertised to tenant-side consumers (workers, konnectivity).
+                        It is passed to the API server's --advertise-address flag and used for the kubeadm
+                        ControlPlaneEndpoint, cluster-info, and admin.conf; when set, the management address is used
+                        for CAPI and status reporting. Both addresses are included in the API server certificate SANs.
+
+                        This must be an IP address, not a DNS name: --advertise-address and the in-tenant "kubernetes"
+                        Service endpoints only accept IPs. To expose the control plane under a hostname, point a DNS
+                        record at a stable VIP and add the hostname to networkProfile.certSANs; for L7/hostname exposure
+                        see spec.controlPlane.ingress / spec.controlPlane.gateway (mind the TLS-passthrough caveats for
+                        client-certificate authentication).
+                      type: string
+                      x-kubernetes-validations:
+                        - message: advertiseAddress must be a valid IP address
+                          rule: self == '' || isIP(self)
                     allowAddressAsExternalIP:
                       description: |-
                         AllowAddressAsExternalIP will include tenantControlPlane.Spec.NetworkProfile.Address in the section of
@@ -7644,11 +8992,28 @@ spec:
                           rule: self.all(r, isCIDR(r))
                     podCidr:
                       default: 10.244.0.0/16
-                      description: 'CIDR for Kubernetes Pods: if empty, defaulted to 10.244.0.0/16.'
+                      description: |-
+                        CIDR for Kubernetes Pods: if empty, defaulted to 10.244.0.0/16.
+                        Deprecated: use PodCIDRs instead.
                       type: string
                       x-kubernetes-validations:
                         - message: podCidr must be empty or a valid CIDR
                           rule: self == '' || isCIDR(self)
+                    podCidrs:
+                      description: |-
+                        PodCIDRs defines one or more CIDRs for Kubernetes Pods.
+                        Supports single-stack and dual-stack configurations.
+                        When specified, this field takes precedence over PodCIDR.
+                      items:
+                        type: string
+                      maxItems: 2
+                      minItems: 1
+                      type: array
+                      x-kubernetes-validations:
+                        - message: all podCidrs entries must be valid CIDRs
+                          rule: self.all(x, isCIDR(x))
+                        - message: podCidrs must not contain two CIDRs of the same IP family
+                          rule: size(self) < 2 || cidr(self[0]).ip().family() != cidr(self[1]).ip().family()
                     port:
                       default: 6443
                       description: Port where API server will be exposed
@@ -7656,15 +9021,29 @@ spec:
                       type: integer
                     serviceCidr:
                       default: 10.96.0.0/16
-                      description: 'CIDR for Kubernetes Services: if empty, defaulted to 10.96.0.0/16.'
+                      description: |-
+                        CIDR for Kubernetes Services: if empty, defaulted to 10.96.0.0/16.
+                        Deprecated: use ServiceCIDRs instead.
                       type: string
                       x-kubernetes-validations:
                         - message: serviceCidr must be empty or a valid CIDR
                           rule: self == '' || isCIDR(self)
+                    serviceCidrs:
+                      description: |-
+                        Service CIDRs for Kubernetes Services.
+                        Supports single-stack and dual-stack configurations.
+                        When specified, this field takes precedence over ServiceCIDR.
+                      items:
+                        type: string
+                      maxItems: 2
+                      minItems: 1
+                      type: array
+                      x-kubernetes-validations:
+                        - message: all serviceCidrs entries must be valid CIDRs
+                          rule: self.all(x, isCIDR(x))
+                        - message: serviceCidrs must not contain two CIDRs of the same IP family
+                          rule: size(self) < 2 || cidr(self[0]).ip().family() != cidr(self[1]).ip().family()
                   type: object
-                  x-kubernetes-validations:
-                    - message: all DNS service IPs must be part of the Service CIDR
-                      rule: '!has(self.dnsServiceIPs) || self.dnsServiceIPs.all(r, cidr(self.serviceCidr).containsIP(r))'
                 writePermissions:
                   description: |-
                     WritePermissions allows to select which operations (create, delete, update) must be blocked:
@@ -7696,8 +9075,14 @@ spec:
                   rule: '!has(self.networkProfile.loadBalancerSourceRanges) || (size(self.networkProfile.loadBalancerSourceRanges) == 0 || self.controlPlane.service.serviceType == ''LoadBalancer'')'
                 - message: LoadBalancerClass is supported only with LoadBalancer service type
                   rule: '!has(self.networkProfile.loadBalancerClass) || self.controlPlane.service.serviceType == ''LoadBalancer'''
+                - message: allocateLoadBalancerNodePorts is supported only with LoadBalancer service type
+                  rule: '!has(self.controlPlane.service.allocateLoadBalancerNodePorts) || self.controlPlane.service.serviceType == ''LoadBalancer'''
                 - message: LoadBalancerClass cannot be set or unset at runtime
                   rule: self.controlPlane.service.serviceType != 'LoadBalancer' || (oldSelf.controlPlane.service.serviceType != 'LoadBalancer' && self.controlPlane.service.serviceType == 'LoadBalancer') || has(self.networkProfile.loadBalancerClass) == has(oldSelf.networkProfile.loadBalancerClass)
+                - message: ipFamilies must contain at most one entry when ipFamilyPolicy is SingleStack
+                  rule: '!has(self.controlPlane.service.ipFamilyPolicy) || self.controlPlane.service.ipFamilyPolicy != ''SingleStack'' || !has(self.controlPlane.service.ipFamilies) || size(self.controlPlane.service.ipFamilies) <= 1'
+                - message: ipFamilies entries must be unique
+                  rule: '!has(self.controlPlane.service.ipFamilies) || size(self.controlPlane.service.ipFamilies) < 2 || self.controlPlane.service.ipFamilies[0] != self.controlPlane.service.ipFamilies[1]'
             status:
               description: TenantControlPlaneStatus defines the observed state of TenantControlPlane.
               properties:
@@ -7868,7 +9253,7 @@ spec:
 
                                       * The Route refers to a nonexistent parent.
                                       * The Route is of a type that the controller does not support.
-                                      * The Route is in a namespace the controller does not have access to.
+                                      * The Route is in a namespace to which the controller does not have access.
 
                                       <gateway:util:excludeFromCRD>
 
@@ -8531,10 +9916,9 @@ spec:
                               type:
                                 description: Type of deployment condition.
                                 type: string
-                            required:
-                              - status
-                              - type
                             type: object
+                            required:
+                              - type
                           type: array
                           x-kubernetes-list-map-keys:
                             - type
@@ -8694,7 +10078,7 @@ spec:
 
                                   * The Route refers to a nonexistent parent.
                                   * The Route is of a type that the controller does not support.
-                                  * The Route is in a namespace the controller does not have access to.
+                                  * The Route is in a namespace to which the controller does not have access.
 
                                   <gateway:util:excludeFromCRD>
 

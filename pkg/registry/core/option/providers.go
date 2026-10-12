@@ -7,16 +7,20 @@ package option
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 
+	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -34,9 +38,15 @@ const (
 // it.
 type providerFunc func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error)
 
+// paramProviderFunc computes the items for a source whose contents depend on a
+// choice already made elsewhere in the form — the machines of one import
+// source, say, which are meaningless until that source is picked.
+type paramProviderFunc func(ctx context.Context, namespace, arg string) ([]corev1alpha1.OptionItem, error)
+
 var (
 	gvrNodes        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
 	gvrPVCs         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrDataVolumes  = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 	gvrKubevirts    = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "kubevirts"}
 	gvrInstancetype = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterinstancetypes"}
 	gvrPreference   = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterpreferences"}
@@ -47,6 +57,8 @@ var (
 	gvrVMDisks      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "vmdisks"}
 	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
 	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
+	gvrImportSource = schema.GroupVersionResource{Group: "forklift.cozystack.io", Version: "v1alpha1", Resource: "vmimportsources"}
+	gvrConfigMaps   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
 	gvrAppDefs      = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 )
 
@@ -67,6 +79,77 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 		"plan":            nameListNamespacedProvider(dyn, gvrPlans),
 		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
 		"appkind":         appKindProvider(dyn),
+		// Source connections a VMImportTask can reference. Namespaced, so a
+		// tenant only ever sees their own.
+		"vmimportsource": nameListNamespacedProvider(dyn, gvrImportSource),
+	}
+}
+
+// DefaultParamProviders returns the sources that need an argument. They are
+// addressed as `<name>.<argument>` and never appear in a List, because without
+// the argument they describe nothing.
+func DefaultParamProviders(dyn dynamic.Interface) map[string]paramProviderFunc {
+	return map[string]paramProviderFunc{
+		"vmimportvm": importVMProvider(dyn),
+	}
+}
+
+// importVMProvider offers the machines of one import source.
+//
+// The list is not read from vCenter here. This process has no route to a
+// provider's inventory and should not grow one — that would put the source's
+// credentials in a second component. Instead the migration controller, which
+// already holds an inventory client, publishes what it found into a ConfigMap
+// owned by the source, and this reads it back as an ordinary object.
+//
+// An absent or empty ConfigMap yields no items rather than an error: a source
+// that was just created has not published yet, and an empty dropdown says that
+// more usefully than a failure does.
+func importVMProvider(dyn dynamic.Interface) paramProviderFunc {
+	return func(ctx context.Context, namespace, source string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" || source == "" {
+			return nil, nil
+		}
+		cm, err := dyn.Resource(gvrConfigMaps).Namespace(namespace).
+			Get(ctx, migrationv1alpha1.InventoryConfigMapName(source), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+
+		raw, found, err := unstructured.NestedString(cm.Object, "data", migrationv1alpha1.InventoryVMsKey)
+		if err != nil || !found || raw == "" {
+			return nil, nil
+		}
+		var vms []migrationv1alpha1.PublishedVM
+		if err := json.Unmarshal([]byte(raw), &vms); err != nil {
+			return nil, fmt.Errorf("decoding the published VM list for source %q: %w", source, err)
+		}
+
+		items := make([]corev1alpha1.OptionItem, 0, len(vms))
+		for _, vm := range vms {
+			if vm.ID == "" {
+				continue
+			}
+			// The name is what a person recognises and the reference is what the
+			// task records, so the label carries both. Two machines can share a
+			// name in different folders, and the reference is also the only
+			// thing a saved task shows afterwards -- a list of bare names would
+			// be ambiguous to pick from and impossible to check against.
+			label := vm.Name
+			if label != "" {
+				label = fmt.Sprintf("%s (%s)", vm.Name, vm.ID)
+			}
+			items = append(items, corev1alpha1.OptionItem{
+				Value:       vm.ID,
+				Label:       label,
+				Description: vm.Path,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+		return items, nil
 	}
 }
 
@@ -237,7 +320,7 @@ func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
 	for _, group := range []string{"pciHostDevices", "mediatedDevices"} {
 		devices, _, _ := unstructured.NestedSlice(kv.Object, "spec", "configuration", "permittedHostDevices", group)
 		for _, d := range devices {
-			dm, ok := d.(map[string]interface{})
+			dm, ok := d.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -251,16 +334,34 @@ func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
 
 // imageProvider lists the default image PVCs in cozy-public and strips the
 // vm-default-images- prefix to get the catalog name used by the vm-disk chart.
+//
+// A golden whose DataVolume is in phase Failed is left out: CDI never
+// populates it, so a disk cloned from it never becomes usable. One still
+// importing stays, because CDI holds a clone until the source is populated.
 func imageProvider(dyn dynamic.Interface) providerFunc {
 	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
 		list, err := dyn.Resource(gvrPVCs).Namespace(publicImagesNamespace).List(ctx, listOpts())
 		if err != nil {
 			return nil, err
 		}
+		// The filter is advisory: when the DataVolumes cannot be read the
+		// goldens go out unfiltered, because the Option list drops a source
+		// whose provider errors and an empty picker is the worse outcome.
+		failed := map[string]bool{}
+		dvs, err := dyn.Resource(gvrDataVolumes).Namespace(publicImagesNamespace).List(ctx, listOpts())
+		if err != nil {
+			logProviderError("image", err)
+		} else {
+			for i := range dvs.Items {
+				if phase, _, _ := unstructured.NestedString(dvs.Items[i].Object, "status", "phase"); phase == "Failed" {
+					failed[dvs.Items[i].GetName()] = true
+				}
+			}
+		}
 		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
 		for i := range list.Items {
 			name := list.Items[i].GetName()
-			if !strings.HasPrefix(name, imagePVCPrefix) {
+			if !strings.HasPrefix(name, imagePVCPrefix) || failed[name] {
 				continue
 			}
 			items = append(items, corev1alpha1.OptionItem{Value: strings.TrimPrefix(name, imagePVCPrefix)})
@@ -289,14 +390,14 @@ func storagePoolProvider(dyn dynamic.Interface) providerFunc {
 			if !ok {
 				continue
 			}
-			volume, ok := values["volume"].(map[string]interface{})
+			volume, ok := values["volume"].(map[string]any)
 			if !ok {
 				continue
 			}
 			collectPoolKeys(volume["pools"], pools)
-			if zones, ok := volume["zones"].(map[string]interface{}); ok {
+			if zones, ok := volume["zones"].(map[string]any); ok {
 				for _, z := range zones {
-					if zm, ok := z.(map[string]interface{}); ok {
+					if zm, ok := z.(map[string]any); ok {
 						collectPoolKeys(zm["pools"], pools)
 					}
 				}
@@ -311,8 +412,8 @@ func storagePoolProvider(dyn dynamic.Interface) providerFunc {
 	}
 }
 
-func collectPoolKeys(v interface{}, out map[string]struct{}) {
-	m, ok := v.(map[string]interface{})
+func collectPoolKeys(v any, out map[string]struct{}) {
+	m, ok := v.(map[string]any)
 	if !ok {
 		return
 	}

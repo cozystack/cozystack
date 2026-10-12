@@ -1,0 +1,105 @@
+{{- /*
+  tracingStorages is empty by default, so tracing is off out of the box and no
+  VTCluster/VTSingle is provisioned. Unlike logsStorages, an absent backend
+  drops no data here: nothing produces spans unless a backend is configured. The
+  trace collector renders only once a backend exists and gates on a non-empty
+  tracingStorages rather than failing on empty (see collector.yaml), so "no
+  backend" stays a clean off-state — there is deliberately no fail-on-empty
+  guard here (contrast the logsStorages #3181 guard, which must fire because
+  fluent-bit ships logs unconditionally, so an absent log store drops data).
+
+  Shared-central topology (monitoring.tracingCentral) moves only the collector's
+  export. The entries still listed here stay rendered: the switch belongs to the
+  parent tenant and the stores to this one, and a VTSingle takes its PVC with it.
+
+  Every store is disk-bounded, not only age-bounded, so a full PVC cannot
+  block ingest: without a byte cap it drops its oldest day once its filesystem
+  is 80% full. VictoriaTraces refuses to start with both limits, so only one is
+  rendered. It always keeps the last two days, which a flood faster than that
+  can still push past the limit.
+
+  The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
+  Flux evaluates them only against CRs present in the release inventory, so with
+  nothing rendered they are inert.
+*/ -}}
+{{- include "monitoring.tracingStorages.validate" . }}
+{{- range .Values.tracingStorages }}
+{{- $mode := .mode | default "cluster" }}
+---
+{{- if eq $mode "single" }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTSingle
+metadata:
+  name: {{ .name | quote }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  retentionPeriod: {{ .retentionPeriod | quote }}
+  {{- with .retentionDiskUsageBytes }}
+  retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+  {{- else }}
+  extraArgs:
+    retention.maxDiskUsagePercent: "80"
+  {{- end }}
+  # Stamped on the storage PVC so the monitoring post-delete cleanup hook can
+  # select it by this label (same release-scoped cleanup as logs/metrics).
+  storageMetadata:
+    labels:
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  storage:
+    {{- with .storageClassName }}
+    storageClassName: {{ . }}
+    {{- end }}
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: {{ .storage }}
+{{- else }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTCluster
+metadata:
+  name: {{ .name | quote }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  insert:
+    replicaCount: 2
+    resources: {}
+  select:
+    replicaCount: 2
+    resources: {}
+  storage:
+    retentionPeriod: {{ .retentionPeriod | quote }}
+    {{- with .retentionDiskUsageBytes }}
+    retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+    {{- else }}
+    extraArgs:
+      retention.maxDiskUsagePercent: "80"
+    {{- end }}
+    replicaCount: 2
+    resources: {}
+    storage:
+      volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs; managedMetadata is not applied to PVCs. The monitoring
+          # post-delete cleanup hook selects PVCs by this label to stay
+          # release-scoped (mirrors vlogs/vmcluster).
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .storage }}
+{{- end }}
+{{- end }}

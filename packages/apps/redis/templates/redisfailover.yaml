@@ -1,3 +1,19 @@
+{{- /* One image for the data pods and the Sentinels, resolved once so they cannot drift apart. */}}
+{{- $redisImage := printf "redis:%s" (include "redis.versionMap" $) }}
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
+{{- /*
+  A Sentinel holds only its configuration and failover state, so the Redis
+  sizing over-provisions it. An empty sentinel block still falls back to the
+  Redis sizing, so existing instances render unchanged on upgrade.
+  An empty sentinel.resources map counts as unset, mirroring how an empty
+  top-level resources falls back to resourcesPreset.
+*/}}
+{{- $sentinel := .Values.sentinel | default dict -}}
+{{- $sentinelPreset := $sentinel.resourcesPreset | default .Values.resourcesPreset -}}
+{{- $sentinelResources := .Values.resources -}}
+{{- if or $sentinel.resources $sentinel.resourcesPreset -}}
+{{-   $sentinelResources = $sentinel.resources | default dict -}}
+{{- end -}}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
   {{- $password := randAlphaNum 32 | b64enc }}
@@ -22,12 +38,37 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    # The freshworks-oss operator reconciles only RedisFailovers whose
+    # operator-group label matches its OPERATOR_GROUP_ID (see
+    # packages/system/redis-operator/values.yaml); without it the CR is
+    # silently ignored. Keep both sides in sync.
+    redis-failover.freshworks.com/operator-group: cozystack
 spec:
+  {{- if $tlsEnabled }}
+  tls:
+    enabled: true
+    authClients: {{ include "redis.tls.authClients" . | quote }}
+    # When TLS is on the operator always publishes an Opaque Secret holding just
+    # ca.crt; this only chooses its name, which otherwise defaults to
+    # "<tls-secret>-ca" — a name that reads as though it belonged to the leaf.
+    # Nothing in the tenant read path consumes it: the trust anchor reaches the
+    # tenant as the <release>.tenant-ca projection declared in
+    # templates/tenant-projection.yaml, sourced from the chart's own CA Secret.
+    caCertSecretName: {{ .Release.Name }}.ca-cert
+    certificateSecret:
+      secretName: {{ .Release.Name }}.tls
+  {{- end }}
   sentinel:
+    # Sentinels run the same image as the data pods. Pinned explicitly because
+    # the operator's compiled-in default (redis:7.2.4-alpine in freshworks-oss
+    # v3.3.5) would otherwise move them on an operator upgrade. Unlike the data
+    # pods they keep no RDB, only a sentinel.conf the init container rewrites
+    # on every start, so a chart rollback to an older engine is safe here.
+    image: {{ $redisImage | quote }}
     replicas: 3
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $sentinelPreset $sentinelResources $) | nindent 6 }}
   redis:
-    image: "redis:{{ include "redis.versionMap" $ }}"
+    image: {{ $redisImage | quote }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
     {{- with .Values.size }}
@@ -50,7 +91,7 @@ spec:
     {{- end }}
     exporter:
       enabled: true
-      image: oliver006/redis_exporter:v1.55.0-alpine
+      image: oliver006/redis_exporter:v1.55.0@sha256:d82625bda93823fb40de881ffbb45b65aca772a39c30141387f92314c258da5d
       args:
         - --web.telemetry-path
         - /metrics
@@ -63,6 +104,22 @@ spec:
       {{- if not .Values.size }}
       - appendonly no
       - save ""
+      {{- end }}
+      {{- /* A master with `replicas` pods has replicas-1 replicas, so a requirement of
+             `replicas` or more can never be met and the master would refuse every write. */}}
+      {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (ge (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}
+      {{- fail (printf "minReplicasToWrite (%d) must be below replicas (%d): the master has replicas-1 replicas, so the master would refuse every write" (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}
+      {{- end }}
+      {{- if not (kindIs "invalid" .Values.minReplicasToWrite) }}
+      - min-replicas-to-write {{ .Values.minReplicasToWrite | int }}
+      {{- end }}
+      {{- /* Redis treats 0 in either directive as "check disabled" (redis.conf), so a lag of 0
+             next to a replica requirement would silently turn the protection off. */}}
+      {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (gt (.Values.minReplicasToWrite | int) 0) (not (kindIs "invalid" .Values.minReplicasMaxLag)) (le (.Values.minReplicasMaxLag | int) 0) }}
+      {{- fail "minReplicasMaxLag must be at least 1 when minReplicasToWrite is set: Redis treats 0 as disabling the check" }}
+      {{- end }}
+      {{- if not (kindIs "invalid" .Values.minReplicasMaxLag) }}
+      - min-replicas-max-lag {{ .Values.minReplicasMaxLag | int }}
       {{- end }}
   {{- if .Values.authEnabled }}
   auth:
@@ -93,7 +150,7 @@ metadata:
   name: {{ $.Release.Name }}-sentinel
   namespace: {{ $.Release.Namespace }}
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ $sentinelPreset | quote }}
 spec:
   minReplicas: 2
   replicas: 3

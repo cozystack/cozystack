@@ -1,0 +1,41 @@
+diff --git a/build.gradle b/build.gradle
+index 75b7f64..d2dfec9 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -37,6 +37,9 @@ configurations {
+ }
+ 
+ def protobufVersion = '31.1'
++// protoc runs on the build host, so fetch the build it can execute rather
++// than always the x86_64 one.
++def protocPlatform = System.getProperty('os.arch') in ['aarch64', 'arm64'] ? 'linux-aarch_64' : 'linux-x86_64'
+ def protoc = file("${projectDir}/tools/protoc-" + protobufVersion + '/bin/protoc')
+ def logbackConfig = "logback.xml"
+ def jvmOpts = ["-Xms32M"]
+@@ -577,7 +580,7 @@ tasks.register('buildTestCommands', Exec) {
+ tasks.register('unzipProtoc', Copy) {
+     dependsOn(downloadProtoc)
+ 
+-    def zipFile = file("tools/protoc-" + protobufVersion + '-linux-x86_64.zip')
++    def zipFile = file("tools/protoc-" + protobufVersion + '-' + protocPlatform + '.zip')
+     def outputDir = file("tools/protoc-" + protobufVersion)
+ 
+     from zipTree(zipFile)
+@@ -591,7 +594,7 @@ tasks.register('unzipProtoc', Copy) {
+ 
+ tasks.register('downloadProtoc') {
+     outputs.dir "tools"
+-    def protozip = new File("${projectDir}/tools/protoc-" + protobufVersion + '-linux-x86_64.zip')
++    def protozip = new File("${projectDir}/tools/protoc-" + protobufVersion + '-' + protocPlatform + '.zip')
+     outputs.file protozip
+ 
+     doLast {
+@@ -599,7 +602,7 @@ tasks.register('downloadProtoc') {
+             mkdir "tools"
+             println "downloading protoc..."
+             new URL('https://github.com/google/protobuf/releases/download/v'
+-                    + protobufVersion + '/protoc-' + protobufVersion + '-linux-x86_64.zip')
++                    + protobufVersion + '/protoc-' + protobufVersion + '-' + protocPlatform + '.zip')
+                     .withInputStream { i -> protozip.withOutputStream { it << i } }
+         }
+     }

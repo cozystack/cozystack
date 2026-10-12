@@ -22,7 +22,8 @@ done
 
 log_substep "Deleting RestoreJobs..."
 kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io \
-    "$RESTOREJOB_TOCOPY_NAME" "$RESTOREJOB_PITR_NAME" "$RESTOREJOB_UNREACHABLE_NAME" --ignore-not-found
+    "$RESTOREJOB_TOCOPY_NAME" "$RESTOREJOB_PITR_NAME" "$RESTOREJOB_UNREACHABLE_NAME" \
+    "$RESTOREJOB_INPLACE_NAME" --ignore-not-found
 
 log_substep "Deleting Plan + BackupJob + derived Backup artefacts..."
 kubectl -n "$NAMESPACE" delete plan.backups.cozystack.io "$PLAN_NAME" --ignore-not-found

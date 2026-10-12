@@ -115,45 +115,6 @@ must exist on the pod and mount at /etc/kubernetes/kubeconfig.
 {{- end }}
 
 {{/*
-Effective worker node groups.
-
-The default "md0" group is applied here, in the template, only when the user
-supplies no nodeGroups at all. Keeping the default out of values.yaml makes
-user-supplied nodeGroups authoritative: a Helm values merge would otherwise
-re-add a baked-in default md0 on top of the user's groups, and because
-Kubernetes strips null values the default could never be removed. With the
-default applied only when the map is empty, users can freely choose their own
-node groups (and omit md0).
-
-The default carries `minReplicas: 0`, which now propagates through to
-`MachineDeployment.spec.replicas: 0` (see the templates/cluster.yaml comment
-next to that field). Consequence: an empty-`nodeGroups` install provisions
-NO workers until either the cluster-autoscaler responds to an unschedulable
-Pod or an operator explicitly scales the group up. If the operator plans to
-enable the ingress-nginx addon, either supply an explicit nodeGroup with
-`roles: [ingress-nginx]` and `minReplicas >= 1`, or accept that the
-autoscaler will bring the default md0 up in response to the ingress-nginx
-controller Pods becoming Pending on install.
-*/}}
-{{- define "kubernetes.nodeGroups" -}}
-{{- if .Values.nodeGroups -}}
-{{ toYaml .Values.nodeGroups }}
-{{- else -}}
-md0:
-  minReplicas: 0
-  maxReplicas: 10
-  instanceType: "u1.medium"
-  diskSize: 20Gi
-  storageClass: ""
-  roles:
-  - ingress-nginx
-  resources: {}
-  gpus: []
-  kubelet: {}
-{{- end -}}
-{{- end }}
-
-{{/*
 OIDC clientId for the per-cluster Keycloak public client (mode: System).
 
 Namespaced by Release.Namespace so the identifier is globally unique within
@@ -185,7 +146,7 @@ Issuer URL for `mode: System`. Resolves to the platform Keycloak realm
 cozystack-basics.
 */}}
 {{- define "kubernetes.oidc.systemIssuerURL" -}}
-{{- printf "https://keycloak.%s/realms/cozy" (dig "root-host" "" (.Values._cluster | default dict)) }}
+{{- printf "https://keycloak.%s/realms/%s" (dig "root-host" "" (.Values._cluster | default dict)) (dig "oidc-realm-name" "cozy" (.Values._cluster | default dict) | toString) }}
 {{- end }}
 
 {{/*
@@ -226,3 +187,123 @@ never boots.
 {{- $ns := .Release.Namespace -}}
 {{- printf "has(claims.groups) && dyn(claims.groups).exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
 {{- end }}
+
+{{- /*
+Validates and returns a duration destined for a consumer that does not reject
+a bad value: the cluster-autoscaler parses its annotation with
+time.ParseDuration and silently falls back to its built-in default on a value
+it cannot parse, and the CAPI webhook does not validate unhealthyConditions
+timeouts at all, so a zero or negative one applies and remediates a Machine the
+moment its condition flips. The values schema types these fields as strings and
+stops there, which lets "30" and "-5m" reach the template. The accepted shape
+is narrower than Go's duration grammar on purpose, because that grammar also
+admits a value large enough to overflow the parser -- the silent fallback again
+-- and a fraction small enough to round to zero. The first segment must be
+positive; later segments may be zero, so the canonical rendering of a duration
+("20m0s", "1h0m0s" -- what metav1.Duration serializes to) round-trips. Every
+string this admits parses to a positive duration.
+*/ -}}
+{{- define "kubernetes.positiveDuration" -}}
+{{- $value := toString .value -}}
+{{- if not (regexMatch "^[1-9][0-9]{0,4}[smh]([0-9]{1,5}[smh]){0,2}$" $value) -}}
+{{-   fail (printf "%s must be a whole number of s, m or h (e.g. 30m, 1h30m), got %q" .field $value) -}}
+{{- end -}}
+{{- $value -}}
+{{- end -}}
+
+{{/*
+  The two kube-apiserver flags the tenant control plane owns that have a
+  KamajiControlPlane field it renders them from, keyed to that field.
+  cluster.yaml moves an --flag=value entry for either into the field.
+*/}}
+{{- define "kubernetes.apiServer.movedArgFields" -}}
+{{- dict
+      "--enable-admission-plugins" "controlPlane.apiServer.admissionControllers"
+      "--kubelet-preferred-address-types" "controlPlane.kubelet.preferredAddressTypes"
+    | toJson }}
+{{- end }}
+
+{{/*
+  controlPlane.apiServer.extraArgs as the KamajiControlPlane carries it, as a
+  JSON list: every entry except an --flag=value entry that cluster.yaml moves
+  into its field. Every writer of spec.apiServer.extraArgs reads this.
+*/}}
+{{- define "kubernetes.apiServer.keptExtraArgs" -}}
+{{- $moved := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $kept := list }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   if not (and (hasKey $moved $flag) (contains "=" (toString $arg))) }}
+{{-     $kept = append $kept $arg }}
+{{-   end }}
+{{- end }}
+{{- toJson $kept }}
+{{- end }}
+{{- /*
+  Nameservers are addresses, so each entry is checked to be one.
+
+  Here the value reaches no shell: this chart writes it into
+  ProxmoxCluster.spec.dnsServers through toYaml. It is checked all the same, so
+  that a hostname or a typo is refused at the same place in both charts rather
+  than accepted here and rejected in the pool chart, where the same list is
+  written into the reconcile Job's unquoted heredoc and has to be an address.
+
+  IPv6 is matched on its character set rather than its full grammar; the
+  apiserver rejects a malformed address anyway.
+*/ -}}
+{{- define "kubernetes.assertDnsServersAreAddresses" -}}
+{{- $v4 := `^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$` -}}
+{{- range $i, $e := (default (list) .Values.proxmox.dnsServers) -}}
+{{- $s := $e | toString -}}
+{{- if not (or (regexMatch $v4 $s) (and (contains ":" $s) (regexMatch `^[0-9A-Fa-f:]+$` $s))) -}}
+{{- fail (printf "proxmox.dnsServers[%d] is %q: entries must be IPv4 or IPv6 addresses. Talos takes addresses here, and this list is written into a shell heredoc, so anything else is both invalid for Talos and unsafe to interpolate." $i $s) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  substrate decides which infrastructure provider this cluster's Cluster object
+  points at, and it is safe to choose only once. Switching it on a live cluster
+  renders no KubevirtCluster, no kccm, no kubevirt-csi controller and no
+  in-tenant -csi HelmRelease — so Flux
+  uninstalls the CSI driver behind every PVC the tenant already has, and the
+  same render adds a ProxmoxCluster and turns the apiserver Service into a
+  LoadBalancer. CAPI does not stop it: its Cluster webhook forbids removing
+  spec.infrastructureRef but admits a change of kind. The `## @immutable` marker
+  on the value is dashboard-only, which is why this reads the live object.
+
+  Inert offline, like the other lookup guards here: with no apiserver the lookup
+  is empty and the render proceeds, so `helm template` and the unit tests are
+  unaffected and a first install has nothing to compare against.
+*/ -}}
+{{- define "kubernetes.assertSubstrateUnchanged" -}}
+{{- $isProxmox := eq (.Values.substrate | default "kubevirt") "proxmox" -}}
+{{- $wantKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox -}}
+{{- $live := lookup "cluster.x-k8s.io/v1beta1" "Cluster" .Release.Namespace .Release.Name -}}
+{{- if $live -}}
+{{- $liveKind := dig "spec" "infrastructureRef" "kind" "" $live -}}
+{{- if and $liveKind (ne $liveKind $wantKind) -}}
+{{- fail (printf "kubernetes: cluster %q already runs on %s and substrate is now %q, which renders a %s. Switching the substrate of a live cluster removes the cloud-controller-manager, the CSI controller and the in-tenant CSI HelmRelease, so Flux uninstalls the driver behind every existing PVC. Create a new cluster on the other substrate and migrate the workloads instead." .Release.Name $liveKind (.Values.substrate | default "kubevirt") $wantKind) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  A per-cluster owner id for the volumes this tenant's CSI controller creates.
+
+  The driver names every volume vm-<controllerVmID>-pvc-<uuid> and defaults that
+  id to 9999, so on shared storage all tenants' volumes carry one owner: an
+  operator looking at leftovers cannot tell whose they are, and a VM-level ACL
+  cannot separate them. Deriving it from the release name gives each tenant its
+  own, which is what makes both of those possible.
+
+  The range starts at 100000, above the ids Proxmox hands out to real guests in
+  practice and well above the driver's own minimum of 100, and is 800000 wide so
+  two tenants colliding takes a birthday collision rather than a near miss. It
+  is derived, not stored: the same release always produces the same id, and a
+  cluster that is deleted and recreated under the same name adopts its own old
+  volumes rather than orphaning them.
+*/ -}}
+{{- define "kubernetes.proxmoxControllerVmID" -}}
+{{- add 100000 (mod (atoi (adler32sum (printf "%s/%s" .Release.Namespace .Release.Name))) 800000) -}}
+{{- end -}}

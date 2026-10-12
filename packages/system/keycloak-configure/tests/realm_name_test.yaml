@@ -1,0 +1,49 @@
+suite: configure-kk realm name is driven by _cluster.oidc-realm-name
+templates:
+  - templates/configure-kk.yaml
+
+release:
+  name: keycloak-configure
+  namespace: cozy-keycloak
+
+# configure-kk.yaml is the source of truth for the realm: it creates the
+# ClusterKeycloakRealm, its clients and the cozystack-cluster-admin roles. The
+# realm's technical name must follow authentication.oidc.realmName (arriving as
+# _cluster.oidc-realm-name from the platform) so operators can rename it in one
+# place. The KeycloakRealm CR object name (keycloakrealm-cozy) and the realmRef
+# that clients point at are internal Kubernetes names and stay fixed.
+
+tests:
+  - it: defaults the realm name to cozy when _cluster is absent
+    asserts:
+      - matchRegex:
+          path: spec.realmName
+          pattern: '^cozy$'
+        documentIndex: 1
+
+  - it: uses a custom realm name from the _cluster channel
+    set:
+      _cluster:
+        oidc-realm-name: acme
+    asserts:
+      - equal:
+          path: spec.realmName
+          value: acme
+        documentIndex: 1
+
+  # A realm name that is a bare integer or a YAML-reserved word (123, on, no)
+  # is legal in Keycloak but, rendered unquoted, YAML-coerces to int/bool and
+  # fails the CRD's string schema on apply — far from values.yaml and hard to
+  # diagnose. Keep spec.realmName a string regardless of the value's shape.
+  - it: keeps a numeric realm name a string
+    set:
+      _cluster:
+        oidc-realm-name: 123
+    asserts:
+      - equal:
+          path: spec.realmName
+          value: "123"
+        documentIndex: 1
+      - isKind:
+          of: ClusterKeycloakRealm
+        documentIndex: 1

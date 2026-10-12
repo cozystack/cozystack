@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes, useLocation } from "react-router"
 import { AppShell } from "@cozystack/ui"
-import { TenantProvider } from "./lib/tenant-context.tsx"
+import { TenantProvider } from "./lib/tenant-provider.tsx"
 import { Breadcrumb } from "./components/Breadcrumb.tsx"
 import { MarketplacePage } from "./routes/MarketplacePage.tsx"
 import { ConsolePage } from "./routes/ConsolePage.tsx"
@@ -12,19 +12,38 @@ import {
   useMarketplaceSidebarSections,
 } from "./routes/sidebar-sections.tsx"
 import type { HeaderTab } from "@cozystack/ui"
-import { CommandPaletteProvider, useCommandPalette } from "./components/command-palette/command-palette-provider.tsx"
+import { CommandPaletteProvider } from "./components/command-palette/command-palette-provider.tsx"
+import { useCommandPalette } from "./components/command-palette/use-command-palette.ts"
 import { CommandPalette } from "./components/command-palette/command-palette.tsx"
-import type { AppConfig } from "./lib/config.ts"
+import { AppConfigContext, useAppConfig, type AppConfig } from "./lib/config.ts"
+import { DEFAULT_LANDING_PATH } from "./lib/portal.ts"
 
-interface ShellProps {
-  config: AppConfig
-  username?: string
-}
+// Admin pages whose content does not depend on the selected tenant, so the
+// picker has nothing to say on them. /admin/tenants is deliberately absent:
+// its rows come from the picker-filtered context list, unlike Modules and
+// External IPs which list tenant namespaces themselves.
+const CLUSTER_SCOPED_ADMIN = [
+  "/admin/capacity",
+  "/admin/backups/backupclasses",
+  "/admin/external-ips",
+  "/admin/modules",
+]
 
-function Shell({ config, username }: ShellProps) {
+function Shell({ username }: { username?: string }) {
+  const config = useAppConfig()
   const { pathname } = useLocation()
   const inMarketplace = pathname.startsWith("/marketplace")
   const inAdmin = pathname.startsWith("/admin")
+  // Only the genuinely cluster-scoped admin pages have no tenant to show. The
+  // rest of /admin mounts the same tenant-scoped resource pages as /console
+  // (see lib/portal.ts), and those resolve their namespace from the tenant
+  // context, so hiding the picker there would leave the active tenant both
+  // invisible and unchangeable.
+  // Anchored on a segment boundary: an unanchored prefix would also swallow a
+  // sibling route that merely starts with the same characters.
+  const inClusterScope = CLUSTER_SCOPED_ADMIN.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )
   const marketplaceSections = useMarketplaceSidebarSections()
   const consoleSections = useConsoleSidebarSections()
   const adminSections = useAdminSidebarSections()
@@ -37,8 +56,8 @@ function Shell({ config, username }: ShellProps) {
   const { toggle } = useCommandPalette()
 
   const tabs: HeaderTab[] = [
-    { id: "marketplace", label: "Marketplace", to: "/marketplace", highlight: true },
-    { id: "console", label: "Console", to: "/console" },
+    { id: "console", label: "Console", to: "/console", highlight: true },
+    { id: "marketplace", label: "Marketplace", to: "/marketplace" },
     ...(canSeeAdmin ? [{ id: "admin", label: "Admin", to: "/admin" }] : []),
   ]
 
@@ -46,7 +65,7 @@ function Shell({ config, username }: ShellProps) {
     <AppShell
       tabs={tabs}
       sections={sections}
-      subtitle={<Breadcrumb />}
+      subtitle={inClusterScope ? undefined : <Breadcrumb />}
       onSearchClick={toggle}
       version={config.version || import.meta.env.VITE_APP_VERSION}
       logoSvg={config.logoSvg}
@@ -55,7 +74,7 @@ function Shell({ config, username }: ShellProps) {
     >
       <CommandPalette />
       <Routes>
-        <Route path="/" element={<Navigate to="/marketplace" replace />} />
+        <Route path="/" element={<Navigate to={DEFAULT_LANDING_PATH} replace />} />
         <Route path="/marketplace/*" element={<MarketplacePage />} />
         <Route path="/console/*" element={<ConsolePage />} />
         <Route path="/admin/*" element={<AdminPage />} />
@@ -71,10 +90,12 @@ export interface AppProps {
 
 export default function App({ config = {}, username }: AppProps) {
   return (
-    <TenantProvider>
-      <CommandPaletteProvider>
-        <Shell config={config} username={username} />
-      </CommandPaletteProvider>
-    </TenantProvider>
+    <AppConfigContext.Provider value={config}>
+      <TenantProvider>
+        <CommandPaletteProvider>
+          <Shell username={username} />
+        </CommandPaletteProvider>
+      </TenantProvider>
+    </AppConfigContext.Provider>
   )
 }

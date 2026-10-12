@@ -4,8 +4,8 @@
   Naming — the identity unit is the Monitoring release, so the clientId
   and the audience scope are `<namespace>-<release>` prefixed. That
   gives:
-    tenant-foo/monitoring        (per-tenant Grafana in tenant-foo ns)
-    cozy-monitoring/monitoring-system  (platform Grafana in cozy-monitoring ns)
+    tenant-foo/monitoring-system   (per-tenant Grafana in tenant-foo ns)
+    tenant-root/monitoring-system  (platform Grafana in the tenant-root ns)
   A token minted for one instance is rejected by the other's Grafana
   because the per-cluster audience scope binds `id_token.aud` to the
   clientId — same isolation primitive as the tenant kube-apiserver PR
@@ -34,7 +34,7 @@
 {{- end -}}
 
 {{- define "monitoring.oidc.grafanaHost" -}}
-{{- $namespaceHost := .Values._namespace.host -}}
+{{- $namespaceHost := include "cozy-lib.ns-host-required" . -}}
 {{- printf "grafana.%s" (.Values.host | default $namespaceHost) -}}
 {{- end -}}
 
@@ -44,7 +44,8 @@
 
 {{- define "monitoring.oidc.systemIssuerURL" -}}
 {{- $host := index .Values._cluster "root-host" -}}
-{{- printf "https://keycloak.%s/realms/cozy" $host -}}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" | toString -}}
+{{- printf "https://keycloak.%s/realms/%s" $host $realm -}}
 {{- end -}}
 
 {{- /*
@@ -213,4 +214,116 @@
 {{- if and (ne ($secretName | toString) "") (gt (len $users) 0) -}}
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+  Values here reach the VictoriaTraces CRs unchecked: the installed CRDs are the
+  trimmed ones (crds.plain: false), so spec is x-kubernetes-preserve-unknown-fields.
+    - name is at most 42 characters: the operator names the StatefulSet
+      vtstorage-<name>, and each pod carries the label controller-revision-hash:
+      vtstorage-<name>-<hash> (hash up to 10 characters, value capped at 63).
+    - storage is positive: in single mode the operator mounts an EmptyDir when
+      the requested size IsZero, so the store reports operational with no volume.
+    - retentionDiskUsageBytes uses the operator's BytesString grammar, which
+      rejects the Kubernetes-quantity `Gi` suffix that storage uses.
+*/ -}}
+{{- define "monitoring.tracingStorages.validate" -}}
+{{- $seen := dict -}}
+{{- range $i, $s := .Values.tracingStorages -}}
+{{-   $name := $s.name | default "" | toString -}}
+{{-   if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name)) (gt (len $name) 42) -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q must be a valid RFC 1123 label (lowercase alphanumeric and '-', starting and ending alphanumeric) of at most 42 characters, so that the vtstorage-<name>-<hash> pod revision label stays within 63." $i $name) -}}
+{{-   end -}}
+{{-   if hasKey $seen $name -}}
+{{-     fail (printf "monitoring: tracingStorages[%d].name %q is duplicated — names must be unique across tracingStorages, since each keys a VTCluster/VTSingle and a GrafanaDatasource and a collision silently overwrites the first." $i $name) -}}
+{{-   end -}}
+{{-   $_ := set $seen $name true -}}
+{{-   $mode := $s.mode | default "cluster" -}}
+{{-   if and (ne $mode "cluster") (ne $mode "single") -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" $name) -}}
+{{-   end -}}
+{{-   $storage := $s.storage | default "" | toString -}}
+{{-   if or (regexMatch "^[+-]?[0.]*([KMGTPE]i|[numkMGTPE]|[eE][+-]?[0-9]+)?$" $storage) (hasPrefix "-" $storage) -}}
+{{-     fail (printf "monitoring: tracingStorages[%s].storage must be a positive Kubernetes quantity (e.g. 10Gi). A zero size makes the operator mount an EmptyDir instead of a PVC in single mode, so the backend reports Ready while every stored span is lost on the next reschedule; a negative one fails the release when the PVC is created." $name) -}}
+{{-   end -}}
+{{-   with $s.retentionDiskUsageBytes -}}
+{{-     $bytes := . | toString -}}
+{{-     if not (regexMatch "^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$" $bytes) -}}
+{{-       fail (printf "monitoring: tracingStorages[%s].retentionDiskUsageBytes %q is not a valid VictoriaMetrics BytesString (^[0-9]+(kb|mb|gb|tb|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$). Its units differ from the sibling `storage` field (a Kubernetes quantity like 10Gi): write 8GB or 8GiB, not 8Gi." $name $bytes) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  The shared VictoriaTraces store separates tenants only by the AccountID and
+  ProjectID request headers (two uint32s), so each tenant needs a stable pair it
+  cannot choose. It is derived from the namespace: the first 16 hex digits of
+  the sha256 of its name and UID, split into two uint32s, which needs no
+  allocator and no stored state. The UID keeps a tenant re-created under a
+  deleted tenant's name out of that tenant's retained spans; an offline render
+  has no UID and hashes the name alone. tenant-root's own spans stay in the
+  header-less default 0:0, since its collector always writes locally. Renders
+  "<AccountID>:<ProjectID>".
+*/ -}}
+{{- define "monitoring.tracingTenantID" -}}
+{{- $digits := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 -}}
+{{- $key := .Release.Namespace -}}
+{{- with dig "metadata" "uid" "" (lookup "v1" "Namespace" "" .Release.Namespace) -}}
+{{-   $key = printf "%s:%s" $key . -}}
+{{- end -}}
+{{- $sum := sha256sum $key -}}
+{{- $ids := list -}}
+{{- range $part := list (substr 0 8 $sum) (substr 8 16 $sum) -}}
+{{-   $n := 0 -}}
+{{-   range $c := splitList "" $part -}}
+{{-     $n = add (mul $n 16) (get $digits $c) -}}
+{{-   end -}}
+{{-   $ids = append $ids $n -}}
+{{- end -}}
+{{- printf "%d:%d" (index $ids 0 | int64) (index $ids 1 | int64) -}}
+{{- end -}}
+
+{{- /*
+  The central tenant's vmauth password: the one already stored, else a new
+  random one. Both the Secret and the collector's rollout checksum read it, and
+  randAlphaNum differs per call, so the first result is kept in .Values, which
+  every template of one render shares.
+*/ -}}
+{{- define "monitoring.tracingCentralPassword" -}}
+{{- $ctx := index . 0 -}}
+{{- $secret := index . 1 -}}
+{{- $key := printf "_tracingCentralPassword_%s" $secret -}}
+{{- if not (hasKey $ctx.Values $key) -}}
+{{-   $password := "" -}}
+{{-   with (index (lookup "v1" "Secret" $ctx.Release.Namespace $secret) "data") -}}
+{{-     with .password }}{{ $password = b64dec . }}{{ end -}}
+{{-   end -}}
+{{-   if not $password }}{{ $password = randAlphaNum 32 }}{{ end -}}
+{{-   $_ := set $ctx.Values $key $password -}}
+{{- end -}}
+{{- index $ctx.Values $key -}}
+{{- end -}}
+
+{{- /* tenant-root hosts the shared store only when it opts in with
+       tracingCentralHost, since the store is also its own, and lists a
+       cluster-mode entry named generic, the store every central VMUser routes
+       to. Renders "true" or "". */}}
+{{- define "monitoring.tracingCentralStore" -}}
+{{- if and (eq .Release.Namespace "tenant-root") (eq (toString .Values.tracingCentralHost) "true") -}}
+{{-   range .Values.tracingStorages -}}
+{{-     if and (eq .name "generic") (eq (.mode | default "cluster") "cluster") }}true{{ end -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Shared-central tracing is switched on only by the tenant chart, through
+  _namespace in the cozystack-values Secret: the apps API refuses `_` keys, so a
+  Monitoring application cannot opt itself in without the egress rules the
+  tenant chart renders under the same condition. tenant-root hosts the shared
+  store and never exports to it. Renders "true" or "".
+*/ -}}
+{{- define "monitoring.tracingCentral" -}}
+{{- if and (ne .Release.Namespace "tenant-root") (eq (toString (dig "tracingCentral" false (.Values._namespace | default dict))) "true") -}}true{{- end -}}
 {{- end -}}

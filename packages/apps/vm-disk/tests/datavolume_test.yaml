@@ -1,0 +1,65 @@
+suite: vm-disk DataVolume binding
+templates:
+  - templates/dv.yaml
+tests:
+  - it: requests immediate binding for a standalone disk
+    set:
+      source:
+        http:
+          url: https://example.com/disk.img
+    asserts:
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
+
+  # Both branches are pinned, because the two cases the switch exists for want
+  # opposite defaults: a standalone disk needs the bind now or it never
+  # populates, and a disk a VMInstance will consume binds correctly only when
+  # KubeVirt's launcher pod is the first consumer. Asserted by key absence and
+  # not by a negated match, which passes for free once the path stops resolving.
+  - it: omits the annotation when the operator defers binding to the consumer
+    set:
+      bindImmediately: false
+      source:
+        http:
+          url: https://example.com/disk.img
+    asserts:
+      - notExists:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+      - exists:
+          path: metadata.annotations["vm-disk.cozystack.io/source"]
+
+  # The existing-DataVolume path renders its own annotation block, so the switch
+  # has to reach it too rather than only the creation path.
+  - it: defers binding on an existing DataVolume as well
+    set:
+      bindImmediately: false
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: RELEASE-NAME
+            namespace: NAMESPACE
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 9Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+      # 9Gi comes from the mocked object and 5Gi from values, so this proves the
+      # render took the existing-DataVolume path rather than passing as a fresh
+      # create that happens to omit the same annotation.
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 9Gi
+      - notExists:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]

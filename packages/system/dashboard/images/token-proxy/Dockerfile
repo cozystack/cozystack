@@ -1,16 +1,18 @@
-FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+ARG GOPROXY
 
 ARG TARGETOS
 ARG TARGETARCH
 
 COPY go.mod go.sum /src/
-COPY *.go /src/
 WORKDIR /src
+RUN for attempt in 1 2 3; do go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
+COPY *.go /src/
 
 # Build the whole package, not main.go alone, so a future split into
 # helper files does not silently drop them from the binary. go build
 # excludes _test.go files automatically.
-RUN go build -o /token-proxy -ldflags '-extldflags "-static" -w -s' .
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /token-proxy -ldflags '-extldflags "-static" -w -s' .
 
 FROM scratch
 

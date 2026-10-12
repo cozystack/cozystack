@@ -1,0 +1,38 @@
+suite: cluster-autoscaler arguments
+
+# `--force-delete-unregistered-nodes` reads as a safety override that lets the
+# autoscaler remove a long-unregistered machine below the group's min size. On
+# the clusterapi provider it grants nothing of the sort: the provider does not
+# implement force deletion, the call falls back to the ordinary delete path,
+# and that path refuses to take a group below its min size. What the flag does
+# do is skip the step that trims the delete batch down to the group's headroom,
+# so a batch larger than the headroom is refused whole instead of trimmed and
+# partly executed. The flag is therefore absent by intent rather than by
+# oversight, which is what this asserts.
+#
+# The positive assertion is not decoration: an absence assertion against a path
+# that does not resolve passes for the wrong reason, so the args list is proven
+# live first.
+
+templates:
+  - templates/cluster-autoscaler/deployment.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  - it: runs against the clusterapi provider without the force-delete override
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-provider=clusterapi
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --force-delete-unregistered-nodes=true

@@ -1,12 +1,13 @@
 {{- define "cozystack.defaultCiliumValues" -}}
 {{- /* Cilium runs hostNetwork on the Talos worker nodes and resolves the
-       apiserver via the worker's /etc/hosts, which the talos-reconcile
-       main-phase Job seeds with the Kamaji Service ClusterIP under
-       <release>.<ns>.svc through machine.network.extraHostEntries. So a
-       plain DNS host works here without a lookup-and-reuse race: the
-       cert covers the same DNS name from chart render time, and the
-       hosts entry is set well before kubelet (and therefore Cilium)
-       comes up on the node. */}}
+       apiserver via the worker's /etc/hosts, which the kubernetes-nodes
+       chart's talos-reconcile Job seeds with the Kamaji Service ClusterIP
+       under <release>.<ns>.svc through machine.network.extraHostEntries
+       (workers only exist through pools, so every node Cilium runs on has
+       the entry). So a plain DNS host works here without a
+       lookup-and-reuse race: the cert covers the same DNS name from chart
+       render time, and the hosts entry is set well before kubelet (and
+       therefore Cilium) comes up on the node. */}}
 cilium:
   k8sServiceHost: {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
   k8sServicePort: 6443
@@ -51,11 +52,30 @@ spec:
   storageNamespace: cozy-cilium
   interval: 5m
   timeout: 10m
+  {{- /* Flux's default install strategy remediates a failed install by
+         uninstalling the release, which takes the tenant's only CNI away
+         between attempts. RetryOnFailure drops that teardown: the manifests
+         stay applied and the failed install is retried as an upgrade. Both
+         actions carry the strategy because that retry runs as an upgrade and
+         would otherwise fall back to upgrade remediation. The cost is that a
+         genuine upgrade failure no longer rolls back either, which is forced,
+         since the controller cannot tell a retried install from a real one,
+         and what it replaces was an unbounded rollback-and-retry flap. This
+         removes an amplifier, not a cause: an install that outruns its budget
+         because no node has registered yet stays a problem. The remediation
+         blocks cover the branches no strategy reaches, an absent release for
+         install and an out-of-sync one for upgrade, so retries: -1 stays. */}}
   install:
     createNamespace: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   values:
@@ -65,4 +85,57 @@ spec:
   - name: {{ .Release.Name }}-gateway-api-crds
     namespace: {{ .Release.Namespace }}
   {{- end }}
+
+{{- /*
+addons.cilium.valuesOverride is x-kubernetes-preserve-unknown-fields, so a
+tenant can set cilium.kubeProxyReplacement: false for its own cluster. Cozystack
+does not support that value or supply an alternative service load balancer for
+it; guest ClusterIP connectivity can fail. The guest ingress-nginx policy's
+source-side deny also loses the pre-DNAT match, but its target-side ingressDeny
+continues to deny pods after any translation, so the override does not imply
+that the admission webhook becomes reachable.
+
+The mismatch is detectable here rather than in the guest cluster, because this
+HelmRelease's values are assembled on the management cluster, so the beacon is
+emitted next to the release that carries the override. Same mechanism and same
+reasoning as the -awaiting-etcd beacon in ../cluster.yaml: a ConfigMap an
+operator and an alert can both see. It is a diagnostic for an unsupported
+override, not an alternative compatibility mode.
+
+Absence is not a warning: the value is unset in both the override and
+cozystack.defaultCiliumValues on every supported path, and the cilium chart's
+own values.yaml then supplies true. Only an explicit non-true value fires.
+*/}}
+{{- $merged := deepCopy .Values.addons.cilium.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCiliumValues" .)) }}
+{{- $mergedCilium := dig "cilium" dict $merged }}
+{{- $kpr := dig "kubeProxyReplacement" "" $mergedCilium }}
+{{- if and (ne (toString $kpr) "") (ne (toString $kpr) "true") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-cilium-kube-proxy-replacement-off
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: kubernetes
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  status: "kube-proxy-replacement-off"
+  kubeProxyReplacement: {{ toString $kpr | quote }}
+  message: |
+    addons.cilium.valuesOverride sets cilium.kubeProxyReplacement to
+    {{ toString $kpr | quote }} for cluster {{ .Release.Name }}.
+
+    Cozystack supports guest cluster networking only when
+    cilium.kubeProxyReplacement is "true". No supported alternative service load
+    balancer is supplied for this override, so ClusterIP connectivity may fail.
+
+    The guest ingress-nginx policy's source-side deny also loses its pre-DNAT
+    match, but its target-side ingressDeny remains. This override does not imply
+    that the admission webhook is reachable through its Service.
+
+    Clear the override or set cilium.kubeProxyReplacement back to true. Disabling
+    the webhook policy does not make this networking configuration supported.
+{{- end }}
 {{- end }}

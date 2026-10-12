@@ -1,0 +1,102 @@
+suite: opensearch-operator raises vm.max_map_count per node
+
+# OpenSearch will not start below vm.max_map_count=262144 and the sysctl is not
+# namespaced, so no pod can set it for itself. This DaemonSet is the platform's
+# carrier for it, which is why its shape is the contract: privileged init, that
+# exact sysctl, and nothing mounted from the host.
+release:
+  name: opensearch-operator
+  namespace: cozy-opensearch-operator
+tests:
+  # The command is pinned whole because both halves of it are the contract: the
+  # threshold OpenSearch needs, and the comparison that makes it a floor. Writing
+  # the value unconditionally would lower vm.max_map_count on any node already
+  # tuned above it, node-wide, on every boot.
+  - it: raises the sysctl to a floor from a privileged init container
+    template: templates/sysctl-daemonset.yaml
+    asserts:
+      - equal:
+          path: kind
+          value: DaemonSet
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: init-sysctl
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value:
+            - sh
+            - -c
+            - 'set -e; current=$(sysctl -n vm.max_map_count); if [ "$current" -lt 262144 ]; then sysctl -w vm.max_map_count=262144; fi'
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.privileged
+          value: true
+
+  - it: keeps the privilege in the init container only
+    template: templates/sysctl-daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: idle
+      # The trap is the contract, not decoration. PID 1 of a namespace receives
+      # only the signals it installed a handler for, so a bare sleep here ignores
+      # SIGTERM and every pod is SIGKILLed after the full grace period on each
+      # rollout and node drain.
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+      - notExists:
+          path: spec.template.spec.containers[0].securityContext.privileged
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value: ["ALL"]
+
+  # Nothing may reach the host filesystem: the write belongs in /proc/sys and
+  # the pod reapplies it on every node restart.
+  - it: touches no host path
+    template: templates/sysctl-daemonset.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.initContainers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: system-node-critical
+
+  - it: lands on tainted nodes and pins the image by digest
+    template: templates/sysctl-daemonset.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+            effect: NoSchedule
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+            effect: NoExecute
+      - matchRegex:
+          path: spec.template.spec.initContainers[0].image
+          pattern: '^docker\.io/library/busybox:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: takes the image override for an air-gapped registry
+    template: templates/sysctl-daemonset.yaml
+    set:
+      sysctl:
+        image: registry.example.test/library/busybox:1.37.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: registry.example.test/library/busybox:1.37.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.test/library/busybox:1.37.0@sha256:0000000000000000000000000000000000000000000000000000000000000000

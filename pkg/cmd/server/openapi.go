@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
@@ -155,6 +156,8 @@ func patchSpec(target *spec.Schema, raw string) error {
 	if err := json.Unmarshal([]byte(raw), &custom); err != nil {
 		return err
 	}
+	// The name declaration describes metadata.name, not anything inside spec.
+	delete(custom.Extensions, appsv1alpha1.NameSchemaExtension)
 
 	// Neutralize any crash-prone boolean additionalProperties at any depth in
 	// the user-supplied schema before publishing it.

@@ -1,0 +1,28 @@
+# A second instance, in the test namespace rather than beside tenant-root's:
+# the data-plane chart pins its workload names to `seaweedfs`, so two instances
+# cannot share a namespace. It is created directly rather than through the
+# tenant module, whose HelmRelease takes no values of its own, so the size
+# limit can be moved here without racing a parent.
+#
+# Sized down from the defaults to what the test needs. replicationFactor stays
+# at 2 on two volume servers, because that is the shape whose growth count
+# (COPY_2) the platform ships.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: SeaweedFS
+metadata:
+  name: seaweedfs
+spec:
+  replicationFactor: 2
+  db:
+    replicas: 1
+    size: 1Gi
+  master:
+    replicas: 1
+    volumeSizeLimitMB: 200
+  filer:
+    replicas: 1
+  volume:
+    replicas: 2
+    size: 2Gi
+  s3:
+    replicas: 1

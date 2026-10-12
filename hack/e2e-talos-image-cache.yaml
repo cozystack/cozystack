@@ -159,6 +159,7 @@ data:
     import http.server
     import os
     import sys
+    import time
 
     ROOT = sys.argv[1] if len(sys.argv) > 1 else "/data"
     PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
@@ -184,6 +185,8 @@ data:
             ctype = self.guess_type(path)
             rng = self.headers.get("Range", "")
             if not rng.startswith("bytes="):
+                self._remaining = size
+                self._transfer_range = "full"
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(size))
@@ -203,6 +206,7 @@ data:
             end = min(end, size - 1)
             f.seek(start)
             self._remaining = end - start + 1
+            self._transfer_range = "%d-%d/%d" % (start, end, size)
             self.send_response(206)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
@@ -217,12 +221,28 @@ data:
                 super().copyfile(source, outputfile)
                 return
             self._remaining = None
-            while remaining > 0:
-                chunk = source.read(min(65536, remaining))
-                if not chunk:
-                    break
-                outputfile.write(chunk)
-                remaining -= len(chunk)
+            requested = remaining
+            sent = 0
+            started = time.monotonic()
+            try:
+                while remaining > 0:
+                    chunk = source.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    outputfile.write(chunk)
+                    sent += len(chunk)
+                    remaining -= len(chunk)
+            finally:
+                status = "complete" if sent == requested else "interrupted"
+                self.log_message(
+                    "transfer-finished status=%s path=%s range=%s requested=%d sent=%d duration=%.3fs",
+                    status,
+                    self.path,
+                    getattr(self, "_transfer_range", "unknown"),
+                    requested,
+                    sent,
+                    time.monotonic() - started,
+                )
 
 
     with http.server.ThreadingHTTPServer(("0.0.0.0", PORT), RangeHandler) as httpd:
@@ -266,8 +286,9 @@ spec:
   # No toPorts: the allow is already scoped to a single kube-system pod identity
   # (CI-only, torn down with the sandbox), so an L4 port restriction adds no
   # meaningful blast-radius reduction — only risk. With kube-proxy-less Cilium the
-  # importer's connect to the Service ClusterIP is socket-LB translated to the
-  # backend pod port BEFORE egress policy is evaluated, so a port literal here
+  # importer's connection to the Service ClusterIP is translated to the backend
+  # pod port per packet in bpf_lxc.c (the chart forces bpf-lb-sock-hostns-only
+  # while Gateway API is on) BEFORE egress policy is evaluated, so a port literal here
   # would have to track the container port (8080), not the Service port (80); a
   # wrong guess silently drops the traffic and reintroduces the exact public-factory
   # fallback this policy exists to prevent.

@@ -12,7 +12,7 @@ suite: postgres TLS configuration
 # In TLS-on mode the chart sets spec.certificates with serverAltDNSNames so the
 # operator's own CA signs server certs. CNPG auto-derives SANs for the three
 # built-in services (rw/r/ro) in four DNS forms each; the chart only appends
-# the external hostname when external=true.
+# the external hostnames when external=true.
 
 release:
   name: pg-test
@@ -64,7 +64,7 @@ tests:
       - isNull:
           path: spec.certificates
 
-  - it: Cluster has spec.certificates.serverAltDNSNames with external hostname when tls auto-on via external true
+  - it: Cluster has spec.certificates.serverAltDNSNames with external hostnames when tls auto-on via external true
     set:
       external: true
       _namespace:
@@ -82,11 +82,14 @@ tests:
       - contains:
           path: spec.certificates.serverAltDNSNames
           content: pg-test.example.cozy.local
+      - contains:
+          path: spec.certificates.serverAltDNSNames
+          content: pg-test.postgres.example.cozy.local
       - lengthEqual:
           path: spec.certificates.serverAltDNSNames
-          count: 1
+          count: 2
 
-  - it: Cluster has spec.certificates.serverAltDNSNames with external hostname when tls explicitly enabled and external true
+  - it: Cluster has spec.certificates.serverAltDNSNames with external hostnames when tls explicitly enabled and external true
     set:
       tls:
         enabled: true
@@ -100,7 +103,10 @@ tests:
       - contains:
           path: spec.certificates.serverAltDNSNames
           content: pg-test.example.cozy.local
+      - contains:
+          path: spec.certificates.serverAltDNSNames
+          content: pg-test.postgres.example.cozy.local
       - lengthEqual:
           path: spec.certificates.serverAltDNSNames
-          count: 1
+          count: 2
 

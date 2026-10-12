@@ -6,10 +6,12 @@ import {
   Gauge,
   Globe,
   HardDrive,
-  Info,
+  Import,
   LayoutGrid,
   Layers,
   Network,
+  Package,
+  Plug,
   Server,
   ToyBrick,
   Users,
@@ -18,7 +20,7 @@ import {
 import type { SidebarSection } from "@cozystack/ui"
 import { useBackupClassAdminAccess } from "../hooks/useBackupClassAdminAccess.ts"
 import { useClusterUsageAccess } from "../hooks/useClusterUsageAccess.ts"
-import { useApplicationDefinitions, groupByCategory } from "../lib/app-definitions.ts"
+import { useApplicationDefinitions, groupByCategory, isTenantModule } from "../lib/app-definitions.ts"
 import { humanizeKind } from "../lib/humanize.ts"
 import {
   lucideIcon,
@@ -27,7 +29,8 @@ import {
 } from "../lib/sidebar-icons.tsx"
 import type { ComponentType } from "react"
 
-const MARKETPLACE_CATEGORIES = ["IaaS", "PaaS", "NaaS"]
+// Lives in the Admin portal; any other category, tapped ones included, gets an entry.
+const ADMIN_CATEGORY = "Administration"
 const CATEGORY_ICON: Record<string, LucideIcon> = {
   IaaS: Cloud,
   PaaS: Database,
@@ -36,7 +39,8 @@ const CATEGORY_ICON: Record<string, LucideIcon> = {
 
 /**
  * Marketplace sidebar: a flat list of filters — "All applications" followed
- * by the three categories. Category links rely on pathname-based matching
+ * by every category in {@link groupByCategory} order (IaaS, PaaS, NaaS, then
+ * the rest alphabetically), Administration excepted. Category links rely on pathname-based matching
  * (`/marketplace/c/<category>`) so NavLink correctly highlights the active
  * entry; see MarketplaceList for the counterpart.
  */
@@ -45,10 +49,9 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
   const grouped = useMemo(() => groupByCategory(data), [data])
 
   return useMemo<SidebarSection[]>(() => {
-    const available = grouped
+    const ordered = grouped
       .map((g) => g.category)
-      .filter((c) => MARKETPLACE_CATEGORIES.includes(c))
-    const ordered = MARKETPLACE_CATEGORIES.filter((c) => available.includes(c))
+      .filter((c) => c !== ADMIN_CATEGORY)
 
     return [
       {
@@ -68,21 +71,17 @@ export function useMarketplaceSidebarSections(): SidebarSection[] {
 
 /**
  * Console sidebar: every non-module, non-Tenant ApplicationDefinition in the
- * cluster as a separate entry grouped by IaaS / PaaS / NaaS, plus a fixed
- * Administration section (Info, Modules, External IPs, Tenants).
+ * cluster as a separate entry grouped by category in {@link groupByCategory}
+ * order, Administration excepted, plus the per-tenant
+ * Backups section. Administration (Info, Modules, External IPs, Tenants) now
+ * lives in the Admin portal — see {@link useAdminSidebarSections}.
  */
 export function useConsoleSidebarSections(): SidebarSection[] {
   const { data } = useApplicationDefinitions()
   const grouped = useMemo(() => groupByCategory(data), [data])
 
   return useMemo<SidebarSection[]>(() => {
-    const sorted = [...grouped]
-      .filter(({ category }) => MARKETPLACE_CATEGORIES.includes(category))
-      .sort(
-        (a, b) =>
-          MARKETPLACE_CATEGORIES.indexOf(a.category) -
-          MARKETPLACE_CATEGORIES.indexOf(b.category),
-      )
+    const sorted = grouped.filter(({ category }) => category !== ADMIN_CATEGORY)
 
     const categorySections: SidebarSection[] = sorted.map(({ category, items }) => ({
       title: category,
@@ -111,17 +110,15 @@ export function useConsoleSidebarSections(): SidebarSection[] {
       ],
     }
 
-    const administrationSection: SidebarSection = {
-      title: "Administration",
+    const migrationSection: SidebarSection = {
+      title: "Migration",
       items: [
-        { label: "Info", to: "/console/info", icon: Info },
-        { label: "Modules", to: "/console/modules", icon: ToyBrick },
-        { label: "External IPs", to: "/console/external-ips", icon: Globe },
-        { label: "Tenants", to: "/console/tenants", icon: Users },
+        { label: "Sources", to: "/console/migration/vmimportsources", icon: Plug },
+        { label: "Imports", to: "/console/migration/vmimporttasks", icon: Import },
       ],
     }
 
-    return [...categorySections, backupsSection, administrationSection]
+    return [...categorySections, backupsSection, migrationSection]
   }, [grouped])
 }
 
@@ -151,20 +148,59 @@ export function useAdminAccess(): {
   }
 }
 
-/** Boolean convenience wrapper around {@link useAdminAccess} for nav gating. */
+/**
+ * The Admin tab is always visible: Administration (Info, Modules, External IPs,
+ * Repositories, Tenants) needs no special permission. The gated Capacity/Backup-Classes areas
+ * keep their own per-area guards inside the portal.
+ */
 export function useCanSeeAdmin(): boolean {
-  return useAdminAccess().allowed
+  return true
 }
 
 /**
- * Admin sidebar: the cluster-wide operator areas (Capacity and Backup Classes).
- * Each entry is gated by its own permission so the sidebar never shows an area
- * the user cannot open.
+ * Admin sidebar: Administration first (always visible, no permission needed —
+ * Tenants, Modules, External IPs, Repositories; per-tenant Info is a row action
+ * in the Tenants tree), then the cluster-wide operator areas (Capacity and Backup
+ * Classes). Each operator area is gated by its own permission so the sidebar
+ * never shows an area the user cannot open.
  */
 export function useAdminSidebarSections(): SidebarSection[] {
   const { canClusterUsage, canBackupClasses } = useAdminAccess()
+  const { data: defs } = useApplicationDefinitions()
+  // Per-tenant Info lives as a row action in the Tenants tree, so the Tenants
+  // entry stays highlighted while an Info detail page is open. Every other
+  // module's detail page keeps Modules highlighted instead.
+  const infoPlural =
+    defs?.items.find((d) => d.spec?.application.kind === "Info")?.spec?.application
+      .plural ?? "infos"
+  const modulePaths = (defs?.items ?? [])
+    .filter(isTenantModule)
+    .filter((d) => d.spec?.application.kind !== "Info")
+    .map((d) => `/admin/${d.spec?.application.plural ?? d.metadata.name}`)
+    .sort()
+    .join(",")
   return useMemo<SidebarSection[]>(() => {
-    const sections: SidebarSection[] = []
+    const sections: SidebarSection[] = [
+      {
+        title: "Administration",
+        items: [
+          {
+            label: "Tenants",
+            to: "/admin/tenants",
+            icon: Users,
+            alsoMatch: [`/admin/${infoPlural}`, "/admin/info"],
+          },
+          {
+            label: "Modules",
+            to: "/admin/modules",
+            icon: ToyBrick,
+            alsoMatch: modulePaths ? modulePaths.split(",") : undefined,
+          },
+          { label: "External IPs", to: "/admin/external-ips", icon: Globe },
+          { label: "Repositories", to: "/admin/taps", icon: Package },
+        ],
+      },
+    ]
     if (canClusterUsage) {
       sections.push({
         title: "Capacity",
@@ -184,5 +220,5 @@ export function useAdminSidebarSections(): SidebarSection[] {
       })
     }
     return sections
-  }, [canClusterUsage, canBackupClasses])
+  }, [canClusterUsage, canBackupClasses, infoPlural, modulePaths])
 }

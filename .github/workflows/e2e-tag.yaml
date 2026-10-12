@@ -11,8 +11,10 @@ name: E2E Release Tag
 # This lane validates published tags only; draft and promote-time validation are
 # explicitly out of scope because release checks run at RC publication time.
 # Prerelease tags use the matching digest-pinned staging branch, while stable
-# tags use their pinned merge tree directly. In both cases the nocloud disk
-# comes from the published release identified by the same tag.
+# tags use their pinned merge tree directly. The nodes run as Talos containers
+# booted from the upstream image, so the release's nocloud disk is required to
+# exist but is not what the suite runs on. It is still required because users
+# install from it, and promote-rc.yaml checks it for an rc only.
 
 on:
   workflow_call:
@@ -37,8 +39,8 @@ concurrency:
   group: e2e-tag-${{ inputs.tag }}
   cancel-in-progress: false
 
-# Listing published releases, reading Git refs, downloading a release asset, and
-# checking out the pinned tree require only repository contents read access.
+# Listing published releases, reading Git refs and checking out the pinned tree
+# require only repository contents read access.
 # Draft releases are not part of this lane's contract. The public GHCR images
 # referenced by that tree need no package token.
 #
@@ -57,7 +59,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      disk_id: ${{ steps.resolve.outputs.disk_id }}
       tree_ref: ${{ steps.resolve.outputs.tree_ref }}
     steps:
       - name: Validate tag and resolve release
@@ -123,18 +124,20 @@ jobs:
               throw error;
             }
 
-            core.setOutput('disk_id', String(disk.id));
             core.setOutput('tree_ref', treeRef);
             core.info(`Resolved ${tag}: tree '${treeRef}', disk asset ${disk.id}`);
 
   e2e:
     name: E2E ${{ inputs.tag }} (full suite)
     needs: resolve
-    # The sandbox boots three 8-vCPU / 24-GiB QEMU guests. This runner leaves
-    # enough host headroom for QEMU, networking, containerd, and the runner
-    # agent while the full platform installs across all three guests.
+    # The sandbox runs three 8-vCPU / 24-GiB Talos containers. This runner
+    # leaves enough host headroom for networking, containerd, and the runner
+    # agent while the full platform installs across all three nodes.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    timeout-minutes: 180
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
+    timeout-minutes: 215
     permissions:
       contents: read
       checks: write # Breakpoint action updates its dedicated "Breakpoint Open" Check Run.
@@ -142,51 +145,80 @@ jobs:
       # The resolved ref is the digest-pinned staging branch for a prerelease,
       # or the stable tag's pinned merge tree.
       - name: Checkout resolved release tree
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.resolve.outputs.tree_ref }}
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Download disk asset from release
-        env:
-          DISK_ID: ${{ needs.resolve.outputs.disk_id }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p _out/assets
-          curl --fail-with-body --silent --show-error --location \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            -o _out/assets/nocloud-amd64.raw.xz \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${DISK_ID}"
 
       - name: Set sandbox ID
         env:
           TAG: ${{ inputs.tag }}
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${TAG}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
 
+      # tags.yaml calls the e2e-tag.yaml from the tag's own commit, so this can
+      # only fire on a dispatch from a newer ref against an older tag.
+      - name: Require a container-lane tree
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ ! -f hack/e2e-compose.yaml ]; then
+            echo "::error title=e2e-tag::${TAG} predates the container lane; dispatch e2e-tag.yaml with --ref ${TAG} to run it on the lane it shipped with"
+            exit 1
+          fi
+
       - name: Prepare workspace
         run: |
           rm -rf "/tmp/$SANDBOX_NAME"
           cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
 
-      # This is the only retried stage: Talos image unpacking, QEMU startup, and
-      # sandbox networking are pure runner infrastructure, not product logic.
+      # Talos cannot load kernel modules in container mode, so the nodes get
+      # exactly what this host has loaded. Why each module, and why failing
+      # here is better than an hour later: the same step in pull-requests.yaml.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules && continue
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            exit 1
+          fi
+
+      # This is the only retried stage: Talos container startup and sandbox
+      # networking are pure runner infrastructure, not product logic.
       - name: Prepare environment
         run: |
           cd "/tmp/$SANDBOX_NAME"
           attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env-container; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then
               echo "Attempt $attempt failed, exiting..."
               exit 1
             fi
             echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
       - name: Install Cozystack into sandbox
+        env:
+          # No ARP VIP in container mode: .11 is a plain control-plane node.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # The nodes share the runner kernel and cannot load DRBD.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
@@ -216,10 +248,12 @@ jobs:
       # CHAINSAW_SUITES is the testing Makefile's full-suite mode.
       - name: Run E2E tests (full suite)
         id: e2e_tests
+        env:
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           cd "/tmp/$SANDBOX_NAME"
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"
@@ -257,11 +291,40 @@ jobs:
 
       # collect-report packages cozyreport plus per-failed-test crust-gather
       # snapshots captured before Chainsaw cleanup.
+      #
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
       - name: Collect report
+        id: collect_report
         if: always()
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
           cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more. A step can end
+      # non-zero without any ceiling firing -- in e2e-tag.yaml the body opens with
+      # a `cd` into a sandbox tree an earlier step may never have created, and the
+      # default shell is `bash -e` -- so naming the timeout as the cause would be
+      # the same false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
 
       - name: Upload cozyreport.tgz
         if: always()
@@ -276,12 +339,56 @@ jobs:
           cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
 
+      # Every image the nodes pulled, read from their image stores rather than
+      # from the pods still running, since the tests delete what they create.
+      # That covers chart defaults and operator-launched images the static gate
+      # in tags.yaml never sees, because the tree does not pin them by digest.
+      # A pre-release fails on a single-arch image, on a ref that cannot be
+      # read or is still rate-limited after the retries, or on a list the
+      # collection could not produce; a stable tag only warns, since it ships
+      # its rc's images unchanged. Before teardown, which runs whatever this
+      # step does.
+      - name: Audit pulled images are multi-arch
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -o pipefail
+          cd "/tmp/$SANDBOX_NAME"
+          # A tag cut before the audit existed has neither the script nor the
+          # image list, and its e2e must still be re-runnable from main.
+          if [ ! -f hack/verify-multiarch.sh ]; then
+            echo "::warning title=multi-arch audit::the tree under test predates the multi-arch audit; skipped"
+            exit 0
+          fi
+          mkdir -p _out
+          { command -v skopeo && command -v jq; } >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo jq; }
+          status=0
+          hack/verify-multiarch.sh --refs-file _out/image-refs.txt 2>&1 | tee _out/multiarch-audit.txt \
+            || status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            case "$TAG" in
+              *-*) exit 1 ;;
+            esac
+            # 1: the audit ran and flagged refs (single-arch, unreadable or
+            # rate-limited); anything else: it did not run.
+            if [ "$status" -eq 1 ]; then
+              echo "::warning title=multi-arch audit::some images pulled by e2e are not amd64+arm64 indexes or could not be checked; see multiarch-audit.txt"
+            else
+              echo "::warning title=multi-arch audit::the multi-arch audit did not run; see multiarch-audit.txt"
+            fi
+          fi
+
       - name: Upload image list
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-list-${{ inputs.tag }}
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+          path: |
+            /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/image-refs.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/multiarch-audit.txt
 
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
       #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
@@ -329,13 +436,17 @@ jobs:
             Resume from inside: `breakpoint resume`. Otherwise the breakpoint
             exits 10 minutes after the last SSH session disconnects.
 
+      # The compose project owns the nodes and the zpools outlive it, so both
+      # halves go, in this order.
       - name: Tear down sandbox
         if: always()
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
 
       - name: Remove workspace
         if: always()
-        run: rm -rf "/tmp/$SANDBOX_NAME"
+        run: rm -rf "/tmp/${SANDBOX_NAME:?}"
 
       - name: Summarize outcome
         if: always()

@@ -1,0 +1,41 @@
+suite: kubernetes apiserver endpoint guards an empty tenant apex only when it is emitted
+templates:
+  - templates/cluster.yaml
+
+release:
+  name: kubernetes
+  namespace: tenant-test
+
+# cluster.yaml advertises the apiserver endpoint as <release>.<_namespace.host>
+# only inside the KamajiControlPlane, which is emitted when the tenant has an
+# etcd DataStore. cozy-lib.ns-host-required guards that one hostname, so an empty
+# apex fails there. The no-etcd path emits only a ConfigMap beacon and never
+# composes the hostname, so it must keep rendering even with an empty apex (the
+# parent Tenant chart populates _namespace.etcd asynchronously).
+
+tests:
+  - it: fails when the tenant has etcd but the apex is empty and no host override
+    set:
+      _namespace:
+        etcd: tenant-test
+        host: ""
+      _cluster:
+        cluster-domain: cozy.local
+      version: "v1.35"
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: still renders the awaiting-etcd beacon when the apex is empty and there is no etcd
+    set:
+      _namespace:
+        etcd: ""
+        host: ""
+      _cluster:
+        cluster-domain: cozy.local
+      version: "v1.35"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap

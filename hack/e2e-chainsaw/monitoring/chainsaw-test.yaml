@@ -1,0 +1,417 @@
+# Grafana OIDC on a tenant Monitoring release, driven through all three
+# shapes the chart supports on one release: System, then CustomConfig with an
+# inline config, then CustomConfig with a secretRef. The render of each shape
+# on a fresh install is pinned by packages/system/monitoring/tests/oidc_test.yaml;
+# what only a live cluster shows is admission by cozystack-api, the Deployment
+# the Grafana operator builds, and what an in-place upgrade leaves behind.
+# Chaining the modes on one release is what makes the last of those
+# observable, and pays for one stack bring-up instead of three. The Keycloak
+# objects are checked as the release wrote them, so creating the client in
+# Keycloak is not asserted; removing it is, because the operator's finalizer
+# holds the KeycloakClient until the client is gone from Keycloak.
+#
+# The release is created here, in tenant-test, and owns its whole stack; the
+# suite does not read the tenant-root monitoring instance. No browser login
+# through Keycloak is driven.
+#
+# The EDP Keycloak CRDs are required rather than probed for: the e2e install
+# turns platform OIDC on, so their absence is a broken install, and an `error:`
+# op against an unknown kind fails instead of asserting absence.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: monitoring-oidc
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: monitoring
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: monitoring-system
+  - describe:
+      apiVersion: grafana.integreatly.org/v1beta1
+      kind: Grafana
+      name: grafana
+  - podLogs:
+      selector: app.kubernetes.io/name=monitoring-oidc-users
+      tail: 100
+  - script:
+      # Same helper and budget as the harbor suite: one bounded kubectl call,
+      # ~75s worst case on a degraded cluster.
+      timeout: 2m
+      content: |
+        set -eu
+        cd ../../..
+        . hack/e2e-chainsaw/_lib/pod-label-census.sh
+        pod_label_census "$NAMESPACE"
+  steps:
+  - name: platform-oidc-ready
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: keycloakclients.v1.edp.epam.com
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: keycloakclientscopes.v1.edp.epam.com
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: keycloakrealmgroups.v1.edp.epam.com
+    # The outer release copies this Secret's _cluster into the inner
+    # release's values once, at render time, and a System-mode render fails
+    # without oidc-enabled. When this suite runs first, the tenant can still be
+    # carrying the values it was created with; an inner install started from
+    # those keeps failing on the stale copy until the outer install times out
+    # 15m later.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cozystack-values
+          "(contains(base64_decode(data.\"values.yaml\"), 'oidc-enabled: \"true\"'))": true
+
+  - name: system-mode-install
+    try:
+    - apply:
+        file: monitoring-system.yaml
+    # 16m: the outer release's install timeout is 15m (monitoring-rd) and the
+    # inner monitoring-system release's spec.timeout is 15m too, plus the 60s
+    # start margin; see "Sizing an HR-Ready budget" in
+    # docs/agents/e2e-testing.md. The outer install waits on the inner
+    # HelmRelease, so outer Ready covers both.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: monitoring
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: monitoring-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: system-mode-shape
+    try:
+    - assert:
+        resource:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: Grafana
+          metadata:
+            name: grafana
+          spec:
+            config:
+              auth.generic_oauth:
+                enabled: "true"
+                client_id: tenant-test-monitoring-system
+                (ends_with(auth_url, '/realms/cozy/protocol/openid-connect/auth')): true
+                skip_org_role_sync: "true"
+                oauth_allow_insecure_email_lookup: "true"
+                # Present here so its absence after the swap below is a change.
+                (contains(keys(@), 'allowed_groups')): true
+                # Authorization is the users-Job's, not a claim mapping.
+                (contains(keys(@), 'role_attribute_path')): false
+    - assert:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          metadata:
+            name: tenant-test-monitoring-system
+          spec:
+            # Confidential client. Absent and false both mean that, and the
+            # chart's `false` has been seen not to survive on a live cluster,
+            # so either passes; only true fails.
+            (contains(keys(@), 'public') && public): false
+            secret: $monitoring-system-oidc-client:client-secret
+    - assert:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClientScope
+          metadata:
+            name: tenant-test-monitoring-system-audience
+          spec:
+            (protocolMappers[*].protocolMapper): [oidc-audience-mapper]
+            (protocolMappers[*].config."included.client.audience"): [tenant-test-monitoring-system]
+    # Group directory objects belong to the tenant chart, not to each
+    # Monitoring release. Checked after the KeycloakClient above is present, so
+    # the absence is a statement about a release that did render.
+    - error:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          metadata:
+            name: tenant-test-monitoring-system-admin
+    - error:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          metadata:
+            name: tenant-test-monitoring-system-editor
+    - error:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakRealmGroup
+          metadata:
+            name: tenant-test-monitoring-system-viewer
+    - assert:
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: monitoring-system-oidc-users
+          spec:
+            template:
+              spec:
+                (containers[?name == 'reconcile'].env[] | [?name == 'OIDC_MODE'].value): [System]
+                (containers[?name == 'reconcile'].env[] | [?name == 'DESIRED_USERS_JSON'].value): ['[{"email":"e2e-admin@example.com","role":"Admin"}]']
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: grafana-deployment
+          spec:
+            template:
+              spec:
+                (containers[?name == 'grafana'].env[] | [?name == 'GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET'].valueFrom.secretKeyRef.name): [monitoring-system-oidc-client]
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: monitoring-system-oidc-client
+    # The value is generated once by the chart and kept across upgrades by a
+    # lookup; its shape is the part an assert cannot express.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          encoded=$(timeout 30 kubectl -n "$NAMESPACE" get secret monitoring-system-oidc-client \
+            -o jsonpath='{.data.client-secret}')
+          value=$(printf '%s' "$encoded" | base64 -d)
+          echo "client-secret length: ${#value}"
+          printf '%s\n' "$value" | grep -Eqx '[A-Za-z0-9]{32}'
+
+  - name: system-mode-did-not-remediate
+    try:
+    - script:
+        # The inner release carries `remediation.retries: -1` and the outer one,
+        # generated by cozystack-api, retries on failure, so either can go Ready
+        # after a failed install or upgrade. A failed install leaves a `failed`
+        # or `uninstalled` snapshot (e2e-testing.md §6), but helm-controller
+        # truncates .status.history after the previous deployed or superseded
+        # snapshot, so a failed upgrade that a rollback and a retry recovered
+        # leaves no such entry. Each mode change is one helm upgrade, so the
+        # revision count is what still shows it: a rollback or a retry adds
+        # revisions the test did not ask for.
+        timeout: 2m
+        env:
+        - name: EXPECTED_REVISION
+          value: "1"
+        content: &remediation-guard |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/remediation-guard.sh
+          for hr in monitoring monitoring-system; do
+            statuses=$(timeout 30 kubectl -n "$NAMESPACE" get helmrelease "$hr" \
+              -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")
+            latest=$(timeout 30 kubectl -n "$NAMESPACE" get helmrelease "$hr" \
+              -o jsonpath='{.status.history[0].version}')
+            echo "HelmRelease $hr history statuses (latest revision ${latest:-<none>}):"
+            printf '%s\n' "${statuses:-<empty>}"
+            if [ -z "$statuses" ]; then
+              echo "empty .status.history on a Ready HelmRelease $hr - the Flux API shape may have changed" >&2
+              exit 1
+            fi
+            if helmrelease_has_remediation_cycle "$statuses"; then
+              echo "HelmRelease $hr went through a remediation cycle" >&2
+              exit 1
+            fi
+            if [ "$latest" != "$EXPECTED_REVISION" ]; then
+              echo "HelmRelease $hr is at revision $latest, expected $EXPECTED_REVISION: a failed action was rolled back or retried" >&2
+              exit 1
+            fi
+          done
+
+  - name: swap-to-customconfig-inline
+    try:
+    - apply:
+        file: monitoring-customconfig-inline.yaml
+    # The inner release applies the Grafana CR at the start of its upgrade, so
+    # this is the first sign the new values arrived, and it bumps the inner
+    # HelmRelease's generation before any Ready check below can read a stale
+    # one.
+    - assert:
+        resource:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: Grafana
+          metadata:
+            name: grafana
+          spec:
+            config:
+              auth.generic_oauth:
+                client_id: byo-monitoring
+                client_secret: byo-secret
+                auth_url: https://idp.example.test/auth
+                token_url: https://idp.example.test/token
+                api_url: https://idp.example.test/userinfo
+                # Forced by the chart over the tenant's map for the users-Job.
+                skip_org_role_sync: "true"
+                oauth_allow_insecure_email_lookup: "true"
+                # A System-mode key surviving the upgrade would keep gating
+                # logins on cozy-realm groups this issuer never emits.
+                (contains(keys(@), 'allowed_groups')): false
+    # The post-upgrade hook replaces the Job only once the upgraded workloads
+    # are ready, so this carries the upgrade budget: the inner release's 15m
+    # spec.timeout plus the start margin.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: monitoring-system-oidc-users
+          spec:
+            template:
+              spec:
+                (containers[?name == 'reconcile'].env[] | [?name == 'OIDC_MODE'].value): [CustomConfig]
+                (containers[?name == 'reconcile'].env[] | [?name == 'DESIRED_USERS_JSON'].value): ['[{"email":"e2e-byo@example.com","role":"Viewer"}]']
+    # The Job above appears when the hook starts, not when it ends, and the
+    # hook runs inside the same 15m upgrade, so this keeps the full upgrade
+    # budget rather than what is left of it.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: monitoring-system
+          (contains(status.conditions[?type == 'Ready' && status == 'True'].observedGeneration, metadata.generation)): true
+    - assert: &outer-ready-current
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: monitoring
+          (contains(status.conditions[?type == 'Ready' && status == 'True'].observedGeneration, metadata.generation)): true
+
+  - name: inline-upgrade-did-not-remediate
+    try:
+    - script:
+        timeout: 2m
+        env:
+        - name: EXPECTED_REVISION
+          value: "2"
+        content: *remediation-guard
+
+  # Leaving System mode has to take the cozy-realm objects with it. A client
+  # left behind keeps a live confidential client in the platform realm for a
+  # Grafana that no longer trusts it, and its Secret outlives the only consumer.
+  - name: customconfig-pruned-system-objects
+    try:
+    - error:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          metadata:
+            name: tenant-test-monitoring-system
+    - error:
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClientScope
+          metadata:
+            name: tenant-test-monitoring-system-audience
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: monitoring-system-oidc-client
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: grafana-deployment
+          spec:
+            template:
+              spec:
+                (containers[?name == 'grafana'].env[] | [?name == 'GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET']): []
+
+  - name: swap-to-customconfig-secretref
+    try:
+    - apply:
+        file: monitoring-customconfig-secretref.yaml
+    # The upgrade-time failure this pins: the inline block surviving next to
+    # the mount, which keeps the previous issuer in force after the tenant
+    # moved to its own ini fragment.
+    - assert:
+        resource:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: Grafana
+          metadata:
+            name: grafana
+          spec:
+            (contains(keys(config), 'auth.generic_oauth')): false
+            deployment:
+              spec:
+                template:
+                  spec:
+                    (volumes[?name == 'oidc-custom-ini'].secret.secretName): [mon-oidc-byo-oauth]
+                    (containers[?name == 'grafana'].volumeMounts[] | [?name == 'oidc-custom-ini'].mountPath): [/etc/grafana/oidc]
+    # No users-Job renders in this shape, so the inner release's own Ready at
+    # the current generation is what marks the end of the upgrade; same 16m
+    # upgrade budget as the Job assert above.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: monitoring-system
+          (contains(status.conditions[?type == 'Ready' && status == 'True'].observedGeneration, metadata.generation)): true
+    - assert: *outer-ready-current
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: grafana-deployment
+          spec:
+            template:
+              spec:
+                (volumes[?name == 'oidc-custom-ini'].secret.secretName): [mon-oidc-byo-oauth]
+                (containers[?name == 'grafana'].volumeMounts[] | [?name == 'oidc-custom-ini'].mountPath): [/etc/grafana/oidc]
+
+  - name: secretref-upgrade-did-not-remediate
+    try:
+    - script:
+        timeout: 2m
+        env:
+        - name: EXPECTED_REVISION
+          value: "3"
+        content: *remediation-guard

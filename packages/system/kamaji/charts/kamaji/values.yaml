@@ -98,12 +98,32 @@ loggingDevel:
 # -- If specified, all the Kamaji instances with an unassigned DataStore will inherit this default value.
 defaultDatastoreName: default
 
+certManager:
+  # -- Reference to an existing cert-manager issuer that signs the webhook serving certificate. When
+  # `name` is empty the chart creates a self-signed `Issuer` named `kamaji-selfsigned-issuer` and uses
+  # that. Set this to chain the webhook certificate to a certificate authority you own. `kind` defaults
+  # to `Issuer` and `group` to `cert-manager.io`. Note that the `kamaji-etcd` subchart has its own
+  # `kamaji-etcd.certManager.issuerRef`, which defaults to `kamaji-selfsigned-issuer` and has to be
+  # updated as well when the etcd certificates are issued by cert-manager.
+  issuerRef: {}
+    # name: my-issuer
+    # kind: ClusterIssuer
+    # group: cert-manager.io
+
 # -- Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml
 kamaji-etcd:
   deploy: true
   fullnameOverride: kamaji-etcd
   ## -- Important, this must match your management cluster's clusterDomain, otherwise the init jobs will fail
   clusterDomain: "cluster.local"
+  selfSignedCertificates:
+    enabled: false
+  certManager:
+    enabled: true
+    issuerRef:
+      name: kamaji-selfsigned-issuer
+      kind: Issuer
+      group: cert-manager.io
   datastore:
     enabled: true
     name: default

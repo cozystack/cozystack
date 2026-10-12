@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubernetes-worker-image
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.kubevirt-cdi
+      components:
+        - name: kubernetes-worker-image
+          path: system/kubernetes-worker-image
+          install:
+            namespace: cozy-system
+            releaseName: kubernetes-worker-image
+            # Ready only once every golden has imported. Worker pools read each
+            # golden's phase directly and do not wait on this status, so the
+            # gate delays no pool; it only stops the catalog reporting green
+            # over an import that never finished. See vm-default-images.yaml
+            # for how the expressions treat each phase.
+            healthCheckExprs:
+              - apiVersion: cdi.kubevirt.io/v1beta1
+                kind: DataVolume
+                failed: "has(status.phase) && status.phase == 'Failed'"
+                current: "has(status.phase) && status.phase == 'Succeeded'"

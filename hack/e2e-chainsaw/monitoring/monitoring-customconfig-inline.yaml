@@ -1,0 +1,33 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Monitoring
+metadata:
+  name: monitoring
+spec:
+  host: ""
+  metricsStorages:
+  - name: shortterm
+    retentionPeriod: "3d"
+    deduplicationInterval: "15s"
+    storage: 10Gi
+    storageClassName: ""
+  vmagent:
+    remoteWrite:
+      urls:
+      - http://vminsert-shortterm:8480/insert/0/prometheus
+  logsStorages:
+  - name: generic
+    retentionPeriod: "1"
+    storage: 10Gi
+    storageClassName: ""
+  oidc:
+    mode: CustomConfig
+    customConfig:
+      config:
+        client_id: byo-monitoring
+        client_secret: byo-secret
+        auth_url: https://idp.example.test/auth
+        token_url: https://idp.example.test/token
+        api_url: https://idp.example.test/userinfo
+    users:
+    - email: e2e-byo@example.com
+      role: Viewer

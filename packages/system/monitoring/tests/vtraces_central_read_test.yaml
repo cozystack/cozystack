@@ -1,0 +1,405 @@
+suite: shared-central traces read path
+templates:
+  - templates/vtraces/vmauth.yaml
+  - templates/vtraces/vmuser.yaml
+  - templates/vtraces/grafana-datasource.yaml
+  - templates/vtraces/vtraces.yaml
+
+# Expected IDs are sha256 values computed outside helm (python hashlib): of the
+# namespace name in an offline render, of "<name>:<uid>" when the namespace is
+# known.
+tests:
+  - it: fronts the shared generic store with a VMAuth in tenant-root
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: VMAuth
+      - equal:
+          path: metadata.name
+          value: traces-central
+      - equal:
+          path: spec.selectAllByDefault
+          value: false
+      - equal:
+          path: spec.internalListenPort
+          value: "8426"
+      # Two replicas are what make maxUnavailable: 1 leave one serving.
+      - equal:
+          path: spec.replicaCount
+          value: 2
+      # Every central tenant writes and reads through this one vmauth, so a
+      # single node drain must not take both replicas down.
+      - equal:
+          path: spec.podDisruptionBudget
+          value:
+            maxUnavailable: 1
+      - equal:
+          path: spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmauth
+                  app.kubernetes.io/instance: traces-central
+      # Its config-init and config-reloader read the config Secret from the
+      # apiserver, which tenant egress allows only to pods carrying this label.
+      - equal:
+          path: spec.podMetadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.userSelector
+          value:
+            matchLabels:
+              tracing.cozystack.io/central-reader: "true"
+      - equal:
+          path: spec.userNamespaceSelector
+          value:
+            matchExpressions:
+              - key: namespace.cozystack.io/monitoring
+                operator: Exists
+
+  # A store named generic is also tenant-root's own; accepting other tenants'
+  # spans into it is a separate decision.
+  - it: renders no VMAuth in tenant-root that did not opt in to hosting
+    release:
+      namespace: tenant-root
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: treats a tracingCentralHost string other than true as no consent
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: "no"
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses hosting in tenant-root without a generic store
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: other
+          mode: cluster
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingCentralHost is set, but tracingStorages has no entry named "generic" in cluster mode to host the shared store in.'
+
+  - it: refuses hosting on a single-mode generic store, which has no vtselect
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: single
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingCentralHost is set, but tracingStorages has no entry named "generic" in cluster mode to host the shared store in.'
+
+  - it: renders no VMAuth outside tenant-root
+    release:
+      namespace: tenant-foo
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    template: templates/vtraces/vmauth.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The collector holds the tenant to its write rate, so the only login that
+  # may write is the collector's. Grafana gets a login that can only read:
+  # vmauth cleans the request path before it picks a route, so a write sent
+  # through a Grafana datasource proxy as ../insert would otherwise reach
+  # vtinsert past the limiter.
+  - it: gives a central tenant a write login pinned to its own account
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+    template: templates/vtraces/vmuser.yaml
+    documentIndex: 0
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: VMUser
+      - equal:
+          path: metadata.name
+          value: traces-central
+      - equal:
+          path: metadata.labels["tracing.cozystack.io/central-reader"]
+          value: "true"
+      # The default username is metadata.name, the same in every tenant.
+      - equal:
+          path: spec.username
+          value: tenant-foo
+      # The chart owns the credentials; the operator must not generate a
+      # second password it only publishes once a VMAuth selects this user.
+      - equal:
+          path: spec.passwordRef
+          value:
+            name: traces-central-credentials
+            key: password
+      - equal:
+          path: spec.disable_secret_creation
+          value: true
+      - notExists:
+          path: spec.generatePassword
+      # One tenant must not take all of the shared vmauth: past this many
+      # requests in flight vmauth answers 429, which the exporter retries.
+      - equal:
+          path: spec.max_concurrent_requests
+          value: 4
+      - equal:
+          path: spec.targetRefs
+          value:
+            - crd:
+                kind: VTCluster/vtinsert
+                name: generic
+                namespace: tenant-root
+              paths:
+                - /insert/opentelemetry/v1/traces
+              headers:
+                - "AccountID: 3333747902"
+                - "ProjectID: 2511166196"
+
+  - it: gives a central tenant a read-only login pinned to the same account
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+    template: templates/vtraces/vmuser.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: VMUser
+      - equal:
+          path: metadata.name
+          value: traces-central-reader
+      - equal:
+          path: metadata.labels["tracing.cozystack.io/central-reader"]
+          value: "true"
+      # A namespace name holds no dot, so no tenant's write login can share it.
+      - equal:
+          path: spec.username
+          value: tenant-foo.reader
+      - equal:
+          path: spec.passwordRef
+          value:
+            name: traces-central-reader-credentials
+            key: password
+      - equal:
+          path: spec.disable_secret_creation
+          value: true
+      - notExists:
+          path: spec.generatePassword
+      - equal:
+          path: spec.max_concurrent_requests
+          value: 4
+      - equal:
+          path: spec.targetRefs
+          value:
+            - crd:
+                kind: VTCluster/vtselect
+                name: generic
+                namespace: tenant-root
+              paths:
+                - /select/jaeger/.*
+              headers:
+                - "AccountID: 3333747902"
+                - "ProjectID: 2511166196"
+
+  # A tenant re-created under a deleted tenant's name must not get its spans.
+  - it: derives the account from the namespace UID as well as its name
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+    kubernetesProvider:
+      scheme:
+        "v1/Namespace":
+          gvr:
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "operator.victoriametrics.com/v1beta1/VMAuth":
+          gvr:
+            group: "operator.victoriametrics.com"
+            version: "v1beta1"
+            resource: "vmauths"
+          namespaced: true
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-foo
+            uid: 3f0e7a1c-5b2d-4c8e-9a6f-1d2e3c4b5a69
+        - kind: VMAuth
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central
+            namespace: tenant-root
+    template: templates/vtraces/vmuser.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.targetRefs[0].headers
+          value:
+            - "AccountID: 3341781467"
+            - "ProjectID: 10782784"
+      - documentIndex: 1
+        equal:
+          path: spec.targetRefs[0].headers
+          value:
+            - "AccountID: 3341781467"
+            - "ProjectID: 10782784"
+
+  - it: gives a different tenant a different account, including IDs above 2^31
+    release:
+      namespace: tenant-bar
+    set:
+      _namespace:
+        tracingCentral: true
+    template: templates/vtraces/vmuser.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.targetRefs[0].headers
+          value:
+            - "AccountID: 4290741035"
+            - "ProjectID: 2806397044"
+
+  # A backend value in the Monitoring application is not a switch.
+  - it: ignores a backend value set in the Monitoring application
+    release:
+      namespace: tenant-foo
+    set:
+      tracingCollector:
+        backend: central
+    template: templates/vtraces/vmuser.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: never treats tenant-root as a central tenant, so its store stays rendered
+    release:
+      namespace: tenant-root
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    templates:
+      - templates/vtraces/vmuser.yaml
+      - templates/vtraces/vtraces.yaml
+    asserts:
+      - template: templates/vtraces/vmuser.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vtraces/vtraces.yaml
+        containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTCluster
+          name: generic
+
+  # Only a real true switches it on; a string that merely reads truthy does not.
+  - it: treats a tracingCentral string other than true as off
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: "false"
+    template: templates/vtraces/vmuser.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no VMUser in local mode
+    release:
+      namespace: tenant-foo
+    template: templates/vtraces/vmuser.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: points a central tenant's datasource at vmauth with the read-only login
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+    template: templates/vtraces/grafana-datasource.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: traces-central
+      - equal:
+          path: spec.datasource.type
+          value: jaeger
+      - equal:
+          path: spec.datasource.url
+          value: http://vmauth-traces-central.tenant-root.svc:8427/select/jaeger
+      - equal:
+          path: spec.datasource.basicAuth
+          value: true
+      - equal:
+          path: spec.datasource.basicAuthUser
+          value: ${username}
+      - equal:
+          path: spec.datasource.secureJsonData.basicAuthPassword
+          value: ${password}
+      - equal:
+          path: spec.valuesFrom
+          value:
+            - targetPath: basicAuthUser
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-reader-credentials
+                  key: username
+            - targetPath: secureJsonData.basicAuthPassword
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-reader-credentials
+                  key: password

@@ -1,8 +1,19 @@
 migrations:
   enabled: true
 bundles:
+  # The system bundle carries two things: a variant-selected data-plane head
+  # (kubeovn/cilium/linstor on isp-full, a noop networking Package here) and a
+  # variant-agnostic control-plane body (cozystack-engine — the sole source of
+  # the ApplicationDefinition CRD — plus cert-manager, prometheus-operator-crds,
+  # postgres-operator, objectstorage-controller and the *-application catalog).
+  # "Hosted" drops the data-plane head only: the host already provides CNI,
+  # storage and virtualisation. That is expressed by variant: isp-hosted, NOT by
+  # disabling the bundle — turning it off also deletes the control-plane body,
+  # which leaves every paas/naas application Package permanently
+  # DependenciesNotReady. iaas stays off; see templates/bundles/iaas.yaml, which
+  # refuses to render on this variant.
   system:
-    enabled: false
+    enabled: true
     variant: "isp-hosted"
   iaas:
     enabled: false

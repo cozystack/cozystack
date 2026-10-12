@@ -27,6 +27,17 @@ rules:
 - apiGroups: ["cozystack.io"]
   resources: ["*"]
   verbs: ["get", "watch", "list"]
+# Marketplace Tap resource: disconnecting a tap deletes its (cluster-scoped)
+# PackageSource and the tap-managed registration Package that de-registers its
+# apps. The tap's Flux OCIRepository is read here for List/Get/Watch; its write
+# verbs are scoped to a namespaced Role in cozy-system (see tap-source-role.yaml),
+# since the API only ever manages tap sources there.
+- apiGroups: ["cozystack.io"]
+  resources: ["packagesources", "packages"]
+  verbs: ["delete"]
+- apiGroups: ["source.toolkit.fluxcd.io"]
+  resources: ["ocirepositories"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["*"]
   verbs: ["*"]
@@ -36,6 +47,10 @@ rules:
   verbs: ["get", "watch", "list"]
 - apiGroups: ["kubevirt.io"]
   resources: ["kubevirts"]
+  verbs: ["get", "watch", "list"]
+# The image picker drops golden images whose import Failed.
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["instancetype.kubevirt.io"]
   resources: ["virtualmachineclusterinstancetypes", "virtualmachineclusterpreferences"]
@@ -51,6 +66,19 @@ rules:
   verbs: ["get", "watch", "list"]
 - apiGroups: ["apps.cozystack.io"]
   resources: ["vmdisks"]
+  verbs: ["get", "watch", "list"]
+# The sourceRef picker on a VMImportTask is an Option provider, which lists
+# the sources through the dynamic client under this ServiceAccount. Without
+# the group here the provider registers and then answers with an empty list,
+# so the form offers no connection to import from.
+- apiGroups: ["forklift.cozystack.io"]
+  resources: ["vmimportsources"]
+  verbs: ["get", "watch", "list"]
+# The VM picker reads the machine list the migration controller publishes for
+# each source. Read-only, and only ever fetched by a name derived from the
+# source the tenant already chose.
+- apiGroups: [""]
+  resources: ["configmaps"]
   verbs: ["get", "watch", "list"]
 # The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
 # storage CRUDs these objects with the cozystack-api ServiceAccount.

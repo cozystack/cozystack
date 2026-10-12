@@ -1185,6 +1185,11 @@ func TestApplicationDefinitionPredicate_GatesOnSecrets(t *testing.T) {
 			want: true,
 		},
 		{
+			name:   "kind change is delivered, since it can move ownership of a kind",
+			mutate: func(d *cozyv1alpha1.ApplicationDefinition) { d.Spec.Application.Kind = "SomethingElse" },
+			want:   true,
+		},
+		{
 			name:   "identical definition is not delivered",
 			mutate: func(*cozyv1alpha1.ApplicationDefinition) {},
 			want:   false,
@@ -1488,10 +1493,14 @@ func TestOwnedSolelyBy(t *testing.T) {
 	}
 }
 
-// TestProjectionNameCannotCollideWithAnEngineCASecret pins the property the
-// canonical name exists to have: no engine CA Secret, for any release, can ever
-// produce the dotted "<release>.tenant-ca" name.
-func TestProjectionNameCannotCollideWithAnEngineCASecret(t *testing.T) {
+// TestProjectionNameCannotCollideWithADotFreeEngineSuffix pins the property the
+// canonical name exists to have, over the dot-free engine suffixes it samples:
+// no engine CA Secret takes the dotted "<release>.tenant-ca" name. Validation
+// elsewhere generalises this over the releases the apps API created and no
+// further, a hand-written HelmRelease being free to carry a dot in its name;
+// over suffixes nothing validates anything, so there the fixtures are the whole
+// coverage. See projectionSuffix.
+func TestProjectionNameCannotCollideWithADotFreeEngineSuffix(t *testing.T) {
 	engineSuffixes := []string{"-ca", "-ca-cert", "-cluster-ca-cert", "-clients-ca-cert", "-ssl", "-tls"}
 	prefixes := []string{"", "postgres-", "kafka-", "clickhouse-", "http-cache-"}
 	appNames := []string{
@@ -1500,8 +1509,8 @@ func TestProjectionNameCannotCollideWithAnEngineCASecret(t *testing.T) {
 	}
 
 	if !strings.HasPrefix(projectionSuffix, ".") {
-		t.Fatalf("the canonical suffix must start with a dot; it is what makes the name "+
-			"unreachable by any engine. Got %q", projectionSuffix)
+		t.Fatalf("the canonical suffix must start with a dot; it is what keeps the name "+
+			"out of reach of a dot-free engine suffix. Got %q", projectionSuffix)
 	}
 
 	for _, prefix := range prefixes {
@@ -1520,5 +1529,28 @@ func TestProjectionNameCannotCollideWithAnEngineCASecret(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestApplicationDefinition_ResolvesKindOwner pins that the definition whose
+// spec.secrets decide a release's projection is the one that owns the kind: a
+// later definition declaring the same kind, even one that sorts first by name,
+// must not be the one whose selectors are read.
+func TestApplicationDefinition_ResolvesKindOwner(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	owner := appDef()
+	owner.CreationTimestamp = metav1.NewTime(base)
+	shadow := appDef()
+	shadow.Name = "a-postgres-shadow"
+	shadow.CreationTimestamp = metav1.NewTime(base.Add(time.Hour))
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(shadow, owner).Build()
+	r := newReconciler(c, record.NewFakeRecorder(1))
+
+	got, err := r.applicationDefinition(context.TODO(), application{Group: appsGroup, Kind: testAppKind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Name != "postgres" {
+		t.Fatalf("resolved %+v, want the owner postgres", got)
 	}
 }

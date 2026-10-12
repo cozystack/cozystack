@@ -1,0 +1,1151 @@
+suite: Alertmanager email receiver
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# Baseline `_cluster` / `_namespace` values wired by cozystack-basics
+# at install time. Individual tests override `alerta.alerts.email.*`.
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+
+# Email delivery is opt-in twice: the receiver only renders when
+# alerta.alerts.email is configured, and even then only alerts labelled
+# notify_email="true" with a severity from the severities list (default
+# critical|major) are routed to it. The alertnames list is the values-side
+# producer: names on it are emailed with no label or severity requirement, so
+# platform-shipped rules can be opted in per cluster. Every route to email is
+# preceded by an alerta route with `continue: true`, so a broken SMTP path can
+# never swallow an alert from the primary channel.
+tests:
+  - it: renders no email receiver, email routes or secrets mount by default
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "name: email"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "receiver: email"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "notify_email"
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.secrets
+
+  - it: renders the email receiver, both routes and the fixed password Secret mount when configured
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: "/etc/vm/secrets/alertmanager-email-password/password"\n    send_resolved: true'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.secrets
+          value:
+            - alertmanager-email-password
+
+  - it: mounts only the fixed password Secret when the values name another one
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            secretName: grafana-db-app
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'auth_password_file: "/etc/vm/secrets/alertmanager-email-password/password"'
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.secrets
+          value:
+            - alertmanager-email-password
+
+  - it: lets the email routes inherit the root group_by
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["KubeAPIDown"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '^global:\n  resolve_timeout: 5m\nroute:\n  group_by: \[alertname, namespace, cluster\]\n'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'group_by: \[alertname, cluster\]'
+
+  - it: works without SMTP auth when authUsername is omitted
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:25"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:25"\n    send_resolved: true'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "auth_username"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "auth_password_file"
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.secrets
+
+  - it: never renders a Subject header or html body
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "Subject:"
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "html:"
+
+  - it: accepts a bracketed IPv6 smarthost
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "[2001:db8::25]:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    smarthost: "\[2001:db8::25\]:587"\n'
+
+  - it: fails the render when smarthost has no port
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got "smtp.example.org"'
+
+  - it: fails the render when the smarthost port is zero
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:0"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost port must be between 1 and 65535, got "smtp.example.org:0"'
+
+  - it: fails the render when the smarthost port is above 65535
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:70000"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost port must be between 1 and 65535, got "smtp.example.org:70000"'
+
+  - it: fails the render when smarthost carries a scheme or path
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp://smtp.example.org:465/"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.smarthost must be host:port, such as smtp.example.com:587, got "smtp://smtp.example.org:465/"'
+
+  - it: fails the render when the email block is only partially configured
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are to"
+
+  - it: names the residual fields when the addresses are cleared to turn email off
+    set:
+      alerta:
+        alerts:
+          email:
+            to: ""
+            from: ""
+            smarthost: ""
+            repeatInterval: "6h"
+            severities: ["critical"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are repeatInterval, severities"
+
+  - it: fails the render when only authUsername is set
+    set:
+      alerta:
+        alerts:
+          email:
+            authUsername: "mailer@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are authUsername"
+
+  - it: fails the render when only repeatInterval is set
+    set:
+      alerta:
+        alerts:
+          email:
+            repeatInterval: "6h"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are repeatInterval"
+
+  - it: fails the render when only alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            alertnames: ["KubeAPIDown"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are alertnames"
+
+  - it: fails the render when only severities is set
+    set:
+      alerta:
+        alerts:
+          email:
+            severities: ["critical"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are severities"
+
+  - it: fails the render when repeatInterval is not a duration
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "tomorrow"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 5m, 12h or 1h30m, got "tomorrow"'
+
+  - it: fails the render when repeatInterval lists its units out of order
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "30s5m"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 5m, 12h or 1h30m, got "30s5m"'
+
+  - it: fails the render when repeatInterval repeats a unit
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "5m5m"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval must be an Alertmanager duration with units in descending order, each at most once, such as 5m, 12h or 1h30m, got "5m5m"'
+
+  - it: fails the render when repeatInterval is zero
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "0s"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval cannot be zero, got "0s"'
+
+  - it: fails the render when repeatInterval overflows what Alertmanager accepts
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "999y"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval is out of range for Alertmanager, got "999y"'
+
+  - it: fails the render one year past the Alertmanager duration limit
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "293y"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.repeatInterval is out of range for Alertmanager, got "293y"'
+
+  - it: accepts whole years near the Alertmanager duration limit
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "292y"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "292y"\n'
+
+  - it: quotes a custom repeatInterval so a stray value cannot break out of the config
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1h30m"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1h30m"\n'
+
+  - it: accepts a repeatInterval with every unit in order
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            repeatInterval: "1y2w3d4h5m6s7ms"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '    repeat_interval: "1y2w3d4h5m6s7ms"\n'
+
+  - it: renders the alertname routes after the notify_email routes when alertnames is set
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["KubeAPIDown", "etcdMembersDown"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".\n  - receiver: alerta\n    continue: true\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .alertname=~"\^\(KubeAPIDown\|etcdMembersDown\)\$".'
+
+  - it: renders no alertname route when alertnames is empty
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: 'alertname=~"\^'
+
+  - it: renders a custom severities matcher on both notify_email routes
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ["critical", "major", "warning"]
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: "12h"\n    matchers:\n    - .severity=~"critical\|major\|warning".\n    - .notify_email="true".'
+
+  - it: fails the render when an alertnames entry is not a plain alert name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames: ["bad name"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.alertnames entries must be Prometheus alert names, got "bad name"'
+
+  - it: fails the render when a severities entry is not a plain severity name
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            severities: ['critical"']
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.severities entries must be plain severity names, got "critical\""'
+
+  - it: accepts a comma-separated recipient list
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org, backup@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "oncall@example\.org, backup@example\.org"'
+
+  - it: accepts a display name on both addresses
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "Oncall <oncall@example.org>"
+            from: "Alerts <alerts@example.org>"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "Oncall <oncall@example\.org>"\n    from: "Alerts <alerts@example\.org>"'
+
+  - it: accepts a domain literal, the way smarthost accepts a bracketed address
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@[192.0.2.25]"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '  - to: "oncall@\[192\.0\.2\.25\]"'
+
+  - it: fails the render when a recipient address has no at sign
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall.example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "oncall.example.org"'
+
+  - it: fails the render when a recipient address carries a space
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "oncall example.org"'
+
+  - it: fails the render when a recipient local part has a doubled dot
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "john..doe@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "john..doe@example.org"'
+
+  - it: fails the render when a recipient local part has a leading dot
+    set:
+      alerta:
+        alerts:
+          email:
+            to: ".john@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got ".john@example.org"'
+
+  - it: fails the render when a recipient local part has a dot before the at sign
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "john.doe.@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "john.doe.@example.org"'
+
+  - it: fails the render when a recipient address carries a pasted mailto prefix
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "mailto:oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "mailto:oncall@example.org"'
+
+  - it: fails the render when one recipient in the list is malformed
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org, backup example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got "backup example.org"'
+
+  - it: fails the render when the recipient list has an empty entry
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org,"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.to has an empty entry, got "oncall@example.org,"'
+
+  - it: fails the render when from carries a list instead of one address
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org, second@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got "alerts@example.org, second@example.org"'
+
+  - it: fails the render when the sender address carries a space
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got "alerts example.org"'
+
+  - it: fails the render when to is the only address missing
+    set:
+      alerta:
+        alerts:
+          email:
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are from, smarthost"
+
+  - it: fails the render when from is the only address missing
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            smarthost: "smtp.example.org:587"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are to, smarthost"
+
+  - it: fails the render when smarthost is the only field missing
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are to, from"
+
+  - it: rejects an unquoted colon in the recipient name
+    set:
+      alerta.alerts.email.to: "Bad:Name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad:Name <oncall@example.org>\""
+
+  - it: rejects an unquoted at sign in the recipient name
+    set:
+      alerta.alerts.email.to: "Bad@Name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad@Name <oncall@example.org>\""
+
+  - it: rejects an unmatched opening comment
+    set:
+      alerta.alerts.email.to: "Bad(Name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad(Name <oncall@example.org>\""
+
+  - it: rejects an unmatched closing comment
+    set:
+      alerta.alerts.email.to: "Bad)Name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad)Name <oncall@example.org>\""
+
+  - it: rejects an unquoted backslash in the recipient name
+    set:
+      alerta.alerts.email.to: "Bad\\Name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad\\\\Name <oncall@example.org>\""
+
+  - it: rejects an unclosed quoted name
+    set:
+      alerta.alerts.email.to: "\"Bad name <oncall@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"\\\"Bad name <oncall@example.org>\""
+
+  - it: rejects an IPv4 octet above 255
+    set:
+      alerta.alerts.email.to: "bad@[999.999.999.999]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[999.999.999.999]\""
+
+  - it: rejects a leading zero in an IPv4 octet
+    set:
+      alerta.alerts.email.to: "bad@[01.2.3.4]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[01.2.3.4]\""
+
+  - it: rejects a non-IP domain literal
+    set:
+      alerta.alerts.email.to: "bad@[abc]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[abc]\""
+
+  - it: rejects multiple IPv6 compression markers
+    set:
+      alerta.alerts.email.to: "bad@[1::2::3]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[1::2::3]\""
+
+  - it: rejects an incomplete uncompressed IPv6 address
+    set:
+      alerta.alerts.email.to: "bad@[1:2:3:4:5:6:7]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[1:2:3:4:5:6:7]\""
+
+  - it: rejects an IPv6 address with no room for compression
+    set:
+      alerta.alerts.email.to: "bad@[1:2:3:4:5:6:7:8::]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"bad@[1:2:3:4:5:6:7:8::]\""
+
+  - it: rejects a malformed named recipient later in the list
+    set:
+      alerta.alerts.email.to: "oncall@example.org, Bad:Name <backup@example.org>"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"Bad:Name <backup@example.org>\""
+
+  - it: rejects an unquoted colon in the sender name
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "Bad:Name <alerts@example.org>"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"Bad:Name <alerts@example.org>\""
+
+  - it: rejects an invalid sender IP literal
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "alerts@[999.0.0.1]"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@[999.0.0.1]\""
+
+  - it: rejects a bracketed tag in the sender name
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "[Alerts] <alerts@example.org>"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"[Alerts] <alerts@example.org>\""
+
+  - it: rejects an IPv4 literal with three parts
+    set:
+      alerta.alerts.email.to: "oncall@[192.0.2]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[192.0.2]\""
+
+  - it: rejects an IPv6 literal made only of colons
+    set:
+      alerta.alerts.email.to: "oncall@[::::]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[::::]\""
+
+  - it: rejects a newline around the sender address
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "alerts@example.org\n"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@example.org\\n\""
+
+  - it: rejects a newline around a recipient address
+    set:
+      alerta.alerts.email.to: "oncall@example.org\r\n"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@example.org\\r\\n\""
+
+  - it: rejects non-ASCII whitespace around a bare address
+    set:
+      alerta.alerts.email.to: " oncall@example.org"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"\\u00a0oncall@example.org\""
+
+  - it: accepts a quoted recipient name with punctuation
+    set:
+      alerta.alerts.email.to: "\"Bad:Name@Oncall (primary)\" <oncall@example.org>"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"\\\\\"Bad:Name@Oncall \\(primary\\)\\\\\" <oncall@example\\.org>\"$"
+
+  - it: accepts an escaped quote in a quoted name
+    set:
+      alerta.alerts.email.to: "\"Oncall \\\"primary\\\"\" <oncall@example.org>"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"\\\\\"Oncall \\\\\\\\\\\\\"primary\\\\\\\\\\\\\"\\\\\" <oncall@example\\.org>\"$"
+
+  - it: accepts a UTF-8 display name
+    set:
+      alerta.alerts.email.to: "Дежурный инженер <oncall@example.org>"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"Дежурный инженер <oncall@example\\.org>\"$"
+
+  - it: accepts several named recipients
+    set:
+      alerta.alerts.email.to: "Oncall <oncall@example.org>, Backup Team <backup@example.org>"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"Oncall <oncall@example\\.org>, Backup Team <backup@example\\.org>\"$"
+
+  - it: accepts IPv4 octet boundaries
+    set:
+      alerta.alerts.email.to: "oncall@[0.9.10.255]"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"oncall@\\[0\\.9\\.10\\.255\\]\"$"
+
+  - it: rejects an uncompressed IPv6 literal
+    set:
+      alerta.alerts.email.to: "oncall@[2001:db8:1:2:3:4:5:6]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[2001:db8:1:2:3:4:5:6]\""
+
+  - it: rejects a compressed IPv6 literal
+    set:
+      alerta.alerts.email.to: "oncall@[2001:db8::25]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[2001:db8::25]\""
+
+  - it: rejects an IPv6 loopback literal
+    set:
+      alerta.alerts.email.to: "oncall@[::1]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[::1]\""
+
+  - it: rejects the unspecified IPv6 literal
+    set:
+      alerta.alerts.email.to: "oncall@[::]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[::]\""
+
+  - it: rejects a trailing IPv6 compression
+    set:
+      alerta.alerts.email.to: "oncall@[2001:db8::]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[2001:db8::]\""
+
+  - it: rejects an IPv4-mapped IPv6 literal
+    set:
+      alerta.alerts.email.to: "oncall@[::ffff:192.0.2.25]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[::ffff:192.0.2.25]\""
+
+  - it: rejects an uncompressed mixed IPv6 literal
+    set:
+      alerta.alerts.email.to: "oncall@[2001:db8:1:2:3:4:192.0.2.25]"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[2001:db8:1:2:3:4:192.0.2.25]\""
+
+  - it: accepts a quoted question in a display name
+    set:
+      alerta.alerts.email.to: "\"Who?\" <oncall@example.org>"
+      alerta.alerts.email.from: '"Alerts: Primary" <alerts@example.org>'
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "(?m)^  - to: \"\\\\\"Who\\?\\\\\" <oncall@example\\.org>\"$"
+
+  - it: rejects an encoded display name with an unknown charset
+    set:
+      alerta.alerts.email.to: "=?unknown?Q?Oncall?= <oncall@example.org>"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"=?unknown?Q?Oncall?= <oncall@example.org>\""
+
+  - it: rejects a control character in a quoted name
+    set:
+      alerta.alerts.email.to: "\"Oncall\u0001\" <oncall@example.org>"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"\\\"Oncall\\x01\\\" <oncall@example.org>\""
+
+  - it: rejects template actions in the recipient local part
+    set:
+      alerta.alerts.email.to: "on{{bad}}@example.org"
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must contain literal addresses, without template actions"
+
+  - it: rejects template actions in a quoted recipient name
+    set:
+      alerta.alerts.email.to: '"{{bad}}" <oncall@example.org>'
+      alerta.alerts.email.from: alerts@example.org
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must contain literal addresses, without template actions"
+
+  - it: rejects template actions in the sender local part
+    set:
+      alerta.alerts.email.to: oncall@example.org
+      alerta.alerts.email.from: "alerts{{bad}}@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must contain a literal address, without template actions"
+
+  - it: accepts single literal braces in addresses
+    set:
+      alerta.alerts.email.to: "on{call}@example.org"
+      alerta.alerts.email.from: "alerts{primary}@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '(?m)^  - to: "on\{call\}@example\.org"$'
+  - it: rejects an IPv4 octet just above the maximum
+    set:
+      alerta.alerts.email.to: "oncall@[256.1.1.1]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[256.1.1.1]\""
+
+  - it: rejects a sender IPv4 octet just above the maximum
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "alerts@[256.1.1.1]"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@[256.1.1.1]\""
+
+  - it: rejects an IPv6 sender literal
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "alerts@[::1]"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@[::1]\""
+
+  - it: rejects an IPv6 prefix in a recipient literal
+    set:
+      alerta.alerts.email.to: "oncall@[IPv6:2001:db8::25]"
+      alerta.alerts.email.from: "alerts@example.org"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.to must be an address or a comma-separated list of addresses, such as oncall@example.org, got \"oncall@[IPv6:2001:db8::25]\""
+
+  - it: rejects an IPv6 prefix in a sender literal
+    set:
+      alerta.alerts.email.to: "oncall@example.org"
+      alerta.alerts.email.from: "alerts@[IPv6:2001:db8::25]"
+      alerta.alerts.email.smarthost: smtp.example.org:587
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@[IPv6:2001:db8::25]\""

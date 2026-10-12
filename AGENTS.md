@@ -20,15 +20,19 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Image references, tags and digests** (e.g., "why is this image tagged rc", "add an image to a package", "change how an image is stamped", "promotion/nightly missed an image", "where do image refs live")
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)
-  - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag and mirror tooling — extend it there rather than teaching an individual script a new path. Note `hack/overlay-main-images.sh` is a fourth consumer that still walks the tree itself and does not source the library
+  - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag, mirror, candidate-verify, multi-arch stitch and verify, and retention tooling — extend it there rather than teaching an individual script a new path. The one exception is `hack/overlay-main-images.sh`, which reads refs but walks the tree itself, so a newly declared file does not reach it; `hack/promote-packages-artifact.sh` sources nothing because it publishes the whole tree and consumes no refs at all — the doc carries both cases
 
-- **Project structure, conventions, code layout** (e.g., "where should I put X", "what's the convention for Y", "how is the project organized")
+- **Retiring an application** (e.g., "remove the X app", "deprecate X", "drop X from the catalog", "what happens to instances people already created")
+  - Read: [`deprecating-applications.md`](./docs/deprecating-applications.md)
+  - Action: Read the entire file before touching the tree. Deleting a chart is not a deletion: pruning its PackageSource garbage-collects the ArtifactGenerator and both ExternalArtifacts, which are the `chartRef` targets of the rd release and of every tenant release, so surviving instances sit `Ready=False` for good and `HelmReleaseNotReady` fires on every cluster carrying the bundle. An application with a successor migrates onto it; one without is frozen, per cluster, on the artifact that cluster already renders from, with the digest read off the live OCIRepository at hook time rather than written into the migration. The tenant RBAC grant comes out of the chart and is re-applied by the migration on the clusters that froze
+
+- **Go code, Helm charts, build and test commands, project structure** (e.g., "add a field to this CRD", "fix this controller", "add a value to the postgres chart", "regenerate the values schema", "how do I build/test this", "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
-  - Action: Read relevant sections to understand project structure and conventions
+  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
-  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no `EXIT`/`RETURN` traps, fail-fast on HelmRelease readiness
+  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no test-level `EXIT`/`RETURN` traps (a self-contained one inside a Chainsaw `script` step or an explicit subshell is fine — see the doc), no assertion beginning with `!` (errexit exempts an inverted status, so it cannot fail — write `if cmd; then echo "FAIL: …"; false; fi`), fail-fast on HelmRelease readiness
 
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
@@ -37,17 +41,15 @@ This file provides structured guidance for AI coding assistants and agents worki
 - **Issue and PR labeling, triage** (e.g., "label this issue", "what label should I use", "triage this", "categorize")
   - Read: [`.github/labels.yml`](./.github/labels.yml)
   - Action: Use labels defined there. Conventions follow the Kubernetes scheme — `kind/*` (type), `area/*` (subsystem), `priority/*` (urgency), `triage/*` (review state), `lifecycle/*` (auto-close), `do-not-merge/*` (PR blockers), `security/*` (severity)
+  - For `triage/*`: `.github/workflows/issue-triage.yaml` labels an issue on arrival and sweeps daily for any open issue carrying none, so change a triage decision by replacing the label rather than removing it — remove the only `triage/*` label an issue has and the next sweep puts one back
+  - A feature request that needs design first gets `triage/needs-proposal`, is re-filed in [cozystack/community](https://github.com/cozystack/community) as an issue or a design-proposal PR, and is closed here with a link to it (re-file rather than transfer, so the label stays on the closed issue as the record); work in this repository starts only once that proposal is accepted, from a new issue that references it
   - For `area/*`: accuracy outweighs reuse. If no existing `area/*` truly fits the change, propose a new one via PR (extend `.github/labels.yml` and the scope mapping in `.github/workflows/pr-labeler.yaml`) — do not shoehorn the change into a wrong area. `area/uncategorized` is the auto-labeler fallback; treat it as a signal to pick a fit, create a new area, or correct the PR title
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
-- ✅ **ONLY read the file if the task matches the documented process scope** - do not read files for tasks that don't match their purpose
-- ✅ **ALWAYS read the file FIRST** before starting the task (when applicable)
-- ✅ **Follow instructions EXACTLY** as written in the documentation
-- ✅ **Do NOT skip mandatory steps** (especially in changelog.md)
-- ✅ **Do NOT assume** you know the process - always check the documentation when the task matches
-- ❌ **Do NOT read files** for tasks that are outside their documented scope
-- 📖 **Note**: [`overview.md`](./docs/agents/overview.md) can be useful as a reference to understand project structure and conventions, even when not explicitly required by the task
+- **Match scope, then read first.** Load a process file only when the task genuinely falls in its scope, and load it before starting work — not midway through. Tasks outside a file's scope should not pull it into context.
+- **Follow it exactly.** Do not assume you already know the process, and do not skip steps (`changelog.md` especially). Where the documentation and your instinct disagree, the documentation wins.
+- **[`overview.md`](./docs/agents/overview.md) is the standing reference** for structure and conventions, useful even when no route above points at it.
 
 ## Project Overview
 
@@ -66,7 +68,8 @@ This file provides structured guidance for AI coding assistants and agents worki
 ### Conventions
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
-- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`
+- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`; an agent-assisted commit adds one `Assisted-by: LLM` trailer
+- **Comments and commit bodies**: WHY, not a narration of WHAT; see [Review Blockers](./docs/agents/contributing.md#review-blockers-messages-trailers-comments) in contributing.md
 - **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do
@@ -74,6 +77,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 - ❌ Modify `go.mod`/`go.sum` manually (use `go get`)
 - ❌ Force push to main/master
 - ❌ Commit built artifacts from `_out`
+- ❌ Credit an AI model or its vendor by name in a commit trailer or in an authorship line in a PR description or comment, or put a `Claude-Session:` trailer or a session URL into any of them
 - ❌ Hardwrap a prose paragraph in markdown, a PR body, or an issue comment
 
 ## Prose Formatting

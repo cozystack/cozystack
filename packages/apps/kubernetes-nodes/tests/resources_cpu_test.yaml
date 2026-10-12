@@ -1,0 +1,296 @@
+suite: worker pool resources.cpu
+
+# resources.cpu is typed as a quantity, but on the kubevirt substrate it lands
+# in the worker VM's domain.cpu.cores, which KubeVirt declares as uint32 and
+# the KubevirtMachineTemplate CRD as an integer. Only a whole number of cores
+# has a meaning there, and the same value decides whether the instancetype
+# matcher is dropped, so a value that cannot be one stops the render. Values
+# that already rendered a working pool keep rendering the same bytes: the
+# template name is a hash of its content, so any change would roll the pool.
+
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+tests:
+  - it: renders a quoted whole number as an integer core count
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an unquoted integer as the same core count
+    set:
+      resources:
+        cpu: 4
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 4
+
+  - it: renders a whole float as an integer core count
+    set:
+      resources:
+        cpu: 2.0
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  # The quantity grammar spells one whole number several ways, and each has
+  # always rendered: YAML decodes the emitted value to the integer.
+  - it: renders a quoted whole decimal as the same core count
+    set:
+      resources:
+        cpu: "2.0"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an explicit plus sign as the same core count
+    set:
+      resources:
+        cpu: "+2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  - it: renders an exponent spelling as the core count it decodes to
+    set:
+      resources:
+        cpu: "1e1"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 10
+
+  # Both ends of the range the error message promises.
+  - it: renders the smallest core count
+    set:
+      resources:
+        cpu: "1"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 1
+
+  - it: renders the largest core count uint32 can hold
+    set:
+      resources:
+        cpu: "4294967295"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 4294967295
+
+  - it: refuses a millicore quantity
+    set:
+      resources:
+        cpu: 500m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(500m\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  - it: refuses a millicore spelling of whole cores
+    set:
+      resources:
+        cpu: 2000m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(2000m\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  - it: refuses a fractional core count
+    set:
+      resources:
+        cpu: "1.5"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(1.5\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  # An unquoted zero is falsy, so it has always rendered as if the field were
+  # unset: no domain.cpu, sizing left to the instancetype. The template name
+  # below is what the chart rendered for it before this guard existed.
+  - it: keeps rendering an unquoted zero as an unset field
+    set:
+      resources:
+        cpu: 0
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
+      - equal:
+          path: metadata.name
+          value: kubernetes-myk8s-md0-28d812
+
+  # A quoted zero is truthy, so it never took the unset path. It was refused
+  # before this guard existed as well, by the kubelet CPU reservation check,
+  # which cannot fit any reservation into an effective CPU of zero cores.
+  - it: refuses a quoted zero
+    set:
+      resources:
+        cpu: "0"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(0\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  # The schema's quantity pattern admits a leading minus.
+  - it: refuses a negative core count
+    set:
+      resources:
+        cpu: "-2"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(-2\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  # A leading zero is emitted verbatim, as it always was, and YAML reads 010
+  # as octal. The template name is what the chart rendered for it before this
+  # guard existed, so a pool sized this way does not roll.
+  - it: keeps rendering a leading zero byte-identically
+    set:
+      resources:
+        cpu: "010"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-myk8s-md0-ce2335
+
+  # KubeVirt declares cores as uint32, so a count past its ceiling cannot size
+  # the guest even though it is a whole number.
+  - it: refuses a core count past the uint32 ceiling
+    set:
+      resources:
+        cpu: "4294967296"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(4294967296\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  - it: refuses an exponent spelling past the uint32 ceiling
+    set:
+      resources:
+        cpu: "1e10"
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(1e10\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  - it: leaves domain.cpu out when resources.cpu is unset
+    set:
+      resources:
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
+
+  - it: lets a whole core count replace the instancetype matcher
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.instancetype
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+
+  # The case the precedence rule got wrong: the raw string was truthy, so the
+  # matcher was dropped for a value that cannot size the VM.
+  - it: refuses a millicore quantity beside an instanceType instead of dropping the matcher
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: 500m
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: resources.cpu \(500m\) must be a whole number of vCPU cores between 1 and 4294967295'
+
+  # Proxmox converts the quantity to millicores and rounds up, so a millicore
+  # value is a valid size there and the kubevirt-only guard must not see it.
+  - it: leaves a millicore quantity to the proxmox substrate
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos]
+        full: true
+        network:
+          bridge: vmbr0
+        dnsServers: ["8.8.8.8"]
+      resources:
+        cpu: 500m
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.numCores
+          value: 1

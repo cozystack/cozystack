@@ -1,0 +1,21 @@
+suite: flux-plunger RBAC
+release:
+  name: flux-plunger
+  namespace: cozy-fluxcd
+templates:
+  - templates/rbac.yaml
+tests:
+  - it: may hold the leader Lease the Deployment's leader election uses, in its own namespace only
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-fluxcd
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]

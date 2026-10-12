@@ -1,0 +1,1012 @@
+Accept an HTTPS-terminate and a TLS-passthrough listener on one port when the
+passthrough hostname is strictly narrower than the HTTPS one.
+
+Downstream only: Gateway API leaves cross-protocol listeners on one port to
+the implementation (kubernetes-sigs/gateway-api#4271), and upstream Cilium
+waits for that before changing the rule. Drop it once a shipped Cilium
+release accepts the pair on its own.
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile_test.go b/operator/pkg/gateway-api/gateway_reconcile_test.go
+index 4dcdcacc6f..fab15d5f85 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile_test.go
++++ b/operator/pkg/gateway-api/gateway_reconcile_test.go
+@@ -334,6 +334,8 @@ func Test_Conformance(t *testing.T) {
+ 		{name: "gateway-multi-port-https-with-multi-port-tls-passthrough", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "multi-port-https-with-multi-port-tls-passthrough", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gateway-cross-protocol-same-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-hostname", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gateway-cross-protocol-same-port-same-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-port-same-hostname", Namespace: "gateway-conformance-infra"}, wantErr: true}}},
++		{name: "gateway-cross-protocol-same-port-wildcard-and-specific-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-port-wildcard-and-specific-hostname", Namespace: "gateway-conformance-infra"}}}},
++		{name: "gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-port-wildcard-passthrough-and-specific-https", Namespace: "gateway-conformance-infra"}, wantErr: true}}},
+ 		{name: "gateway-ns-restricted-same-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "ns-restricted-same-hostname", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gatewayclassconfig-nodeport", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "nodeport-gateway", Namespace: "gateway-conformance-infra"}}}},
+ 		// hostNetwork mode tests
+diff --git a/operator/pkg/gateway-api/status_listener.go b/operator/pkg/gateway-api/status_listener.go
+index dfa93f6c01..9359c041e9 100644
+--- a/operator/pkg/gateway-api/status_listener.go
++++ b/operator/pkg/gateway-api/status_listener.go
+@@ -242,12 +242,22 @@ func (m *ListenerStatusManager) listenerPairConflict(first, second *gatewayv1.Li
+ 		return gatewayv1.ListenerReasonProtocolConflict, true
+ 	}
+ 
+-	// HTTPS termination and TLS passthrough both consume the SNI of the same
+-	// port, so they conflict whenever their hostnames can match the same value.
++	// HTTPS termination and TLS passthrough share the SNI of the port. Envoy
++	// picks the most specific server_names match before transport protocol,
++	// so the pair is served when the passthrough hostname is strictly narrower
++	// than the HTTPS one. The passthrough chains take their server_names from
++	// the attached TLSRoutes, which are confined to the listener hostname, so
++	// any other overlap lets a route claim the HTTPS listener's exact name and
++	// produce two chains with the same match, which Envoy rejects for the
++	// whole listener.
+ 	if m.isHTTPSAndTLSPassthroughPair(first, second) {
+-		if helpers.SNIHostnamesIntersect(
+-			helpers.ListenerHostname(first), helpers.ListenerHostname(second),
+-		) {
++		https, passthrough := first, second
++		if helpers.IsTLSPassthroughListener(first) {
++			https, passthrough = second, first
++		}
++		h := m.normalizedListenerHostname(https)
++		p := m.normalizedListenerHostname(passthrough)
++		if helpers.SNIHostnamesIntersect(h, p) && !strictlyNarrowerHostname(p, h) {
+ 			return gatewayv1.ListenerReasonProtocolConflict, true
+ 		}
+ 		return "", false
+@@ -263,6 +273,22 @@ func (m *ListenerStatusManager) listenerPairConflict(first, second *gatewayv1.Li
+ 	return "", false
+ }
+ 
++// strictlyNarrowerHostname reports whether every SNI narrow matches is also
++// matched by wide, and the two differ. Both are normalized, "*" standing for
++// a listener without a hostname.
++func strictlyNarrowerHostname(narrow, wide string) bool {
++	if narrow == wide {
++		return false
++	}
++	if wide == "*" {
++		return true
++	}
++	if !strings.HasPrefix(wide, "*.") {
++		return false
++	}
++	return strings.HasSuffix(narrow, wide[1:])
++}
++
+ func (m *ListenerStatusManager) isL4Protocol(p gatewayv1.ProtocolType) bool {
+ 	return p == gatewayv1.TCPProtocolType || p == gatewayv1.UDPProtocolType
+ }
+@@ -291,7 +317,7 @@ func (m *ListenerStatusManager) listenerConflictMessage(
+ 		)
+ 	case m.isHTTPSAndTLSPassthroughPair(self, other):
+ 		return fmt.Sprintf(
+-			"Listener conflicts with listener %q: same port %d has overlapping HTTPS and TLS passthrough hostnames.",
++			"Listener conflicts with listener %q: same port %d has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.",
+ 			other.Name, self.Port,
+ 		)
+ 	default:
+diff --git a/operator/pkg/gateway-api/status_listener_conflict_test.go b/operator/pkg/gateway-api/status_listener_conflict_test.go
+index 4052bfd6d9..89bea36ba1 100644
+--- a/operator/pkg/gateway-api/status_listener_conflict_test.go
++++ b/operator/pkg/gateway-api/status_listener_conflict_test.go
+@@ -117,12 +117,55 @@ func Test_listenerPairConflict(t *testing.T) {
+ 			wantOK:     true,
+ 		},
+ 		{
+-			name:       "https and tls passthrough wildcard overlap conflict",
++			name:       "https and tls passthrough identical wildcard hostname conflict",
+ 			first:      muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "*.example.com"),
+-			second:     tlsPassthroughListener("b", 443, "foo.example.com"),
++			second:     tlsPassthroughListener("b", 443, "*.example.com"),
+ 			wantReason: gatewayv1.ListenerReasonProtocolConflict,
+ 			wantOK:     true,
+ 		},
++		{
++			name:       "https and tls passthrough both catch-all conflict",
++			first:      muxedListener("a", gatewayv1.HTTPSProtocolType, 443, ""),
++			second:     tlsPassthroughListener("b", 443, ""),
++			wantReason: gatewayv1.ListenerReasonProtocolConflict,
++			wantOK:     true,
++		},
++		{
++			name:   "wildcard https and specific tls passthrough coexist",
++			first:  muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "*.example.com"),
++			second: tlsPassthroughListener("b", 443, "foo.example.com"),
++		},
++		{
++			// A TLSRoute on the wildcard passthrough listener may claim
++			// foo.example.com and give its chain the HTTPS chain's match.
++			name:       "specific https and wildcard tls passthrough conflict",
++			first:      muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "foo.example.com"),
++			second:     tlsPassthroughListener("b", 443, "*.example.com"),
++			wantReason: gatewayv1.ListenerReasonProtocolConflict,
++			wantOK:     true,
++		},
++		{
++			name:       "catch-all tls passthrough and specific https conflict",
++			first:      tlsPassthroughListener("a", 443, ""),
++			second:     muxedListener("b", gatewayv1.HTTPSProtocolType, 443, "foo.example.com"),
++			wantReason: gatewayv1.ListenerReasonProtocolConflict,
++			wantOK:     true,
++		},
++		{
++			name:   "narrower wildcard tls passthrough under wider wildcard https coexist",
++			first:  muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "*.example.com"),
++			second: tlsPassthroughListener("b", 443, "*.db.example.com"),
++		},
++		{
++			name:   "wildcard https and its apex tls passthrough coexist",
++			first:  muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "*.example.com"),
++			second: tlsPassthroughListener("b", 443, "example.com"),
++		},
++		{
++			name:   "catch-all https and specific tls passthrough coexist",
++			first:  muxedListener("a", gatewayv1.HTTPSProtocolType, 443, ""),
++			second: tlsPassthroughListener("b", 443, "foo.example.com"),
++		},
+ 		{
+ 			name:   "https and tls passthrough disjoint hostnames coexist",
+ 			first:  muxedListener("a", gatewayv1.HTTPSProtocolType, 443, "foo.example.com"),
+@@ -203,7 +246,7 @@ func Test_conflictsWithinSource(t *testing.T) {
+ 		assert.Equal(t, gatewayv1.ListenerReasonProtocolConflict, conflicts["b"].reason)
+ 	})
+ 
+-	t.Run("https and tls passthrough overlap keeps existing message", func(t *testing.T) {
++	t.Run("https and tls passthrough overlap names the narrower passthrough rule", func(t *testing.T) {
+ 		gw := gatewayWithConflictListeners(
+ 			muxedListener("https", gatewayv1.HTTPSProtocolType, 443, "api.example.test"),
+ 			tlsPassthroughListener("tls-passthrough", 443, "api.example.test"),
+@@ -211,20 +254,39 @@ func Test_conflictsWithinSource(t *testing.T) {
+ 		conflicts := manager.conflictsWithinSource(gw.Spec.Listeners)
+ 		assert.Equal(t, gatewayv1.ListenerReasonProtocolConflict, conflicts["https"].reason)
+ 		assert.Equal(t,
+-			`Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames.`,
++			`Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.`,
+ 			conflicts["https"].message)
+ 	})
++
++	t.Run("wildcard tls passthrough over specific https names the narrower passthrough rule", func(t *testing.T) {
++		gw := gatewayWithConflictListeners(
++			muxedListener("https", gatewayv1.HTTPSProtocolType, 443, "api.example.test"),
++			tlsPassthroughListener("tls-passthrough", 443, "*.example.test"),
++		)
++		conflicts := manager.conflictsWithinSource(gw.Spec.Listeners)
++		assert.Equal(t,
++			`Listener conflicts with listener "https": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.`,
++			conflicts["tls-passthrough"].message)
++	})
+ }
+ 
+ func Test_acceptedListeners(t *testing.T) {
+ 	t.Run("later listener loses against an accepted listener", func(t *testing.T) {
+ 		accepted := &acceptedListeners{}
+-		accepted.accept(*muxedListener("gw-https", gatewayv1.HTTPSProtocolType, 443, "*.example.com"))
++		accepted.accept(*muxedListener("gw-https", gatewayv1.HTTPSProtocolType, 443, "foo.example.com"))
+ 
+ 		reason := accepted.checkConflict(*tlsPassthroughListener("ls-tls", 443, "foo.example.com"))
+ 		assert.Equal(t, gatewayv1.ListenerReasonProtocolConflict, reason)
+ 	})
+ 
++	t.Run("more specific tls passthrough beside an accepted wildcard https is accepted", func(t *testing.T) {
++		accepted := &acceptedListeners{}
++		accepted.accept(*muxedListener("gw-https", gatewayv1.HTTPSProtocolType, 443, "*.example.com"))
++
++		reason := accepted.checkConflict(*tlsPassthroughListener("ls-tls", 443, "foo.example.com"))
++		assert.Empty(t, string(reason))
++	})
++
+ 	t.Run("distinct hostname on the same protocol is accepted", func(t *testing.T) {
+ 		accepted := &acceptedListeners{}
+ 		accepted.accept(*muxedListener("first", gatewayv1.HTTPProtocolType, 80, "foo.example.com"))
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-same-hostname/output/cross-protocol-same-port-same-hostname.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-same-hostname/output/cross-protocol-same-port-same-hostname.yaml
+index c23386ddf6..c580ce3cae 100644
+--- a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-same-hostname/output/cross-protocol-same-port-same-hostname.yaml
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-same-hostname/output/cross-protocol-same-port-same-hostname.yaml
+@@ -47,12 +47,12 @@ status:
+     - attachedRoutes: 1
+       conditions:
+         - lastTransitionTime: "2026-05-05T19:06:19Z"
+-          message: 'Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames.'
++          message: 'Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: ProtocolConflict
+           status: "True"
+           type: Conflicted
+         - lastTransitionTime: "2026-05-05T19:06:19Z"
+-          message: 'Listener not valid. Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames.'
++          message: 'Listener not valid. Listener conflicts with listener "tls-passthrough": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: Invalid
+           status: "False"
+           type: Accepted
+@@ -70,12 +70,12 @@ status:
+     - attachedRoutes: 1
+       conditions:
+         - lastTransitionTime: "2026-05-05T19:06:19Z"
+-          message: 'Listener conflicts with listener "https": same port 443 has overlapping HTTPS and TLS passthrough hostnames.'
++          message: 'Listener conflicts with listener "https": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: ProtocolConflict
+           status: "True"
+           type: Conflicted
+         - lastTransitionTime: "2026-05-05T19:06:19Z"
+-          message: 'Listener not valid. Listener conflicts with listener "https": same port 443 has overlapping HTTPS and TLS passthrough hostnames.'
++          message: 'Listener not valid. Listener conflicts with listener "https": same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: Invalid
+           status: "False"
+           type: Accepted
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/input/cross-protocol-same-port-wildcard-and-specific-hostname.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/input/cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+new file mode 100644
+index 0000000000..8d6a7c75ec
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/input/cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+@@ -0,0 +1,92 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: cross-protocol-same-port-wildcard-and-specific-hostname
++  namespace: gateway-conformance-infra
++spec:
++  gatewayClassName: cilium
++  listeners:
++    - name: https
++      protocol: HTTPS
++      port: 443
++      hostname: "*.example.test"
++      tls:
++        certificateRefs:
++          - group: ""
++            kind: Secret
++            name: cross-protocol-tls
++            namespace: gateway-conformance-infra
++      allowedRoutes:
++        namespaces:
++          from: Same
++    - name: tls-passthrough
++      protocol: TLS
++      port: 443
++      hostname: "api.example.test"
++      tls:
++        mode: Passthrough
++      allowedRoutes:
++        namespaces:
++          from: Same
++        kinds:
++          - kind: TLSRoute
++---
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: https-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: cross-protocol-same-port-wildcard-and-specific-hostname
++      sectionName: https
++  hostnames:
++    - web.example.test
++  rules:
++    - matches:
++        - path:
++            type: PathPrefix
++            value: /secure
++      backendRefs:
++        - name: infra-backend-v1
++          port: 8080
++---
++apiVersion: gateway.networking.k8s.io/v1alpha2
++kind: TLSRoute
++metadata:
++  name: tls-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: cross-protocol-same-port-wildcard-and-specific-hostname
++      namespace: gateway-conformance-infra
++      sectionName: tls-passthrough
++  hostnames:
++    - api.example.test
++  rules:
++    - backendRefs:
++        - name: tls-backend
++          port: 443
++---
++apiVersion: v1
++kind: Secret
++metadata:
++  name: cross-protocol-tls
++  namespace: gateway-conformance-infra
++type: kubernetes.io/tls
++data:
++  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVORENDQXB5Z0F3SUJBZ0lSQUtEL0JMRkJmd0tJWjBXR3JIdFRINmd3RFFZSktvWklodmNOQVFFTEJRQXcKZHpFZU1Cd0dBMVVFQ2hNVmJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElFTkJNU1l3SkFZRFZRUUxEQjEwWVcxdApZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tURXRNQ3NHQTFVRUF3d2tiV3RqWlhKMElIUmhiVzFoClkyaEFabVZrYjNKaExteGhiaUFvVkdGdElFMWhZMmdwTUI0WERUSXpNREl5TVRFeE1EZzBNMW9YRFRJMU1EVXkKTVRFeU1EZzBNMW93VVRFbk1DVUdBMVVFQ2hNZWJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElHTmxjblJwWm1sagpZWFJsTVNZd0pBWURWUVFMREIxMFlXMXRZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tUQ0NBU0l3CkRRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFNSVp5KzBKUlZqcXBXZ2VxMmRQKzFvbGlPNEEKQ2Zabk1nNHRTcVBhbGhEUUw2TWY2OEhZTGZpenlKSXBSek1KOTA1cllkMEFjbVhtdS9nMEVvOHlrSHhGRHo1VApzZVBzMlhRbmc4TU40YXpzUm1tMWw0Zjc0b3Zhd1F6UWNiODIyUVAxQ1M2SUxaM1Z0d05qUmgybkF3dGhZQk1vCkNrbmdER2VROEdsMHRqSExGbkJkVGRTd1FSbUUyanREQmNBZ3lFR3BxKzZSZVl0Ky80N25ObjdkQ2Z0c1ZxaEUKQllyOVhIM2l0ZWZIbXNiZmo3eldGYnB0ZGtvN3E5bE1Id25CZCswaGQ0ME1tSklYTVpyT0dHRlpqYXdKREJxUwpzQnEyUTNsNlhRejhYN1AvR0E0RG44aDR3M3JwcG1pYU43TE9tR1hla2kzeFgyd3FuTSswczZhWlpac0NBd0VBCkFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnV2dNQk1HQTFVZEpRUU1NQW9HQ0NzR0FRVUZCd01CTUI0R0ExVWQKSXdRWU1CYUFGR1EyREIwNkNkUUZRQnNZUHllME5Cd0VyVU5FTUJjR0ExVWRFUVFRTUE2Q0RIVnVhWFIwWlhOMApMbU52YlRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVlFQXJ0SGRLV1hSNmFFTHBmYWwxN2JpYWJDUHZJRjlqNm53CnVEemNkTVlRTHJYbThNK05IZTh4M2RwSTd1M2xsdE8rZHpMbmcrblZLUU9SM2FsUUFDU21SRDljN2llOGVUNWQKN3pLT1RrNmtlWTE5NUkxd1ZWNGpiTkxiTldhOXk0UkpRUlR2QkxBdkFQOU5WdFV3MlEvdy9FclVUcVN5eitvYgpkd250NGdZQ3c2ZEdubHVMeGxmRjM0REI5S2ZsdlZOU25reU1CL2dzQjRBM3IxR1BPSW8wR3lmNzRpZzNGV3JTCndIWUtuQmJ0WmZZTzBKVjBMQ29QeUhlOGcwWGFqWmU4RENiUC9FNlNtbFROQW1KRVNWamlnVFRjSUJBa0ZJK24KdG9CQWR4ZmhqS1VHYUNsT0hTMjljcGFpeW5qU2F5R200UmtIa3g3bWNBdWE5bFdQZjdwU2EzbUNjRmIrd0ZyMwpBQmtIRFBKSDJhY2ZhVUsxdmdLVGdPd2NHLzZLQTgyMC9QcmFvU2loTGFQSy9BN2VnNzdyMUVlWXB0ME5lcHBiClhqdlVwM1ltVmxJTVpYUHpyak9zYXN0b0RTcnN5Z2o1amRWdG00UHNsdjluUGh6RHJCamxacEVKU2NXNEpsYisKNnd0ZDdwMDNVREJTS2ZUYlZST1ZBZTVtdkp2QTBob1MKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
++  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRRENHY3Z0Q1VWWTZxVm8KSHF0blQvdGFKWWp1QUFuR1p6SU9MVXFqMnBZUTBDK2pIK3ZCMkMzNHM4aVNLVWN6Q2ZkT2EySGRBSEpsNXJ2NApOQktQTXBCOFJROCtVN0hqN05sMEo0UEREZUdzN0VacHRaZUgrK0tMMnNFTTBIRy9OdGtEOVFrdWlDMmQxYmNEClkwWWRwd01MWVdBVEtBcEo0QXhua1BCcGRMWXh5eFp3WFUzVXNFRVpoTm83UXdYQUlNaEJxYXZ1a1htTGZ2K08KNXpaKzNRbjdiRmFvUkFXSy9WeDk0clhueDVyRzM0KzgxaFc2YlhaS082dlpUQjhKd1hmdElYZU5ESmlTRnpHYQp6aGhoV1kyc0NRd2FrckFhdGtONWVsME0vRit6L3hnUEE1L0llTU42NmFab21qZXl6cGhsM3BJdDhWOXNLcHpQCnRMT21tV0diQWdNQkFBRUNnZ0VBRWpBU29NSjJvZzlTc24vMU5iZ1Q2RzJOK0NjK3d6MldQaWZXVDZaQzI0NTIKZUVXY2RNeUoranoyZFdPeXpVQ0kwT3RVL3oxMGVzSDFLUnZRQldVS2p1cDF0RFJwZmQ4S3ZVeWFseU5zMnlSRQpzTkVZUXVEQ2FMSjExbnFOdmdvb3FhdERVZjNtc0Z4L1NxejV1L3VUV0hTbWFRVWVlYStwMmVhRjhJdkVLc1FmCjZRTmtsa2VIc3YrR1ZQditpaWJmYlhYbmU2STVhVjM1UmM0UTA4elJDZ1lYL0JOMUFZWFY2aG80UkM5ZFpWR1AKSlVrU0x6UmFkZWdvay9FT05La3JxTFpPRkpWYjJ3dEZxODVnSjAxbE9ETS9najdHcU01OU0vd2s1NUNhUUlSRAo5eDVINFg0cnBNMnJobWlOTGtJTjB0R0xLTzhYMzF1cDdoVHg5YnZKY1FLQmdRRDUxTUxXWVlVUHovdW12U3JOClFPVDlVaEVISS9ieHRDYldRdGhXM0wxcXJWVDdEQjhKa28vNi94WWxYaGw3bndWd0p6MjRqSmY5dnV4V2JCcEwKSFpSZjBRc0RPMi9PNHJxaEtEb3YvR01VQ3gyc2h6YytKN2srVDkzS05WQU5ZYTA1Z3VxTWVCOG4zMEhQcm9rRgpMZ2loVkZGMjBrOVo2U2liVXZnVE1wRjFFd0tCZ1FERzVNQmdjOG9GWG1sci83cEhLaXpDNEYzZURBWFV4VkhNCldDSWJTd015ek9YS3FEY2RYTkR6OGNRcmpoS2EyckQxZktoRTBvUlIrUXZIejhJUEMrME1zVDdRNlFzSUhZajUKQ1h1YkhyMHM1azhQSkFwK0xrMkVkSGVQWlFNL0kvdmovZ1N3eG5KOVFzNjRGV1oyNUs5elluTk5zaW9qUWVsNwpXVm1JOUlWYVdRS0JnRDNCWWdnc1F3QU5vVjh1RTQ1NUpDR2FUNnM4TUthK3FYcjlPd3o5czdUUzg5YTZ3RkZWCmNWSFNERjlnUzF4TGlzU1dicU5YM1pwVHY0ZjlZT0tBaFZUS0Q3YlUwbWFKbFNpUkVSRWJpa0pDSFN1d29PODAKVW80Y24rNkVEeTIvbjFwQUNrcCt4dlRNTXpCckxHT2paVzY3c1FkMkpUZE1jMFV4MVRDcHAxc1JBb0dBYUVWSQpyY2hHWXlZcDhwcXcxOW8rZVRRVFFmUGZvcnFIdGErR3dmUkRpd0JzZ0NCTU5MS1NRVUhBZkcwUlIrbmExL2d3CloxUk9Wb05RTDhLMXBCbkdmdDcxWmFTblNldmlBVjE5VmNkNXVlNU1DRTRHeWp3UUc1N0xoM3VYaGlTaFM5ZkMKTWNMNEJyOWRqSmg3alYwNnRpMG84ZFN6enFRaGVhOVFCMExhSHBFQ2dZQXBjOG9Cb2lLNjlzMHdYeUk0K1BoeApTY0JKMFhxREJZRmt4eVhyOFk1cEVhckVhcUN0bDFPUFBNT2lRUkRXb3hSUitGd0EvMGxhU2ZoNXh3MFUzYitxCmlaMlhwa3JiUXAwMzRyQzBVUjZwK0ttMVN2OUFWQ0FDQWpyY1EzTlphZjhiRE9XcXZwbGE3QXVxMG9HOGk2VVgKaEVLQ0tmL04zZ0Uxb01yVHhWelVEUT09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
++---
++apiVersion: v1
++kind: Service
++metadata:
++  name: cilium-gateway-cross-protocol-same-port-wildcard-and-87ff7df5mg
++  namespace: gateway-conformance-infra
++spec:
++  type: LoadBalancer
++status:
++  loadBalancer:
++    ingress:
++      - ip: 172.18.255.200
++        ipMode: VIP
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cec-cross-protocol-same-port-wildcard-and-specific-hostname.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cec-cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+new file mode 100644
+index 0000000000..eba82452c2
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cec-cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+@@ -0,0 +1,166 @@
++metadata:
++  annotations:
++    cec.cilium.io/use-original-source-address: "false"
++  labels:
++    gateway.networking.k8s.io/gateway-name: cross-protocol-same-port-wildcard-and-specific-hostname
++  name: cilium-gateway-cross-protocol-same-port-wildcard-and-87ff7df5mg
++  namespace: gateway-conformance-infra
++  ownerReferences:
++  - apiVersion: gateway.networking.k8s.io/v1
++    controller: true
++    kind: Gateway
++    name: cross-protocol-same-port-wildcard-and-specific-hostname
++    uid: ""
++  resourceVersion: "1"
++spec:
++  backendServices:
++  - name: infra-backend-v1
++    namespace: gateway-conformance-infra
++    number:
++    - "8080"
++  - name: tls-backend
++    namespace: gateway-conformance-infra
++    number:
++    - "443"
++  resources:
++  - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
++    filterChains:
++    - filterChainMatch:
++        transportProtocol: raw_buffer
++      filters:
++      - name: envoy.filters.network.http_connection_manager
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
++          commonHttpProtocolOptions:
++            maxStreamDuration: 0s
++          httpFilters:
++          - name: envoy.filters.http.grpc_web
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
++          - name: envoy.filters.http.grpc_stats
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_stats.v3.FilterConfig
++              emitFilterState: true
++              enableUpstreamStats: true
++          - name: envoy.filters.http.router
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
++          internalAddressConfig: {}
++          rds:
++            routeConfigName: listener-insecure
++          statPrefix: listener-insecure
++          streamIdleTimeout: 300s
++          upgradeConfigs:
++          - upgradeType: websocket
++          useRemoteAddress: true
++    - filterChainMatch:
++        serverNames:
++        - '*.example.test'
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.http_connection_manager
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
++          commonHttpProtocolOptions:
++            maxStreamDuration: 0s
++          httpFilters:
++          - name: envoy.filters.http.grpc_web
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
++          - name: envoy.filters.http.grpc_stats
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_stats.v3.FilterConfig
++              emitFilterState: true
++              enableUpstreamStats: true
++          - name: envoy.filters.http.router
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
++          internalAddressConfig: {}
++          rds:
++            routeConfigName: listener-secure
++          statPrefix: listener-secure
++          streamIdleTimeout: 300s
++          upgradeConfigs:
++          - upgradeType: websocket
++          useRemoteAddress: true
++      transportSocket:
++        name: envoy.transport_sockets.tls
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
++          commonTlsContext:
++            tlsCertificateSdsSecretConfigs:
++            - name: cilium-secrets/cilium-sync-secret-9e3240dd5d81ba618935c49937e7e7dbefac584583bbc8129c126827692366f5
++    - filterChainMatch:
++        serverNames:
++        - api.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.tcp_proxy
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
++          cluster: gateway-conformance-infra:tls-backend:443
++          statPrefix: tls-passthrough:api.example.test
++    listenerFilters:
++    - name: envoy.filters.listener.tls_inspector
++      typedConfig:
++        '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
++    name: listener
++    socketOptions:
++    - description: Enable TCP keep-alive (default to enabled)
++      intValue: "1"
++      level: "1"
++      name: "9"
++    - description: TCP keep-alive idle time (in seconds) (defaults to 10s)
++      intValue: "10"
++      level: "6"
++      name: "4"
++    - description: TCP keep-alive probe intervals (in seconds) (defaults to 5s)
++      intValue: "5"
++      level: "6"
++      name: "5"
++    - description: TCP keep-alive probe max failures.
++      intValue: "10"
++      level: "6"
++      name: "6"
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-insecure
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-secure
++    virtualHosts:
++    - domains:
++      - web.example.test
++      - web.example.test:*
++      name: web.example.test
++      routes:
++      - match:
++          pathSeparatedPrefix: /secure
++        route:
++          cluster: gateway-conformance-infra:infra-backend-v1:8080
++          maxStreamDuration:
++            maxStreamDuration: 0s
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/infra-backend-v1:8080
++    name: gateway-conformance-infra:infra-backend-v1:8080
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++    typedExtensionProtocolOptions:
++      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
++        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
++        commonHttpProtocolOptions:
++          idleTimeout: 60s
++        useDownstreamProtocolConfig:
++          http2ProtocolOptions: {}
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/tls-backend:443
++    name: gateway-conformance-infra:tls-backend:443
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++  services:
++  - name: cilium-gateway-cross-protocol-same-port-wildcard-and-87ff7df5mg
++    namespace: gateway-conformance-infra
++    ports:
++    - 443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cross-protocol-same-port-wildcard-and-specific-hostname.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+new file mode 100644
+index 0000000000..57de1fd72d
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/cross-protocol-same-port-wildcard-and-specific-hostname.yaml
+@@ -0,0 +1,93 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: cross-protocol-same-port-wildcard-and-specific-hostname
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  gatewayClassName: cilium
++  listeners:
++  - allowedRoutes:
++      namespaces:
++        from: Same
++    hostname: '*.example.test'
++    name: https
++    port: 443
++    protocol: HTTPS
++    tls:
++      certificateRefs:
++      - group: ""
++        kind: Secret
++        name: cross-protocol-tls
++        namespace: gateway-conformance-infra
++  - allowedRoutes:
++      kinds:
++      - kind: TLSRoute
++      namespaces:
++        from: Same
++    hostname: api.example.test
++    name: tls-passthrough
++    port: 443
++    protocol: TLS
++    tls:
++      mode: Passthrough
++status:
++  addresses:
++  - type: IPAddress
++    value: 172.18.255.200
++  conditions:
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway successfully scheduled
++    reason: Accepted
++    status: "True"
++    type: Accepted
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway Programmed
++    reason: Programmed
++    status: "True"
++    type: Programmed
++  listeners:
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: https
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: HTTPRoute
++    - group: gateway.networking.k8s.io
++      kind: GRPCRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: tls-passthrough
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: TLSRoute
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/httproute-https-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/httproute-https-route.yaml
+new file mode 100644
+index 0000000000..bdc9de14e6
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/httproute-https-route.yaml
+@@ -0,0 +1,37 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: https-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - web.example.test
++  parentRefs:
++  - name: cross-protocol-same-port-wildcard-and-specific-hostname
++    sectionName: https
++  rules:
++  - backendRefs:
++    - name: infra-backend-v1
++      port: 8080
++    matches:
++    - path:
++        type: PathPrefix
++        value: /secure
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted HTTPRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: cross-protocol-same-port-wildcard-and-specific-hostname
++      sectionName: https
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/tlsroute-tls-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/tlsroute-tls-route.yaml
+new file mode 100644
+index 0000000000..e1fdb07da3
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-and-specific-hostname/output/tlsroute-tls-route.yaml
+@@ -0,0 +1,35 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: TLSRoute
++metadata:
++  name: tls-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - api.example.test
++  parentRefs:
++  - name: cross-protocol-same-port-wildcard-and-specific-hostname
++    namespace: gateway-conformance-infra
++    sectionName: tls-passthrough
++  rules:
++  - backendRefs:
++    - name: tls-backend
++      port: 443
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted TLSRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: cross-protocol-same-port-wildcard-and-specific-hostname
++      namespace: gateway-conformance-infra
++      sectionName: tls-passthrough
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/input/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/input/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml
+new file mode 100644
+index 0000000000..bbe345cb30
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/input/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml
+@@ -0,0 +1,92 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++  namespace: gateway-conformance-infra
++spec:
++  gatewayClassName: cilium
++  listeners:
++    - name: https
++      protocol: HTTPS
++      port: 443
++      hostname: "api.example.test"
++      tls:
++        certificateRefs:
++          - group: ""
++            kind: Secret
++            name: cross-protocol-tls
++            namespace: gateway-conformance-infra
++      allowedRoutes:
++        namespaces:
++          from: Same
++    - name: tls-passthrough
++      protocol: TLS
++      port: 443
++      hostname: "*.example.test"
++      tls:
++        mode: Passthrough
++      allowedRoutes:
++        namespaces:
++          from: Same
++        kinds:
++          - kind: TLSRoute
++---
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: https-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++      sectionName: https
++  hostnames:
++    - api.example.test
++  rules:
++    - matches:
++        - path:
++            type: PathPrefix
++            value: /secure
++      backendRefs:
++        - name: infra-backend-v1
++          port: 8080
++---
++apiVersion: gateway.networking.k8s.io/v1alpha2
++kind: TLSRoute
++metadata:
++  name: tls-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++      namespace: gateway-conformance-infra
++      sectionName: tls-passthrough
++  hostnames:
++    - api.example.test
++  rules:
++    - backendRefs:
++        - name: tls-backend
++          port: 443
++---
++apiVersion: v1
++kind: Secret
++metadata:
++  name: cross-protocol-tls
++  namespace: gateway-conformance-infra
++type: kubernetes.io/tls
++data:
++  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVORENDQXB5Z0F3SUJBZ0lSQUtEL0JMRkJmd0tJWjBXR3JIdFRINmd3RFFZSktvWklodmNOQVFFTEJRQXcKZHpFZU1Cd0dBMVVFQ2hNVmJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElFTkJNU1l3SkFZRFZRUUxEQjEwWVcxdApZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tURXRNQ3NHQTFVRUF3d2tiV3RqWlhKMElIUmhiVzFoClkyaEFabVZrYjNKaExteGhiaUFvVkdGdElFMWhZMmdwTUI0WERUSXpNREl5TVRFeE1EZzBNMW9YRFRJMU1EVXkKTVRFeU1EZzBNMW93VVRFbk1DVUdBMVVFQ2hNZWJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElHTmxjblJwWm1sagpZWFJsTVNZd0pBWURWUVFMREIxMFlXMXRZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tUQ0NBU0l3CkRRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFNSVp5KzBKUlZqcXBXZ2VxMmRQKzFvbGlPNEEKQ2Zabk1nNHRTcVBhbGhEUUw2TWY2OEhZTGZpenlKSXBSek1KOTA1cllkMEFjbVhtdS9nMEVvOHlrSHhGRHo1VApzZVBzMlhRbmc4TU40YXpzUm1tMWw0Zjc0b3Zhd1F6UWNiODIyUVAxQ1M2SUxaM1Z0d05qUmgybkF3dGhZQk1vCkNrbmdER2VROEdsMHRqSExGbkJkVGRTd1FSbUUyanREQmNBZ3lFR3BxKzZSZVl0Ky80N25ObjdkQ2Z0c1ZxaEUKQllyOVhIM2l0ZWZIbXNiZmo3eldGYnB0ZGtvN3E5bE1Id25CZCswaGQ0ME1tSklYTVpyT0dHRlpqYXdKREJxUwpzQnEyUTNsNlhRejhYN1AvR0E0RG44aDR3M3JwcG1pYU43TE9tR1hla2kzeFgyd3FuTSswczZhWlpac0NBd0VBCkFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnV2dNQk1HQTFVZEpRUU1NQW9HQ0NzR0FRVUZCd01CTUI0R0ExVWQKSXdRWU1CYUFGR1EyREIwNkNkUUZRQnNZUHllME5Cd0VyVU5FTUJjR0ExVWRFUVFRTUE2Q0RIVnVhWFIwWlhOMApMbU52YlRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVlFQXJ0SGRLV1hSNmFFTHBmYWwxN2JpYWJDUHZJRjlqNm53CnVEemNkTVlRTHJYbThNK05IZTh4M2RwSTd1M2xsdE8rZHpMbmcrblZLUU9SM2FsUUFDU21SRDljN2llOGVUNWQKN3pLT1RrNmtlWTE5NUkxd1ZWNGpiTkxiTldhOXk0UkpRUlR2QkxBdkFQOU5WdFV3MlEvdy9FclVUcVN5eitvYgpkd250NGdZQ3c2ZEdubHVMeGxmRjM0REI5S2ZsdlZOU25reU1CL2dzQjRBM3IxR1BPSW8wR3lmNzRpZzNGV3JTCndIWUtuQmJ0WmZZTzBKVjBMQ29QeUhlOGcwWGFqWmU4RENiUC9FNlNtbFROQW1KRVNWamlnVFRjSUJBa0ZJK24KdG9CQWR4ZmhqS1VHYUNsT0hTMjljcGFpeW5qU2F5R200UmtIa3g3bWNBdWE5bFdQZjdwU2EzbUNjRmIrd0ZyMwpBQmtIRFBKSDJhY2ZhVUsxdmdLVGdPd2NHLzZLQTgyMC9QcmFvU2loTGFQSy9BN2VnNzdyMUVlWXB0ME5lcHBiClhqdlVwM1ltVmxJTVpYUHpyak9zYXN0b0RTcnN5Z2o1amRWdG00UHNsdjluUGh6RHJCamxacEVKU2NXNEpsYisKNnd0ZDdwMDNVREJTS2ZUYlZST1ZBZTVtdkp2QTBob1MKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
++  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRRENHY3Z0Q1VWWTZxVm8KSHF0blQvdGFKWWp1QUFuR1p6SU9MVXFqMnBZUTBDK2pIK3ZCMkMzNHM4aVNLVWN6Q2ZkT2EySGRBSEpsNXJ2NApOQktQTXBCOFJROCtVN0hqN05sMEo0UEREZUdzN0VacHRaZUgrK0tMMnNFTTBIRy9OdGtEOVFrdWlDMmQxYmNEClkwWWRwd01MWVdBVEtBcEo0QXhua1BCcGRMWXh5eFp3WFUzVXNFRVpoTm83UXdYQUlNaEJxYXZ1a1htTGZ2K08KNXpaKzNRbjdiRmFvUkFXSy9WeDk0clhueDVyRzM0KzgxaFc2YlhaS082dlpUQjhKd1hmdElYZU5ESmlTRnpHYQp6aGhoV1kyc0NRd2FrckFhdGtONWVsME0vRit6L3hnUEE1L0llTU42NmFab21qZXl6cGhsM3BJdDhWOXNLcHpQCnRMT21tV0diQWdNQkFBRUNnZ0VBRWpBU29NSjJvZzlTc24vMU5iZ1Q2RzJOK0NjK3d6MldQaWZXVDZaQzI0NTIKZUVXY2RNeUoranoyZFdPeXpVQ0kwT3RVL3oxMGVzSDFLUnZRQldVS2p1cDF0RFJwZmQ4S3ZVeWFseU5zMnlSRQpzTkVZUXVEQ2FMSjExbnFOdmdvb3FhdERVZjNtc0Z4L1NxejV1L3VUV0hTbWFRVWVlYStwMmVhRjhJdkVLc1FmCjZRTmtsa2VIc3YrR1ZQditpaWJmYlhYbmU2STVhVjM1UmM0UTA4elJDZ1lYL0JOMUFZWFY2aG80UkM5ZFpWR1AKSlVrU0x6UmFkZWdvay9FT05La3JxTFpPRkpWYjJ3dEZxODVnSjAxbE9ETS9najdHcU01OU0vd2s1NUNhUUlSRAo5eDVINFg0cnBNMnJobWlOTGtJTjB0R0xLTzhYMzF1cDdoVHg5YnZKY1FLQmdRRDUxTUxXWVlVUHovdW12U3JOClFPVDlVaEVISS9ieHRDYldRdGhXM0wxcXJWVDdEQjhKa28vNi94WWxYaGw3bndWd0p6MjRqSmY5dnV4V2JCcEwKSFpSZjBRc0RPMi9PNHJxaEtEb3YvR01VQ3gyc2h6YytKN2srVDkzS05WQU5ZYTA1Z3VxTWVCOG4zMEhQcm9rRgpMZ2loVkZGMjBrOVo2U2liVXZnVE1wRjFFd0tCZ1FERzVNQmdjOG9GWG1sci83cEhLaXpDNEYzZURBWFV4VkhNCldDSWJTd015ek9YS3FEY2RYTkR6OGNRcmpoS2EyckQxZktoRTBvUlIrUXZIejhJUEMrME1zVDdRNlFzSUhZajUKQ1h1YkhyMHM1azhQSkFwK0xrMkVkSGVQWlFNL0kvdmovZ1N3eG5KOVFzNjRGV1oyNUs5elluTk5zaW9qUWVsNwpXVm1JOUlWYVdRS0JnRDNCWWdnc1F3QU5vVjh1RTQ1NUpDR2FUNnM4TUthK3FYcjlPd3o5czdUUzg5YTZ3RkZWCmNWSFNERjlnUzF4TGlzU1dicU5YM1pwVHY0ZjlZT0tBaFZUS0Q3YlUwbWFKbFNpUkVSRWJpa0pDSFN1d29PODAKVW80Y24rNkVEeTIvbjFwQUNrcCt4dlRNTXpCckxHT2paVzY3c1FkMkpUZE1jMFV4MVRDcHAxc1JBb0dBYUVWSQpyY2hHWXlZcDhwcXcxOW8rZVRRVFFmUGZvcnFIdGErR3dmUkRpd0JzZ0NCTU5MS1NRVUhBZkcwUlIrbmExL2d3CloxUk9Wb05RTDhLMXBCbkdmdDcxWmFTblNldmlBVjE5VmNkNXVlNU1DRTRHeWp3UUc1N0xoM3VYaGlTaFM5ZkMKTWNMNEJyOWRqSmg3alYwNnRpMG84ZFN6enFRaGVhOVFCMExhSHBFQ2dZQXBjOG9Cb2lLNjlzMHdYeUk0K1BoeApTY0JKMFhxREJZRmt4eVhyOFk1cEVhckVhcUN0bDFPUFBNT2lRUkRXb3hSUitGd0EvMGxhU2ZoNXh3MFUzYitxCmlaMlhwa3JiUXAwMzRyQzBVUjZwK0ttMVN2OUFWQ0FDQWpyY1EzTlphZjhiRE9XcXZwbGE3QXVxMG9HOGk2VVgKaEVLQ0tmL04zZ0Uxb01yVHhWelVEUT09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
++---
++apiVersion: v1
++kind: Service
++metadata:
++  name: cilium-gateway-cross-protocol-same-port-wildcard-and-87ff7df5mg
++  namespace: gateway-conformance-infra
++spec:
++  type: LoadBalancer
++status:
++  loadBalancer:
++    ingress:
++      - ip: 172.18.255.200
++        ipMode: VIP
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml
+new file mode 100644
+index 0000000000..0d001313c6
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/cross-protocol-same-port-wildcard-passthrough-and-specific-https.yaml
+@@ -0,0 +1,94 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  gatewayClassName: cilium
++  listeners:
++  - allowedRoutes:
++      namespaces:
++        from: Same
++    hostname: api.example.test
++    name: https
++    port: 443
++    protocol: HTTPS
++    tls:
++      certificateRefs:
++      - group: ""
++        kind: Secret
++        name: cross-protocol-tls
++        namespace: gateway-conformance-infra
++  - allowedRoutes:
++      kinds:
++      - kind: TLSRoute
++      namespaces:
++        from: Same
++    hostname: '*.example.test'
++    name: tls-passthrough
++    port: 443
++    protocol: TLS
++    tls:
++      mode: Passthrough
++status:
++  conditions:
++  - lastTransitionTime: "2026-10-08T20:27:40Z"
++    message: No Accepted Listeners
++    reason: ListenersNotValid
++    status: "False"
++    type: Accepted
++  - lastTransitionTime: "2026-10-08T20:27:40Z"
++    message: No Accepted Listeners
++    reason: ListenersNotValid
++    status: "False"
++    type: Programmed
++  listeners:
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: 'Listener conflicts with listener "tls-passthrough": same port 443
++        has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
++      reason: ProtocolConflict
++      status: "True"
++      type: Conflicted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: 'Listener not valid. Listener conflicts with listener "tls-passthrough":
++        same port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
++      reason: Invalid
++      status: "False"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Address not ready yet
++      reason: Pending
++      status: "False"
++      type: Programmed
++    name: https
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: HTTPRoute
++    - group: gateway.networking.k8s.io
++      kind: GRPCRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: 'Listener conflicts with listener "https": same port 443 has overlapping
++        HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
++      reason: ProtocolConflict
++      status: "True"
++      type: Conflicted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: 'Listener not valid. Listener conflicts with listener "https": same
++        port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
++      reason: Invalid
++      status: "False"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Address not ready yet
++      reason: Pending
++      status: "False"
++      type: Programmed
++    name: tls-passthrough
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: TLSRoute
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/httproute-https-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/httproute-https-route.yaml
+new file mode 100644
+index 0000000000..597d8b47bf
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/httproute-https-route.yaml
+@@ -0,0 +1,37 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: https-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - api.example.test
++  parentRefs:
++  - name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++    sectionName: https
++  rules:
++  - backendRefs:
++    - name: infra-backend-v1
++      port: 8080
++    matches:
++    - path:
++        type: PathPrefix
++        value: /secure
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Accepted HTTPRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++      sectionName: https
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/tlsroute-tls-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/tlsroute-tls-route.yaml
+new file mode 100644
+index 0000000000..ec1d83a139
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-cross-protocol-same-port-wildcard-passthrough-and-specific-https/output/tlsroute-tls-route.yaml
+@@ -0,0 +1,35 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: TLSRoute
++metadata:
++  name: tls-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - api.example.test
++  parentRefs:
++  - name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++    namespace: gateway-conformance-infra
++    sectionName: tls-passthrough
++  rules:
++  - backendRefs:
++    - name: tls-backend
++      port: 443
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Accepted TLSRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T20:27:40Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: cross-protocol-same-port-wildcard-passthrough-and-specific-https
++      namespace: gateway-conformance-infra
++      sectionName: tls-passthrough
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/tlsroute-mixed-protocol-listeners/output/gateway-tlsroute-mixed.yaml b/operator/pkg/gateway-api/testdata/gateway/tlsroute-mixed-protocol-listeners/output/gateway-tlsroute-mixed.yaml
+index 1b0efa2e09..668b20f2cc 100644
+--- a/operator/pkg/gateway-api/testdata/gateway/tlsroute-mixed-protocol-listeners/output/gateway-tlsroute-mixed.yaml
++++ b/operator/pkg/gateway-api/testdata/gateway/tlsroute-mixed-protocol-listeners/output/gateway-tlsroute-mixed.yaml
+@@ -71,14 +71,14 @@ status:
+         - lastTransitionTime: "2025-07-01T14:29:32Z"
+           message:
+             'Listener conflicts with listener "tls": same port 443 has overlapping
+-            HTTPS and TLS passthrough hostnames.'
++            HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: ProtocolConflict
+           status: "True"
+           type: Conflicted
+         - lastTransitionTime: "2025-07-01T14:29:32Z"
+           message:
+             'Listener not valid. Listener conflicts with listener "tls": same port
+-            443 has overlapping HTTPS and TLS passthrough hostnames.'
++            443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: Invalid
+           status: "False"
+           type: Accepted
+@@ -98,14 +98,14 @@ status:
+         - lastTransitionTime: "2025-07-01T14:29:32Z"
+           message:
+             'Listener conflicts with listener "https": same port 443 has overlapping
+-            HTTPS and TLS passthrough hostnames.'
++            HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: ProtocolConflict
+           status: "True"
+           type: Conflicted
+         - lastTransitionTime: "2025-07-01T14:29:32Z"
+           message:
+             'Listener not valid. Listener conflicts with listener "https": same
+-            port 443 has overlapping HTTPS and TLS passthrough hostnames.'
++            port 443 has overlapping HTTPS and TLS passthrough hostnames, and the TLS passthrough hostname is not strictly narrower than the HTTPS one.'
+           reason: Invalid
+           status: "False"
+           type: Accepted

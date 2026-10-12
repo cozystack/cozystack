@@ -14,17 +14,17 @@ capabilities:
     - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
 
 tests:
-  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute and TLSRoute (Layer 7)
+  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute, TLSRoute and GRPCRoute (Layer 7)
     # Layer 7 (route-hostname VAP) is the only VAP rendered by THIS
-    # template: 2 docs (VAP + Binding) × 2 route kinds (HTTPRoute,
-    # TLSRoute) = 4 docs total. Layers 2-5 live in
+    # template: 2 docs (VAP + Binding) × 3 route kinds (HTTPRoute,
+    # TLSRoute, GRPCRoute) = 6 docs total. Layers 2-5 live in
     # gateway-hostname-policy.yaml. Pin both counts so the 7-layer
     # security model documented in README.md is enforced at render
     # time — a maintainer dropping one of the VAPs without updating
     # the docs trips one of these counts.
     asserts:
       - hasDocuments:
-          count: 4
+          count: 6
       - documentIndex: 0
         equal:
           path: kind
@@ -37,6 +37,22 @@ tests:
         equal:
           path: kind
           value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: cozystack-route-hostname-policy-tls
+      - documentIndex: 3
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 4
+        equal:
+          path: metadata.name
+          value: cozystack-route-hostname-policy-grpc
+      - documentIndex: 5
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
 
   - it: gates on tenant-* namespace prefix via matchConditions
     asserts:
@@ -45,6 +61,14 @@ tests:
           path: spec.matchConditions[0].name
           value: tenant-namespace
       - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+      - documentIndex: 2
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+      - documentIndex: 4
         equal:
           path: spec.matchConditions[0].expression
           value: object.metadata.namespace.startsWith("tenant-")
@@ -60,14 +84,158 @@ tests:
           path: spec.validations[0].expression
           pattern: 'namespace\.cozystack\.io/host'
 
-  - it: validation actions are Deny so requests fail closed
+  - it: normalizes both operands of every comparison with lowerAscii
+    # The route hostname is already lowercase, but the apex operand
+    # is the namespace.cozystack.io/host label VALUE, which Kubernetes
+    # permits to carry uppercase.
+    #
+    # Both comparisons are pinned as whole operand pairs, for HTTPRoute
+    # (doc 0) and TLSRoute (doc 2), which share one CEL validator with
+    # GRPCRoute (doc 4): a pattern
+    # matching a lone `.lowerAscii()` somewhere in the expression still
+    # matches when one operand loses its normalization.
     asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\) == namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\) == namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)'
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\) == namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.lowerAscii\(\)\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\.lowerAscii\(\)\)'
+
+  # A Binding whose policyName points at another policy renders fine and
+  # leaves its own policy inert, so the pair is pinned together: which
+  # policy is bound, and that the binding denies.
+  - it: each binding denies for the policy it names
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy
+      - documentIndex: 3
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-tls
+      - documentIndex: 5
+        equal:
+          path: spec.policyName
+          value: cozystack-route-hostname-policy-grpc
       - documentIndex: 1
         equal:
           path: spec.validationActions
           value: [Deny]
+      - documentIndex: 3
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+      - documentIndex: 5
+        equal:
+          path: spec.validationActions
+          value: [Deny]
 
-  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+  # A route that omits spec.hostnames does not match nothing: under Gateway API
+  # it inherits the hostnames of the listener it attaches to, which is the
+  # boundary this policy exists to hold. An earlier form of the expression
+  # opened with `!has(object.spec.hostnames) ||`, so that route satisfied the
+  # first operand and was admitted with no hostname examined at all. An empty
+  # list is the same shape reached a different way: has() is true on it, and
+  # all() over an empty list is vacuously true. Both operands are pinned here,
+  # and the old short-circuit is pinned absent, because either one alone is
+  # enough to admit the whole shape again.
+  #
+  # Addressed by documentSelector rather than documentIndex: the three policies
+  # rendered by this template share one CEL string, so an assertion tied to a
+  # position would slide onto another policy if the documents were reordered
+  # and stay green either way. Each policy is named separately so a failure says
+  # which one lost the guard.
+  - it: HTTPRoute policy requires spec.hostnames to be present and non-empty
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'has\(object\.spec\.hostnames\)\s*&&\s*size\(object\.spec\.hostnames\)\s*>\s*0\s*&&'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        notMatchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.hostnames\)'
+
+  - it: TLSRoute policy requires spec.hostnames to be present and non-empty
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'has\(object\.spec\.hostnames\)\s*&&\s*size\(object\.spec\.hostnames\)\s*>\s*0\s*&&'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        notMatchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.hostnames\)'
+
+  - it: GRPCRoute policy requires spec.hostnames to be present and non-empty
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: grpcroutes
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'has\(object\.spec\.hostnames\)\s*&&\s*size\(object\.spec\.hostnames\)\s*>\s*0\s*&&'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: grpcroutes
+        notMatchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.hostnames\)'
+
+  # The denial a hostname-less route now gets has to name the reason. Without
+  # this the operator reads "hostnames must equal the label or be subdomains of
+  # it" against a route that declares no hostnames at all, and the message
+  # describes a rule the route does not visibly break.
+  - it: denial message names the missing-hostnames case for every route kind
+    asserts:
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: httproutes
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'HTTPRoute must declare spec\.hostnames'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tlsroutes
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'TLSRoute must declare spec\.hostnames'
+      - documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: grpcroutes
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'GRPCRoute must declare spec\.hostnames'
+
+  - it: targets every served HTTPRoute, TLSRoute and GRPCRoute version in gateway.networking.k8s.io
     asserts:
       - documentIndex: 0
         equal:
@@ -79,12 +247,36 @@ tests:
           value: ["httproutes"]
       - documentIndex: 2
         equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 2
+        equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: ["tlsroutes"]
+      # Every version the vendored bundle serves for each kind, pinned to
+      # exact values so a change here is deliberate. The reason a shorter
+      # list is unsafe lives in
+      # hack/route-hostname-policy-version-coverage.bats.
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1", "v1beta1"]
       - documentIndex: 2
         equal:
           path: spec.matchConstraints.resourceRules[0].apiVersions
-          value: ["v1alpha2"]
+          value: ["v1", "v1alpha2", "v1alpha3"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["grpcroutes"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1"]
 
   - it: failurePolicy is Fail so admission errors deny instead of allow
     asserts:
@@ -96,19 +288,26 @@ tests:
         equal:
           path: spec.failurePolicy
           value: Fail
+      - documentIndex: 4
+        equal:
+          path: spec.failurePolicy
+          value: Fail
 
   - it: CEL is fail-closed when namespace has no host label (returns false, not true)
-    # Regression guard: an earlier draft used `... ? true : (...)` which
+    # Regression guard: an earlier form used `... ? true : (...)`, which
     # silently allowed routes in any tenant-* namespace where the layer-5
-    # label was missing or scrubbed. Fixing this is the whole point of the
-    # round-6 hardening pass — pin the false branch in the CEL string so
-    # nobody flips it back without an explicit test failure.
+    # label was missing or scrubbed. Pin the false branch in the CEL string
+    # so nobody flips it back without an explicit test failure.
     asserts:
       - documentIndex: 0
         matchRegex:
           path: spec.validations[0].expression
           pattern: '\)\s*\?\s*false\s*:'
       - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 4
         matchRegex:
           path: spec.validations[0].expression
           pattern: '\)\s*\?\s*false\s*:'

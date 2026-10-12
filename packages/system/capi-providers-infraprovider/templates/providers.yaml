@@ -12,6 +12,7 @@ spec:
   deployment:
     containers:
     - name: manager
+      imageUrl: {{ .Files.Get "images/cluster-api-provider-kubevirt.tag" | trim | quote }}
       resources:
         limits:
           cpu: 500m

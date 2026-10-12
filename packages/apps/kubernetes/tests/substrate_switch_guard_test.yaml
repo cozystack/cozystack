@@ -1,0 +1,78 @@
+suite: substrate switch guard (assertSubstrateUnchanged)
+
+# Switching substrate on a live cluster is not a migration, it is a removal.
+# The proxmox render carries no KubevirtCluster, no cloud-controller-manager, no
+# kubevirt-csi controller and no in-tenant -csi HelmRelease — so Flux uninstalls the CSI driver behind every PVC
+# the tenant already has, while the same render adds a ProxmoxCluster and turns
+# the apiserver Service into a LoadBalancer.
+#
+# CAPI does not stop it: the Cluster webhook forbids removing
+# spec.infrastructureRef but admits a change of kind. The `## @immutable` marker
+# is dashboard-only. So the guard reads the live Cluster, and is inert offline.
+templates:
+  - templates/cluster.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+    host: example.org
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+tests:
+  - it: refuses to move a live KubeVirt cluster onto proxmox
+    set:
+      substrate: proxmox
+      proxmox:
+        allowedNodes: [prox-home]
+        dnsServers: ["8.8.8.8"]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+    kubernetesProvider:
+      scheme: &scheme
+        "cluster.x-k8s.io/v1beta1/Cluster":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "clusters"}
+          namespaced: true
+      objects: &liveKubevirt
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: kubernetes-test, namespace: tenant-test}
+          spec:
+            infrastructureRef:
+              kind: KubevirtCluster
+              name: kubernetes-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "already runs on KubevirtCluster"
+
+  - it: renders when the live cluster already matches the value
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveKubevirt
+    asserts:
+      - containsDocument:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtCluster
+          name: kubernetes-test
+          any: true
+
+  - it: renders offline, where a first install has nothing to compare against
+    set:
+      substrate: proxmox
+      proxmox:
+        allowedNodes: [prox-home]
+        dnsServers: ["8.8.8.8"]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+    asserts:
+      - containsDocument:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: ProxmoxCluster
+          name: kubernetes-test
+          any: true

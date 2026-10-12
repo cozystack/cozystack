@@ -58,11 +58,11 @@
 ## @param {int} replicas - Number of RabbitMQ replicas.
 replicas: 3
 
-## @param {Resources} [resources] - Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each RabbitMQ replica. Every resource left unset here is taken from `resourcesPreset`.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "t1.nano"
+## @param {ResourcesPreset} resourcesPreset="s1.nano" - Default sizing preset. It supplies every resource `resources` does not set, not only a `resources` left empty entirely.
+resourcesPreset: "s1.nano"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
@@ -74,6 +74,16 @@ storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
+
+## @typedef {struct} TLS - TLS configuration for RabbitMQ.
+## @field {bool} [enabled] - Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Plaintext AMQP (5672) and management (15672) keep serving unless `disableNonTLSListeners` is set as well. Moves the `port` key of the `<release>-default-user` Secret from 5672 to 5671, and the metrics port from 15692 to 15691. Defaults to false.
+## @field {bool} [disableNonTLSListeners] - Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.
+
+## @param {TLS} [tls] - TLS configuration. TLS is off unless `tls.enabled` is set to true.
+## Both fields default to false and neither is inferred from `external`, so an
+## existing instance keeps its listeners and its published connection details
+## until someone edits them. See README "TLS scope" before setting either.
+tls: {}
 
 ##
 ## @enum {string} Version

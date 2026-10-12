@@ -19,11 +19,15 @@ package operator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -33,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -78,6 +83,10 @@ const (
 	annotationFluxRequestedAt  = "reconcile.fluxcd.io/requestedAt"
 	annotationRecoveryAttempts = "cozystack.io/source-watcher-recovery-attempts"
 	annotationLastRecoveryAt   = "cozystack.io/source-watcher-last-recovery-at"
+	// annotationVerifiedGeneration records the last AG generation for which a
+	// rebuild was forced after source-watcher first reported it Ready; see
+	// verifyArtifactGeneratorGeneration.
+	annotationVerifiedGeneration = "cozystack.io/source-watcher-verified-generation"
 
 	reasonAwaitingRecovery = "AwaitingSourceWatcherRecovery"
 	reasonSourceWatcherBad = "SourceWatcherStalled"
@@ -162,6 +171,28 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 	// Collect all OutputArtifacts
 	outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
 
+	// Withhold a tap source's PRIVILEGED component artifacts until the registration
+	// Package is confirmed, so the helm-controller has no privileged content to
+	// upgrade a HelmRelease from. This narrows, but does not fully close, the window
+	// in which a benign component flipped to privileged in a new revision could be
+	// materialised by source-watcher before this reconciler removes it from the
+	// generator (see issue #4359); the Package reconciler's install-site and
+	// cleanup gates are the other best-effort layers. The registration Package
+	// shares the PackageSource's name; `cozypkg add --allow-privileged` sheds the
+	// tap label on it, and a Package watch re-runs this generation. Non-tap
+	// (platform) sources carry no marketplace-tap label and are never gated.
+	privilegedConfirmed := true
+	if packageSource.GetLabels()[tapconst.Label] == "true" {
+		privilegedConfirmed = false
+		var regPkg cozyv1alpha1.Package
+		err := r.Get(ctx, types.NamespacedName{Name: packageSource.Name}, &regPkg)
+		if err == nil {
+			privilegedConfirmed = collision.PrivilegedConfirmed(&regPkg)
+		} else if !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+
 	// Process all variants and their components
 	for _, variant := range packageSource.Spec.Variants {
 		// Build library map for this variant
@@ -189,6 +220,14 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 			}
 
 			logger.V(1).Info("processing component", "packageSource", packageSource.Name, "variant", variant.Name, "component", component.Name, "path", component.Path)
+
+			// Withhold a privileged component's artifact until the registration is
+			// confirmed, so the helm-controller has no content to upgrade a
+			// HelmRelease to. See privilegedConfirmed above.
+			if component.Install != nil && component.Install.Privileged && !privilegedConfirmed {
+				logger.Info("withholding privileged component artifact until registration is confirmed", "packageSource", packageSource.Name, "variant", variant.Name, "component", component.Name)
+				continue
+			}
 
 			// Extract component name from path (last component)
 			componentPathName := r.getPackageNameFromPath(component.Path)
@@ -231,12 +270,11 @@ func (r *PackageSourceReconciler) reconcileArtifactGenerators(ctx context.Contex
 				})
 			}
 
-			// Artifact name: <packagesource>-<variant>-<componentname>
-			// Replace dots with dashes to comply with Kubernetes naming requirements
-			artifactName := fmt.Sprintf("%s-%s-%s",
-				strings.ReplaceAll(packageSource.Name, ".", "-"),
-				strings.ReplaceAll(variant.Name, ".", "-"),
-				strings.ReplaceAll(component.Name, ".", "-"))
+			// Artifact name: <packagesource>-<variant>-<componentname>, dots
+			// replaced by dashes to comply with Kubernetes naming. This is the
+			// single definition shared with the marketplace backend and the
+			// validator via internal/marketplace/naming.
+			artifactName := naming.ArtifactName(packageSource.Name, variant.Name, component.Name)
 
 			outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
 				Name: artifactName,
@@ -537,6 +575,10 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		return ctrl.Result{RequeueAfter: agFollowUpDelay(ag.CreationTimestamp.Time, now)}, r.Status().Update(ctx, packageSource)
 	}
 
+	if needsGenerationVerification(ag, readyCondition) {
+		return r.verifyArtifactGeneratorGeneration(ctx, packageSource, ag, now)
+	}
+
 	// Copy Ready condition from ArtifactGenerator to PackageSource
 	meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
@@ -582,6 +624,63 @@ func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duratio
 	return remaining
 }
 
+// needsGenerationVerification reports whether source-watcher has just claimed
+// a successful build of an AG generation this operator has not yet verified.
+//
+// source-watcher builds from the spec it read when its reconcile started, but
+// its final status patch re-reads the live object and stamps Ready with the
+// live generation (fluxcd/source-watcher#384). When this operator changes the
+// spec mid-build, the AG ends up Ready on the new generation with artifacts
+// from the old one, and detectDrift never rebuilds it. Nothing in the AG
+// status tells the two apart, so every generation that reaches Ready=True is
+// rebuilt once. An unchanged spec rebuilds to the same digest, leaving the
+// ExternalArtifacts and their HelmReleases untouched.
+//
+// Generation 1 is exempt: the race needs a spec change during a build.
+//
+// TODO(remove once fluxcd/source-watcher#384 is fixed and rolled out).
+func needsGenerationVerification(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition) bool {
+	if ag.Generation <= 1 || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != ag.Generation {
+		return false
+	}
+	return ag.Annotations[annotationVerifiedGeneration] != strconv.FormatInt(ag.Generation, 10)
+}
+
+// verifyArtifactGeneratorGeneration forces the one rebuild described on
+// needsGenerationVerification through the fluxcd/pkg#934 force-drift path, so
+// the follow-up reconciles are driven by maybeRecoverArtifactGenerator and the
+// synthetic Ready=False never reaches the PackageSource. It starts a fresh
+// attempt budget, since a counter left by an earlier stall may have survived
+// the best-effort clearRecoveryTracking. The verified generation is recorded
+// after the force: if that write fails, the next Ready=True costs one more
+// rebuild rather than a skipped one.
+func (r *PackageSourceReconciler) verifyArtifactGeneratorGeneration(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time) (ctrl.Result, error) {
+	if err := r.forceArtifactGeneratorDrift(ctx, ag, now, 1); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to force ArtifactGenerator rebuild: %w", err)
+	}
+	patchBase := ag.DeepCopy()
+	ag.Annotations[annotationVerifiedGeneration] = strconv.FormatInt(ag.Generation, 10)
+	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to record verified ArtifactGenerator generation: %w", err)
+	}
+	meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+		Type:   "Ready",
+		Status: metav1.ConditionUnknown,
+		Reason: reasonAwaitingRecovery,
+		Message: fmt.Sprintf(
+			"rebuilding ArtifactGenerator generation %d once, since source-watcher may have built it from the previous spec (fluxcd/source-watcher#384).",
+			ag.Generation,
+		),
+		ObservedGeneration: packageSource.Generation,
+	})
+	if err := r.Status().Update(ctx, packageSource); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.FromContext(ctx).Info("forced ArtifactGenerator rebuild to verify generation",
+		"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "generation", ag.Generation)
+	return ctrl.Result{RequeueAfter: backoffFor(1)}, nil
+}
+
 // maybeRecoverArtifactGenerator advances the bounded-recovery schedule for an
 // AG whose Ready condition is stuck in the fluxcd/pkg#934 window (Inventory
 // and ObservedSourcesDigest persisted on the current spec generation, Ready
@@ -624,11 +723,10 @@ func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duratio
 // source-watcher lands a definitive Ready=True or Ready=False with a
 // real upstream reason.
 //
-// TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
-// consumes a patch.Helper that either serialises or transactionally combines
-// the .status / .status.conditions writes, this whole recovery driver can be
-// deleted and updateStatus can copy the AG's Ready condition through
-// unconditionally.
+// TODO(remove once fluxcd/pkg#934 and fluxcd/source-watcher#384 are both
+// fixed and rolled out): verifyArtifactGeneratorGeneration drives its rebuild
+// through this driver, so it goes only together with that verification. Then
+// updateStatus can copy the AG's Ready condition through unconditionally.
 func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition, now time.Time) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -655,8 +753,8 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 	switch decision.action {
 	case recoveryActionGiveUp:
 		message := fmt.Sprintf(
-			"ArtifactGenerator %s/%s has been stuck with a lost Ready condition through %d force-drift attempts; "+
-				"source-watcher is not recovering. See https://github.com/fluxcd/pkg/issues/934. "+
+			"ArtifactGenerator %s/%s has not been rebuilt through %d force-drift attempts; "+
+				"source-watcher is not recovering (see fluxcd/pkg#934 and fluxcd/source-watcher#384). "+
 				"An operator must restart source-watcher or manually inspect the ArtifactGenerator.",
 			ag.Namespace, ag.Name, maxRecoveryAttempts,
 		)
@@ -677,8 +775,7 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 			Status: metav1.ConditionUnknown,
 			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
-				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"force-drift %d/%d issued, waiting for source-watcher to rebuild.",
+				"force-drift %d/%d issued, waiting for source-watcher to rebuild the ArtifactGenerator.",
 				attempts, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
@@ -698,8 +795,7 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 			Status: metav1.ConditionUnknown,
 			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
-				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"forced drift on AG.status.conditions[Ready]=False (attempt %d/%d) so source-watcher rebuilds.",
+				"forced drift on AG.status.conditions[Ready]=False (attempt %d/%d) so source-watcher rebuilds.",
 				nextAttempt, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
@@ -877,7 +973,7 @@ func (r *PackageSourceReconciler) forceArtifactGeneratorDrift(ctx context.Contex
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		Reason:             reasonRecoveryForced,
-		Message:            "cozystack-operator forced drift after fluxcd/pkg#934 stall; source-watcher will rebuild",
+		Message:            "cozystack-operator forced drift; source-watcher will rebuild",
 		ObservedGeneration: ag.Generation,
 	})
 	if err := r.Status().Patch(ctx, ag, client.MergeFrom(statusBase)); err != nil {
@@ -985,9 +1081,7 @@ func cloneAnnotations(src map[string]string) map[string]string {
 		return nil
 	}
 	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
+	maps.Copy(dst, src)
 	return dst
 }
 
@@ -1011,12 +1105,20 @@ func readRecoveryTracking(ag *sourcewatcherv1beta1.ArtifactGenerator) (attempts 
 	return attempts, lastRecoveryAt
 }
 
+// mapPackageToSource enqueues the PackageSource that shares a Package's name, so
+// confirming a registration (which sheds the marketplace-tap label on the
+// Package) re-runs artifact generation and materialises the now-confirmed
+// privileged components.
+func mapPackageToSource(_ context.Context, obj client.Object) []ctrl.Request {
+	return []ctrl.Request{{NamespacedName: types.NamespacedName{Name: obj.GetName()}}}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *PackageSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-packagesource").
 		For(&cozyv1alpha1.PackageSource{}).
 		Owns(&sourcewatcherv1beta1.ArtifactGenerator{}).
+		Watches(&cozyv1alpha1.Package{}, handler.EnqueueRequestsFromMapFunc(mapPackageToSource)).
 		Complete(r)
 }
-

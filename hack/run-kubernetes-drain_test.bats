@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for cozy_tenant_drained in hack/e2e-chainsaw/_lib/run-kubernetes.sh
+# Unit tests for the scoped tenant-drain helpers in run-kubernetes.sh.
 #
 # cozy_tenant_drained is the pure exit-condition of the inter-test drain loop
 # (cozy_wait_tenant_drained). Each argument is one resource-probe capture: the
@@ -9,12 +9,15 @@
 # is never misread as "the tenant has drained". The function returns 0 (drained)
 # only when every capture is empty/whitespace, non-zero otherwise.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
-# direct shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-drain_test.bats
+# Run with: bats hack/run-kubernetes-drain_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "all-empty captures report drained" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
@@ -78,4 +81,37 @@
         echo "expected drained when captures hold only whitespace" >&2
         exit 1
     fi
+}
+
+@test "PVC filtering ignores leftovers from databases and other Kubernetes clusters" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    pvcs=$(printf '%s\n' \
+        'persistentvolumeclaim/clickhouse-data-test' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-previous-version-md0-worker-a' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-worker-b')
+    got=$(cozy_filter_cluster_pvcs test-latest-version "$pvcs")
+    expected='persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-worker-b'
+    [ "$got" = "$expected" ] || {
+        echo "PVC filter crossed cluster ownership: [$got]" >&2
+        exit 1
+    }
+}
+
+@test "scoped drain queries the CAPI label and ignores unrelated PVCs" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    calls=$(mktemp)
+    kubectl() {
+        printf '%s\n' "$*" >> "$calls"
+        case "$*" in
+            *" get pvc "*) printf 'persistentvolumeclaim/clickhouse-data-test\n' ;;
+            *) printf '' ;;
+        esac
+    }
+
+    cozy_wait_tenant_drained test-latest-version 0 >/dev/null
+    [ "$(grep -c 'cluster.x-k8s.io/cluster-name=kubernetes-test-latest-version' "$calls")" -eq 2 ] || {
+        echo "VM and VMI probes were not scoped to the current CAPI cluster" >&2
+        cat "$calls" >&2
+        exit 1
+    }
 }

@@ -1,0 +1,75 @@
+{{- /*
+  The only way other tenants have into the shared-central store. vtinsert and
+  vtselect take the account from the AccountID/ProjectID headers verbatim, so a
+  writer or reader reaching them directly could use any account; tenant egress
+  keeps other tenants off them, while tenant-root's own workloads, inside the
+  store's trust boundary, reach them directly. tenant-root therefore fronts
+  its shared `generic` store with vmauth: every central tenant's collector and
+  Grafana log in as its own VMUser, whose headers vmauth sets on the proxied
+  request, replacing whatever the client sent. It needs a cluster-mode store,
+  since a VMUser routes to the vtinsert and vtselect components.
+
+  VMUsers are picked up only from tenant namespaces and only with the reader
+  label; tenants have no RBAC on VMUser objects, so the monitoring chart is the
+  only writer of either.
+*/ -}}
+{{- /* Dropping the hosting removes the vmauth every central tenant writes
+       through, and an in-sync tenant release is not re-rendered to notice, so
+       the render refuses while a central tenant's VMUser remains. One already
+       being deleted is not waited on: its tenant is leaving. An offline
+       render lists no VMUsers, so it is never refused. */}}
+{{- if and (eq .Release.Namespace "tenant-root") (eq (toString .Values.tracingCentralHost) "true") (not (include "monitoring.tracingCentralStore" .)) }}
+{{-   fail "monitoring: tracingCentralHost is set, but tracingStorages has no entry named \"generic\" in cluster mode to host the shared store in." }}
+{{- end }}
+{{- if and (eq .Release.Namespace "tenant-root") (not (include "monitoring.tracingCentralStore" .)) }}
+{{-   $users := list }}
+{{-   range (lookup "operator.victoriametrics.com/v1beta1" "VMUser" "" "").items | default list }}
+{{-     if and (eq (dig "metadata" "labels" "tracing.cozystack.io/central-reader" "" .) "true") (not (dig "metadata" "deletionTimestamp" "" .)) }}
+{{-       $users = append $users .metadata.namespace }}
+{{-     end }}
+{{-   end }}
+{{-   with $users }}
+{{-     fail (printf "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: %s. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone." (join ", " (sortAlpha (uniq .)))) }}
+{{-   end }}
+{{- end }}
+{{- if include "monitoring.tracingCentralStore" . }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAuth
+metadata:
+  name: traces-central
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ .Release.Name }}
+  replicaCount: 2
+  # Every central tenant writes and reads through this one vmauth.
+  podDisruptionBudget:
+    maxUnavailable: 1
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: vmauth
+          app.kubernetes.io/instance: traces-central
+  # config-init and config-reloader read the config Secret from the apiserver,
+  # which tenant egress allows only to pods carrying this label.
+  podMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"
+  # Tenant egress allows only the proxy port; /metrics names every tenant's
+  # user and /-/reload takes no credentials, so they move off it.
+  internalListenPort: "8426"
+  selectAllByDefault: false
+  userSelector:
+    matchLabels:
+      tracing.cozystack.io/central-reader: "true"
+  userNamespaceSelector:
+    matchExpressions:
+      - key: namespace.cozystack.io/monitoring
+        operator: Exists
+{{- end }}

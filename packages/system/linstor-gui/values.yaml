@@ -1,3 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 ## @section Image
 ## @param image.repository LINSTOR GUI container image repository
 ## @param image.tag LINSTOR GUI container image tag (digest recommended)

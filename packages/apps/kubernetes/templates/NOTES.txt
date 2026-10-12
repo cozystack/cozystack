@@ -34,3 +34,16 @@ OIDC is enabled for this cluster (spec.oidc.mode={{ .Values.oidc.mode }}).
     (none — set spec.oidc.users[] to grant access)
 {{- end }}
 {{- end }}
+
+Worker nodes are managed separately as KubernetesNodes resources (one per
+pool), not via spec.nodeGroups on this Kubernetes CR. Create at least one
+pool named {{ .Release.Name | trimPrefix "kubernetes-" }}-<pool> for the
+cluster to have workers.
+{{- if .Values.addons.ingressNginx.enabled }}
+
+The ingress-nginx addon is enabled: its controller only schedules on nodes
+labelled node-role.kubernetes.io/ingress-nginx. Give at least one
+KubernetesNodes pool `roles: [ingress-nginx]`, otherwise the controller has
+nowhere to run and ingress stays unavailable (the chart no longer fails the
+render for this — it is a runtime requirement).
+{{- end }}

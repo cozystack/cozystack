@@ -25,6 +25,34 @@
 {{-   end }}
 {{- end }}
 {{- $etcd := .Values._namespace.etcd }}
+{{- /* Substrate selects the infrastructure half of the cluster. The control
+       plane is Kamaji either way, so this changes exactly one object — the
+       one Cluster.infrastructureRef points at — plus the two tenant addons
+       that only exist because the workers are KubeVirt VMs (the kubevirt-csi
+       driver and the KubeVirt cloud-controller-manager RBAC). */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
+       these fields and has no DHCP mode, so an unset pool is not a default —
+       it is a ProxmoxCluster that never reaches Ready and worker Machines that
+       wait on it forever. Refuse at render time instead. */}}
+{{- if not .Values.proxmox.ipv4Config.addresses }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.addresses: capmox allocates static addresses and has no DHCP mode" }}
+{{- end }}
+{{- if not .Values.proxmox.ipv4Config.gateway }}
+{{- fail "substrate proxmox requires proxmox.ipv4Config.gateway" }}
+{{- end }}
+{{- if not .Values.proxmox.dnsServers }}
+{{- fail "substrate proxmox requires proxmox.dnsServers: the ProxmoxCluster schema makes it mandatory" }}
+{{- end }}
+{{- include "kubernetes.assertDnsServersAreAddresses" . }}
+{{- end }}
+{{- include "kubernetes.assertSubstrateUnchanged" . }}
+{{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
   _namespace.etcd in cozystack-values yet - either the operator forgot to
@@ -36,18 +64,15 @@
   flux marks the HelmRelease Ready and retries its 5m reconcile loop until
   the Tenant chart catches up.
 */}}
-{{- /* The TalosConfigTemplate and the apiserver-Service ClusterIP-SAN
-       used to be rendered in this template behind a lookup gate that
-       races every fresh install: Service / Talos CA / K8s CA do not
-       exist on first Helm render, so the gate fails, the TCT is
-       skipped, and Helm's release-storage three-way merge then refuses
-       to upgrade because no values changed. Both objects are now
-       produced by the main-phase Job in
-       templates/talos/talos-reconcile-job.yaml, which blocks until the
-       four dependencies exist and then `kubectl apply`s deterministic
-       results. The Job owns the TCT through an ownerReference to the
-       KamajiControlPlane so K8s garbage-collects it naturally on
-       release uninstall. */}}
+{{- /* Worker node pools (KubevirtMachineTemplate, MachineDeployment,
+       MachineHealthCheck, worker WorkloadMonitor) and the Talos
+       reconcile Job that produces each pool's TalosConfigTemplate now
+       live in the separate `kubernetes-nodes` chart (one HelmRelease
+       per pool). This chart renders the control plane only. The
+       reconcile Job in the kubernetes-nodes release still re-patches
+       this KamajiControlPlane's apiserver-Service ClusterIP-SAN and
+       owns each TalosConfigTemplate via an ownerReference to this KCP,
+       so garbage collection on control-plane uninstall is unchanged. */}}
 {{- /*
   Cluster pod/service CIDRs MUST match between the CAPI Cluster
   spec.clusterNetwork below and the Talos worker machineconfig's
@@ -59,135 +84,6 @@
 {{- $podCIDR := "10.243.0.0/16" }}
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
-{{- $kubevirtmachinetemplateNames := list }}
-{{- define "kubevirtmachinetemplate" -}}
-spec:
-  {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
-        on an SSH probe that will never succeed. The Machine reaches Ready
-        once kubelet registers with the tenant apiserver via standard CSR. */}}
-  virtualMachineBootstrapCheck:
-    checkStrategy: none
-  virtualMachineTemplate:
-    metadata:
-      namespace: {{ $.Release.Namespace }}
-      labels:
-        {{- range .group.roles }}
-        node-role.kubernetes.io/{{ . }}: ""
-        {{- end }}
-    spec:
-      {{- /* Explicit resources take precedence over instanceType. When a node
-             group is sized by resources (both cpu and memory set), the
-             instancetype is omitted from the VM: KubeVirt rejects a
-             VirtualMachine that references an instancetype and also overrides
-             either domain.cpu or domain.memory. */}}
-      {{- $sizedByResources := and .group.resources .group.resources.cpu .group.resources.memory }}
-      {{- if and .group.instanceType (not $sizedByResources) }}
-      instancetype:
-        kind: VirtualMachineClusterInstancetype
-        name: {{ .group.instanceType }}
-      {{- end }}
-      runStrategy: Always
-      dataVolumeTemplates:
-      - metadata:
-          name: disk-system
-          annotations:
-            cdi.kubevirt.io/storage.usePopulator: "false"
-        spec:
-          {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
-                injects bootstrap data via cloudInitConfigDrive (OpenStack
-                metadata service shape), and the openstack platform image
-                is the one that reads it. The nocloud-amd64 image silently
-                ignores configdrive and never applies the machineconfig. */}}
-          source:
-            http:
-              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
-          {{- if hasKey .group "ephemeralStorage" }}
-          {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
-          {{- end }}
-          storage:
-            resources:
-              requests:
-                storage: {{ .group.diskSize | default "20Gi" | quote }}
-            {{- /*
-              Worker VMs live-migrate, so their disks need ReadWriteMany. The
-              RWX access mode is supplied by the chosen StorageClass's CDI
-              StorageProfile — it is not set on the DataVolume here. linstor-csi
-              rejects RWX volumes that are not on a DRBD-backed StorageClass, so
-              an empty nodeGroup storageClass falls back to the application-level
-              storageClass (a replicated/DRBD class) instead of the cluster
-              default, which may be a non-DRBD class that the CSI driver would
-              reject. Both empty still omits the field so the cluster default
-              applies.
-            */}}
-            {{- with .group.storageClass | default $.Values.storageClass }}
-            storageClassName: {{ . | quote }}
-            {{- end }}
-      template:
-        metadata:
-          annotations:
-            kubevirt.io/allow-pod-bridge-network-live-migration: "true"
-          labels:
-            apps.cozystack.io/application.group: apps.cozystack.io
-            apps.cozystack.io/application.kind: Kubernetes
-            apps.cozystack.io/application.name: {{ $.Release.Name | trimPrefix "kubernetes-" | quote }}
-            {{- range .group.roles }}
-            node-role.kubernetes.io/{{ . }}: ""
-            {{- end }}
-            cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
-        spec:
-          {{- if .Values._cluster.scheduling }}
-          {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
-          {{- if $rawConstraints }}
-          {{- $rawConstraints | fromYaml | toYaml | nindent 10 }}
-            labelSelector:
-              matchLabels:
-                cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
-          {{- end }}
-          {{- end }}
-          domain:
-            {{- if and .group.resources .group.resources.cpu }}
-            cpu:
-              threads: 1
-              cores: {{ .group.resources.cpu }}
-              sockets: 1
-            {{- end }}
-            devices:
-              {{- if .group.gpus }}
-              gpus:
-              {{- range $i, $gpu := .group.gpus }}
-              - name: gpu{{ add $i 1 }}
-                deviceName: {{ $gpu.name }}
-              {{- end }}
-              {{- end }}
-              disks:
-              - name: system
-                disk:
-                  bus: virtio
-                  pciAddress: 0000:07:00.0
-                blockSize:
-                  custom:
-                    logical: 512
-                    physical: 4096
-              interfaces:
-              - name: default
-                bridge: {}
-            {{- if and .group.resources .group.resources.memory }}
-            memory:
-              guest: {{ .group.resources.memory }}
-            {{- end }}
-            resources:
-              {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
-              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
-          evictionStrategy: External
-          volumes:
-          - name: system
-            dataVolume:
-              name: disk-system
-          networks:
-          - name: default
-            pod: {}
-{{- end }}
 {{- if not $etcd }}
 ---
 apiVersion: v1
@@ -208,6 +104,68 @@ data:
     to reconcile - this HelmRelease will pick up the DataStore on its next
     5m reconcile loop and provision the cluster.
 {{- else }}
+{{- /* Phase 2 worker-pool adoption guard. Worker pools now live in per-pool
+       kubernetes-nodes releases; the platform migration adopts each pre-split
+       pool's live objects onto its child release (re-annotating
+       meta.helm.sh/release-name, pinning helm.sh/resource-policy=keep) as a
+       pre-upgrade hook, BEFORE this control-plane-only chart reconciles. If
+       that migration never processed a pool (its version slot was already
+       stamped, or it was renumbered out on a merge/backport), a live worker
+       MachineDeployment for this cluster is NOT owned by its kubernetes-nodes
+       child release AND carries no keep pin, and Helm's control-plane-only
+       re-render would prune it and cascade-delete the tenant's worker VMs.
+       Refuse to render instead: the upgrade blocks with a legible reason and
+       the workers keep running on the prior release until the migration runs.
+
+       Exempt pools carrying helm.sh/resource-policy=keep. The migration pins
+       keep on every pool it touches: on the ones it fully adopts (release-name
+       rewritten to the child) and, deliberately, on the ones it cannot adopt
+       but must keep prune-proof (documented skip branches: non-object
+       nodeGroups, invalid rfc-1123 child name, child name over 53 chars,
+       non-object group value). Those skipped pools keep the parent release-name
+       by design, so keep is the migration's "processed, made prune-proof"
+       signature. A pinned MachineDeployment is already safe from Helm prune, so
+       flagging it here would convert that documented degraded-but-running state
+       into a permanent upgrade deadlock. The exemption keys on OWNERSHIP BY THE
+       CHILD RELEASE (release-name starts with kubernetes-nodes-<cluster>-), not
+       on "owned by this parent release": Helm's prune gates on resource-policy
+       alone and never consults the live release-name (see migration 56's
+       foreign-owner branch), so a same-cluster unpinned MD whose release-name is
+       empty or foreign (Helm annotations stripped out-of-band, or a DR restore
+       of the CAPI objects) is ALSO in the parent's prune set and ALSO lost.
+       Firing on "not child-owned AND unpinned" catches those alongside the
+       parent-owned case; only a pool already adopted or natively created by its
+       child release (child release-name) is exempt.
+
+       Fail-closed like system/seaweedfs naming-guard: the release Namespace is
+       a canary that always exists for a live install/upgrade, so an empty
+       canary means a client-side render (helm template / unittest / CI lint,
+       where lookup returns nil) that never prunes live objects: skip there.
+       Discriminate on the adoption annotation, never on mere existence: the
+       MachineDeployment always exists at render time, so an existence-only
+       guard would deadlock the routine upgrade (see helmreleases/ouroboros.yaml).
+
+       Scope: this guard lives in the etcd-present branch (the else of
+       `if not $etcd`), so it does NOT run during the awaiting-etcd window,
+       where the chart renders only the status beacon above. An owned+unpinned
+       MD is therefore not refused in that transient window. This is a
+       pre-existing narrow exposure, not introduced by the split (the pre-split
+       chart also rendered pools only in this same else branch), and it closes
+       as soon as etcd resolves and a real control-plane upgrade re-renders. */}}
+{{- if .Release.IsUpgrade }}
+{{-   if lookup "v1" "Namespace" "" .Release.Namespace }}
+{{-     $unadopted := list }}
+{{-     $childPrefix := printf "kubernetes-nodes-%s-" (trimPrefix "kubernetes-" $.Release.Name) }}
+{{-     range $md := (lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" $.Release.Namespace "").items }}
+{{-       if and (eq (dig "spec" "clusterName" "" $md) $.Release.Name) (not (hasPrefix $childPrefix (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $md))) (ne (dig "metadata" "annotations" "helm.sh/resource-policy" "" $md) "keep") }}
+{{-         $unadopted = append $unadopted (dig "metadata" "name" "" $md) }}
+{{-       end }}
+{{-     end }}
+{{-     if $unadopted }}
+{{-       fail (printf "kubernetes: refusing to render cluster %q control-plane-only: worker MachineDeployment(s) %v are not owned by their kubernetes-nodes child release and are not pinned with helm.sh/resource-policy=keep, so the Phase 2 worker-pool adoption migration never processed them. Helm prunes on resource-policy alone (not on the live release-name), so rendering now would let Helm prune them and delete the tenant's worker VMs. Recover by one of two paths depending on why the migration missed this pool: if the worker-adoption migration has not run yet, re-run the platform upgrade; if it already ran and stamped (its version slot was renumbered out on a backport, or this parent HelmRelease predates the apps.cozystack.io/application.kind=Kubernetes label the migration selects on and was skipped), then manually annotate helm.sh/resource-policy=keep on those MachineDeployment(s) so this render stops pruning them, and stamp the cozystack-version ConfigMap in cozy-system back below the worker-adoption migration version so it re-runs and adopts them on the next upgrade. A pool the migration deliberately left pinned-but-unadopted already carries helm.sh/resource-policy=keep and is intentionally exempt from this guard." $.Release.Name $unadopted) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 {{- /* Validate user-supplied apiServer.extraVolumes / extraVolumeMounts before
        they are wired into the control-plane Deployment and apiserver container.
 
@@ -262,6 +220,65 @@ data:
 {{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
 {{-   end }}
 {{- end }}
+{{- /*
+  Mirrors the `managed` map of buildKubeAPIServerCommand in Kamaji's
+  internal/builders/controlplane/deployment.go (lines 726-774 at 26.9.4-edge,
+  the tag packages/system/kamaji builds), narrowed to what this chart renders:
+  an etcd DataStore, konnectivity on, no dataStoreOverrides. Kamaji cuts each
+  entry at the first "=" and drops it when the name is in that map, so the
+  bare two-entry spelling loses its flag and leaves the value behind as a
+  positional argument the apiserver refuses. Re-derive this list on every
+  Kamaji bump; the extraArgs description in values.yaml names the same flags.
+*/}}
+{{- $kamajiManagedArgs := list
+      "--advertise-address" "--client-ca-file" "--enable-admission-plugins"
+      "--service-cluster-ip-range" "--kubelet-client-certificate"
+      "--kubelet-client-key" "--kubelet-preferred-address-types"
+      "--proxy-client-cert-file" "--proxy-client-key-file"
+      "--requestheader-allowed-names" "--requestheader-client-ca-file"
+      "--secure-port" "--service-account-key-file"
+      "--service-account-signing-key-file" "--tls-cert-file"
+      "--tls-private-key-file" "--etcd-servers" "--etcd-cafile"
+      "--etcd-certfile" "--etcd-keyfile" "--etcd-prefix"
+      "--etcd-compaction-interval" "--egress-selector-config-file" }}
+{{- /*
+  Two of those flags have a field on the KamajiControlPlane that the control
+  plane renders them from, so an --flag=value entry is moved into that field
+  instead of refused, on every render: the entry stays in the values and
+  nothing rewrites it. The last entry wins, as it did while the control plane
+  kept one entry per flag name. The moved entry is left out of the rendered
+  extraArgs, so the list below is the one the apiserver receives.
+*/}}
+{{- $movedArgFields := include "kubernetes.apiServer.movedArgFields" . | fromJson }}
+{{- $admissionControllers := .Values.controlPlane.apiServer.admissionControllers | default list }}
+{{- $preferredAddressTypes := get (.Values.controlPlane.kubelet | default dict) "preferredAddressTypes" | default list }}
+{{- $movedArgs := dict }}
+{{- $keptExtraArgs := include "kubernetes.apiServer.keptExtraArgs" . | fromJsonArray }}
+{{- range $arg := .Values.controlPlane.apiServer.extraArgs | default list }}
+{{-   $flag := index (splitList "=" (toString $arg)) 0 }}
+{{-   $field := get $movedArgFields $flag }}
+{{-   if ne $field "" }}
+{{-     if not (contains "=" (toString $arg)) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q with its value in a separate entry — the tenant control plane sets %s itself, from %s, and drops the entry naming it, which leaves the value behind as an argument the apiserver refuses. Write it as %s=value so the chart moves it into %s, or set that field instead." $arg $flag $field $flag $field) }}
+{{-     end }}
+{{-     $fieldIsSet := ternary (gt (len $admissionControllers) 0) (gt (len $preferredAddressTypes) 0) (eq $flag "--enable-admission-plugins") }}
+{{-     if $fieldIsSet }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while %s is also set — the tenant control plane takes %s only from %s, so the entry cannot apply. Remove the entry, or empty %s to have the chart take the list from it." $arg $field $flag $field $field) }}
+{{-     end }}
+{{-     if contains "\"" (toString $arg) }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, whose value is quoted — the apiserver strips the quotes when it reads the list and the chart does not, so it cannot move the names into %s as written. Write the value without quotes." $arg $field) }}
+{{-     end }}
+{{-     $items := uniq (compact (splitList "," (trimPrefix (printf "%s=" $flag) (toString $arg)))) }}
+{{-     if eq (len $items) 0 }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q, which names nothing — the chart moves this flag into %s and has no list to move. Remove the entry." $arg $field) }}
+{{-     end }}
+{{-     $movedArgs = set $movedArgs $flag $items }}
+{{-   else if has $flag $kamajiManagedArgs }}
+{{-     fail (printf "controlPlane.apiServer.extraArgs contains %q — the tenant control plane sets %s itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns." $arg $flag) }}
+{{-   end }}
+{{- end }}
+{{- $admissionControllers = $admissionControllers | default (get $movedArgs "--enable-admission-plugins") }}
+{{- $preferredAddressTypes = $preferredAddressTypes | default (get $movedArgs "--kubelet-preferred-address-types") | default (list "InternalIP" "ExternalIP") }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -283,7 +300,7 @@ spec:
     name: {{ .Release.Name }}
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-    kind: KubevirtCluster
+    kind: {{ $infraKind }}
     name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
 ---
@@ -325,6 +342,60 @@ metadata:
 {{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
 {{- end }}
 {{- /*
+  Aggregation-layer UID plumbing. What is rendered per version, why an
+  opt-out renders nothing rather than failing, and how the operator's own
+  entries change that are in docs/oidc-tenant.md. That table is the one
+  to update; there is deliberately no copy of it here.
+
+  The chart never renders a --feature-gates term of its own, so it never
+  enables an alpha gate for the operator; it reads the operator's gate entries
+  only to find an opt-out.
+
+  Anchors for the split, read at v1.32.13 and v1.35.6:
+  staging/src/k8s.io/apiserver/pkg/features/kube_features.go for the gate's
+  versioned spec, and .../server/options/authentication.go Validate() for
+  the refusals the guards below mirror. The version that decides is the
+  EFFECTIVE one, which --emulated-version moves down.
+
+  Every entry of a flag reaches the apiserver, so every entry is read, and
+  the three flags accumulate differently. --requestheader-uid-headers is a
+  pflag StringSlice whose repeats append, so the apiserver validates the
+  union and an element the chart adds can only satisfy caseInsensitiveHas.
+  --feature-gates collects into one bucket per component and is handed to
+  featureGate.Set() once, so the last term for a gate name wins across
+  entries. --emulated-version is a StringSlice too, and toVersionMap refuses
+  two elements naming the same component.
+
+  Two pins decide that: the tenant control plane build in
+  packages/system/kamaji, and the owner of the CR field read here,
+  cluster-api-control-plane-provider-kamaji in
+  packages/system/capi-providers-cpprovider, which copies
+  spec.apiServer.extraArgs into the TenantControlPlane verbatim. A bump of
+  either is a reason to re-read this block.
+
+  Ownership is resolved after the arg loop because the merged reading of
+  each flag, and the interaction between them, are known only once every
+  arg has been seen.
+*/}}
+{{- $uidHeaderUnsupported := false }}
+{{- $emulatedKubeVersion := "" }}
+{{- $emulatedKubeDuplicated := false }}
+{{- $uidGateOptedOut := false }}
+{{- $uidHeaderArgSeen := "" }}
+{{- $uidHeaderEmptyArg := "" }}
+{{- $emulatedQuoted := false }}
+{{- $gateArgUnreadable := false }}
+{{- $emulatedArgUnreadable := false }}
+{{- $uidHeaderConforms := false }}
+{{- $uidHeaderHasEmpty := false }}
+{{- $gateValues := dict }}
+{{- $gateArgs := dict }}
+{{- $gateArgSeen := "" }}
+{{- $uidGateSetting := "" }}
+{{- $allBetaSetting := "" }}
+{{- $versionPattern := `^\s*v?([0-9]+(?:\.[0-9]+)*)(.*)$` }}
+{{- $uidArgs := list }}
+{{- /*
   Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
   exclusive with `--authentication-config`. The kube-apiserver refuses
   to boot when both are set (`--authentication-config cannot be used with
@@ -338,12 +409,295 @@ metadata:
   preserved for backward compatibility.
 */}}
 {{- if $oidcEnabled }}
-{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
+{{- /*
+  The chart appends its own arguments after the operator's, starting with
+  --authentication-config. pflag gives a valueless long flag the next argv
+  element as its value whatever that element looks like, so an operator
+  entry that ends the list with one of the three flags read here swallows
+  that appended argument, and the AuthenticationConfiguration is never
+  applied. What that costs depends on the flag: a uid-headers list takes the
+  path verbatim and the apiserver starts with OIDC silently off, while
+  featureGate.Set and toVersionMap both reject it and the apiserver exits.
+  Silent is the one worth refusing the render over, and the other two arrive
+  at the same place by a louder road.
+
+  Earlier in the list the same shape takes the operator's own next entry,
+  which is theirs to mean. No entry between the two goes missing on the way
+  to the apiserver: an entry the control plane would drop is refused above or
+  moved out of this list.
+*/}}
+{{-   $userExtraArgs := $keptExtraArgs }}
+{{-   if gt (len $userExtraArgs) 0 }}
+{{-     $lastUserArg := index $userExtraArgs (sub (len $userExtraArgs) 1) }}
+{{-     if has $lastUserArg (list "--requestheader-uid-headers" "--feature-gates" "--emulated-version") }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs ends with %q while spec.oidc.mode is %q — the chart appends --authentication-config after your entries, and the kube-apiserver would read that as the value of your flag: the AuthenticationConfiguration is never applied, and the control plane either comes up with OIDC silently off or refuses to start at all, depending on which flag swallowed it. Give the flag its value in the same entry, as --flag=value." $lastUserArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{-   range $arg := $userExtraArgs }}
 {{-     if hasPrefix "--oidc-" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
 {{-     end }}
 {{-     if hasPrefix "--authentication-config" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if eq $arg "--requestheader-uid-headers" }}
+{{- /*
+  The space-separated spelling, as two elements. pflag pairs them, so the
+  entry counts as present even though its value lives in the next element
+  and this loop never looks there. Presence is what the gate-disabled guard
+  needs; conformance and emptiness stay unknown, exactly as for a quoted
+  value below. The arrangement where the element pflag pairs with is the
+  chart's own is refused above, before this loop runs.
+*/}}
+{{-       if eq $uidHeaderArgSeen "" }}
+{{-         $uidHeaderArgSeen = $arg }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--requestheader-uid-headers=" $arg }}
+{{- /*
+  An empty value is not an entry: readAsCSV returns an empty slice, pflag
+  appends nothing from it, and Validate() only inspects a non-empty list.
+
+  Only --flag=value is read for its value here. One element holding both the
+  flag and its value, separated by a space, reaches pflag as an unknown flag
+  and the apiserver refuses to start; the two-element spelling is handled
+  above.
+
+  Match whole ELEMENTS and do NOT trim them: caseInsensitiveHas compares with
+  strings.EqualFold and pflag's CSV reader keeps surrounding spaces, so
+  "X-Remote-Uid-Extra" and "X-Remote-Uid " are both something else, and the
+  chart answers them by adding its own element rather than by reading them
+  permissively. The emptiness test is the one that trims, because
+  checkForWhiteSpaceOnly does, and it refuses the union whatever else it holds.
+
+  A quoted value is read by encoding/csv before the apiserver sees it and
+  this code does not reproduce that, so a quoted entry counts as present and
+  contributes nothing else: it can neither show the union conforms nor show
+  an element is empty. That is the rule for the whole block: fail only where
+  the operator's own entry would stop the apiserver from starting, and
+  withhold a reading rather than guess at one.
+*/}}
+{{-       $headerValue := trimPrefix "--requestheader-uid-headers=" $arg }}
+{{-       if ne $headerValue "" }}
+{{-         if eq $uidHeaderArgSeen "" }}
+{{-           $uidHeaderArgSeen = $arg }}
+{{-         end }}
+{{-         if not (contains "\"" $headerValue) }}
+{{-           range $h := splitList "," $headerValue }}
+{{-             if eq (lower $h) "x-remote-uid" }}
+{{-               $uidHeaderConforms = true }}
+{{-             end }}
+{{-             if eq (trim $h) "" }}
+{{-               $uidHeaderHasEmpty = true }}
+{{-               if eq $uidHeaderEmptyArg "" }}
+{{-                 $uidHeaderEmptyArg = $arg }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-     if or (eq $arg "--feature-gates") (eq $arg "--emulated-version") }}
+{{- /*
+  The space-separated spelling of the two flags whose values decide what is
+  rendered. pflag pairs the element with the next one, but the value is in
+  an element this loop does not read, so neither the gate nor the effective
+  version can be settled. Withhold what depends on that reading, the way a
+  quoted value does: rendering against a reading that was never taken is the
+  one outcome worth avoiding.
+*/}}
+{{-       if eq $arg "--feature-gates" }}
+{{-         $gateArgUnreadable = true }}
+{{-       else }}
+{{-         $emulatedArgUnreadable = true }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--feature-gates=" $arg }}
+{{- /*
+  Values resolve as strconv.ParseBool resolves them (0/f/F, 1/t/T), names
+  compare exactly, and both only after the component prefix is off: the flag
+  is a colon-separated multimap parsed above featureGate.Set(), which is the
+  layer `known[Feature(k)]` belongs to.
+
+  A blanket AllBeta counts: setUnsetBetaGates skips a key an explicit entry
+  already wrote, so the explicit one wins in either map-iteration order.
+
+  Settings accumulate across entries into one dict because the multimap
+  does: every entry's terms land in the same per-component bucket and are
+  joined into a single featureGate.Set(), so the last term for a gate name
+  wins and no earlier entry is dropped.
+*/}}
+{{-       $gateValue := trimPrefix "--feature-gates=" $arg }}
+{{-       range $g := splitList "," $gateValue }}
+{{- /*
+  --feature-gates is a colon-separated multimap: each element is
+  component:name=value, and an element with no component belongs to the
+  empty key, which Set() folds into kube. Reading the whole "kube:Name" as
+  the gate name misses every prefixed spelling. Zero-length elements are
+  skipped the way ColonSeparatedMultimapStringString skips them.
+*/}}
+{{-         if ne $g "" }}
+{{-           $element := $g }}
+{{-           $elementIsKube := true }}
+{{-           if contains ":" $element }}
+{{-             $component := trim (index (splitList ":" $element) 0) }}
+{{- /*
+  Only a literal "kube" keys under the kube component. An empty component,
+  as in ":Foo=true", keys under "" exactly like an unprefixed element. A
+  foreign component keeps its prefix and never matches one of the gate names
+  below.
+*/}}
+{{-             if has $component (list "kube" "") }}
+{{-               $element = trimPrefix (printf "%s:" (index (splitList ":" $element) 0)) $element }}
+{{-             else }}
+{{-               $elementIsKube = false }}
+{{-             end }}
+{{-           end }}
+{{-           if $elementIsKube }}
+{{-             $kv := splitList "=" $element }}
+{{-             if eq (len $kv) 2 }}
+{{-               $gname := trim (index $kv 0) }}
+{{-               $gval := trim (index $kv 1) }}
+{{-               $resolved := "" }}
+{{-               if has $gval (list "1" "t" "T" "true" "TRUE" "True") }}
+{{-                 $resolved = "true" }}
+{{-               else if has $gval (list "0" "f" "F" "false" "FALSE" "False") }}
+{{-                 $resolved = "false" }}
+{{-               end }}
+{{-               if and (ne $resolved "") (has $gname (list "RemoteRequestHeaderUID" "AllBeta")) }}
+{{-                 $gateValues = set $gateValues $gname $resolved }}
+{{- /*
+  Keyed by gate name, so the opt-out message can quote the entry that carries
+  the setting it names rather than whichever entry happened to be read last.
+*/}}
+{{-                 $gateArgs = set $gateArgs $gname $arg }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-     if hasPrefix "--emulated-version=" $arg }}
+{{- /*
+  Emulation moves the version the gate resolves at, and the header flag has
+  to follow it rather than the image tag. featureSpecAtEmulationVersion
+  (featureSpecAtEmulationAndMinCompatVersion by v1.35) walks the versioned
+  specs down to the emulated version, so RemoteRequestHeaderUID
+  is alpha-and-off at an emulated 1.32 on any binary, and the apiserver
+  refuses the header flag there.
+
+  The value is a CSV of component=version, and an element naming no component
+  is kube's. Anything else names another component and is none of our
+  business. $versionPattern copies versionMatchRE from version.Parse, which
+  toVersionMap uses: an optional v, a run of dot-separated numbers, and
+  anything after it ignored, so the chart reads v1.32, 1.32.0 and 1.32-rc all
+  as 1.32. A version it cannot parse is left
+  alone, the way an unparseable gate value is: the apiserver rejects it on its
+  own terms. A non-zero patch component in an unquoted value fails the render
+  instead: toVersionMap refuses it too, and the render error names the entry
+  where the apiserver would only crash-loop.
+
+  Elements accumulate across entries, and toVersionMap refuses two of them
+  naming the same component. A second kube element therefore stops the
+  apiserver and leaves no version this code can trust, so it is tracked and
+  the header flag is withheld rather than rendered against a guess.
+*/}}
+{{-       $emulatedValue := trimPrefix "--emulated-version=" $arg }}
+{{-       if ne $emulatedValue "" }}
+{{-         if contains "\"" $emulatedValue }}
+{{-           $emulatedQuoted = true }}
+{{-         end }}
+{{-         range $e := splitList "," $emulatedValue }}
+{{-           $parts := regexSplit "=" (trim $e) 2 }}
+{{-           $candidate := "" }}
+{{-           if eq (len $parts) 1 }}
+{{-             $candidate = trim (index $parts 0) }}
+{{-           else if eq (trim (index $parts 0)) "kube" }}
+{{-             $candidate = trim (index $parts 1) }}
+{{-           end }}
+{{-           if ne $candidate "" }}
+{{-             if ne $emulatedKubeVersion "" }}
+{{-               $emulatedKubeDuplicated = true }}
+{{-             end }}
+{{-             $emulatedKubeVersion = $candidate }}
+{{-             if and (not (contains "\"" $emulatedValue)) (regexMatch $versionPattern $candidate) }}
+{{-               $numeric := splitList "." (regexReplaceAll $versionPattern $candidate "${1}") }}
+{{-               if and (ge (len $numeric) 3) (ne (atoi (index $numeric 2)) 0) }}
+{{-                 fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses an --emulated-version with a non-zero patch component (patch version not allowed), so the control plane would refuse to start. Emulation takes major.minor: write %s.%s instead of %s." $arg $.Values.oidc.mode (index $numeric 0) (index $numeric 1) $candidate) }}
+{{-               end }}
+{{-             end }}
+{{-           end }}
+{{-         end }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{-   $uidGateSetting = dig "RemoteRequestHeaderUID" "" $gateValues }}
+{{-   $allBetaSetting = dig "AllBeta" "" $gateValues }}
+{{- /*
+  Emulation can only move the effective version down, so the lower of the two
+  decides. A tenant asking to emulate something newer than its own image is
+  rejected by the apiserver; reading the lower one keeps the chart from
+  rendering a flag that version cannot take.
+*/}}
+{{-   $chartMinorParts := splitList "." (trimPrefix "v" .Values.version) }}
+{{-   $chartMinor := atoi (index $chartMinorParts 1) }}
+{{-   $effectiveMinor := $chartMinor }}
+{{-   if regexMatch $versionPattern $emulatedKubeVersion }}
+{{-     $emulatedParts := splitList "." (regexReplaceAll $versionPattern $emulatedKubeVersion "${1}") }}
+{{-     if ge (len $emulatedParts) 2 }}
+{{-       $emulatedMinor := atoi (index $emulatedParts 1) }}
+{{-       if lt $emulatedMinor $effectiveMinor }}
+{{-         $effectiveMinor = $emulatedMinor }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- /*
+  The fail messages are migration instructions, so they name the version the
+  decision was taken at, which is not the image tag when emulation moved it.
+*/}}
+{{-   $versionForMessage := .Values.version }}
+{{-   if and (ne $emulatedKubeVersion "") (ne $effectiveMinor $chartMinor) }}
+{{-     $versionForMessage = printf "%s emulating %s" .Values.version $emulatedKubeVersion }}
+{{-   end }}
+{{-   $uidHeaderUnsupported = lt $effectiveMinor 33 }}
+{{-   if eq $uidGateSetting "false" }}
+{{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "RemoteRequestHeaderUID" "" $gateArgs }}
+{{-   else if and (ne $uidGateSetting "true") (eq $allBetaSetting "false") }}
+{{-     $uidGateOptedOut = true }}
+{{-     $gateArgSeen = dig "AllBeta" "" $gateArgs }}
+{{-   end }}
+{{-   $argUnreadable := or $gateArgUnreadable $emulatedArgUnreadable }}
+{{- /*
+  An unreadable entry leaves the gate or the version unknown, and what
+  follows holds in every state it can hide. An explicit
+  RemoteRequestHeaderUID=false is an opt-out at every version, so it is
+  refused behind an unread --emulated-version; a blanket AllBeta reaches
+  the gate only while the gate is beta, which a lower emulated version can
+  undo, so it waits for a reading. An unread --feature-gates term can turn
+  the gate back on, so it keeps the opt-out refusal off. An empty element
+  is fatal with the gate in either state. X-Remote-Uid beside an
+  operator's own list can only help: the gate off refuses that list anyway.
+  What the chart adds with no list of the operator's beside it, X-Remote-Uid
+  alone, waits for a reading.
+*/}}
+{{-   if not (or $uidHeaderUnsupported $emulatedQuoted $emulatedKubeDuplicated) }}
+{{-     if $uidGateOptedOut }}
+{{-       if and (ne $uidHeaderArgSeen "") (not $gateArgUnreadable) (or (not $emulatedArgUnreadable) (eq $uidGateSetting "false")) }}
+{{-         fail (printf "controlPlane.apiServer.extraArgs contains %q alongside %q, while spec.oidc.mode is %q on Kubernetes %s — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off." $uidHeaderArgSeen $gateArgSeen $.Values.oidc.mode $versionForMessage) }}
+{{-       end }}
+{{-     end }}
+{{-     if $uidHeaderHasEmpty }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry." $uidHeaderEmptyArg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if not $uidGateOptedOut }}
+{{- /*
+  Adding a second X-Remote-Uid to a list that already has one is harmless,
+  so this is only about leaving a conforming setup rendering as it did.
+*/}}
+{{-       if and (not $uidHeaderConforms) (or (not $argUnreadable) (ne $uidHeaderArgSeen "")) }}
+{{-         $uidArgs = append $uidArgs "--requestheader-uid-headers=X-Remote-Uid" }}
+{{-       end }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -363,13 +717,16 @@ spec:
       REPLACE patch that clears the stale value.
     */}}
     extraArgs:
-      {{- with .Values.controlPlane.apiServer.extraArgs }}
+      {{- with $keptExtraArgs }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
       - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- with $uidArgs }}
+      {{- toYaml . | nindent 6 }}
       {{- end }}
-      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
+      {{- end }}
+      {{- if not (or $keptExtraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
       {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
@@ -385,6 +742,10 @@ spec:
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
   dataStoreName: "{{ $etcd }}"
+  {{- with $admissionControllers }}
+  admissionControllers:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   addons:
     konnectivity:
       {{- $konnVersion := include "kubernetes.konnectivityVersion" $ | trim }}
@@ -400,15 +761,20 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
-    preferredAddressTypes:
-    - InternalIP
-    - ExternalIP
+    preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
-    serviceType: ClusterIP
+    {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
+          over the pod network, where a ClusterIP is meaningful. A Proxmox
+          worker is a VM on the hypervisor network and cannot route to one at
+          all: it boots, fails to reach the endpoint, and never files a CSR —
+          a silence that looks like a broken bootstrap rather than an
+          unreachable address. Publishing the Service moves the endpoint onto
+          a network the workers share. */}}
+    serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
-      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
+      hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name (include "cozy-lib.ns-host-required" .)) }}:443
       className: "{{ $ingress }}"
     additionalServicePorts:
       - name: talos-trustd
@@ -417,9 +783,14 @@ spec:
         protocol: TCP
     {{- /* Initial render lists only the DNS SANs because the apiserver
            Service ClusterIP is not yet allocated when Helm executes the
-           template. The talos-reconcile main-phase Job re-patches certSANs
-           with the live ClusterIP once Kamaji emits the Service, and
-           Kamaji then re-issues the apiserver TLS cert to cover it. */}}
+           template. Since the worker split, the talos-reconcile Job that
+           re-patches certSANs with the live ClusterIP (after which Kamaji
+           re-issues the apiserver TLS cert) runs in each kubernetes-nodes
+           pool release, not in this chart: a cluster with at least one pool
+           gains the ClusterIP SAN once Kamaji emits the Service, while a
+           pool-less cluster keeps DNS SANs only. That is a best-effort
+           extra, not a dependency -- workers dial the apiserver by DNS name
+           via extraHostEntries, so nothing requires the IP SAN. */}}
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
@@ -502,403 +873,53 @@ spec:
   version: {{ $.Chart.Version }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtCluster
+kind: {{ $infraKind }}
 metadata:
+  {{- if not $isProxmox }}
+  {{- /* KubevirtCluster carries managed-by: nothing has to reconcile it, and
+        the annotation keeps CAPI from waiting on an infrastructure controller
+        that will never answer.
+
+        ProxmoxCluster must NOT carry it. The annotation tells CAPI the object
+        is owned by something outside Cluster API, so the Cluster controller
+        never sets the ownerRef on it — and capmox's reconciler exits at
+        "Waiting for Cluster Controller to set OwnerRef on ProxmoxCluster"
+        without ever building the InClusterIPPool the workers draw addresses
+        from. The control plane being external is expressed instead by
+        spec.externalManagedControlPlane below, which is the field capmox
+        actually reads. */}}
   annotations:
     cluster.x-k8s.io/managed-by: kamaji
+  {{- end }}
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
-{{- range $groupName, $group := (include "kubernetes.nodeGroups" $ | fromYaml) }}
-{{- /* instanceType and explicit resources are alternative sizing sources, and
-       explicit resources win. KubeVirt rejects a VirtualMachine that references
-       an instancetype while also overriding either domain.cpu or domain.memory,
-       so when a group is sized by resources (both cpu and memory set) the
-       instancetype is omitted from the VM (see the VM spec above) and the lookup
-       below is skipped — a stale instancetype name cannot fail an otherwise
-       valid, resource-sized group. Explicit resources are all-or-nothing: a
-       partial spec (only one of cpu/memory) would emit one domain override
-       alongside the instancetype, which KubeVirt rejects, so it fails here with
-       a clear render-time error instead of a late admission rejection. */}}
-{{- $hasCpu := and $group.resources $group.resources.cpu }}
-{{- $hasMem := and $group.resources $group.resources.memory }}
-{{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
-{{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
-{{- end }}
-{{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
-{{- $instanceType := dict }}
-{{- if and $group.instanceType (not (and $hasCpu $hasMem)) }}
-{{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
-{{-   if not $instanceType }}
-{{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
-{{-   end }}
-{{- end }}
-{{/* Compute kubelet reservations: explicit resources.memory/cpu wins over instanceType spec.
-     Auto-computed system/kube reserved memory = 5% of effective memory, clamped to [256Mi, 1Gi].
-     Auto-computed system/kube reserved CPU = 5% of effective CPU, clamped to [50m, 500m]. */}}
-{{- $effectiveMemory := "" }}
-{{- if and $group.resources $group.resources.memory }}
-{{-   $effectiveMemory = $group.resources.memory | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
-{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
-{{- end }}
-{{- $effectiveCpu := "" }}
-{{- if and $group.resources $group.resources.cpu }}
-{{-   $effectiveCpu = $group.resources.cpu | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
-{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
-{{- end }}
-{{- $autoReservedMi := 256 }}
-{{- if $effectiveMemory }}
-{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
-{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
-{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
-{{- end }}
-{{- $autoReservedMillicores := 50 }}
-{{- if $effectiveCpu }}
-{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
-{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
-{{- end }}
-{{- $kubeletOverride := $group.kubelet | default dict }}
-{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
-{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
-{{/* Validate reservation field formats.
-  These guards check the USER-SUPPLIED value (from values.yaml via
-  $kubeletOverride), not the resolved/computed default — the default is
-  always valid by construction.  The eviction threshold validation below
-  differs: it validates the RESOLVED values (user-supplied or default). */}}
-{{- $validations := list
-      (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
-      (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
-      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
-      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
-}}
-{{- range $validations }}
-{{-   if and .value (not (regexMatch .pattern (.value | toString))) }}
-{{-     fail (printf "nodeGroup %s: invalid %s value %q — must be %s" $groupName .key (.value | toString) .hint) }}
-{{-   end }}
-{{- end }}
-{{/* Validate that user-supplied reservation values are positive (non-zero) */}}
-{{- range $_, $entry := list (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory) (dict "key" "kubeReservedMemory" "value" $kubeletOverride.kubeReservedMemory) }}
-{{-   if $entry.value }}
-{{-     $bytes := include "cozy-lib.resources.toFloat" ($entry.value | toString) | float64 }}
-{{-     if le $bytes 0.0 }}
-{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
-{{-     end }}
-{{-   end }}
-{{- end }}
-{{- range $_, $entry := list (dict "key" "systemReservedCpu" "value" $kubeletOverride.systemReservedCpu) (dict "key" "kubeReservedCpu" "value" $kubeletOverride.kubeReservedCpu) }}
-{{-   if $entry.value }}
-{{-     $cpuMillis := include "kubernetes.cpuToMillicores" $entry.value | float64 }}
-{{-     if le $cpuMillis 0.0 }}
-{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
-{{-     end }}
-{{-   end }}
-{{- end }}
-{{/* Validate absolute eviction threshold formats before converting */}}
-{{- if not (hasSuffix "%" $evictionHardMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
-{{-     fail (printf "nodeGroup %s: invalid evictionHardMemory value %q — must be a percentage (e.g. 7%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionHardMemory) }}
-{{-   end }}
-{{- end }}
-{{- if not (hasSuffix "%" $evictionSoftMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionSoftMemory) }}
-{{-     fail (printf "nodeGroup %s: invalid evictionSoftMemory value %q — must be a percentage (e.g. 10%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionSoftMemory) }}
-{{-   end }}
-{{- end }}
-{{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
-{{-   $hardPctStr := trimSuffix "%" $evictionHardMemory }}
-{{-   $softPctStr := trimSuffix "%" $evictionSoftMemory }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $hardPctStr) }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage value %q is not a valid number" $groupName $hardPctStr) }}
-{{-   end }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $softPctStr) }}
-{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage value %q is not a valid number" $groupName $softPctStr) }}
-{{-   end }}
-{{-   $hardPct := $hardPctStr | float64 }}
-{{-   $softPct := $softPctStr | float64 }}
-{{-   if le $hardPct 0.0 }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
-{{-   end }}
-{{-   if gt $hardPct 100.0 }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
-{{-   end }}
-{{-   if le $softPct 0.0 }}
-{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
-{{-   end }}
-{{-   if gt $softPct 100.0 }}
-{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
-{{-   end }}
-{{-   if ge $hardPct $softPct }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
-{{-   end }}
-{{- else if and (not (hasSuffix "%" $evictionHardMemory)) (not (hasSuffix "%" $evictionSoftMemory)) }}
-{{-   $hardBytes := include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
-{{-   $softBytes := include "cozy-lib.resources.toFloat" $evictionSoftMemory | float64 }}
-{{-   if ge $hardBytes $softBytes }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
-{{-   end }}
-{{- else }}
-{{-   fail (printf "nodeGroup %s: evictionHardMemory (%s) and evictionSoftMemory (%s) must use the same unit type (both percentage or both absolute)" $groupName $evictionHardMemory $evictionSoftMemory) }}
-{{- end }}
-{{/* Resolve eviction hard threshold to bytes for arithmetic.
-     Percentage is relative to effective node memory; absolute values are used as-is. */}}
-{{- $evictionHardBytes := 0.0 }}
-{{- if $effectiveMemory }}
-{{-   if hasSuffix "%" $evictionHardMemory }}
-{{-     $evictionPct := trimSuffix "%" $evictionHardMemory | float64 }}
-{{-     $evictionHardBytes = mulf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) (divf $evictionPct 100.0) }}
-{{-   else }}
-{{-     $evictionHardBytes = include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
-{{-   end }}
-{{- end }}
-{{/* Validate that total reserved memory (system + kube + eviction) does not exceed effective node memory */}}
-{{- if $effectiveMemory }}
-{{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
-{{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
-{{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
-{{-   $effectiveMemBytes := include "cozy-lib.resources.toFloat" $effectiveMemory | float64 }}
-{{-   if ge $totalReservedBytes $effectiveMemBytes }}
-{{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s + evictionHardMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $evictionHardMemory $effectiveMemory) }}
-{{-   end }}
-{{- end }}
-{{/* Validate that total reserved CPU does not exceed effective node CPU */}}
-{{- if $effectiveCpu }}
-{{-   $sysCpuMillis := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
-{{-   $kubeCpuMillis := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
-{{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
-{{-   $effectiveCpuMillicoresV := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-{{-   $effectiveCpuMillis := float64 $effectiveCpuMillicoresV }}
-{{-   if ge $totalCpuMillis $effectiveCpuMillis }}
-{{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
-{{-   end }}
-{{- end }}
-{{/* Guard: explicit kubelet overrides require effective memory for validation */}}
-{{- if not $effectiveMemory }}
-{{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
-{{-   if $hasOverride }}
-{{-     fail (printf "nodeGroup %s: kubelet memory reservations require effective memory to validate — set resources.memory or instanceType" $groupName) }}
-{{-   end }}
-{{- end }}
-{{/* Guard: explicit kubelet CPU overrides require effective CPU for validation */}}
-{{- if not $effectiveCpu }}
-{{-   $hasCpuOverride := or $kubeletOverride.systemReservedCpu $kubeletOverride.kubeReservedCpu }}
-{{-   if $hasCpuOverride }}
-{{-     fail (printf "nodeGroup %s: cannot validate kubelet CPU reservations without effective CPU — set resources.cpu or a valid instanceType" $groupName) }}
-{{-   end }}
-{{- end }}
----
-{{- /* TalosConfigTemplate is no longer rendered here — the chart cannot
-       produce a valid Talos worker machineconfig at Helm template time
-       because three of the inputs (apiserver Service ClusterIP, Talos
-       CA from cert-manager, Kamaji-issued tenant CA) are created
-       asynchronously after Helm applies this manifest. The main-phase
-       Job in templates/talos/talos-reconcile-job.yaml waits for those
-       inputs and produces the TalosConfigTemplate with a
-       KamajiControlPlane ownerReference for natural GC. That Job runs in
-       the main install phase, so it applies the template as soon as the
-       inputs appear — in parallel with the rest of the install. The
-       MachineDeployment below still references the TCT name; CAPI's
-       Machine controller blocks on its absence and unblocks the moment
-       the Job applies it. */}}
----
-{{- $context := deepCopy $ }}
-{{- $_ := set $context "group" $group }}
-{{- $_ := set $context "groupName" $groupName }}
-{{- $kubevirtmachinetemplate := include "kubevirtmachinetemplate" $context }}
-{{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
-{{- $kubevirtmachinetemplateName := printf "%s-%s-%s" $.Release.Name $groupName $kubevirtmachinetemplateHash }}
-{{- $kubevirtmachinetemplateNames = append $kubevirtmachinetemplateNames $kubevirtmachinetemplateName }}
-apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
-  namespace: {{ $.Release.Namespace }}
+{{- if $isProxmox }}
 spec:
-  template:
-    {{- $kubevirtmachinetemplate | nindent 4 }}
----
-apiVersion: cluster.x-k8s.io/v1beta1
-kind: MachineDeployment
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-  annotations:
-    cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
-    cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
-    {{- if $effectiveMemory }}
-    {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
-    {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
-    {{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
-    {{-   $allocatableBytes := subf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) $totalReservedBytes }}
-    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | floor }}
-    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
-    {{- end }}
-    {{- if $effectiveCpu }}
-    {{-   $sysCpuMillisA := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
-    {{-   $kubeCpuMillisA := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
-    {{-   $effectiveCpuMillicoresA := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-    {{-   $effectiveCpuMillisA := float64 $effectiveCpuMillicoresA }}
-    {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
-    {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
-    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
-    {{- end }}
-spec:
-  clusterName: {{ $.Release.Name }}
-  # `spec.replicas` is intentionally omitted so the field is owned by
-  # the cluster-autoscaler alone. Two independent CAPI mechanisms —
-  # not Server-Side-Apply field managers — carry the guarantee:
-  #   1. Create: the MachineDeployment defaulting webhook seeds
-  #      `spec.replicas` from the `cluster-api-autoscaler-node-group-
-  #      min-size` annotation (see
-  #      https://cluster-api.sigs.k8s.io/tasks/automated-machine-management/autoscaling).
-  #   2. Update: `calculateMachineDeploymentReplicas` preserves the
-  #      existing live value (`oldMD.Spec.Replicas`) whenever the
-  #      incoming spec has `replicas: nil`, clamping into
-  #      `[min, max]` if it drifts outside — so a cluster the
-  #      autoscaler holds above min-size is not drained by a
-  #      `helm upgrade` that would otherwise re-render this field.
-  # Flux helm-controller applies this chart through the Helm SDK
-  # three-way merge (not SSA), so field-manager ownership is not the
-  # mechanism at play. The chart guarantee reduces to "leave the
-  # field out of the rendered manifest and let CAPI's update-time
-  # defaulting keep the live value stable". Emitting a chart-managed
-  # `replicas: N` here (as this chart did before
-  # cozystack/cozystack#3231) drains workers on every `helm upgrade`
-  # action until the autoscaler notices unschedulable Pods and
-  # scales back up — a real disruption window on every routine
-  # platform bump.
-  strategy:
-    rollingUpdate:
-      maxSurge: {{ $group.maxReplicas }}
-      maxUnavailable: 1
-    type: RollingUpdate
-  selector:
-    matchLabels:
-      cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
-      cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ $groupName }}
-  template:
-    metadata:
-      labels:
-        cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
-        cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ $groupName }}
-        {{- range $group.roles }}
-        node-role.kubernetes.io/{{ . }}: ""
-        {{- end }}
-    spec:
-      bootstrap:
-        configRef:
-          apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
-          kind: TalosConfigTemplate
-          name: {{ $.Release.Name }}-{{ $groupName }}
-          namespace: {{ $.Release.Namespace }}
-      clusterName: {{ $.Release.Name }}
-      infrastructureRef:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-        kind: KubevirtMachineTemplate
-        name: {{ $.Release.Name }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
-        namespace: {{ $.Release.Namespace }}
-      version: {{ include "kubernetes.versionMap" $}}
----
-apiVersion: cluster.x-k8s.io/v1beta1
-kind: MachineHealthCheck
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-spec:
-  clusterName: {{ $.Release.Name }}
-  {{- /* MHC spec.maxUnhealthy is an IntOrString. CAPI admission accepts a
-         bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
-         rejects a quoted plain integer ("0"). Quote only when the operator
-         supplied a percentage; otherwise render the value as a bare int so
-         the admission webhook is happy with the chart-default "0". A node
-         group may override the cluster-wide nodeHealthCheck via
-         nodeGroups.<name>.maxUnhealthy / .nodeStartupTimeout. */}}
-  {{- $maxUnhealthy := toString $.Values.nodeHealthCheck.maxUnhealthy }}
-  {{- $muSource := "nodeHealthCheck.maxUnhealthy" }}
-  {{- if hasKey $group "maxUnhealthy" }}
-  {{-   $maxUnhealthy = toString $group.maxUnhealthy }}
-  {{-   $muSource = printf "nodeGroups.%s.maxUnhealthy" $groupName }}
-  {{- end }}
-  {{- if hasSuffix "%" $maxUnhealthy }}
-  {{-   if not (regexMatch "^[0-9]+%$" $maxUnhealthy) }}
-  {{-     fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
-  {{-   end }}
-  maxUnhealthy: {{ $maxUnhealthy | quote }}
-  {{- else if regexMatch "^[0-9]+$" $maxUnhealthy }}
-  maxUnhealthy: {{ $maxUnhealthy | int }}
-  {{- else }}
-  {{-   fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
-  {{- end }}
-  {{- $nodeStartupTimeout := $.Values.nodeHealthCheck.nodeStartupTimeout }}
-  {{- if hasKey $group "nodeStartupTimeout" }}{{ $nodeStartupTimeout = $group.nodeStartupTimeout }}{{ end }}
-  nodeStartupTimeout: {{ $nodeStartupTimeout }}
-  selector:
-    matchLabels:
-      cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
-      cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ $groupName }}
-  unhealthyConditions:
-  - type: Ready
-    status: Unknown
-    timeout: 30s
-  - type: Ready
-    status: "False"
-    timeout: 300s
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-spec:
-  minReplicas: {{ $group.minReplicas }}
-  kind: kubernetes
-  type: worker
-  selector:
-    cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
-    cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ $groupName }}
-    cluster.x-k8s.io/role: worker
-  version: {{ $.Chart.Version }}
-{{- end }}
----
-{{- /*
-We must preserve all previous KubevirtMachineTemplates until a MachineSet references them.
-*/ -}}
-{{- $mss := (lookup "cluster.x-k8s.io/v1beta1" "MachineSet" $.Release.Namespace "").items }}
-{{- $oldKubevirtmachinetemplates := dict }}
-{{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" .Release.Namespace "").items }}
-{{- range $or := $kmt.metadata.ownerReferences }}
-{{- /* Only re-emit KubevirtMachineTemplates that belong to THIS release. The
-       Cluster ownerReference alone is not enough: worker pools split out into
-       kubernetes-nodes releases share the same CAPI Cluster ownerReference, so
-       without the release-name scoping this block would re-emit a pool's KMT
-       (annotated meta.helm.sh/release-name=kubernetes-nodes-<cluster>-<pool>)
-       and the next upgrade of this release would fail Helm ownership
-       validation. */}}
-{{- if and (eq $or.kind "Cluster") (eq $or.name $.Release.Name) (eq (dig "annotations" "meta.helm.sh/release-name" "" $kmt.metadata) $.Release.Name) }}
-{{- range $ms := $mss }}
-{{- if and (eq $ms.spec.template.spec.infrastructureRef.kind "KubevirtMachineTemplate") (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
-{{- if not (has $kmt.metadata.name $kubevirtmachinetemplateNames) }}
-{{- $oldKubevirtmachinetemplates = merge $oldKubevirtmachinetemplates (dict $kmt.metadata.name $kmt) }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
+  {{- /* KubevirtCluster needs no spec: its workers live in this cluster and
+        reach the apiserver over the pod network. A ProxmoxCluster addresses an
+        external hypervisor, so it carries what capmox cannot infer — where VMs
+        may be placed, which addresses they may take, and who resolves names for
+        them.
 
-{{- range $oldKubevirtmachinetemplates }}
----
-apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
-metadata:
-  name: {{ .metadata.name }}
-  namespace: {{ .metadata.Namespace }}
-spec:
-  {{- .spec | toYaml | nindent 2 }}
+        externalManagedControlPlane is not decoration next to the managed-by
+        annotation above: capmox reads the FIELD, not the annotation. Its
+        ProxmoxCluster webhook skips endpoint validation only when the field is
+        set, and on an absent controlPlaneEndpoint it does not return a
+        validation error — it panics
+        (internal/webhook/proxmoxcluster_webhook.go:105), so the admission
+        request fails with a nil-pointer stack trace instead of a message.
+        Kamaji owns the endpoint here, so the field is simply true. */}}
+  externalManagedControlPlane: true
+  {{- with .Values.proxmox.allowedNodes }}
+  allowedNodes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  dnsServers:
+    {{- toYaml .Values.proxmox.dnsServers | nindent 4 }}
+  ipv4Config:
+    addresses:
+      {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
+    gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
+    prefix: {{ .Values.proxmox.ipv4Config.prefix }}
 {{- end }}
 {{- end }}

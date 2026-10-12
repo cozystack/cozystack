@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,9 +44,25 @@ const (
 	singularName         = "tenantsecret"
 	kindTenantSecret     = "TenantSecret"
 	kindTenantSecretList = "TenantSecretList"
+
+	// internalPrefix namespaces the labels and annotations the platform owns:
+	// the lineage webhook's tenantresource verdict, the cacert controller's
+	// tenant-ca selector and its ownership markers. They are the platform's
+	// answer to "may this tenant see this Secret", and an ApplicationDefinition
+	// selects on them, so a caller writing through this API must not be able to
+	// plant or strip one on the backing Secret. The guard is on the prefix
+	// rather than on a list of keys so a platform key added later is protected
+	// without anyone remembering to come back here.
+	internalPrefix = "internal.cozystack.io/"
 )
 
-func stripInternal(m map[string]string) map[string]string {
+// isInternalKey reports whether a metadata key belongs to the platform.
+func isInternalKey(k string) bool { return strings.HasPrefix(k, internalPrefix) }
+
+// stripTenantMarker hides the tenant-resource marker, and only that key. The
+// read side is deliberately narrower than the write side: a tenant may see the
+// platform's other verdicts, tenant-ca among them, it just cannot write them.
+func stripTenantMarker(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
 	}
@@ -93,7 +110,7 @@ func secretToTenant(sec *corev1.Secret) *corev1alpha1.TenantSecret {
 			UID:               sec.UID,
 			ResourceVersion:   sec.ResourceVersion,
 			CreationTimestamp: sec.CreationTimestamp,
-			Labels:            stripInternal(sec.Labels),
+			Labels:            stripTenantMarker(sec.Labels),
 			Annotations:       sec.Annotations,
 		},
 		Type:       string(sec.Type),
@@ -115,6 +132,14 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 	}
 	out.Labels[tsLabelKey] = tsLabelValue
 	for k, v := range ts.Labels {
+		// Platform keys are dropped rather than rejected: a caller that GETs an
+		// object, edits it and PUTs it back sends them straight back at us, and
+		// failing that round-trip would break `kubectl edit` for no gain. On an
+		// update out starts as a copy of the stored Secret, so ignoring the
+		// caller here also means a platform key cannot be stripped.
+		if isInternalKey(k) {
+			continue
+		}
 		out.Labels[k] = v
 	}
 
@@ -122,6 +147,9 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 		out.Annotations = map[string]string{}
 	}
 	for k, v := range ts.Annotations {
+		if isInternalKey(k) {
+			continue
+		}
 		out.Annotations[k] = v
 	}
 
@@ -147,10 +175,13 @@ func nsFrom(ctx context.Context) (string, error) {
 // -----------------------------------------------------------------------------
 
 var (
-	_ rest.Creater              = &REST{}
-	_ rest.Getter               = &REST{}
-	_ rest.Lister               = &REST{}
-	_ rest.Updater              = &REST{}
+	_ rest.Creater = &REST{}
+	_ rest.Getter  = &REST{}
+	_ rest.Lister  = &REST{}
+	_ rest.Updater = &REST{}
+	// rest.Patcher is Getter+Updater: a PATCH request is decoded against the
+	// object Get returns and applied through Update, so there is no separate
+	// patch entry point and the guard in tenantToSecret covers PATCH too.
 	_ rest.Patcher              = &REST{}
 	_ rest.GracefulDeleter      = &REST{}
 	_ rest.Watcher              = &REST{}
@@ -219,7 +250,7 @@ func buildTenantSelector(opts *metainternal.ListOptions) (labels.Selector, bool)
 func (r *REST) Create(
 	ctx context.Context,
 	obj runtime.Object,
-	_ rest.ValidateObjectFunc,
+	createValidation rest.ValidateObjectFunc,
 	opts *metav1.CreateOptions,
 ) (runtime.Object, error) {
 	in, ok := obj.(*corev1alpha1.TenantSecret)
@@ -227,8 +258,14 @@ func (r *REST) Create(
 		return nil, fmt.Errorf("expected TenantSecret, got %T", obj)
 	}
 
+	if createValidation != nil {
+		if err := createValidation(ctx, obj); err != nil {
+			return nil, err
+		}
+	}
+
 	sec := tenantToSecret(in, nil)
-	err := r.c.Create(ctx, sec, &client.CreateOptions{Raw: opts})
+	err := r.c.Create(ctx, sec, registry.ClientCreateOptions(opts))
 	if err != nil {
 		return nil, err
 	}
@@ -335,8 +372,8 @@ func (r *REST) Update(
 	ctx context.Context,
 	name string,
 	objInfo rest.UpdatedObjectInfo,
-	_ rest.ValidateObjectFunc,
-	_ rest.ValidateObjectUpdateFunc,
+	createValidation rest.ValidateObjectFunc,
+	updateValidation rest.ValidateObjectUpdateFunc,
 	forceCreate bool,
 	opts *metav1.UpdateOptions,
 ) (runtime.Object, bool, error) {
@@ -358,7 +395,13 @@ func (r *REST) Update(
 		cur = previous
 	}
 
-	newObj, err := objInfo.UpdatedObject(ctx, nil)
+	// The apiserver's patch handler builds the patched object from the old
+	// object alone; a nil old object makes it answer 404 (and admit as CREATE).
+	var oldObj runtime.Object
+	if cur != nil {
+		oldObj = secretToTenant(cur)
+	}
+	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
 	if err != nil {
 		return nil, false, err
 	}
@@ -370,19 +413,30 @@ func (r *REST) Update(
 		if !forceCreate {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-		err := r.c.Create(ctx, newSec, &client.CreateOptions{Raw: &metav1.CreateOptions{}})
+		if createValidation != nil {
+			if err := createValidation(ctx, newObj); err != nil {
+				return nil, false, err
+			}
+		}
+		err := r.c.Create(ctx, newSec, registry.ClientCreateOptionsFromUpdate(opts))
 		return secretToTenant(newSec), true, err
 	}
 
+	if updateValidation != nil {
+		if err := updateValidation(ctx, newObj, secretToTenant(cur)); err != nil {
+			return nil, false, err
+		}
+	}
+
 	newSec.ResourceVersion = cur.ResourceVersion
-	err = r.c.Update(ctx, newSec, &client.UpdateOptions{Raw: opts})
+	err = r.c.Update(ctx, newSec, registry.ClientUpdateOptions(opts))
 	return secretToTenant(newSec), false, err
 }
 
 func (r *REST) Delete(
 	ctx context.Context,
 	name string,
-	_ rest.ValidateObjectFunc,
+	deleteValidation rest.ValidateObjectFunc,
 	opts *metav1.DeleteOptions,
 ) (runtime.Object, bool, error) {
 	ns, err := nsFrom(ctx)
@@ -396,55 +450,14 @@ func (r *REST) Delete(
 	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
-	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
+	if deleteValidation != nil {
+		if err := deleteValidation(ctx, secretToTenant(current)); err != nil {
+			return nil, false, err
+		}
+	}
+
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, registry.ClientDeleteOptions(opts))
 	return nil, err == nil, err
-}
-
-func (r *REST) Patch(
-	ctx context.Context,
-	name string,
-	pt types.PatchType,
-	data []byte,
-	opts *metav1.PatchOptions,
-	subresources ...string,
-) (runtime.Object, error) {
-	if len(subresources) > 0 {
-		return nil, fmt.Errorf("TenantSecret does not have subresources")
-	}
-	ns, err := nsFrom(ctx)
-	if err != nil {
-		return nil, err
-	}
-	current := &corev1.Secret{}
-	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
-		return nil, err
-	}
-	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-	out := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      name,
-		},
-	}
-	patch := client.RawPatch(pt, data)
-	err = r.c.Patch(ctx, out, patch, &client.PatchOptions{Raw: opts})
-	if err != nil {
-		return nil, err
-	}
-
-	// Ensure tenant secret label is preserved
-	if out.Labels == nil {
-		out.Labels = make(map[string]string)
-	}
-
-	if out.Labels[tsLabelKey] != tsLabelValue {
-		out.Labels[tsLabelKey] = tsLabelValue
-		_ = r.c.Update(ctx, out, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
-	}
-
-	return secretToTenant(out), nil
 }
 
 // -----------------------------------------------------------------------------
@@ -465,19 +478,19 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return watch.NewProxyWatcher(ch), nil
 	}
 
-	// For a SendInitialEvents (WatchList) request, ask the backing watch for
-	// bookmarks — the apiserver omits them by default, which would leave the
-	// terminating initial-events-end bookmark with no reliable trigger.
-	sendInitialEvents := opts.SendInitialEvents != nil && *opts.SendInitialEvents
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(opts)
 
 	secList := &corev1.SecretList{}
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
 		Namespace:     ns,
 		LabelSelector: ls,
 		Raw: &metav1.ListOptions{
-			Watch:               true,
-			ResourceVersion:     opts.ResourceVersion,
-			AllowWatchBookmarks: sendInitialEvents,
+			Watch:           true,
+			ResourceVersion: opts.ResourceVersion,
+			// Backing bookmarks are forwarded to the client, so ask for them only
+			// when the client did; a WatchList client always does, which keeps
+			// the terminating bookmark's trigger.
+			AllowWatchBookmarks: opts.AllowWatchBookmarks,
 		},
 	})
 	if err != nil {
@@ -494,7 +507,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	// Emit the initial-events-end bookmark after the initial ADDED events so
 	// client-go reflectors reach HasSynced.
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, opts.ResourceVersion, func() runtime.Object {
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, opts.ResourceVersion, func() runtime.Object {
 		return &corev1alpha1.TenantSecret{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -593,7 +606,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	now := time.Now()
 	row := func(o *corev1alpha1.TenantSecret) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{o.Name, o.Type, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
+			Cells:  []any{o.Name, o.Type, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}

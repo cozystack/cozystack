@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -205,13 +206,7 @@ func buildGraphFromCluster(ctx context.Context, kubeconfig string, packagesOnly 
 
 		// Filter by selected packages if specified
 		if len(selectedPackages) > 0 {
-			found := false
-			for _, selected := range selectedPackages {
-				if psName == selected {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(selectedPackages, psName)
 			if !found {
 				continue
 			}
@@ -393,7 +388,7 @@ func buildGraphFromCluster(ctx context.Context, kubeconfig string, packagesOnly 
 						graph[componentName] = append(graph[componentName], psName)
 						existingEdges[edgeKey] = true
 					}
-					
+
 					// If component is not in all variants, store variant info for component->package edge
 					componentAllVariants := componentVariants[componentName]
 					if len(componentAllVariants) < len(allVariantNames) {

@@ -1,0 +1,27 @@
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: IPAMProvider
+metadata:
+  name: in-cluster
+spec:
+  # https://github.com/kubernetes-sigs/cluster-api-ipam-provider-in-cluster
+  #
+  # Who needs this, and why it is not in a KubeVirt install: see the dependsOn
+  # edge in packages/core/platform/sources/capi-provider-infra-proxmox.yaml.
+  #
+  # v1.0.x, not v1.1.0: both serve InClusterIPPool v1alpha2, but the v1.0 series
+  # declares the v1beta1 contract that matches capi-providers-core v1.10.1.
+  version: v1.0.3-ipam-in-cluster
+  fetchConfig:
+    selector:
+      matchLabels:
+        ipamprovider-provider: in-cluster
+  deployment:
+    containers:
+    - name: manager
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 10m
+          memory: 64Mi

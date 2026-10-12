@@ -1,13 +1,210 @@
+diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
+index 962ac11..5a10bde 100644
+--- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
++++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_nodegroup_test.go
+@@ -241,11 +241,6 @@ func TestNodeGroupIncreaseSizeErrors(t *testing.T) {
+ 		delta:       -1,
+ 		initial:     3,
+ 		errorMsg:    "size increase must be positive",
+-	}, {
+-		description: "errors because initial+delta > maxSize",
+-		delta:       8,
+-		initial:     3,
+-		errorMsg:    "size increase too large - desired:11 max:10",
+ 	}}
+ 
+ 	test := func(t *testing.T, tc *testCase, testConfig *testConfig) {
+@@ -768,6 +763,58 @@ func TestNodeGroupDeleteNodes(t *testing.T) {
+ 	})
+ }
+ 
++// A group can stand above its max size, for one when the annotation is
++// lowered under it, and deleting a node from it must not be refused as an
++// increase.
++func TestNodeGroupDeleteNodesAboveMaxSize(t *testing.T) {
++	test := func(t *testing.T, testConfig *testConfig) {
++		controller, stop := mustCreateTestController(t, testConfig)
++		defer stop()
++
++		nodegroups, err := controller.nodeGroups()
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		if l := len(nodegroups); l != 1 {
++			t.Fatalf("expected 1 nodegroup, got %d", l)
++		}
++
++		ng := nodegroups[0].(*nodegroup)
++		if err := ng.DeleteNodes(testConfig.nodes[:1]); err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		gvr, err := ng.scalableResource.GroupVersionResource()
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		scalableResource, err := ng.machineController.managementScaleClient.Scales(testConfig.spec.namespace).
++			Get(context.TODO(), gvr.GroupResource(), ng.scalableResource.Name(), metav1.GetOptions{})
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		if scalableResource.Spec.Replicas != 3 {
++			t.Errorf("expected 3, got %v", scalableResource.Spec.Replicas)
++		}
++	}
++
++	annotations := map[string]string{
++		nodeGroupMinSizeAnnotationKey: "1",
++		nodeGroupMaxSizeAnnotationKey: "2",
++	}
++
++	t.Run("MachineSet", func(t *testing.T) {
++		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 4, annotations, nil))
++	})
++
++	t.Run("MachineDeployment", func(t *testing.T) {
++		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 4, annotations, nil))
++	})
++}
++
+ func TestNodeGroupMachineSetDeleteNodesWithMismatchedNodes(t *testing.T) {
+ 	test := func(t *testing.T, expected int, testConfigs []*testConfig) {
+ 		testConfig0, testConfig1 := testConfigs[0], testConfigs[1]
+@@ -1631,3 +1678,103 @@ func TestNodeGroupGetOptions(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// A group can stand below its min size, for one when the annotation is
++// raised over it, and adding a node to it must not be refused as a
++// decrease: the refusal backs the group off, which also stops the min-size
++// enforcement from lifting it.
++func TestNodeGroupIncreaseSizeBelowMinSize(t *testing.T) {
++	test := func(t *testing.T, testConfig *testConfig) {
++		controller, stop := mustCreateTestController(t, testConfig)
++		defer stop()
++
++		nodegroups, err := controller.nodeGroups()
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		if l := len(nodegroups); l != 1 {
++			t.Fatalf("expected 1 nodegroup, got %d", l)
++		}
++
++		ng := nodegroups[0].(*nodegroup)
++		if err := ng.IncreaseSize(1); err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		gvr, err := ng.scalableResource.GroupVersionResource()
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		scalableResource, err := ng.machineController.managementScaleClient.Scales(testConfig.spec.namespace).
++			Get(context.TODO(), gvr.GroupResource(), ng.scalableResource.Name(), metav1.GetOptions{})
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		if scalableResource.Spec.Replicas != 2 {
++			t.Errorf("expected 2, got %v", scalableResource.Spec.Replicas)
++		}
++	}
++
++	annotations := map[string]string{
++		nodeGroupMinSizeAnnotationKey: "3",
++		nodeGroupMaxSizeAnnotationKey: "10",
++	}
++
++	t.Run("MachineSet", func(t *testing.T) {
++		test(t, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, annotations, nil))
++	})
++
++	t.Run("MachineDeployment", func(t *testing.T) {
++		test(t, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), 1, annotations, nil))
++	})
++}
++
++func TestNodeGroupSetSizeRefusesDecreaseBelowMinSize(t *testing.T) {
++	test := func(t *testing.T, desired int, testConfig *testConfig) {
++		controller, stop := mustCreateTestController(t, testConfig)
++		defer stop()
++
++		nodegroups, err := controller.nodeGroups()
++		if err != nil {
++			t.Fatalf("unexpected error: %v", err)
++		}
++
++		if l := len(nodegroups); l != 1 {
++			t.Fatalf("expected 1 nodegroup, got %d", l)
++		}
++
++		ng := nodegroups[0].(*nodegroup)
++		err = ng.scalableResource.SetSize(desired)
++		if err == nil {
++			t.Fatal("expected an error")
++		}
++		if !strings.Contains(err.Error(), fmt.Sprintf("size decrease too large - desired:%d min:3", desired)) {
++			t.Errorf("unexpected error: %v", err)
++		}
++	}
++
++	annotations := map[string]string{
++		nodeGroupMinSizeAnnotationKey: "3",
++		nodeGroupMaxSizeAnnotationKey: "10",
++	}
++
++	for _, tc := range []struct {
++		description string
++		initial     int
++		desired     int
++	}{
++		{"from above min size", 4, 2},
++		{"from below min size", 2, 1},
++	} {
++		t.Run(tc.description+"/MachineSet", func(t *testing.T) {
++			test(t, tc.desired, createMachineSetTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initial, annotations, nil))
++		})
++
++		t.Run(tc.description+"/MachineDeployment", func(t *testing.T) {
++			test(t, tc.desired, createMachineDeploymentTestConfig(RandomString(6), RandomString(6), RandomString(6), tc.initial, annotations, nil))
++		})
++	}
++}
 diff --git a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
-index 4eec0e4bf..f28fd9241 100644
+index f374dc7..0e4e469 100644
 --- a/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
 +++ b/cluster-autoscaler/cloudprovider/clusterapi/clusterapi_unstructured.go
-@@ -106,8 +106,6 @@ func (r unstructuredScalableResource) Replicas() (int, error) {
+@@ -106,13 +106,6 @@ func (r unstructuredScalableResource) Replicas() (int, error) {
+ }
  
  func (r unstructuredScalableResource) SetSize(nreplicas int) error {
- 	switch {
+-	switch {
 -	case nreplicas > r.maxSize:
 -		return fmt.Errorf("size increase too large - desired:%d max:%d", nreplicas, r.maxSize)
- 	case nreplicas < r.minSize:
- 		return fmt.Errorf("size decrease too large - desired:%d min:%d", nreplicas, r.minSize)
+-	case nreplicas < r.minSize:
+-		return fmt.Errorf("size decrease too large - desired:%d min:%d", nreplicas, r.minSize)
+-	}
+-
+ 	gvr, err := r.GroupVersionResource()
+ 	if err != nil {
+ 		return err
+@@ -127,6 +120,12 @@ func (r unstructuredScalableResource) SetSize(nreplicas int) error {
+ 		return fmt.Errorf("unknown %s %s/%s", r.Kind(), r.Namespace(), r.Name())
  	}
+ 
++	// Only a decrease is refused below min size: a group standing under it
++	// has to be able to grow toward it one step at a time.
++	if nreplicas < r.minSize && nreplicas < int(s.Spec.Replicas) {
++		return fmt.Errorf("size decrease too large - desired:%d min:%d", nreplicas, r.minSize)
++	}
++
+ 	s.Spec.Replicas = int32(nreplicas)
+ 	_, updateErr := r.controller.managementScaleClient.Scales(r.Namespace()).Update(context.TODO(), gvr.GroupResource(), s, metav1.UpdateOptions{})
+ 

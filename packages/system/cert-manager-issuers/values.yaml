@@ -1,2 +1,6 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 cert-manager:
   installCRDs: true

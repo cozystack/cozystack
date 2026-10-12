@@ -44,6 +44,14 @@ export function graftOptionSources(
 function applySource(specSchema: unknown, path: string[], source: string): void {
   let node = specSchema
   for (const segment of path) {
+    // An array is transparent in the annotation path: `vms.instanceType` means
+    // the field on each item, matching how addDynamicOptionWidgets already
+    // recurses into `items`. Without this an annotation on a field inside a
+    // list resolves to nothing and the dropdown silently never appears.
+    const items = (node as { items?: unknown })?.items
+    if (items && typeof items === "object" && !(node as { properties?: unknown })?.properties) {
+      node = items
+    }
     const properties = (node as { properties?: Record<string, unknown> })?.properties
     if (!properties || typeof properties !== "object" || !(segment in properties)) {
       return

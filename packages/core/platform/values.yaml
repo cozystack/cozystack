@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 54
+  targetVersion: 60
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -37,29 +37,57 @@ migrations:
 bundles:
   system:
     enabled: false
-    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
+    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "isp-slim", "isp-slim-generic", "isp-hosted-slim"
   iaas:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
     # in bundles.enabledPackages. "default" runs the vfio-pci passthrough
-    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack. The
-    # platform mirrors this into the KubeVirt CR: passthrough auto-wires the
-    # HostDevices feature gate plus a default permittedHostDevices.pciHostDevices
-    # table covering common NVIDIA datacenter GPUs (vendor 10DE); vgpu
-    # auto-wires permittedHostDevices.mediatedDevices plus a starter
-    # mediatedDevicesConfiguration. Operators with additional or non-NVIDIA
-    # cards extend the defaults via gpu.permittedHostDevices /
-    # gpu.mediatedDevicesConfiguration / gpu.replaceDefaults below.
+    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack;
+    # "container" serves GPUs to ordinary pods through the device plugin on
+    # hosts that already provide the NVIDIA driver and container toolkit.
+    # The platform mirrors the two VM variants into the KubeVirt CR: both
+    # get the HostDevices feature gate; passthrough also gets a default
+    # permittedHostDevices.pciHostDevices table covering common NVIDIA
+    # datacenter GPUs (vendor 10DE), and vgpu gets
+    # permittedHostDevices.mediatedDevices when
+    # gpu.vgpuDeviceManager.enabled is true. No mediatedDevicesConfiguration
+    # default ships in either variant — see the gpu block below for why.
+    # "container" gets none of that wiring: it keeps the host driver bound,
+    # so no GPU is available for VM passthrough.
+    # Operators with additional or non-NVIDIA cards extend the defaults via
+    # gpu.permittedHostDevices / gpu.mediatedDevicesConfiguration /
+    # gpu.replaceDefaults below — read by the two VM variants only.
     gpuOperatorVariant: default
   paas:
     enabled: false
   naas:
     enabled: false
   disabledPackages: []
+  # Packages the platform ships but does not deploy unless named here. Two of
+  # them belong to the Proxmox substrate, where worker VMs run on an external
+  # hypervisor instead of on KubeVirt in this cluster:
+  #
+  #   cozystack.capi-provider-infra-proxmox
+  #     capmox, the Cluster API infrastructure provider for Proxmox VE. Needs a
+  #     capmox-config Secret with a Proxmox API token before it can do anything;
+  #     enabling it pulls in the IPAM provider below automatically.
+  #   cozystack.capi-provider-ipam-in-cluster
+  #     Cluster API in-cluster IPAM. Required by capmox, which assigns static
+  #     addresses and has no DHCP mode. Listed separately because it is a
+  #     generic addon, not a Proxmox one.
+  #
+  # Both are emitted by the iaas bundle. disabledPackages still wins over this
+  # list, except that disabling IPAM while capmox is enabled stops the render:
+  # the cluster would only park capmox at Ready=False with DependenciesNotReady,
+  # and nothing there would name the two list entries that conflict.
   enabledPackages: []
 # Network configuration
 networking:
   clusterDomain: "cozy.local"
+  # On the kube-ovn variants the last /21 of podCIDR is reserved for Cilium's
+  # own router and Gateway API Ingress addresses and excluded from kube-ovn
+  # allocation, so podCIDR needs a prefix of /20 or shorter. Each node takes a
+  # /29 of that block, which caps these variants at 256 nodes.
   podCIDR: "10.244.0.0/16"
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
@@ -83,16 +111,15 @@ networking:
   #
   # The mechanism is datapath-specific (selected by bundles.system.variant):
   #
-  #   * kubeovn-cilium (isp-full, the default) and kubeovn-cilium-generic
+  #   * kubeovn-cilium (isp-full) and kubeovn-cilium-generic
   #     (isp-full-generic): KubeOVN owns the datapath; its Geneve overlay is
   #     encrypted with IPsec (kube-ovn ENABLE_OVN_IPSEC). KubeOVN's own
   #     controller provisions the IPsec CA and per-node certificates through
   #     the Kubernetes CSR API — no cert-manager wiring is required. This is
   #     the path this toggle drives today.
-  #   * cilium / cilium-generic (Cilium owns the datapath): Cilium-native
-  #     WireGuard/IPsec is the right mechanism there, but the platform system
-  #     bundle does not select those variants, so this toggle does not reach
-  #     them yet.
+  #   * cilium / cilium-generic (Cilium owns the datapath; isp-slim,
+  #     isp-slim-generic): Cilium-native WireGuard/IPsec is the right mechanism
+  #     there, but it is not wired yet, so the slim variants refuse this toggle.
   #   * cilium-kilo: Kilo already establishes a WireGuard mesh, but only at
   #     meshGranularity=location — it encrypts CROSS-LOCATION traffic and
   #     leaves intra-location pod-to-pod in cleartext by design. This toggle
@@ -105,10 +132,41 @@ networking:
   # inter-node overlay tunnels — same-node pod-to-pod traffic never leaves the
   # host and is not tunneled or encrypted. Flipping this on an existing
   # cluster triggers a rollout of the CNI components. On variants without a
-  # cozystack-managed encryptable datapath (e.g. isp-hosted / noop) the toggle
+  # cozystack-managed encryptable datapath (isp-hosted, isp-hosted-slim / noop) the toggle
   # has no effect.
   encryption:
     enabled: false
+  # Install the upstream reference CNI plugins (bridge, macvlan, ipvlan, ...)
+  # into /opt/cni/bin on every node, from the multus image. Multus-backed
+  # NetworkAttachmentDefinitions delegate to these. Talos puts six binaries in
+  # that directory -- bridge, firewall, host-local, loopback and portmap from the
+  # same upstream release, plus flannel from a different repo -- and generic Linux
+  # gives no guarantee at all, so a bridge-type NAD fails there with
+  # `failed to find plugin "bridge" in path [/opt/cni/bin]`. A NAD naming one of
+  # the other ten needs staging on either platform.
+  #
+  # On for both variants when unset. Four of the names Talos carries are ones
+  # staging writes, so it rewrites those with the same upstream version (v1.9.1
+  # on both sides) and adds the ten it does not carry; loopback is not staged and
+  # flannel was never part of the reference set. Set it explicitly to decline.
+  #
+  # A spelling this chart does not recognise stops the whole platform render, not
+  # just multus, so a typo here halts reconciliation cluster-wide. That is
+  # deliberate -- reading an unreadable value as "off" would defeat the opt-out --
+  # but it is why the accepted spellings are worth getting right first time.
+  #
+  # When on, the plugins are written every time the Multus pod is recreated,
+  # replacing files of the same name. 14 of the upstream reference plugins are
+  # installed; loopback, dhcp, dummy and tap are left alone. See
+  # docs/vm-external-vlan.md.
+  #
+  # On a running cluster this is set on the `platform` component of the
+  # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
+  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # the child Package cozystack.multus directly is reverted by the platform
+  # reconcile.
+  # stageCniPlugins: true
+
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
@@ -138,6 +196,20 @@ publishing:
   # value requires recreating that Service once (the chart fails early with the
   # exact command).
   loadBalancerClass: ""
+  # DNS suffix the dashboard appends to the name of a LoadBalancer Service on
+  # the application Services tab, shown under the external IP as
+  # `<service-name>.<serviceDomain>` (e.g. demo-external-write.svc.example.org
+  # for a postgres release named demo). Display-only: nothing in the platform
+  # creates DNS records for it. Set it only when your DNS already resolves
+  # exactly that name to the Service's LoadBalancer IP, e.g. external-dns with
+  # a matching fqdn template. A CoreDNS k8s_external zone does not fit: it
+  # answers <service>.<namespace>.<zone>, which this suffix cannot express.
+  # This is not the `<release>.<tenant host>` name the app charts put into
+  # their certificates, so a TLS client may see a SAN mismatch unless DNS and
+  # certificates are aligned by the operator. The suffix is cluster-wide, so
+  # two tenants with a release of the same name get the same hostname.
+  # Empty (the default) shows no hostname.
+  serviceDomain: ""
   # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
   # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
   # problem (intra-cluster traffic to the cluster's own public hostnames
@@ -221,8 +293,7 @@ publishing:
   #
   #   kubectl delete package.cozystack.io cozystack.ouroboros
   #
-  # or adds the package name to bundles.disabledPackages. THAT is the
-  # path that triggers the chart's pre-delete Helm hook
+  # THAT is the path that triggers the chart's pre-delete Helm hook
   # (charts/ouroboros/templates/coredns-cleanup-hook.yaml, vendored at
   # 0.8.0) — the hook quiesces the controller, sed-strips the
   # BEGIN/END block from the live kube-system/coredns Corefile, and
@@ -230,6 +301,15 @@ publishing:
   # automatic; operators do NOT need to run a manual sed recipe in
   # the normal disable path. Documentation of the hook's exact
   # behaviour lives in the upstream chart's README.
+  #
+  # bundles.disabledPackages does NOT do this. Putting this name in
+  # that list only makes templates/_helpers.tpl skip emitting the
+  # Package document — the same suppression as leaving proxyProtocol
+  # false — and resource-policy: keep then stops Helm pruning a
+  # Package it no longer renders. The Package CR stays, so does the
+  # HelmRelease it owns, ouroboros keeps running, and the pre-delete
+  # hook never fires. No platform values setting reaches that hook:
+  # the operator has to delete the Package CR.
   #
   # Manual cleanup recipe (only if the chart's pre-delete hook fails
   # to land — controller pod stuck in CrashLoop blocking the quiesce
@@ -339,8 +419,10 @@ publishing:
     #
     # Child tenants are covered automatically: the platform controller
     # replicates this Secret into every tenant namespace that runs its own
-    # ingress controller or Gateway, so each per-tenant termination point
-    # serves the wildcard from its own namespace (no cross-namespace Secret
+    # ingress controller, and into Gateway owners as long as their Gateway
+    # terminates TLS itself (see gateway.edgeTerminatedClasses below), so each
+    # per-tenant termination point serves the wildcard from its own
+    # namespace (no cross-namespace Secret
     # read, no widened tenant RBAC). No extra input — the same name set
     # here drives both the consumers and the replication. The replica
     # carries the wildcard private key into each terminating tenant
@@ -389,12 +471,43 @@ publishing:
         tsigAlgorithm: HMACSHA256
         secretName: ""
         secretKey: tsig-secret-key
+# Telemetry reported by platform components.
+#
+# Two components report: cozystack-operator (cluster facts — nodes, storage,
+# packages) and cozystack-controller (application counts). This key covers the
+# CONTROLLER, which the platform deploys. The operator is deployed by the
+# cozy-installer chart and is switched off separately, with
+# cozystackOperator.disableTelemetry=true — a full opt-out needs both, because
+# the two components are installed by two different charts.
+#
+# What is collected, and why, is documented at
+# https://cozystack.io/docs/operations/configuration/telemetry/
+telemetry:
+  disabled: false
 # Authentication configuration
 authentication:
   oidc:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
+    # Technical name of the Keycloak realm that owns the cozystack clients and
+    # the cozystack-cluster-admin roles. keycloak-configure creates the realm
+    # under this name, and every SSO consumer (dashboard, linstor-gui, the
+    # generated kubeconfig, and the derived keycloakInternalUrl below) points at
+    # /realms/<realmName>. The apiserver OIDC issuer is set out-of-band via talm
+    # oidcIssuerUrl and must carry the same realm, or the tokens minted here are
+    # rejected. Rename it in one place; keep it in step with talm.
+    #
+    # Set this at install time. Changing it on a running cluster does not rename
+    # the realm: the keycloak-operator provisions a fresh, empty realm under the
+    # new name and abandons the old one, so every account, session and client
+    # living in the previous realm is orphaned. Treat a rename on a live cluster
+    # as a from-scratch re-provision of identities, not an in-place migration.
+    #
+    # "master" is refused: that realm holds the Keycloak super-admin, so naming
+    # it here would put the platform clients, the cluster-admin roles and every
+    # end user inside it.
+    realmName: "cozy"
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.
@@ -409,7 +522,13 @@ authentication:
     #
     # Override only for a KeyCloak that does not live at the standard in-cluster address. Setting it
     # to an empty string restores full OIDC discovery against the external issuer.
-    keycloakInternalUrl: "http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"
+    #
+    # Left unset (null), it is derived from realmName as
+    # http://keycloak-http.cozy-keycloak.svc:8080/realms/<realmName>, so a realm rename reaches these
+    # backend calls automatically. The tri-state is: null -> derive from realmName; "" -> external
+    # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
+    # custom realm paired with an explicit URL must name the same realm.
+    keycloakInternalUrl: null
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
@@ -417,13 +536,65 @@ gateway:
   #     that attaches to the root tenant's Gateway, so Certificate issuance
   #     works for tenants whose ingress is via Gateway API rather than
   #     ingress-nginx.
-  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
-  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
-  #     HTTPRoute attached to the tenant's Gateway.
+  #   - Exposed services whose TLS the Gateway terminates (dashboard,
+  #     keycloak, harbor, bucket, grafana) render an HTTPRoute attached to
+  #     the tenant's Gateway.
+  #   - The three that present a certificate of their own (api,
+  #     vm-exportproxy, cdi-uploadproxy) render a TLSRoute instead, pinned
+  #     by sectionName to the tls-<name> TLS-passthrough listener the
+  #     per-tenant gateway chart declares for it. The cozystack-api,
+  #     kubevirt and kubevirt-cdi packages ship one each, cluster-wide,
+  #     attached to the Gateway in the namespace publishing.ingressName
+  #     selects.
   # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
   # materialises the Gateway itself. This flag only controls platform-wide
-  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  # Gateway API integration (cert-manager solver + the per-service routes).
   enabled: false
+  # Default GatewayClass for tenant Gateways. A tenant picks another one
+  # with `gatewayClass` on its Tenant resource; this is the value used when
+  # it does not. The default is the Cilium class the platform ships. Reaches
+  # the per-tenant gateway chart as _cluster.gateway-class-name.
+  className: cilium
+  # GatewayClasses whose provider terminates TLS upstream of the Gateway
+  # (a Cloudflare Tunnel class ends TLS at the Cloudflare edge and reaches
+  # the Gateway over the tunnel). TLS termination is a property of the
+  # class, not of the tenant, so it is declared here once and every tenant
+  # that selects such a class gets it: the TenantGateway controller then
+  # issues no certificates for that Gateway, renders plain HTTP listeners
+  # for the apex and its wildcards, and skips the TLS-passthrough listeners
+  # — which leaves the tenant Kubernetes API, VM export and CDI upload
+  # endpoints unpublished through it, their TLSRoutes matching no listener.
+  #
+  # Listing a class here is a claim about that class and nothing validates
+  # it: name the bundled `cilium` and its Gateways publish every app
+  # hostname over plain HTTP on a public address, with no redirect and no
+  # certificate. Only list a class whose provider really does terminate TLS
+  # in front of the Gateway.
+  #
+  # Moving an existing tenant onto such a class also withdraws the operator
+  # wildcard from it: its namespace stops counting as a TLS termination
+  # point, so the replica of publishing.certificates.wildcardSecretName is
+  # deleted from it on the next reconcile. Ingress owners keep theirs, and a
+  # missing source Secret postpones the deletion rather than forcing it.
+  # Reaches the per-tenant gateway chart as _cluster.gateway-edge-classes.
+  edgeTerminatedClasses: []
+  # GatewayClasses a tenant may select for its own Gateway through
+  # `tenant.spec.gatewayClass`, on top of className above (which every
+  # tenant may always end up on, since it is the default). A tenant asking
+  # for anything outside this set fails its own gateway release with a
+  # message naming the class, and reaches no other tenant.
+  #
+  # This is an allowlist because Tenant is a tenant-writable object and a
+  # GatewayClass is cluster-scoped: without it a tenant could attach its
+  # Gateway to any class the cluster registers, including one an admin
+  # keeps for internal-only or differently-fronted traffic. Empty (the
+  # default) means tenants cannot choose at all and every Gateway lands on
+  # className. The allowed set is this list plus the CURRENT className, so
+  # changing className while a tenant pins the previous one by name fails
+  # that tenant's gateway release until it is updated too — list the old
+  # class here when moving the default. Reaches the per-tenant gateway
+  # chart as _cluster.gateway-tenant-classes.
+  tenantSelectableClasses: []
   # Advertise HTTP/2 on every Gateway API listener served by the bundled
   # Cilium dataplane. Browsers negotiate HTTP/2 exclusively through TLS ALPN
   # "h2"; with this off, Envoy advertises no ALPN protocols and every client
@@ -442,17 +613,26 @@ gateway:
   # Cluster-wide: maps to Cilium's enable-gateway-api-alpn agent config, so
   # it covers the root and every tenant Gateway at once — there is no
   # per-Gateway granularity in the dataplane. Only effective on bundles
-  # where cozystack manages Cilium (isp-full, isp-full-generic); on
-  # isp-hosted the hosting-side CNI owns this setting. Flipping it re-rolls
+  # where cozystack manages Cilium (isp-full*, isp-slim*); on
+  # isp-hosted* the hosting-side CNI owns this setting. Flipping it re-rolls
   # the cilium DaemonSet on the next platform upgrade (rollOutCiliumPods),
   # the same disruption profile as any cilium config change.
   http2: true
   # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
   # Gateway. The publishing tenant namespace is always included implicitly.
-  # Additional entries must be the exact namespace name (matched on the
-  # built-in kubernetes.io/metadata.name label). Tenants not on this list
-  # cannot attach a route to somebody else's Gateway, which prevents
-  # hostname hijacking across tenants.
+  # Additional entries must be the exact namespace name. The controller
+  # grants the access by stamping the namespace.cozystack.io/gateway label
+  # on each listed namespace; writing that label needs patch on Namespace,
+  # which no tenant role holds. The label reaches the HTTPS-terminate and
+  # the port-443 passthrough listeners. The port-80 listener and the
+  # native-port listeners from tlsPassthroughListeners select on the
+  # built-in kubernetes.io/metadata.name label instead: the native-port
+  # ones name the publishing tenant alone, so listing a namespace here
+  # does not let it attach to a database port, while the port-80 listener
+  # names the tenant plus cozy-cert-manager, where the ACME challenge
+  # route lands. Tenants not on this list cannot attach a route to
+  # somebody else's Gateway, which prevents hostname hijacking across
+  # tenants.
   #
   # The `default` namespace is included because the Kubernetes API's
   # TLSRoute (shipped by the cozystack-api package) has to live next to
@@ -486,6 +666,23 @@ monitoring:
   # here is true only to preserve the historical always-create behaviour;
   # operators MUST set it to match their actual Tenant/root spec.monitoring.
   rootEnabled: true
+  # The rate, in bytes per second counted uncompressed and before the
+  # collector samples, at which each tenant using shared-central tracing may
+  # write into the traces store tenant-root hosts; each tenant's collector
+  # refuses data above it, with a 429 an OTLP/HTTP sender retries and a
+  # RESOURCE_EXHAUSTED an OTLP/gRPC sender drops, so central tenants should
+  # export over HTTP; a request above 3 MiB gets a 400, not retried. 0 keeps
+  # the default of about 97 KiB/s: over the two days VictoriaTraces always
+  # keeps, one tenant writes at most the disk cap of a default 10Gi store,
+  # counted uncompressed, and the store keeps it compressed and only the
+  # sampled share of it (samplingPercentage). Each collector pod starts with a
+  # full bucket, so a pod start lets through above the rate up to 5 MiB, or
+  # one second of the pod's share of the rate when that is larger. Raise it
+  # with the store's size, as a whole number up to 1099511627776 (1 TiB/s);
+  # anything else fails the render. A change upgrades every release in every
+  # tenant once, since it travels in the cozystack-values Secret they all
+  # read.
+  tracingCentralTenantBytesPerSecond: 0
 # Backup storage overrides for the platform-managed cozy-default BackupClass.
 # Everything set here is forwarded verbatim into the emitted
 # cozystack.backupstrategy-controller Package CR as
@@ -498,6 +695,34 @@ monitoring:
 # cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
+
+# backupStrategyController overrides for the platform-managed strategy CRs,
+# forwarded verbatim into the same Package as
+# components.backupstrategy-controller.values.backupStrategyController. The
+# knob that needs this is redisBackupResources: the shipped cozy-default-redis
+# Strategy CR is Helm-managed (a direct edit reverts on upgrade), so a tenant
+# with a large Redis raises the restore Pod's memory / ephemeral-storage here,
+# via spec.components.platform.values.backupStrategyController.redisBackupResources
+# on the cozystack.cozystack-platform Package. Empty forwards nothing.
+backupStrategyController: {}
+# Overrides for the optional cozystack.kubernetes-worker-image package (the
+# golden Talos worker OS images tenant Kubernetes node pools clone instead of
+# each worker importing the raw image over HTTP). Everything set here is
+# forwarded verbatim into the emitted Package CR as
+# components.kubernetes-worker-image.values, so it lands on that chart's
+# HelmRelease and deep-merges over its defaults
+# (packages/system/kubernetes-worker-image/values.yaml documents every knob:
+# imageFactoryURL, storageClass, storage, images). Admins set this via
+# spec.components.platform.values.kubernetesWorkerImage on the
+# cozystack.cozystack-platform Package, alongside adding
+# cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
+# opt-in and this key alone does not enable it. The two knobs that decide
+# whether the feature is usable at all are imageFactoryURL (an air-gapped or
+# rate-limited cluster must repoint the single import) and storageClass (CDI
+# cannot clone across StorageClasses, so a cluster whose worker pools are not on
+# `replicated` must move the golden onto their class). Empty (the default)
+# forwards nothing and keeps the child chart defaults.
+kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
@@ -559,10 +784,40 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
-# GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
-# KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
-# cozystack.gpu-operator. Without it the admission webhook rejects any VM
-# that references a GPU host-device by resourceName.
+# KubeVirt CR settings that no other platform knob implies. Forwarded into the
+# emitted cozystack.kubevirt Package CR as components.kubevirt.values, next to
+# the entries the iaas bundle derives from resources.cpuAllocationRatio and
+# from the gpu block below.
+kubevirt:
+  # Feature gates switched off under
+  # spec.configuration.developerConfiguration.disabledFeatureGates, on top of
+  # the opt-outs the kubevirt chart pins: Template and
+  # ExternalNetResourceInjection always, ImageVolume below Kubernetes 1.35.
+  # KubeVirt 1.9 turns every Beta gate on by default, so this is how a cluster
+  # declines one it cannot carry — a container runtime without image volume
+  # support on Kubernetes 1.35 or newer is the case this list is for.
+  #
+  #   kubevirt:
+  #     disabledFeatureGates:
+  #     - ImageVolume
+  #
+  # A gate the chart already enables cannot be switched off here. KubeVirt
+  # refuses a CR that names one gate in both lists, so the chart stops the
+  # render and names the gate rather than ship a CR the cluster would reject
+  # on update and misread on install.
+  disabledFeatureGates: []
+  # Passed to spec.configuration.migrations on the KubeVirt CR.
+  # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
+  migrations: {}
+# GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
+# CR's permittedHostDevices when bundles.enabledPackages contains
+# cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two
+# VM variants, default or vgpu. The platform's own defaults join it there: the
+# passthrough table in the default variant, the mdev table in vgpu only when
+# gpu.vgpuDeviceManager.enabled is true, and neither when replaceDefaults below
+# is true. So a stock vgpu cluster that sets nothing here gets the HostDevices
+# gate and no device table at all. The container variant serves GPUs to pods
+# and never to VMs, so nothing in this block reaches the KubeVirt CR under it.
 gpu:
   # When false (default), the lists below are appended to the platform's
   # NVIDIA defaults. When true, the user lists fully replace the defaults
@@ -570,11 +825,12 @@ gpu:
   # strictly curated allowlist is required.
   replaceDefaults: false
   permittedHostDevices:
-    # PCI passthrough devices. Always rendered when non-empty regardless of
-    # gpuOperatorVariant — pciHostDevices covers both the vfio-pci passthrough
-    # path (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
+    # PCI passthrough devices. Rendered when non-empty under either VM
+    # variant — pciHostDevices covers both the vfio-pci passthrough path
+    # (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
     # (vgpu variant on Ada Lovelace / Blackwell, where VFs are advertised
-    # via pciHostDevices, not via mediatedDevices). Default-table coverage:
+    # via pciHostDevices, not via mediatedDevices). The container variant
+    # renders neither list. Default-table coverage:
     # H100, H200, A100 PCIe/SXM, A40, A30, A10, L40, L40S, L4, T4, V100,
     # V100S (PCI vendor 10DE). Item shape matches KubeVirt's pciHostDevices:
     #   - pciVendorSelector: "10DE:2335"
@@ -641,3 +897,21 @@ gpu:
   # missing entries).
   vgpuDeviceManager:
     enabled: false
+
+# VM import from external virtualization platforms (opt-in; see the iaas bundle).
+vmImport:
+  # Container image carrying the VMware Virtual Disk Development Kit, used by
+  # the raw-copy transfer path. Cozystack neither ships nor mirrors it: it is
+  # built from a proprietary VMware SDK, so an operator who holds a licence
+  # builds the image, pushes it somewhere the cluster can pull from, and names
+  # it here. Only the reference travels to the controller, never a credential.
+  #
+  # Empty is the normal state and means the vSphere import path is unavailable
+  # rather than broken: a vSphere VMImportSource reports VDDKNotConfigured on
+  # its own status, so a tenant learns at registration time instead of watching
+  # a transfer die halfway. Non-VMware providers never need it.
+  #
+  # Named vmImport, not migration, to keep it clearly distinct from the
+  # top-level `migrations` key above, which is the platform's own schema
+  # migrations and has nothing to do with moving virtual machines.
+  vddkImage: ""

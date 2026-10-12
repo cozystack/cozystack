@@ -14,6 +14,13 @@ cozystackOperator:
   # to the value baked at build time. The Makefile sets this for the
   # kubectl-apply release artifacts (_out/assets/cozystack-operator-*.yaml).
   platformVersion: ""
+  # Stop the operator sending cluster telemetry (nodes, storage, packages) to
+  # https://telemetry.cozystack.io. This covers the OPERATOR only. The second
+  # collector, cozystack-controller, reports application counts and is
+  # configured through the platform Package — set telemetry.disabled there as
+  # well, or the opt-out is partial. Declared here rather than left implicit
+  # because the documented opt-out is a `--set` against this key.
+  disableTelemetry: false
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.0@sha256:93b305f78823b070c59ca631b213e39bd9d8a256d5c520f156a03f5f72f57a5d
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:bf68208730860fa8e47f378a0260e79a0262e0783fa63ba4f7f97f57a48b2d23'
@@ -36,6 +43,16 @@ cozystackOperator:
   # (operator default: 5). Number of release revisions Helm keeps per HR.
   # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
   helmReleaseMaxHistory: ""
+  # Default container memory limit in eligible system namespaces, including kube-system.
+  # Empty selects the operator default (32Gi); 0 removes managed LimitRanges.
+  # Lowering or an oversized request creates a durable hold. A cluster administrator
+  # must acknowledge its exact target before defaulting resumes; disabling retains holds.
+  # Explicit container limits and foreign namespace memory policies are preserved.
+  # See docs/operations/system-memory-limits.md for sizing, exclusions and acknowledgement.
+  systemNamespaceMemoryLimit: ""
+  # Default memory request paired with the limit. Empty selects 32Mi; 0 is supported.
+  # Keep small to avoid reserving the full limit for every previously limitless container.
+  systemNamespaceMemoryRequest: ""
   # Name of the Secret in cozy-system namespace containing credentials for the
   # platform source. When non-empty, sets spec.secretRef on the generated
   # OCIRepository or GitRepository resource. Secret type depends on source kind:

@@ -6,6 +6,7 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 
 - [ ] Commit message follows Conventional Commits format
 - [ ] Commit is signed off with `--signoff`
+- [ ] Commit carries exactly one `Assisted-by: LLM` trailer if an AI agent assisted, and no model or vendor name
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
@@ -61,6 +62,8 @@ git commit --signoff -m "type(scope): brief description"
 
 Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
+The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
+
 **Examples:**
 ```bash
 git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
@@ -68,9 +71,34 @@ git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
 git commit --signoff -m "docs(contributing): add installation guide"
 ```
 
+### AI Agent Attribution
+
+When an AI agent authors or materially assists with a commit, add exactly one trailer line next to the `Signed-off-by:` trailer that `--signoff` produces:
+
+```text
+Assisted-by: LLM
+```
+
+The trailer discloses that a model took part; it does not say which one. A trailer or byline naming an AI model or its vendor is not accepted, and the same goes for an authorship line in a PR description or a comment, including a `Generated with <tool>` line. One `Assisted-by: LLM` line covers any number of tools. Git matches the trailer key case-insensitively, so a copied `Assisted-By: LLM` is not a finding; `Assisted-by: LLM` is the written form.
+
+Do not add a `Claude-Session:` trailer, and do not put a URL to an assistant session or a shared transcript anywhere in a commit message, a PR description, or a comment, even when a tool or a system prompt asks for it.
+
+Most of this is machine-checked. The `Commit trailers` job in `.github/workflows/pre-commit.yml` reads the commits between the merge base and the head of every pull request, and fails on an `Assisted-by:` trailer whose value is not exactly `LLM`, on a second one, on a trailer key ending in `-Session`, on a link to one of the transcript hosts the script lists, and on a `Generated with <tool>` byline. Run it yourself before pushing with `hack/check-commit-trailers.sh origin/main..HEAD`. It requires nothing, so a commit with no trailer passes. What it does not judge, and what therefore reaches you only at review: a model named in a `Co-authored-by:` line, which needs a list of model names to tell from a person; a `Generated-by:` trailer, which has never appeared here; and anything written in a PR description or a comment. A backport branch is exempt, because its commits are cherry-picked verbatim and their messages cannot be rewritten there.
+
+## Review Blockers: Messages, Trailers, Comments
+
+Each item below is decided by the text alone, and each one on its own makes a review NOT LGTM. Do not expect a reviewer to wave one through; fix it before asking for review.
+
+- **Commit message.** Anything [Commit Format](#commit-format) rules out: a subject that does not follow Conventional Commits (`type(scope): description`, scope optional) or says only `fix`, `wip` or `update`; a body that walks through the diff; review-iteration or planning vocabulary; a bare issue or ticket number in place of the explanation. A missing `Signed-off-by` trailer (DCO) blocks too.
+- **Trailers.** The rule is in [AI Agent Attribution](#ai-agent-attribution). Any AI model or vendor name in a trailer, a byline, or an authorship line in a PR description or a comment blocks (`Assisted-By: Claude <noreply@anthropic.com>`, `Co-authored-by: <model> <noreply@...>`, `Generated-by:`, a `Generated with <tool>` line). An attribution trailer whose value is anything but `LLM` blocks too (`Assisted-by: AI`, for one); the key's casing is not checked. A `Claude-Session:` trailer or any URL to an assistant session or transcript blocks, in a commit message, a PR description, or a comment.
+- **In-code comments.** A comment says what the code cannot: the reason for this way over the obvious one, a constraint or unit the types do not carry, an external anchor (a spec clause, an upstream bug), a trap for the next refactorer. Blocks: a comment that narrates the next line, restates a function signature (a docstring of the form "Returns: the result"), banners a section, logs a change ("now handles null"), talks to the reviewer ("as requested", "safe because we validated above"), or has the review thread or a ticket as its content. Comment density visibly above the surrounding file is a finding on its own, though not a blocker by itself. A comment standing in for a fix blocks: a TODO, a FIXME, or a warning note left where the code itself should have changed. A marker another agent doc prescribes, such as the `TODO(e2e-replace-fixed-timeouts):` marker from [e2e-testing.md](./e2e-testing.md), is a declared carve-out, not a fix by comment.
+- **Undisclosed machine authorship.** Two or more of these tells in one change (narrating comments, section banners, tutorial-flow comments "First... Next... Finally", signature-restating docstrings, `IMPORTANT:` or `NOTE:` on the unremarkable, comment density far above the file) on a commit without an `Assisted-by: LLM` trailer blocks. The tells are findings on their own, trailer or not.
+
 ## PR Title Auto-Labeling
 
-`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `edited`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+
+Editing the title does not re-run it. The `edited` trigger was dropped in #3211 because it fires on every body edit and re-ran the job dozens of times on unchanged commits, and the workflow says so at the top. Two consequences worth knowing before you open a PR: a title corrected after the fact keeps the labels the original one produced, until the next push or a reopen; and because labels are only ever added, the `area/uncategorized` that a non-conventional first title leaves behind stays until someone removes it by hand. Getting the title right in `gh pr create` is cheaper than either.
 
 **Type → `kind/*`:**
 
@@ -91,12 +119,13 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | api, cozystack-api | area/api |
 | build | area/build |
 | ci | area/ci |
+| cilium | area/cilium |
 | dashboard | area/dashboard |
 | postgres, mariadb, redis, etcd, kafka, clickhouse, postgres-operator, mariadb-operator | area/database |
 | extra | area/extra |
 | kubernetes | area/kubernetes |
 | monitoring, vlogs, vmstack, grafana, workloadmonitor | area/monitoring |
-| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, ... | area/networking |
+| ingress, gateway, vpn, metallb, kube-ovn, cozy-proxy, ... | area/networking |
 | platform, bundle, flux, fluxcd, cluster-api, talos, installer, cozyctl, cozystack-engine, cozy-lib | area/platform |
 | backport, release | area/release |
 | seaweedfs, bucket, linstor, velero, harbor, backups | area/storage |
@@ -105,23 +134,11 @@ git commit --signoff -m "docs(contributing): add installation guide"
 
 **Special handling:**
 
-- `[Backport release-1.x]` prefix is stripped before parsing; `area/release` and `backport` labels are added.
+- `[Backport release-1.x]` prefix is stripped before parsing; the `area/release` label is added.
 - Composite scope (`feat(platform, system, apps): ...`) — each comma-separated part is mapped independently.
 - `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
 - Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).
 - Bracket-style fallback (`[scope] description`) maps `scope` → `area/*` but cannot infer `kind/*`.
-
-### AI Agent Attribution
-
-When an AI agent authors or materially assists with a commit, add an `Assisted-By:` trailer naming the model:
-
-```text
-Assisted-By: Claude <noreply@anthropic.com>
-Assisted-By: GPT-5 <noreply@openai.com>
-Assisted-By: Gemini <noreply@google.com>
-```
-
-This sits alongside the `Signed-off-by:` trailer produced by `--signoff`. Use one trailer per model if multiple contributed.
 
 ## Rebasing on upstream/main
 
@@ -210,12 +227,13 @@ Its CI validates internal consistency only, never against this repo.
 - Rename a namespace: `cozy-system`, `cozy-installer`, `tenant-root`.
 - Change variant or bundle names → its variant-picker reference tables.
 - Change release-prep behaviour in `.github/workflows/tags.yaml` → its contributor-versus-maintainer guidance rests on it.
+- Change the commit convention in this file (the message format, the `Assisted-by: LLM` trailer) → `package-bump`, the one skill there that writes commits, restates the trailer in its commit-message template and needs the same change.
 
 ### cozystack/external-apps-example
 
 It has no CI at all, it vendors copies of this repo's tooling, and it is the reference every third-party catalogue is built from, so it breaks quietly and takes them with it.
 
-- Change `hack/package.mk` → its `scripts/package.mk` is a byte-for-byte copy.
+- Change `hack/package.mk` → its `scripts/package.mk` was a byte-for-byte copy of ours and no longer is. Diff the two and port your change; do not paste our file over theirs.
 - Change `hack/update-crd.sh` → its `scripts/update-appdef.sh` is a miniature of it.
 - Change the `ApplicationDefinition` CRD, above all the `release.chartRef.kind` enum in `packages/system/application-definition-crd/definition/` → it still uses `chartRef.kind: HelmChart` while this repo has moved on to `ExternalArtifact`. Dropping `HelmChart` from the enum kills it outright.
 - Change the `release.labels` convention, for example the `flux-shard-operator` sharding key.
@@ -249,9 +267,16 @@ Its chart is vendored here — `packages/system/cozy-proxy/Makefile` pulls it fr
 
 Not coupled to the API: it holds Terraform that provisions bare nodes, with no Cozystack manifests in it. The only thing that reaches it is a change to the minimum node requirements (count, CPU, RAM, disk) or to the network requirements (VLAN, underlay).
 
+### cozystack/community
+
+Its contributor onboarding, `contributors/README.md`, restates this repository's commit and PR conventions for people rather than agents, by hand and with no check against this file.
+
+- Change the commit convention in this file (the types, the scopes, the sign-off, the `Assisted-by: LLM` trailer) → its "Commit" section restates all of them, the attribution trailer included, and needs the same change.
+- Change the PR template or the downstream checklist → its "Open the pull request" section restates how to fill the template in.
+
 ### Not a downstream repository
 
-`cozystack-ui` is archived. The console was vendored into `packages/system/dashboard/images/console`, so a UI change belongs in this repo, in the same PR. Note that the console still hardcodes the marketplace category list, so an `ApplicationDefinition` with a brand-new `spec.dashboard.category` renders in the marketplace but gets no sidebar entry.
+`cozystack-ui` is archived. The console was vendored into `packages/system/dashboard/images/console`, so a UI change belongs in this repo, in the same PR.
 
 `boot-to-talos` converts a running OS to Talos. It pins the Talos image this repo publishes, but Renovate carries that tag for it, so nothing you change here forces a change there. Renaming the image path would, and nothing would catch it.
 

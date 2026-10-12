@@ -27,9 +27,22 @@
       cozystack.bucket-application + cozystack.objectstorage-controller
       ensures the controllers exist before this chart installs, but the
       BucketClaim status is reconciled asynchronously, so the first render
-      sees an unpopulated status and skips. Flux re-renders the
-      HelmRelease on its next reconcile (spec.interval); once COSI has
-      populated status.bucketName, the gated templates materialise.
+      sees an unpopulated status and skips.
+
+      The render CANNOT fail here instead: this chart is the producer of
+      the very Bucket the lookup reads, so a failed render would never
+      apply templates/bucket.yaml and the condition could never resolve.
+
+      Nor does Flux repair the skip on its own. helm-controller does not
+      re-render a release whose chart and values did not change — the
+      interval reconcile is a no-op for a healthy release, and drift
+      detection is off on operator-generated HelmReleases — so the skip is
+      PERMANENT, not a bootstrap window. Convergence is driven instead by
+      the controller's DefaultObjectsGate
+      (internal/backupcontroller/default_objects_gate.go), which forces a
+      real Helm upgrade (reconcile.fluxcd.io/forceAt + requestedAt) once
+      the bucket name is resolvable and any gated object is missing. See
+      backupStorage.reconcileDefaultObjects in values.yaml.
     - bucketNameOverride set → bypass the lookup and use it directly. This
       is the escape hatch for offline `helm template` / `--dry-run` renders
       (CI / local diffs), where lookup returns nil and no apiserver is
@@ -53,11 +66,13 @@
 {{- end -}}
 {{/* When neither path produces a value, emit the empty string.
      Strategy/BSL templates that include this helper must gate
-     themselves on a non-empty result and skip rendering until Flux
-     re-reconciles the HelmRelease (driven by spec.interval) once the
-     BucketClaim's COSI-assigned status.bucketName is populated. The
-     accompanying templates/bucket.yaml ALWAYS renders so the
-     BucketClaim CAN come into existence even on the first install. */}}
+     themselves on a non-empty result and skip rendering until a real
+     Helm upgrade re-runs this lookup with the BucketClaim's
+     COSI-assigned status.bucketName populated. That upgrade is forced by
+     the controller's DefaultObjectsGate — it does NOT happen on the
+     HelmRelease's interval reconcile. The accompanying
+     templates/bucket.yaml ALWAYS renders so the BucketClaim CAN come
+     into existence even on the first install. */}}
 {{- end -}}
 {{- end -}}
 
@@ -104,6 +119,69 @@
 {{- printf "https://%s" (b64dec (index $secret.data "endpoint") | trim | trimPrefix "https://" | trimPrefix "http://") -}}
 {{- else -}}
 {{- .Values.backupStorage.endpoint -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Answer, for one CRD this chart ships as a template, whether the apiserver
+  already serves its kind.
+
+  Why a default Strategy needs this on top of the bucket-name gate. This chart
+  ships its strategy.backups.cozystack.io CRDs as ordinary templates
+  (templates/crds.yaml globs definitions/*.yaml), and Helm resolves EVERY
+  document in a release manifest through the cluster's RESTMapper in Build()
+  before it applies any of them. A Strategy CR whose CRD is not served yet
+  therefore fails Build(), and the release applies ZERO objects — including the
+  CRDs that would have made the mapping resolve. Every retry renders the same
+  manifest, so the failure is permanent rather than a race.
+
+  The bucket-name gate covers the FIRST INSTALL of a new cluster, where nothing
+  is resolvable yet and no Strategy renders at all. It cannot cover the case
+  this helper exists for: adding a NEW strategy kind to a chart that is already
+  installed. There the bucket name resolved long ago, so the first upgraded
+  revision renders the new CRD and the new Strategy CR together and wedges the
+  release exactly as above. That is not hypothetical — it is how the MongoDB
+  driver reached main, and the upgrade E2E lane caught it on the v1.6.2 → main
+  path with `no matches for kind "MongoDB"`.
+
+  Asking about the CRD OBJECT rather than listing the custom kind is
+  deliberate. `lookup` on a kind the apiserver does not serve is not an empty
+  result — it is a render ERROR ("unable to get apiresource"), which would trade
+  the wedge for a different permanent failure. apiextensions.k8s.io/v1 is always
+  served, so this lookup can only answer yes or no. Established=True rather than
+  mere existence, because a CRD is only in the RESTMapper once it is; a
+  not-yet-established CRD costs one retried revision here instead of a failed
+  one, and Flux retries.
+
+  Convergence after a skip is the same mechanism the bucket gate relies on and
+  is NOT the HelmRelease interval (see the bucketName helper): once the CRD is
+  served, the controller's DefaultObjectsGate sees the kind mapped and the CR
+  absent and forces a real Helm upgrade, whose render then includes it. The gate
+  skips kinds that do not map at all (meta.IsNoMatchError), which is what keeps
+  it from forcing upgrades against a render that cannot yet produce the object.
+
+  bucketNameOverride short-circuits the lookup for the same reason it does in
+  bucketName: it marks an offline render — `helm template`, a CI diff, a
+  helm-unittest case — where there is no apiserver to ask and the operator has
+  declared that cluster-derived state should be treated as resolved. Live
+  deploys go through Flux and never set it.
+
+  Every default Strategy added from here on should gate on this helper as well
+  as on the bucket name. The siblings that predate it are not wedged today only
+  because their CRDs already shipped in an earlier release.
+*/}}
+{{- define "backupstrategy-controller.crdEstablished" -}}
+{{- if .root.Values.backupStorage.bucketNameOverride -}}
+true
+{{- else -}}
+{{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" .crd -}}
+{{- if and $crd $crd.status -}}
+{{- range $c := (default (list) $crd.status.conditions) -}}
+{{- if and (eq $c.type "Established") (eq (toString $c.status) "True") -}}
+true
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

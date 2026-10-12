@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,10 +23,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
-	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 )
 
 var (
@@ -73,6 +75,8 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
+	h.ownerCache = lineage.NewObjectCache(ownerCacheTTL)
+
 	h.initConfig()
 	// Register HTTP path -> handler.
 	mgr.GetWebhookServer().Register("/mutate-lineage", &admission.Webhook{Handler: h})
@@ -99,6 +103,14 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	obj := &unstructured.Unstructured{}
 	if err := h.decodeUnstructured(req, obj); err != nil {
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
+	}
+
+	// The objectSelector skips objects carrying the managed label, but on UPDATE
+	// it matches if either the old or the new object does. Pods go on, since
+	// every Pod admission also needs applySchedulingClass.
+	if obj.GetKind() != "Pod" && hasAllLineageLabels(obj) {
+		logger.V(1).Info("object already carries lineage labels, skipping owner walk")
+		return admission.Allowed("lineage labels already present")
 	}
 
 	owner, err := h.getOwner(ctx, obj)
@@ -133,11 +145,11 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 }
 
 func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
+	owners := lineage.WalkOwnershipGraphWithCache(ctx, h.dynClient, h.mapper, h, h.ownerCache, o)
 	if len(owners) == 0 {
 		return nil, NoAncestors
 	}
-	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
+	obj, err := owners[0].GetUnstructuredCached(ctx, h.dynClient, h.mapper, h.ownerCache)
 	if err != nil {
 		return nil, err
 	}
@@ -195,14 +207,37 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 	if existing == nil {
 		existing = make(map[string]string)
 	}
-	for k, v := range labels {
-		existing[k] = v
-	}
+	maps.Copy(existing, labels)
 	o.SetLabels(existing)
 }
 
-// applySchedulingClass injects schedulerName and scheduling-class annotation
-// into Pods whose namespace carries the scheduler.cozystack.io/scheduling-class label.
+// hasAllLineageLabels needs every key computeLabels writes, not just
+// ManagedObjectKey: an UPDATE can carry a partial set written by another client,
+// and the tenantsecret registry filters on TenantResourceLabelKey.
+func hasAllLineageLabels(o *unstructured.Unstructured) bool {
+	labels := o.GetLabels()
+	if labels == nil {
+		return false
+	}
+	if labels[ManagedObjectKey] != "true" {
+		return false
+	}
+	for _, k := range []string{ManagerGroupKey, ManagerKindKey, ManagerNameKey, corev1alpha1.TenantResourceLabelKey} {
+		if _, ok := labels[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// applySchedulingClass injects schedulerName, scheduling-class annotation, and
+// scheduling-class label into Pods whose namespace carries the
+// scheduler.cozystack.io/scheduling-class label.
+//
+// The label (in addition to the annotation) lets SchedulingClass authors write
+// podAffinity rules whose labelSelector matches pods across applications that
+// share the same class.
+//
 // If the referenced SchedulingClass CR does not exist (e.g. the scheduler
 // package is not installed), the injection is silently skipped so that pods
 // are not left Pending.
@@ -254,6 +289,13 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	annotations[schedulerapi.SchedulingClassAnnotation] = schedulingClass
 	obj.SetAnnotations(annotations)
 
+	podLabels := obj.GetLabels()
+	if podLabels == nil {
+		podLabels = make(map[string]string)
+	}
+	podLabels[schedulerapi.SchedulingClassLabel] = schedulingClass
+	obj.SetLabels(podLabels)
+
 	return nil
 }
 
@@ -282,5 +324,7 @@ func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out
 	if len(req.Object.Raw) == 0 {
 		return errors.New("empty admission object")
 	}
-	return json.Unmarshal(req.Object.Raw, &out.Object)
+	// encoding/json would turn every number into float64, and an int64 above
+	// 2^53 would come back altered in the patch computed against req.Object.Raw.
+	return utiljson.Unmarshal(req.Object.Raw, &out.Object)
 }

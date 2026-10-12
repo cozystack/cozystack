@@ -1,21 +1,26 @@
 # shellcheck shell=sh
 # Shared enumeration of where cozystack vendors its image references.
 #
-# Sourced by hack/promote-retag.sh, hack/nightly-mirror.sh and
-# hack/promote-rewrite-tags.sh. It exists because those three call sites each
-# grew their own idea of where a ref can live, and drifted: promote-retag and
-# nightly-mirror scanned only the depth-2 values.yaml, while the promote
-# workflow's tag rewrite scanned those plus packages/apps/kubernetes/images/
-# *.tag alone. Every ref stored in any OTHER images/*.tag file was therefore
-# invisible to all three — never retagged to the stable version in the
-# registry, never mirrored to GHCR for a nightly, and left carrying the rc
-# version string in a promoted release tree. See docs/agents/image-refs.md for
-# the contract this file implements; a new storage location must be added here
-# and nowhere else.
+# Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
+# hack/nightly-mirror.sh, hack/verify-promoted-packages.sh,
+# hack/stitch-multiarch.sh, hack/verify-multiarch.sh and
+# hack/retention-packages.sh. It exists because the
+# first three call sites each grew their own idea of where a ref can live, and
+# drifted: promote-retag and nightly-mirror scanned only the depth-2
+# values.yaml, while the promote workflow's tag rewrite scanned those plus
+# packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
+# images/*.tag file was therefore invisible to all three — never retagged to
+# the stable version in the registry, never mirrored to GHCR for a nightly, and
+# left carrying the rc version string in a promoted release tree. The verifier
+# is a later consumer that has only ever read this enumeration: it compares the
+# stable candidate's refs against the rc artifact's to prove promotion moved no
+# container bytes, so a shape it could not see would be a proof that passed over
+# the images it skipped. See docs/agents/image-refs.md for the contract this
+# file implements; a new storage location must be added here and nowhere else.
 #
 # Three storage shapes exist, and all are first-class:
 #
-#   1. <root>/<group>/<pkg>/values.yaml     — five YAML sub-shapes, below
+#   1. <root>/<group>/<pkg>/values.yaml     — the YAML sub-shapes listed below
 #   2. <root>/<group>/<pkg>/images/*.tag    — a plain file holding one ref
 #   3. an explicitly declared file (IMAGE_REF_EXTRA_FILES) whose producer sed's
 #      a ref straight into it because the package is not values-driven
@@ -32,13 +37,12 @@
 # sweep in every vendored upstream chart template and every Helm-templated
 # `image:` line, where a blind rewrite corrupts a value `make update`
 # regenerates. An entry here is a deliberate statement that some package's
-# `image:` target sed's a ref into a file it vendors verbatim.
+# `image:` target sed's a ref into a file it vendors from upstream.
 #
 # system/multus is the only one today: its templates/ is the upstream
 # multus-daemonset-thick.yml fetched by `make update`, and multus's Makefile
-# `image:` target sed's the built ref into two `image:` lines inside it. Left
-# undeclared, multus-cni is invisible to promotion and to the nightly mirror —
-# it receives no stable :vX.Y.Z tag and is never copied to the public registry.
+# `image:` target sed's the built ref into every `multus-cni` `image:` line
+# inside it.
 #
 # KNOWN GAP, deliberately not listed: system/capi-providers-cpprovider stamps
 # its kamaji ref into files/control-plane-components.yaml AND into the
@@ -94,13 +98,15 @@ image_ref_files() {
 #   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
 #   2. split map      {[registry,] repository, tag, digest}   (e.g. .cilium.image)
 #   3. split map      {[registry,] repository, tag: <tag>@sha256:<digest>}
-#                     (e.g. .linstorCSI.image; .keycloak-operator.image adds registry)
+#                     (e.g. .linstorCSI.image)
 #   4. chart-global   global.registry.address + global.images.<n>.{repository, tag}
 #                     (kube-ovn's wrapper chart)
 #   5. OCI artifact   {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
+#   6. split map      {[registry,] image, [tag,] digest}
+#                     (upstream ingress-nginx's layout, e.g. its .controller.image)
 #
-# The optional `registry` sibling in shapes 2/3 and the whole of shape 4 exist
-# because the host does not always live inside `repository`. When it does not,
+# The optional `registry` sibling in shapes 2/3/6 and the whole of shape 4 exist
+# because the host does not always live inside the repository key. When it does not,
 # the rule must rejoin it: a host-less ref reaches the caller's ownership
 # filter looking third-party and is dropped, which is the silent-skip failure
 # the shape-3 rule was added to fix.
@@ -161,14 +167,25 @@ collect_image_refs() {
 
   # Declared extras additionally get the textual scrape, even though most are
   # YAML and were already parsed above. Parsing ALONE would narrow what this
-  # shape means: an extra is a manifest vendored verbatim from upstream, so it
-  # can carry a ref inside a block scalar (a ConfigMap embedding a whole
-  # deployment, say), where yq returns the enclosing block rather than the ref
-  # and the caller's ownership filter then discards it — and it can stop
-  # parsing entirely when `make update` pulls a version yq chokes on, yielding
-  # nothing at all. Both are silent skips, which is the failure mode this
-  # library exists to remove. Running both and letting the callers' existing
-  # dedup absorb the overlap costs nothing.
+  # shape means: an extra is a manifest vendored from upstream, so it can carry
+  # a ref inside a block scalar (a ConfigMap embedding a whole deployment, say),
+  # where yq returns the enclosing block rather than the ref and the caller's
+  # ownership filter then discards it — and it can stop parsing entirely, when
+  # `make update` pulls a version yq chokes on or when the package patches Helm
+  # syntax into the vendored file. Both are silent skips, which is the failure
+  # mode this library exists to remove. Running both and letting the callers'
+  # existing dedup absorb the overlap costs nothing.
+  #
+  # The multus entry is in the second state today: its staging init container is
+  # wrapped in Helm conditionals, so yq refuses the whole file and this scrape is
+  # not a backstop for it but the only leg that reports anything. One consequence
+  # is worth knowing when reading the tests: the completeness oracle in
+  # hack/promote-rewrite-tags_test.bats builds its expected side with
+  # collect_refs_from_file, so for this file that comparison is inert -- it can
+  # neither fail nor pass on it. What pins the multus entry against the real tree
+  # is `image_ref_files enumerates all three storage shapes` for the path and
+  # `collect_image_refs finds refs the depth-2 values.yaml glob misses` for the
+  # ref, both in that same file.
   for _ir_f in $IMAGE_REF_EXTRA_FILES; do
     [ -f "$_ir_root/$_ir_f" ] || continue
     grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_root/$_ir_f" 2>/dev/null || true
@@ -196,5 +213,9 @@ _collect_yaml_shapes() {
     yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$_ir_f" 2>/dev/null || true
     # shape 5
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$_ir_f" 2>/dev/null || true
+    # shape 6. Requiring a whole digest, not just the key, is what keeps
+    # upstream's unpinned default (`digest: ""`) from emitting "<image>@". The
+    # `!!str` guard on digest has to come before test(), as in shape 3.
+    yq -r '.. | select(tag == "!!map") | select(.image | tag == "!!str") | select(.digest | tag == "!!str") | select(.digest | test("^sha256:[0-9a-f]{64}$")) | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .image) | sub("^/"; "")) + "@" + .digest' "$_ir_f" 2>/dev/null || true
     return 0
 }

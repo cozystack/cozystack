@@ -1,17 +1,119 @@
+{{/*
+  A database name also names Kubernetes resources: the Database CR
+  {{ .Release.Name }}-{{ replace "_" "-" $name }} and, under it, each Grant. So
+  the same DNS-1123 rule and "_"/"-" collision that the username guard enforces
+  apply here — a name like "My.Db" or "foo-" renders but the apiserver rejects
+  the Database CR with an opaque error, and two names differing only in "_" vs
+  "-" collide on one Database CR (one silently overwrites the other). Reject an
+  invalid name on both install and upgrade (it never applied either way), but the
+  "_"/"-" collision only on a fresh install, mirroring the username guard in
+  secret.yaml: an existing release already took the overwrite, and blocking its
+  upgrades only makes a running release worse. Database names are not Secret keys,
+  so the DNS-1123 name is the binding rule.
+*/}}
+{{- $seenDBDNS := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $crName := printf "%s-%s" $.Release.Name (replace "_" "-" $name) }}
+  {{- if or (gt (len $crName) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $crName)) }}
+    {{- fail (printf "invalid database name %q: it also names the Database resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit); use a lowercase name without a leading or trailing \"-\" or \".\"" $name $crName) }}
+  {{- end }}
+  {{- /*
+    The name is also the MariaDB database identifier (Database CR spec.name). The
+    server caps an identifier at 64 characters and rejects a longer CREATE DATABASE
+    with "Incorrect database name", but the Database CRD allows 80, so a name of 65-80
+    characters renders a Database the apiserver accepts and only the operator's SQL
+    fails. A release that already applied such a Database must keep upgrading, so on
+    upgrade the 64 cap applies only when the Database does not exist yet; past 80 the
+    apiserver rejects the object itself, so that holds on both paths. An offline
+    render sees no Database and stays strict. The DNS-1123 check above admits only
+    ASCII, so len (bytes) equals characters.
+  */}}
+  {{- if or (gt (len $name) 80) (and (gt (len $name) 64) (or $.Release.IsInstall (not (lookup "k8s.mariadb.com/v1alpha1" "Database" $.Release.Namespace $crName)))) }}
+    {{- fail (printf "invalid database name %q: a MariaDB database identifier is at most 64 characters" $name) }}
+  {{- end }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- if and $.Release.IsInstall (hasKey $seenDBDNS $dbDNS) }}
+    {{- fail (printf "database names %q and %q both map to the Database resource name %q (\"_\" renders as \"-\"); rename one of them" (index $seenDBDNS $dbDNS) $name (printf "%s-%s" $.Release.Name $dbDNS)) }}
+  {{- end }}
+  {{- $_ := set $seenDBDNS $dbDNS $name }}
+{{- end }}
+
+{{/*
+  The Grant CR name is <release>-<dbDNS>-<userDNS>. Two DIFFERENT (database, user)
+  pairs whose "-"/"_" split differently collide there — (database "a", user "b-c")
+  and (database "a-b", user "c") both render <release>-a-b-c — and one silently
+  overwrites the other at apply, dropping a privilege the tenant configured. A
+  user in both admin and readonly of one database would also collide with itself;
+  that user needs only the admin grant (ALL is a superset of the readonly SELECT),
+  so the readonly grant is SKIPPED for them rather than the name role-scoped —
+  role-scoping renames the Grant, and renaming a Grant on upgrade makes the
+  operator revoke the tenant's live privilege while the old CR is pruned. Track
+  the whole rendered Grant name plus its length (the apiserver caps a resource
+  name at 253) and reject an over-long or charset-invalid name on both install and
+  upgrade, but the "_"/"-" collision only on a fresh install — like the sibling
+  guards, an existing release already took the overwrite and blocking its upgrades
+  only makes a running release worse.
+*/}}
+{{- $seenGrant := dict }}
+{{- range $name, $db := .Values.databases }}
+  {{- $dbDNS := replace "_" "-" $name }}
+  {{- $roles := $db.roles | default dict }}
+  {{- $adminUsers := $roles.admin | default (list) | uniq }}
+  {{- $grantUsers := $adminUsers }}
+  {{- range $user := ($roles.readonly | default (list) | uniq) }}
+    {{- if not (has $user $adminUsers) }}{{- $grantUsers = append $grantUsers $user }}{{- end }}
+  {{- end }}
+  {{- range $user := $grantUsers }}
+    {{- $g := printf "%s-%s-%s" $.Release.Name $dbDNS (replace "_" "-" $user) }}
+    {{- if gt (len $g) 253 }}
+      {{- fail (printf "the Grant resource name %q for (database %q, user %q) exceeds the 253-character limit Kubernetes puts on a resource name; shorten the database or user name" $g $name $user) }}
+    {{- end }}
+    {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $g) }}
+      {{- fail (printf "invalid role member %q for database %q: it names the Grant resource %q, which Kubernetes requires to be a DNS-1123 subdomain (lowercase letters, digits, \"-\" and \".\", starting and ending with a letter or digit). A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username guard never sees it - use a lowercase name without special characters" $user $name $g) }}
+    {{- end }}
+    {{- /*
+      The member is also the Grant's spec.username, a MariaDB account name the
+      server caps at 128 characters. A declared user is held to 80 by secret.yaml,
+      matching the User CRD, but a member declared only under databases.<db>.roles
+      has no User CR and never passes through that cap. Checked after the DNS-1123 guard above, which admits
+      only lowercase ASCII, so len (bytes) equals characters here and a non-ASCII
+      member is reported for its charset rather than as too long; and after the 253
+      guard, so a member long enough to blow the Grant name reports that first.
+      Unlike those two guards, whose invalid name the apiserver rejects so the
+      object never applied, a too-long member renders a Grant the apiserver
+      ACCEPTS: its metadata.name is valid and the Grant CRD puts no maxLength on
+      spec.username, so only mariadb-operator's CREATE USER/GRANT SQL fails. A
+      release that already applied such a Grant must keep upgrading, but a member
+      added on upgrade is new and must still be named here, so on upgrade the cap
+      applies only when the Grant does not exist yet. An offline render sees no
+      Grant and stays strict.
+    */}}
+    {{- if and (gt (len $user) 128) (or $.Release.IsInstall (not (lookup "k8s.mariadb.com/v1alpha1" "Grant" $.Release.Namespace $g))) }}
+      {{- fail (printf "invalid role member %q for database %q: a MariaDB account name is at most 128 characters, so the server rejects the GRANT for a longer one. A name in databases.<db>.roles.admin/readonly is not one of .Values.users, so the username length cap in secret.yaml never sees it" $user $name) }}
+    {{- end }}
+    {{- $desc := printf "(database %q, user %q)" $name $user }}
+    {{- if and $.Release.IsInstall (hasKey $seenGrant $g) }}
+      {{- fail (printf "the Grant resource name %q is produced by both %s and %s (\"_\" renders as \"-\"); rename a database or user so their Grants do not collide" $g (index $seenGrant $g) $desc) }}
+    {{- end }}
+    {{- $_ := set $seenGrant $g $desc }}
+  {{- end }}
+{{- end }}
 {{- range $name, $db := .Values.databases }}
 {{ $dbDNSName := replace "_" "-" $name }}
+{{- $roles := $db.roles | default dict }}
+{{- $adminUsers := $roles.admin | default (list) | uniq }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Database
 metadata:
   name: {{ $.Release.Name }}-{{ $dbDNSName }}
 spec:
-  name: {{ $name }}
+  name: {{ $name | quote }}
   mariaDbRef:
     name: {{ $.Release.Name }}
   characterSet: utf8
   collate: utf8_general_ci
-{{- range $user := $db.roles.admin }}
+{{- range $user := $adminUsers }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
@@ -22,13 +124,26 @@ spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['ALL']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
 {{- end }}
-{{- range $user := $db.roles.readonly }}
+{{- range $user := ($roles.readonly | default (list) | uniq) }}
+{{- if not (has $user $adminUsers) }}
 {{ $userDNSName := replace "_" "-" $user }}
+{{- /*
+  No -readonly suffix: the Grant name must match what earlier releases rendered, or the
+  operator revokes the live privilege as the renamed CR is pruned on upgrade. A
+  user also in admin gets ALL and is skipped above, so there is no same-name
+  collision to disambiguate. Corollary of the shared name: when a user moves
+  between readonly-only and admin across an upgrade, the chart keeps ONE Grant CR
+  under a stable name and only its `privileges` value changes (SELECT<->ALL) — the
+  chart never forces a rename, so it never drives a revoke-and-prune. How the
+  operator applies that privilege change on the live grant is the operator's
+  concern and is not asserted here. This rationale is a template comment so it does
+  not ship into every rendered Grant manifest.
+*/}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Grant
@@ -38,10 +153,11 @@ spec:
   mariaDbRef:
     name: {{ $.Release.Name }}
   privileges: ['SELECT']
-  database: {{ $name }}
+  database: {{ $name | quote }}
   table: "*"
-  username: {{ $user }}
+  username: {{ $user | quote }}
   grantOption: true
+{{- end }}
 {{- end }}
 
 {{- end }}

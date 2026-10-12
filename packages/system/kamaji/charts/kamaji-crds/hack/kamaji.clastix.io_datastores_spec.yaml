@@ -123,9 +123,14 @@ versions:
                   List of the endpoints to connect to the shared datastore.
                   No need for protocol, just bare IP/FQDN and port.
                 items:
+                  maxLength: 256
                   type: string
+                maxItems: 64
                 minItems: 1
                 type: array
+                x-kubernetes-validations:
+                  - message: an IPv6 endpoint address must be bracketed, e.g. [2001:db8::1]:2379
+                    rule: self.all(e, e.startsWith('[') || e.split(':').size() <= 2)
               tlsConfig:
                 description: |-
                   Defines the TLS/SSL configuration required to connect to the data store in a secure way.

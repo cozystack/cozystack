@@ -4,7 +4,7 @@ This scenario assumes the admin steps (`01-...`, `02-...`) have already run.
 
 ## Prerequisites
 
-- Tenant namespace (default: `tenant-test`).
+- Tenant namespace (default: `tenant-root`, where the shared SeaweedFS the backups land in also lives).
 - A Cozystack `Bucket` (or any S3-compatible coordinates supplied via
   `spec.backup.*` on the ClickHouse application). The chart materialises
   `<release>-backup-s3` Secret in the tenant namespace and an in-pod

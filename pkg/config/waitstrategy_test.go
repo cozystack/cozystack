@@ -44,25 +44,25 @@ func TestResolveWaitStrategy(t *testing.T) {
 			name:         "unset, with exprs -> poller (coupled default)",
 			waitStrategy: "",
 			hasExprs:     true,
-			want:         ptr(helmv2.WaitStrategyPoller),
+			want:         new(helmv2.WaitStrategyPoller),
 		},
 		{
 			name:         "explicit poller is honored",
 			waitStrategy: "poller",
 			hasExprs:     true,
-			want:         ptr(helmv2.WaitStrategyPoller),
+			want:         new(helmv2.WaitStrategyPoller),
 		},
 		{
 			name:         "explicit legacy is honored even with exprs",
 			waitStrategy: "legacy",
 			hasExprs:     true,
-			want:         ptr(helmv2.WaitStrategyLegacy),
+			want:         new(helmv2.WaitStrategyLegacy),
 		},
 		{
 			name:         "explicit legacy without exprs is honored",
 			waitStrategy: "legacy",
 			hasExprs:     false,
-			want:         ptr(helmv2.WaitStrategyLegacy),
+			want:         new(helmv2.WaitStrategyLegacy),
 		},
 	}
 
@@ -84,5 +84,3 @@ func TestResolveWaitStrategy(t *testing.T) {
 		})
 	}
 }
-
-func ptr(n helmv2.WaitStrategyName) *helmv2.WaitStrategyName { return &n }

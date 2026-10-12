@@ -12,14 +12,15 @@
 # variables to redirect socket/dir probes into the stub tree, so tests do not
 # need root privileges or a real systemd host.
 #
-# Each test installs a `trap 'rm -rf "$STUB_DIR"' EXIT` immediately after
-# creating the stub dir so cleanup runs even when an assertion fails mid-test
-# under `set -e`. cozytest.sh runs each @test in its own subshell, so traps
-# scope per test and do not leak across tests.
+# Each test removes its stub dir on the last line of its body rather than from
+# an EXIT trap: a trap inside an @test replaces the one the bats binary installs
+# for its own bookkeeping, and a test that then fails prints no TAP line at all.
+# Both runners set -e, so a failed test leaves its stub dir behind, which is what
+# you want to look at anyway.
 #
-# Tests are otherwise self-contained — no shared setup/teardown helpers,
-# because cozytest.sh's awk parser only recognizes @test blocks and treats a
-# bare `}` on its own line as the end of a test function.
+# Fixture setup is otherwise self-contained rather than placed in file-local
+# setup()/teardown() hooks, preserving compatibility with the legacy
+# cozytest.sh translator. Strict setup still comes from `load test_helper`.
 #
 # Title syntax constraints (inherited from cozytest.sh's awk parser):
 #   - Titles must be delimited by ASCII double quotes; embedded literal
@@ -29,14 +30,15 @@
 #     only in punctuation collapse to the same function name. Keep titles
 #     distinctive in their alphanumeric run.
 #
-# Run with: hack/cozytest.sh hack/check-host-runtime.bats
-#           (or `bats hack/check-host-runtime.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/check-host-runtime.bats`. The legacy `hack/cozytest.sh` runner
+# remains a supported compatibility path.
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "clean host with no runtime services exits silently" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -58,11 +60,11 @@ STUBEOF
 
   [ ! -s "$STDERR_FILE" ]
   [ ! -s "$STUB_DIR/stdout" ]
+  rm -rf "$STUB_DIR"
 }
 
 @test "standalone containerd service active prints warning" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -105,11 +107,11 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }
 
 @test "standalone docker service active prints warning" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -150,11 +152,11 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }
 
 @test "both services active prints two warnings and the HINT block" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -198,11 +200,11 @@ STUBEOF
   # would be told to run it as a non-root user and quietly fail.
   grep -q 'HINT:' "$STDERR_FILE"
   grep -q 'sudo systemctl disable --now containerd.service docker.service' "$STDERR_FILE"
+  rm -rf "$STUB_DIR"
 }
 
 @test "failing du does not suppress the containerd warning" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -234,11 +236,11 @@ DUEOF
     bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
 
   grep -q 'standalone containerd.service' "$STDERR_FILE"
+  rm -rf "$STUB_DIR"
 }
 
 @test "containerd socket fallback fires when systemctl is unavailable" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   # The script uses `[ -e "$sock" ]`, not `[ -S ... ]`, so a regular
   # file is a valid stand-in for a unix socket in tests. This also
@@ -256,11 +258,11 @@ DUEOF
     bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
 
   grep -q 'standalone containerd.service' "$STDERR_FILE"
+  rm -rf "$STUB_DIR"
 }
 
 @test "docker socket fallback fires when systemctl is unavailable" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   SOCK="$STUB_DIR/docker.sock"
   touch "$SOCK"
@@ -279,11 +281,11 @@ DUEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }
 
 @test "clean host without systemctl exits silently" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   STDERR_FILE="$STUB_DIR/stderr"
   COZYSTACK_PREFLIGHT_FORCE_NO_SYSTEMCTL=1 \
@@ -295,11 +297,11 @@ DUEOF
 
   [ ! -s "$STDERR_FILE" ]
   [ ! -s "$STUB_DIR/stdout" ]
+  rm -rf "$STUB_DIR"
 }
 
 @test "docker service plus socket still emits exactly one warning" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -334,11 +336,11 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }
 
 @test "docker socket paths with glob chars do not expand" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   # Create two directories that a naive `for sock in $PATHS` loop
   # would glob-expand and treat as existing "sockets". With the
@@ -369,11 +371,11 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }
 
 @test "containerd service plus socket still emits exactly one warning" {
   STUB_DIR=$(mktemp -d)
-  trap 'rm -rf "$STUB_DIR"' EXIT
 
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
@@ -412,4 +414,5 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
+  rm -rf "$STUB_DIR"
 }

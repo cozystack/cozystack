@@ -1,11 +1,6 @@
 # OIDC for the Grafana instance (Phase 1)
 
-Cozystack ships one Grafana codebase deployed twice: as
-`monitoring-system` in the platform's `cozy-monitoring` namespace and as
-`monitoring` in every tenant namespace. Both instances opt in to OIDC
-authentication through the same flat selector on the `Monitoring` CR.
-This document covers the operator-facing surface: what the modes mean,
-what the chart provisions, and how a user signs in.
+Cozystack ships one Grafana codebase deployed twice, both released as `monitoring-system` and differing only by namespace: the platform instance runs in `tenant-root` and a per-tenant instance runs in every tenant namespace. Both instances opt in to OIDC authentication through the same flat selector on the `Monitoring` CR. This document covers the operator-facing surface: what the modes mean, what the chart provisions, and how a user signs in.
 
 The architectural rationale lives in
 [cozystack/community#24](https://github.com/cozystack/community/pull/24)
@@ -78,7 +73,7 @@ CR:
    fallback, same pattern as `packages/system/dashboard`), preserved
    across upgrades.
 4. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
-   the cozy realm issuer + the per-instance audience scope. Two
+   the platform realm issuer (`cozy` by default, `authentication.oidc.realmName`) + the per-instance audience scope. Two
    independent gates ride on top of the raw OAuth wiring:
 
    **Tenant-membership gate — unconditional in System mode.** The chart
@@ -96,7 +91,7 @@ CR:
    `user.Groups` slice empty regardless of what the userinfo endpoint
    returns, and the gate rejects every login with "user not a member
    of one of the required groups" — even when the token carries the
-   correct claim (verified end-to-end on dev3 with Grafana v11.6.15).
+   correct claim (verified end-to-end on a test cluster with Grafana v11.6.15).
    The JMESPath expression `groups` reads the top-level `groups`
    array from userinfo, matching the shape Keycloak's
    `oidc-group-membership-mapper` emits.

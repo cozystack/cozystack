@@ -78,6 +78,18 @@
   color: 'e11d21'
   description: Indicates the change introduces a breaking API or behaviour change
 
+# kind/backport-previous has no upstream Kubernetes equivalent (k8s has no
+# two-release-line model); it stays under kind/ per the file convention.
+- name: kind/backport
+  color: 'fbca04'
+  description: Categorizes issue or PR as requiring a backport to the current release line
+  aliases: ['backport']
+
+- name: kind/backport-previous
+  color: 'fbd876'
+  description: Categorizes issue or PR as requiring a backport to the previous release line
+  aliases: ['backport-previous']
+
 # ──────────────────────────────────────────────
 # priority/ — urgency
 # ──────────────────────────────────────────────
@@ -113,6 +125,10 @@
 - name: triage/needs-information
   color: 'fbca04'
   description: Indicates an issue needs more information in order to work on it
+
+- name: triage/needs-proposal
+  color: 'fbca04'
+  description: Indicates an issue needs a design proposal in cozystack/community before work starts here
 
 - name: triage/not-reproducible
   color: 'fbca04'
@@ -174,6 +190,10 @@
   color: 'bfd4f2'
   description: Dependency bumps (Renovate, go.mod); scope `deps`
 
+- name: area/dx
+  color: 'bfd4f2'
+  description: Issues or PRs related to developer tooling (hack/ scripts, package Makefiles, cozypkg)
+
 - name: area/dashboard
   color: 'bfd4f2'
   description: Issues or PRs related to the dashboard / UI
@@ -196,7 +216,11 @@
 
 - name: area/networking
   color: 'bfd4f2'
-  description: Issues or PRs related to networking (ingress, gateway, vpn, metallb, cilium, kube-ovn)
+  description: Issues or PRs related to networking (ingress, gateway, vpn, metallb, kube-ovn)
+
+- name: area/cilium
+  color: 'bfd4f2'
+  description: Issues or PRs related to Cilium (agent, operator, Gateway API, network policy, LB-IPAM)
 
 - name: area/platform
   color: 'bfd4f2'
@@ -225,6 +249,10 @@
 - name: area/keycloak
   color: 'bfd4f2'
   description: Issues or PRs related to Keycloak (SSO / identity)
+
+- name: area/openbao
+  color: 'bfd4f2'
+  description: Issues or PRs related to OpenBAO (secrets management, seals, auto-unseal)
 
 - name: area/tenant
   color: 'bfd4f2'
@@ -277,14 +305,6 @@
 - name: upstream-issue
   color: 'aaaaaa'
   description: Requires resolving an issue in an upstream project
-
-- name: backport
-  color: 'fbca04'
-  description: Should change be backported on previous release
-
-- name: backport-previous
-  color: 'fbd876'
-  description: Backport target — previous release line
 
 - name: release
   color: 'aaaaaa'

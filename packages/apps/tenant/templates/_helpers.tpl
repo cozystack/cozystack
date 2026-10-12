@@ -92,3 +92,24 @@ false
 {{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* The shared-central tracing hops out of a tenant: an opted-in tenant with
+       Monitoring (which deploys the collector and Grafana that use them),
+       never tenant-root, which hosts the shared store. Both egress rules read
+       this one condition so the write and read paths cannot be split. */}}
+{{- define "tenant.tracingCentralEgress" -}}
+{{- if and (ne (include "tenant.name" .) "tenant-root") .Values.tracingCentral .Values.monitoring -}}true{{- end -}}
+{{- end -}}
+
+{{- /* Every variant but the isp-hosted ones installs Cilium itself, so the
+       policies render unconditionally there: a CRD missing at render time
+       must fail the install, not leave the tenant unisolated for good, since
+       helm-controller does not re-render a release when discovery changes.
+       isp-hosted runs on the host's CNI, which may or may not be Cilium. */ -}}
+{{- define "tenant.ciliumPolicies" -}}
+{{- if not (has (include "cozy-lib.bundle-name" .) (list "isp-hosted" "isp-hosted-slim")) -}}
+true
+{{- else if and (.Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy") (.Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy") -}}
+true
+{{- end -}}
+{{- end -}}

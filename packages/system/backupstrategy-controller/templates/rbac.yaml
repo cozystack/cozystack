@@ -57,14 +57,21 @@ rules:
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachineinstances"]
   verbs: ["get"]
-# CDI DataVolumes: pre-restore deletes DVs so CDI doesn't recreate PVCs after rename
+# CDI DataVolumes: pre-restore deletes DVs so CDI doesn't recreate PVCs after rename,
+# and reads each one back to hold the restore until it is gone (a point Get
+# through the dynamic client, so no list/watch)
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
-  verbs: ["delete"]
-# HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR and deletes old
+  verbs: ["get", "delete"]
+# HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR
+# and deletes old. patch additionally lets the DefaultObjectsGate stamp
+# reconcile.fluxcd.io/forceAt + requestedAt on THIS chart's own release to
+# force the Helm upgrade that materialises the lookup-gated default backup
+# objects (no list/watch: every access is a point Get through the dynamic
+# client, so no cluster-wide HelmRelease informer is started).
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
-  verbs: ["get", "create", "update", "delete"]
+  verbs: ["get", "create", "update", "patch", "delete"]
 # PVCs and PVs: pre-restore renames PVCs (delete old, create new) and patches PV reclaim policy
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
@@ -76,6 +83,13 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["backups", "restores", "datauploads"]
   verbs: ["create", "get", "list", "watch", "update", "patch", "delete", "deletecollection"]
+# Velero BackupStorageLocation: the DefaultObjectsGate checks that the
+# cozy-default BSL — rendered by the same lookup-gated template as the
+# Strategy CRs — actually exists. Read-only, and a point Get through the
+# dynamic client, so `get` alone is enough (no informer, no list/watch).
+- apiGroups: ["velero.io"]
+  resources: ["backupstoragelocations"]
+  verbs: ["get"]
 # Velero DeleteBackupRequest: used by BackupReconciler to delete Velero backups with their storage data
 - apiGroups: ["velero.io"]
   resources: ["deletebackuprequests"]
@@ -142,6 +156,27 @@ rules:
 - apiGroups: ["k8s.mariadb.com"]
   resources: ["backups", "restores"]
   verbs: ["get", "list", "watch", "create"]
+# MongoDB strategy: read the operator-side PerconaServerMongoDB CR to gate on
+# the backup preconditions, create one-shot PerconaServerMongoDBBackup CRs on the
+# BackupJob path, and create PerconaServerMongoDBRestore CRs on the RestoreJob
+# path. The cluster CR is patched only on the useSystemBucket flow (storage
+# injection, below); it is never deleted.
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbs"]
+  # patch: the useSystemBucket flow SSA-injects spec.backup.storages onto the
+  # live PerconaServerMongoDB at BackupJob time (server-side apply is a PATCH).
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbbackups"]
+  # delete: prune a useSystemBucket archive by deleting its CR (the delete-backup
+  # finalizer frees the object), and cancel a not-yet-started system-bucket CR at
+  # the BackupJob timeout (a legacy CR is left in place). patch: strip the driver's own delete-backup finalizer
+  # to release a wedged cleanup. See reconcileMongoDB / cleanupMongoDBBackup and
+  # docs/operations/backup-classes.md.
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: ["psmdb.percona.com"]
+  resources: ["perconaservermongodbrestores"]
+  verbs: ["get", "list", "watch", "create"]
 # FoundationDB strategy: read the operator-side FoundationDBCluster CR to
 # surface "not yet rendered" preconditions, create per-BackupJob
 # FoundationDBBackup CRs and per-RestoreJob FoundationDBRestore CRs.
@@ -172,3 +207,17 @@ rules:
 - apiGroups: ["etcd-operator.cozystack.io"]
   resources: ["etcdsnapshots"]
   verbs: ["get", "list", "watch", "create"]
+# Rabbitmq strategy: read the operator-side RabbitmqCluster CR to gate on
+# "all replicas ready" before exporting/importing definitions over the
+# management API. The driver only ever reads it - the actual work runs in a
+# batch/v1.Job (granted above), never by mutating the RabbitmqCluster.
+- apiGroups: ["rabbitmq.com"]
+  resources: ["rabbitmqclusters"]
+  verbs: ["get", "list", "watch"]
+# Kafka strategy: read the Strimzi Kafka cluster CR only, as a Ready
+# precondition before the metadata backup/restore Job runs. The driver never
+# mutates it; the export/import runs entirely in the batch/jobs granted above
+# via the Kafka Admin API, so no kafkatopics access is needed here.
+- apiGroups: ["kafka.strimzi.io"]
+  resources: ["kafkas"]
+  verbs: ["get", "list", "watch"]

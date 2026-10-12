@@ -142,7 +142,7 @@ func ParsePinnedTenants(s string) (map[string]string, error) {
 	if s == "" {
 		return pinned, nil
 	}
-	for _, pair := range strings.Split(s, ",") {
+	for pair := range strings.SplitSeq(s, ",") {
 		k, v, found := strings.Cut(strings.TrimSpace(pair), "=")
 		if !found || k == "" {
 			return nil, fmt.Errorf("invalid pinned tenant entry %q, expected <tenant-namespace>=<shard>", pair)

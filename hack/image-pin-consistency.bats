@@ -8,25 +8,22 @@
 # tag. The first wins, the second hits the write-once guard, and the promotion
 # fails — on release day, in a workflow that runs once per release.
 #
-# This is not hypothetical. platform-migrations was pinned twice: once in
-# packages/core/platform/values.yaml (stamped by its Makefile) and once as
-# .backupStrategyController.chBackupClientImage, which had no producer at all
-# and so froze at v1.4.0-rc.2 while the other advanced to v1.5.0. v1.6.0 is the
-# first release cut through the promote path rather than a full rebuild, so it
-# would have been the first to hit it.
+# This is not hypothetical. platform-migrations was once pinned twice, the
+# second copy by a key that had no producer: it froze at v1.4.0-rc.2 while the
+# other advanced to v1.5.0, and v1.6.0, the first release cut through the
+# promote path, would have been the first to hit it. A chart that renders one
+# image under several keys (backupstrategy-controller's backup client) must
+# have them stamped together.
 #
-# The general invariant is cheaper to hold than the specific one: a duplicate
-# pin can arise from any package reusing another's image, which the tree does
-# deliberately (backupstrategy-controller reuses platform-migrations as a
-# curl+jq runner rather than shipping a second one-binary tag).
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, so it avoids `run`, `$status`, `$output`,
+# `skip`, and setup()/teardown(). Paths stay repo-root-relative for both
+# runners.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. There is no
-# `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each test runs as
-# a shell function under `set -eu -x`, so a non-zero exit is the failure.
-# Paths are repo-root-relative: BATS_TEST_DIRNAME is unset and would abort the
-# whole suite under `set -u`.
-#
-# Run with: hack/cozytest.sh hack/image-pin-consistency.bats
+# Run with: bats hack/image-pin-consistency.bats
+
+load test_helper
 
 @test "no image repository is pinned at more than one digest" {
   tmp=$(mktemp -d)
@@ -63,32 +60,10 @@
         -- "${repo#ghcr.io/cozystack/cozystack/}" packages/ >&2 || true
     done
     echo >&2
-    echo "Give the duplicate key a producer that stamps the same ref (see" >&2
-    echo "packages/core/platform/Makefile), or drop the duplicate pin." >&2
+    echo "Give the duplicate key a producer that stamps the same ref, or drop" >&2
+    echo "the duplicate pin." >&2
     rm -rf "$tmp"
     return 1
   fi
   rm -rf "$tmp"
-}
-
-@test "platform-migrations is pinned identically in both consumers" {
-  # The specific instance, pinned separately so a regression names its cause
-  # rather than only tripping the general check above. The two must match
-  # exactly, not merely resolve to the same digest: backupstrategy-controller
-  # renders its copy into a Pod spec, so a stale tag string there is what an
-  # operator reads when asking what is running.
-  a=$(yq -r '.migrations.image' packages/core/platform/values.yaml)
-  b=$(yq -r '.backupStrategyController.chBackupClientImage' \
-    packages/system/backupstrategy-controller/values.yaml)
-
-  if [ "$a" != "$b" ]; then
-    echo "platform-migrations pins have drifted:" >&2
-    echo "  packages/core/platform/values.yaml            .migrations.image" >&2
-    echo "    $a" >&2
-    echo "  backupstrategy-controller/values.yaml         .chBackupClientImage" >&2
-    echo "    $b" >&2
-    echo >&2
-    echo "packages/core/platform/Makefile stamps both; do not hand-edit either." >&2
-    return 1
-  fi
 }

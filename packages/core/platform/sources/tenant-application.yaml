@@ -33,3 +33,26 @@ spec:
           install:
             namespace: cozy-system
             releaseName: tenant-rd
+    # Selected by the slim platform variants, which emit none of the
+    # monitoring, etcd and seaweedfs applications the default variant waits on.
+    # The tenant ApplicationDefinition and cozystack-basics reference the default
+    # variant's artifacts by name; the PackageSource builds those for every variant.
+    - name: slim
+      dependsOn:
+        - cozystack.networking
+        - cozystack.ingress-application
+        - cozystack.gateway-application
+        - cozystack.info-application
+        - cozystack.cozystack-engine
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: tenant
+          path: apps/tenant
+          libraries: [cozy-lib]
+        - name: tenant-rd
+          path: system/tenant-rd
+          install:
+            namespace: cozy-system
+            releaseName: tenant-rd

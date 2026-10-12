@@ -110,6 +110,9 @@ tests:
   # will regress to the same infinite-rotation loop from a different angle
   # (any change to Certificate metadata would flip the sha).
   - it: certManagerEnabled=true does NOT set checksum/tls-secret on the admission-controller pod
+    documentSelector:
+      path: kind
+      value: Deployment
     set:
       vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
     template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
@@ -189,6 +192,9 @@ tests:
   # outside its `if` gate, this catches it before it hits a customer
   # cluster and starts a fresh ReplicaSet-churn incident.
   - it: existingSecret emits neither tls-secret nor tls-cert checksum on the admission-controller pod
+    documentSelector:
+      path: kind
+      value: Deployment
     set:
       vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
       vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
@@ -207,6 +213,9 @@ tests:
   # `admissionController disabled` test group below (which confirms no
   # unrelated annotation leaks).
   - it: certManagerEnabled=true does NOT emit checksum/tls-cert during offline render (lookup returns nil)
+    documentSelector:
+      path: kind
+      value: Deployment
     set:
       vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
     template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml

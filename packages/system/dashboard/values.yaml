@@ -1,3 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 console:
   image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.6.0@sha256:ad0e132ce506bbc9e0f6a5dfb94311c9bbc08da3d8eca84eb0e527ba6c1a8897
 tokenProxy:

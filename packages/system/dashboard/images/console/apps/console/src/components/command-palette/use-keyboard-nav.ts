@@ -8,6 +8,7 @@ export function useKeyboardNav(items: CommandItem[]) {
   const itemsKey = useMemo(() => items.map((i) => i.id).join(","), [items])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- moves the highlight back to the top when the item list changes
     setHighlightedIndex(0)
   }, [itemsKey])
 

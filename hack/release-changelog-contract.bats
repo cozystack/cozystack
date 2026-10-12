@@ -70,6 +70,11 @@
 #     needs a change in that repo first, and nothing here would catch its absence.
 #   * Whether the release body ACTUALLY lands. That is one API call at publish
 #     time, on a path no unit test reaches.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
@@ -237,11 +242,12 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
   return 0
 }
 
-# 6. When a promote PR targets release-X.Y (a patch release), the changelog never
-#    reaches main, so the backstop fires. It must PORT the reviewed file from the
-#    tag, not regenerate: a second AI pass would spend quota and then, once its PR
-#    merged, update-releasenotes.yaml would overwrite already-published release
-#    notes with text nobody approved.
+# 6. A promote PR targets release-X.Y for EVERY release since the rc freeze, so
+#    the changelog never reaches main on its own and the backstop fires as the
+#    normal path rather than the patch-release corner case it was written for. It
+#    must PORT the reviewed file from the tag, not regenerate: a second AI pass
+#    would spend quota and then, once its PR merged, update-releasenotes.yaml
+#    would overwrite already-published release notes with text nobody approved.
 @test "the tags.yaml backstop ports an existing changelog instead of regenerating" {
   block="$(job_block generate-changelog "$TAGS")"
   [ -n "$block" ] || { echo "Could not locate generate-changelog in $TAGS" >&2; exit 1; }
@@ -394,37 +400,36 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
 #     validator could degenerate to `exit 0` and tests 9 and 10 would still pass.
 @test "the changelog validator rejects unusable output" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   printf '   \n\n  \n' > "$tmp/whitespace.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted a whitespace-only file — it would publish as blank release notes." >&2
     exit 1
-  }
+  fi
 
   : > "$tmp/empty.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted an empty file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted an empty file." >&2; exit 1; fi
 
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted a nonexistent file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted a nonexistent file." >&2; exit 1; fi
 
   # Truncated mid-stream: head intact, tail (the compare link) lost. This is the
   # realistic AI failure — a timeout or quota cutoff partway through the write.
   head -8 "$REPO_ROOT/docs/changelogs/v1.5.1.md" > "$tmp/truncated.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1; then
     echo "Validator accepted a truncated changelog — a fragment would be published" >&2
     echo "verbatim as the release body." >&2
     exit 1
-  }
+  fi
 
   # Right shape, wrong version: a stale file left by a previous promotion, or a
   # changelog generated against the rc tag instead of the stable one.
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
     exit 1
-  }
+  fi
+  rm -rf "$tmp"
 }
 
 # 12. The workflow must actually call the script. Keeping the predicates in a

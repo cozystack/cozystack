@@ -28,8 +28,7 @@ spec:
         admin:
           - app
   users:
-    app:
-      password: REPLACE_WITH_PASSWORD
+    app: {}
   backup:
     enabled: true
     # schedule intentionally empty: we do NOT use the chart's legacy

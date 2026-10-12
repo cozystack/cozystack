@@ -18,7 +18,7 @@ CACHE_REGISTRY ?= $(REGISTRY)
 # that does not collide between concurrent builds:
 #   * pull-requests.yaml -> pr-<N>-<sha>
 #   * tags.yaml          -> <ref_name>           (e.g. v1.5.0)
-#   * local              -> dev                  (with PUSH=0 by default)
+#   * local              -> dev                  (pushes unless PUSH=0; LOAD=1 defaults PUSH to 0)
 IMAGE_TAG ?= dev
 
 # Opt-in extra tags. Workflows set these explicitly; defaults are off so a
@@ -34,19 +34,42 @@ PUBLISH_FLOATING  ?= 0
 # never race on the cache manifest (the 409 collisions PR #2711 fixed for tags).
 WRITE_CACHE ?= 0
 
-PUSH := 1
-LOAD := 0
+# Environment and command line both override these, and an empty value from the
+# environment counts as unset. LOAD=1 loads into the local docker store, so PUSH
+# follows it to 0 unless PUSH is set too.
+LOAD := $(or $(strip $(LOAD)),0)
+PUSH := $(or $(strip $(PUSH)),$(if $(filter 1,$(LOAD)),0,1))
+
+# OCI_EXPORT_DIR: when set, build every image to a per-image OCI archive
+# (<dir>/<name>.oci.tar) instead of pushing or loading it. Fork PRs use this:
+# the unprivileged `pull_request` build carries no registry credentials, so it
+# exports the images as workflow artifacts and a privileged `workflow_run` later
+# pushes them to the registry BY DIGEST (see .github/workflows/e2e-fork.yaml).
+# The image digest is content-addressed and captured via --metadata-file
+# regardless of output type, so the values.yaml/.tag refs baked during this
+# build match exactly what the privileged run pushes. Setting it forces
+# PUSH/LOAD off so buildx emits only the archive — a `--push` alongside the OCI
+# --output would attempt an anonymous push and die with `denied` (#3257).
+OCI_EXPORT_DIR ?=
+ifneq ($(strip $(OCI_EXPORT_DIR)),)
+    PUSH := 0
+    LOAD := 0
+endif
+
 BUILDER ?=
-PLATFORM ?=
+# Published images are amd64+arm64 by default, so a build on either
+# architecture cannot publish an image the other one cannot run. LOAD=1 builds
+# the host architecture only: the classic docker image store cannot load a
+# multi-platform index. Set PLATFORM explicitly to build anything else.
+DEFAULT_PLATFORMS := linux/amd64,linux/arm64
+PLATFORM ?= $(if $(filter 1,$(LOAD)),,$(DEFAULT_PLATFORMS))
 BUILDX_EXTRA_ARGS ?=
 COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 
 # SBOM=1 attaches a CycloneDX SBOM as a buildx build attestation (--sbom=true).
 # Requires the docker-container buildx driver and registry referrers/attestation
 # support. Kept OFF by default until an OCIR referrers/attestation probe confirms
-# support — otherwise the attestation push fails the build. (NB: the dashboard
-# package's bespoke buildx calls don't read BUILDX_ARGS, so they are not yet
-# SBOM-covered — follow-up.) See #2937.
+# support — otherwise the attestation push fails the build. See #2937.
 SBOM ?= 0
 
 BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
@@ -65,26 +88,73 @@ BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
 # Consumers reference images by digest, so the build-unique tag is enough
 # for cluster-side pulls; the versioned and floating tags exist for human
 # discoverability and downstream tooling on releases.
+# When OCI_EXPORT_DIR is set it also appends a per-image `--output type=oci`
+# (via the oci-output macro) so the build writes <dir>/<name>.oci.tar (the tag
+# becomes the archive's image name). Every package's buildx call routes its tags
+# through this macro, so this is the single point that turns the whole build into
+# an artifact-export build — except recipes that bypass image-tags, which must
+# call oci-output directly (see #3257).
+
+# comma emits a literal comma inside the lazily-expanded macros below
+# (oci-output, cache-args) without make mis-reading it as an $(if …)/$(call …)
+# argument separator. Defined here, above its first user, so it is unambiguously
+# in scope wherever those macros are $(call)ed from a recipe.
+comma := ,
+
+# oci-output <image-name> — when OCI_EXPORT_DIR is set, expands to a per-image
+# `--output type=oci,dest=<dir>/<name>.oci.tar`; empty otherwise. EVERY buildx
+# call reachable from a fork build must include this — via image-tags, or
+# directly for recipes that bypass image-tags (#3257). A missing archive is
+# caught loudly by the fork build's `if-no-files-found: error` upload.
+oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
+
+# image-tags <image-name> [<versioned-tag>] — the --tag/--output flags for one
+# image. Under OCI_EXPORT_DIR the versioned/floating tags are suppressed: a
+# multi-`--tag` `--output type=oci` build writes every ref into the archive's
+# index.json, and `skopeo copy oci-archive:<f>` then refuses it ("more than one
+# image in oci"). PUBLISH_* are 0 on fork PRs (the only export case today), so
+# this is belt-and-suspenders for that trap.
+#
+# PUSHED_TAGS_LOG=<file> appends every pushed <repo>:<tag> to <file>, one per
+# line. hack/stitch-multiarch.sh moves exactly those tags onto the multi-arch
+# index; no ref in the tree names a versioned tag, so this is how it learns
+# one was pushed. The append happens when the recipe is expanded, `make -n`
+# included, and is skipped when the build pushes nothing (PUSH other than 1, or
+# OCI_EXPORT_DIR).
+image-tag-refs = $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), $(REGISTRY)/$(1):latest))
+
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)
+$(foreach r,$(call image-tag-refs,$(1),$(2)),--tag $(r))$(call oci-output,$(1))$(if $(and $(strip $(PUSHED_TAGS_LOG)),$(filter 1,$(PUSH)),$(if $(strip $(OCI_EXPORT_DIR)),,1)),$(shell printf '%s\n' $(call image-tag-refs,$(1),$(2)) >>'$(PUSHED_TAGS_LOG)'))
 endef
 
-# cache-args <image-name> [<cache-tag>]
+# cache-args <image-name>
 # Expands to buildx cache flags for one image:
 #   --cache-from is always emitted (a missing cache 404s harmlessly -> cold build)
 #   --cache-to is emitted only when WRITE_CACHE=1 (main/release), writing mode=max
 #     so ALL stages are cached -- including the multistage `builder` layers that
 #     `--cache-to type=inline` could never export. oci-mediatypes + image-manifest
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
-# <cache-tag> defaults to `buildcache`; pass an explicit tag for images that build
-# a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
-# $(comma) escapes the literal commas in the --cache-to value so make does not
-# mis-parse them as $(if ...) argument separators.
-comma := ,
-cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
+# CACHE_TAG lets a build for another platform keep a cache of its own
+# (buildcache-arm64) instead of overwriting the amd64 one with every write.
+# $(comma) (defined above) escapes the literal commas in the --cache-to value so
+# make does not mis-parse them as $(if ...) argument separators.
+CACHE_TAG ?= buildcache
+cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(CACHE_TAG)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(CACHE_TAG)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
 
 ifeq ($(COZYSTACK_VERSION),)
     $(shell git remote add upstream https://github.com/cozystack/cozystack.git || true)
     $(shell git fetch upstream --tags)
     COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 endif
+
+# Go module fetches in image builds. IMAGE_GOPROXY reaches every Go builder
+# stage as the GOPROXY build arg, which a stage sees only once it declares
+# `ARG GOPROXY`. The pipe falls back to direct on any proxy error; Go's default
+# comma does so only on a 404 or 410, so an HTTP/2 stream reset from
+# proxy.golang.org fails the build. A module hosted in git can only be fetched
+# directly where the stage has git, which the alpine golang images lack; there
+# the retry around `go mod download` is the only cover. The value is not read
+# from the host's GOPROXY: a mirror on localhost or a file:// proxy is
+# unreachable from inside buildkit.
+IMAGE_GOPROXY ?= https://proxy.golang.org|direct
+BUILDX_ARGS += --build-arg 'GOPROXY=$(IMAGE_GOPROXY)'

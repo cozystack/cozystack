@@ -1,0 +1,43 @@
+suite: etcd defrag CronJob leaves compaction to etcd and knows the real quota
+
+release:
+  name: etcd
+  namespace: tenant-test
+
+templates:
+  - templates/etcd-defrag.yaml
+  - templates/etcd-cluster.yaml
+
+set:
+  _cluster: {}
+
+tests:
+  - it: does not compact before defragmenting
+    template: templates/etcd-defrag.yaml
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --compaction=false
+
+  - it: evaluates dbQuotaUsage against the default 4Gi cluster quota
+    template: templates/etcd-defrag.yaml
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --etcd-storage-quota-bytes=4080218931
+
+  - it: passes the defrag tool the same quota the EtcdCluster gets
+    set:
+      size: 10Gi
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --etcd-storage-quota-bytes=10200547328
+        template: templates/etcd-defrag.yaml
+      - equal:
+          path: spec.options.quotaBackendBytes
+          value: 10200547328
+        template: templates/etcd-cluster.yaml
+        documentSelector:
+          path: kind
+          value: EtcdCluster

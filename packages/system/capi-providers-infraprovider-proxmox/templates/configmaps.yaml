@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: v0.7.7-infraprovider-proxmox
+  {{- /*
+    NOT 'infraprovider-components: cozy'. That label already identifies the
+    KubeVirt provider's ConfigMap, and a shared label would put both in the
+    same match. The operator would still install the right one — it keys every
+    matched ConfigMap by its name as the version and takes the one equal to
+    spec.version — but it builds that repository in a single pass and returns
+    an error for the whole list as soon as one match is malformed: a name that
+    does not parse as semver, or missing metadata. Sharing the label would let
+    a broken ConfigMap of one provider stop the other from being installed.
+    The kubeadm/talos bootstrap packages separate on a 'bootstrap-provider'
+    key for the same reason; this mirrors that.
+  */}}
+  labels:
+    infraprovider-provider: proxmox
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+binaryData:
+  components: {{ .Files.Get "files/components.gz" | b64enc | quote }}
+data:
+  metadata: {{ .Files.Get "files/metadata.yaml" | quote }}

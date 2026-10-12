@@ -152,6 +152,9 @@ tests:
   # annotation is emitted. Pin the absence: re-enabling the knob would buy only
   # a redundant pod restart on every cert-manager renewal.
   - it: emits no Reloader annotation, the webhook reloads its own certificate
+    documentSelector:
+      path: kind
+      value: Deployment
     template: charts/linstor-scheduler/templates/admission-deployment.yaml
     asserts:
       - notExists:

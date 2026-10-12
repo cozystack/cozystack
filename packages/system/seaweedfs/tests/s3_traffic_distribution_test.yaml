@@ -35,6 +35,9 @@ tests:
           value: PreferSameZone
 
   - it: omits the field on Kubernetes 1.30 (below the 1.31 gate)
+    documentSelector:
+      path: kind
+      value: Service
     capabilities:
       majorVersion: 1
       minorVersion: 30

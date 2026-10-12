@@ -1,0 +1,146 @@
+suite: postgres pg_hba TLS enforcement
+
+# CNPG appends user pg_hba rules after its fixed rules and before its default
+# "host all all all" rule, and the first match wins. tls.required is a tri-state
+# that follows external when omitted.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+  _namespace:
+    host: example.cozy.local
+
+templates:
+  - templates/db.yaml
+
+tests:
+  - it: renders no pg_hba when the instance is not external
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.postgresql.pg_hba
+
+  - it: external instance accepts TLS sessions only
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.pg_hba
+          value:
+            - hostssl all all all scram-sha-256
+            - host all all all reject
+
+  - it: external instance still gets the TLS rules when tls.enabled is false
+    set:
+      external: true
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.pg_hba[0]
+          value: hostssl all all all scram-sha-256
+
+  - it: tls.required false opts an external instance out
+    set:
+      external: true
+      tls:
+        required: false
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.postgresql.pg_hba
+
+  - it: tls.required true applies to an in-cluster instance
+    set:
+      tls:
+        required: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.pg_hba
+          value:
+            - hostssl all all all scram-sha-256
+            - host all all all reject
+
+  - it: pg_hba does not disturb postgresql.parameters
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.max_connections
+          value: "100"
+
+  # CloudNativePG's own default rule uses md5 before PostgreSQL 14, where
+  # password_encryption defaults to md5; md5 also accepts SCRAM verifiers.
+  - it: uses md5 on PostgreSQL 13 like CloudNativePG's default rule
+    set:
+      external: true
+      version: v13
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.pg_hba
+          value:
+            - hostssl all all all md5
+            - host all all all reject
+
+  - it: uses scram-sha-256 from PostgreSQL 14
+    set:
+      external: true
+      version: v14
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.pg_hba
+          value:
+            - hostssl all all all scram-sha-256
+            - host all all all reject
+
+  - it: refuses ssl off while TLS is required
+    set:
+      external: true
+      postgresql:
+        parameters:
+          ssl: "off"
+    asserts:
+      - failedTemplate:
+          errorPattern: "postgresql.parameters.ssl is off while tls.required is in effect"
+
+  - it: allows ssl off when TLS is not required
+    set:
+      external: true
+      tls:
+        required: false
+      postgresql:
+        parameters:
+          ssl: "off"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.postgresql.pg_hba

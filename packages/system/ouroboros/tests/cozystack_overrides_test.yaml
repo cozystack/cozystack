@@ -27,9 +27,15 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --target-service-namespace=cozy-ingress-nginx
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --target-host=
+      # Match the flag name per element, not one whole element against one
+      # value: contains and notContains compare elements for equality, so
+      # `--target-host=` never equals a rendered `--target-host=<value>` and
+      # that negative could not fail. A length assertion would not do either,
+      # since an upstream bump that adds the flag while consolidating another
+      # argument keeps the count.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--target-host"
 
   - it: controller image is pinned to the digest the values.yaml ships
     template: charts/ouroboros/templates/controller-deployment.yaml

@@ -1,0 +1,1300 @@
+Serve HTTPS and TLS passthrough on a shared port from one Envoy listener in
+the per-port translation path, so a Gateway with passthrough on two ports no
+longer emits two listeners named listener-<port> (cilium/cilium#48269).
+
+Upstream: cilium/cilium#49248. Drop it once a shipped Cilium release
+carries the fix.
+
+diff --git a/operator/pkg/gateway-api/gateway_reconcile_test.go b/operator/pkg/gateway-api/gateway_reconcile_test.go
+index 312439798f..440e54033e 100644
+--- a/operator/pkg/gateway-api/gateway_reconcile_test.go
++++ b/operator/pkg/gateway-api/gateway_reconcile_test.go
+@@ -331,6 +331,8 @@ func Test_Conformance(t *testing.T) {
+ 			{FullName: types.NamespacedName{Name: "gateway-tlsroute-mixed", Namespace: "gateway-conformance-infra"}},
+ 		}},
+ 		{name: "gateway-multi-port-tls-passthrough", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "multi-port-tls-passthrough", Namespace: "gateway-conformance-infra"}}}},
++		{name: "gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "same-port-https-and-tls-passthrough-with-second-passthrough-port", Namespace: "gateway-conformance-infra"}}}},
++		{name: "gateway-same-port-https-and-tls-passthrough-with-second-https-port", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "same-port-https-and-tls-passthrough-with-second-https-port", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gateway-multi-port-https-with-multi-port-tls-passthrough", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "multi-port-https-with-multi-port-tls-passthrough", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gateway-cross-protocol-same-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-hostname", Namespace: "gateway-conformance-infra"}}}},
+ 		{name: "gateway-cross-protocol-same-port-same-hostname", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "cross-protocol-same-port-same-hostname", Namespace: "gateway-conformance-infra"}, wantErr: true}}},
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/input/same-port-https-and-tls-passthrough-with-second-https-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/input/same-port-https-and-tls-passthrough-with-second-https-port.yaml
+new file mode 100644
+index 0000000000..7e1a231f36
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/input/same-port-https-and-tls-passthrough-with-second-https-port.yaml
+@@ -0,0 +1,117 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: same-port-https-and-tls-passthrough-with-second-https-port
++  namespace: gateway-conformance-infra
++spec:
++  gatewayClassName: cilium
++  listeners:
++    - name: https-443
++      protocol: HTTPS
++      port: 443
++      hostname: "web.example.test"
++      tls:
++        certificateRefs:
++          - group: ""
++            kind: Secret
++            name: multi-port-https-tls
++            namespace: gateway-conformance-infra
++      allowedRoutes:
++        namespaces:
++          from: Same
++    - name: https-8443
++      protocol: HTTPS
++      port: 8443
++      hostname: "api.example.test"
++      tls:
++        certificateRefs:
++          - group: ""
++            kind: Secret
++            name: multi-port-https-tls
++            namespace: gateway-conformance-infra
++      allowedRoutes:
++        namespaces:
++          from: Same
++    - name: tls-443
++      protocol: TLS
++      port: 443
++      hostname: "a.example.test"
++      tls:
++        mode: Passthrough
++      allowedRoutes:
++        namespaces:
++          from: Same
++        kinds:
++          - kind: TLSRoute
++---
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: web-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-https-port
++      sectionName: https-443
++  hostnames:
++    - web.example.test
++  rules:
++    - backendRefs:
++        - name: infra-backend-v1
++          port: 8080
++---
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: api-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-https-port
++      sectionName: https-8443
++  hostnames:
++    - api.example.test
++  rules:
++    - backendRefs:
++        - name: infra-backend-v1
++          port: 8080
++---
++apiVersion: gateway.networking.k8s.io/v1alpha2
++kind: TLSRoute
++metadata:
++  name: tls-route-a
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-https-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-443
++  hostnames:
++    - a.example.test
++  rules:
++    - backendRefs:
++        - name: tls-backend
++          port: 443
++---
++apiVersion: v1
++kind: Secret
++metadata:
++  name: multi-port-https-tls
++  namespace: gateway-conformance-infra
++type: kubernetes.io/tls
++data:
++  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVORENDQXB5Z0F3SUJBZ0lSQUtEL0JMRkJmd0tJWjBXR3JIdFRINmd3RFFZSktvWklodmNOQVFFTEJRQXcKZHpFZU1Cd0dBMVVFQ2hNVmJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElFTkJNU1l3SkFZRFZRUUxEQjEwWVcxdApZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tURXRNQ3NHQTFVRUF3d2tiV3RqWlhKMElIUmhiVzFoClkyaEFabVZrYjNKaExteGhiaUFvVkdGdElFMWhZMmdwTUI0WERUSXpNREl5TVRFeE1EZzBNMW9YRFRJMU1EVXkKTVRFeU1EZzBNMW93VVRFbk1DVUdBMVVFQ2hNZWJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElHTmxjblJwWm1sagpZWFJsTVNZd0pBWURWUVFMREIxMFlXMXRZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tUQ0NBU0l3CkRRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFNSVp5KzBKUlZqcXBXZ2VxMmRQKzFvbGlPNEEKQ2Zabk1nNHRTcVBhbGhEUUw2TWY2OEhZTGZpenlKSXBSek1KOTA1cllkMEFjbVhtdS9nMEVvOHlrSHhGRHo1VApzZVBzMlhRbmc4TU40YXpzUm1tMWw0Zjc0b3Zhd1F6UWNiODIyUVAxQ1M2SUxaM1Z0d05qUmgybkF3dGhZQk1vCkNrbmdER2VROEdsMHRqSExGbkJkVGRTd1FSbUUyanREQmNBZ3lFR3BxKzZSZVl0Ky80N25ObjdkQ2Z0c1ZxaEUKQllyOVhIM2l0ZWZIbXNiZmo3eldGYnB0ZGtvN3E5bE1Id25CZCswaGQ0ME1tSklYTVpyT0dHRlpqYXdKREJxUwpzQnEyUTNsNlhRejhYN1AvR0E0RG44aDR3M3JwcG1pYU43TE9tR1hla2kzeFgyd3FuTSswczZhWlpac0NBd0VBCkFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnV2dNQk1HQTFVZEpRUU1NQW9HQ0NzR0FRVUZCd01CTUI0R0ExVWQKSXdRWU1CYUFGR1EyREIwNkNkUUZRQnNZUHllME5Cd0VyVU5FTUJjR0ExVWRFUVFRTUE2Q0RIVnVhWFIwWlhOMApMbU52YlRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVlFQXJ0SGRLV1hSNmFFTHBmYWwxN2JpYWJDUHZJRjlqNm53CnVEemNkTVlRTHJYbThNK05IZTh4M2RwSTd1M2xsdE8rZHpMbmcrblZLUU9SM2FsUUFDU21SRDljN2llOGVUNWQKN3pLT1RrNmtlWTE5NUkxd1ZWNGpiTkxiTldhOXk0UkpRUlR2QkxBdkFQOU5WdFV3MlEvdy9FclVUcVN5eitvYgpkd250NGdZQ3c2ZEdubHVMeGxmRjM0REI5S2ZsdlZOU25reU1CL2dzQjRBM3IxR1BPSW8wR3lmNzRpZzNGV3JTCndIWUtuQmJ0WmZZTzBKVjBMQ29QeUhlOGcwWGFqWmU4RENiUC9FNlNtbFROQW1KRVNWamlnVFRjSUJBa0ZJK24KdG9CQWR4ZmhqS1VHYUNsT0hTMjljcGFpeW5qU2F5R200UmtIa3g3bWNBdWE5bFdQZjdwU2EzbUNjRmIrd0ZyMwpBQmtIRFBKSDJhY2ZhVUsxdmdLVGdPd2NHLzZLQTgyMC9QcmFvU2loTGFQSy9BN2VnNzdyMUVlWXB0ME5lcHBiClhqdlVwM1ltVmxJTVpYUHpyak9zYXN0b0RTcnN5Z2o1amRWdG00UHNsdjluUGh6RHJCamxacEVKU2NXNEpsYisKNnd0ZDdwMDNVREJTS2ZUYlZST1ZBZTVtdkp2QTBob1MKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
++  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRRENHY3Z0Q1VWWTZxVm8KSHF0blQvdGFKWWp1QUFuR1p6SU9MVXFqMnBZUTBDK2pIK3ZCMkMzNHM4aVNLVWN6Q2ZkT2EySGRBSEpsNXJ2NApOQktQTXBCOFJROCtVN0hqN05sMEo0UEREZUdzN0VacHRaZUgrK0tMMnNFTTBIRy9OdGtEOVFrdWlDMmQxYmNEClkwWWRwd01MWVdBVEtBcEo0QXhua1BCcGRMWXh5eFp3WFUzVXNFRVpoTm83UXdYQUlNaEJxYXZ1a1htTGZ2K08KNXpaKzNRbjdiRmFvUkFXSy9WeDk0clhueDVyRzM0KzgxaFc2YlhaS082dlpUQjhKd1hmdElYZU5ESmlTRnpHYQp6aGhoV1kyc0NRd2FrckFhdGtONWVsME0vRit6L3hnUEE1L0llTU42NmFab21qZXl6cGhsM3BJdDhWOXNLcHpQCnRMT21tV0diQWdNQkFBRUNnZ0VBRWpBU29NSjJvZzlTc24vMU5iZ1Q2RzJOK0NjK3d6MldQaWZXVDZaQzI0NTIKZUVXY2RNeUoranoyZFdPeXpVQ0kwT3RVL3oxMGVzSDFLUnZRQldVS2p1cDF0RFJwZmQ4S3ZVeWFseU5zMnlSRQpzTkVZUXVEQ2FMSjExbnFOdmdvb3FhdERVZjNtc0Z4L1NxejV1L3VUV0hTbWFRVWVlYStwMmVhRjhJdkVLc1FmCjZRTmtsa2VIc3YrR1ZQditpaWJmYlhYbmU2STVhVjM1UmM0UTA4elJDZ1lYL0JOMUFZWFY2aG80UkM5ZFpWR1AKSlVrU0x6UmFkZWdvay9FT05La3JxTFpPRkpWYjJ3dEZxODVnSjAxbE9ETS9najdHcU01OU0vd2s1NUNhUUlSRAo5eDVINFg0cnBNMnJobWlOTGtJTjB0R0xLTzhYMzF1cDdoVHg5YnZKY1FLQmdRRDUxTUxXWVlVUHovdW12U3JOClFPVDlVaEVISS9ieHRDYldRdGhXM0wxcXJWVDdEQjhKa28vNi94WWxYaGw3bndWd0p6MjRqSmY5dnV4V2JCcEwKSFpSZjBRc0RPMi9PNHJxaEtEb3YvR01VQ3gyc2h6YytKN2srVDkzS05WQU5ZYTA1Z3VxTWVCOG4zMEhQcm9rRgpMZ2loVkZGMjBrOVo2U2liVXZnVE1wRjFFd0tCZ1FERzVNQmdjOG9GWG1sci83cEhLaXpDNEYzZURBWFV4VkhNCldDSWJTd015ek9YS3FEY2RYTkR6OGNRcmpoS2EyckQxZktoRTBvUlIrUXZIejhJUEMrME1zVDdRNlFzSUhZajUKQ1h1YkhyMHM1azhQSkFwK0xrMkVkSGVQWlFNL0kvdmovZ1N3eG5KOVFzNjRGV1oyNUs5elluTk5zaW9qUWVsNwpXVm1JOUlWYVdRS0JnRDNCWWdnc1F3QU5vVjh1RTQ1NUpDR2FUNnM4TUthK3FYcjlPd3o5czdUUzg5YTZ3RkZWCmNWSFNERjlnUzF4TGlzU1dicU5YM1pwVHY0ZjlZT0tBaFZUS0Q3YlUwbWFKbFNpUkVSRWJpa0pDSFN1d29PODAKVW80Y24rNkVEeTIvbjFwQUNrcCt4dlRNTXpCckxHT2paVzY3c1FkMkpUZE1jMFV4MVRDcHAxc1JBb0dBYUVWSQpyY2hHWXlZcDhwcXcxOW8rZVRRVFFmUGZvcnFIdGErR3dmUkRpd0JzZ0NCTU5MS1NRVUhBZkcwUlIrbmExL2d3CloxUk9Wb05RTDhLMXBCbkdmdDcxWmFTblNldmlBVjE5VmNkNXVlNU1DRTRHeWp3UUc1N0xoM3VYaGlTaFM5ZkMKTWNMNEJyOWRqSmg3alYwNnRpMG84ZFN6enFRaGVhOVFCMExhSHBFQ2dZQXBjOG9Cb2lLNjlzMHdYeUk0K1BoeApTY0JKMFhxREJZRmt4eVhyOFk1cEVhckVhcUN0bDFPUFBNT2lRUkRXb3hSUitGd0EvMGxhU2ZoNXh3MFUzYitxCmlaMlhwa3JiUXAwMzRyQzBVUjZwK0ttMVN2OUFWQ0FDQWpyY1EzTlphZjhiRE9XcXZwbGE3QXVxMG9HOGk2VVgKaEVLQ0tmL04zZ0Uxb01yVHhWelVEUT09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
++---
++apiVersion: v1
++kind: Service
++metadata:
++  name: cilium-gateway-same-port-https-and-tls-passthrough-w-bc7tk66g54
++  namespace: gateway-conformance-infra
++spec:
++  type: LoadBalancer
++status:
++  loadBalancer:
++    ingress:
++      - ip: 172.18.255.200
++        ipMode: VIP
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/cec-same-port-https-and-tls-passthrough-with-second-https-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/cec-same-port-https-and-tls-passthrough-with-second-https-port.yaml
+new file mode 100644
+index 0000000000..a95db00c68
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/cec-same-port-https-and-tls-passthrough-with-second-https-port.yaml
+@@ -0,0 +1,219 @@
++metadata:
++  annotations:
++    cec.cilium.io/use-original-source-address: "false"
++  labels:
++    gateway.networking.k8s.io/gateway-name: same-port-https-and-tls-passthrough-with-second-https-port
++  name: cilium-gateway-same-port-https-and-tls-passthrough-w-bc7tk66g54
++  namespace: gateway-conformance-infra
++  ownerReferences:
++  - apiVersion: gateway.networking.k8s.io/v1
++    controller: true
++    kind: Gateway
++    name: same-port-https-and-tls-passthrough-with-second-https-port
++    uid: ""
++  resourceVersion: "1"
++spec:
++  backendServices:
++  - name: infra-backend-v1
++    namespace: gateway-conformance-infra
++    number:
++    - "8080"
++  - name: tls-backend
++    namespace: gateway-conformance-infra
++    number:
++    - "443"
++  resources:
++  - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
++    filterChains:
++    - filterChainMatch:
++        serverNames:
++        - web.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.http_connection_manager
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
++          commonHttpProtocolOptions:
++            maxStreamDuration: 0s
++          httpFilters:
++          - name: envoy.filters.http.grpc_web
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
++          - name: envoy.filters.http.grpc_stats
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_stats.v3.FilterConfig
++              emitFilterState: true
++              enableUpstreamStats: true
++          - name: envoy.filters.http.router
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
++          internalAddressConfig: {}
++          rds:
++            routeConfigName: listener-443
++          statPrefix: listener-443
++          streamIdleTimeout: 300s
++          upgradeConfigs:
++          - upgradeType: websocket
++          useRemoteAddress: true
++      transportSocket:
++        name: envoy.transport_sockets.tls
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
++          commonTlsContext:
++            tlsCertificateSdsSecretConfigs:
++            - name: cilium-secrets/cilium-sync-secret-62f4462c70564aa40ef22396762652f4b3bd572448747e332d134b0c028c0cfb
++    - filterChainMatch:
++        serverNames:
++        - a.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.tcp_proxy
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
++          cluster: gateway-conformance-infra:tls-backend:443
++          statPrefix: tls-passthrough:a.example.test
++    listenerFilters:
++    - name: envoy.filters.listener.tls_inspector
++      typedConfig:
++        '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
++    name: listener-443
++    socketOptions:
++    - description: Enable TCP keep-alive (default to enabled)
++      intValue: "1"
++      level: "1"
++      name: "9"
++    - description: TCP keep-alive idle time (in seconds) (defaults to 10s)
++      intValue: "10"
++      level: "6"
++      name: "4"
++    - description: TCP keep-alive probe intervals (in seconds) (defaults to 5s)
++      intValue: "5"
++      level: "6"
++      name: "5"
++    - description: TCP keep-alive probe max failures.
++      intValue: "10"
++      level: "6"
++      name: "6"
++  - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
++    filterChains:
++    - filterChainMatch:
++        serverNames:
++        - api.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.http_connection_manager
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
++          commonHttpProtocolOptions:
++            maxStreamDuration: 0s
++          httpFilters:
++          - name: envoy.filters.http.grpc_web
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
++          - name: envoy.filters.http.grpc_stats
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_stats.v3.FilterConfig
++              emitFilterState: true
++              enableUpstreamStats: true
++          - name: envoy.filters.http.router
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
++          internalAddressConfig: {}
++          rds:
++            routeConfigName: listener-8443
++          statPrefix: listener-8443
++          streamIdleTimeout: 300s
++          upgradeConfigs:
++          - upgradeType: websocket
++          useRemoteAddress: true
++      transportSocket:
++        name: envoy.transport_sockets.tls
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
++          commonTlsContext:
++            tlsCertificateSdsSecretConfigs:
++            - name: cilium-secrets/cilium-sync-secret-62f4462c70564aa40ef22396762652f4b3bd572448747e332d134b0c028c0cfb
++    listenerFilters:
++    - name: envoy.filters.listener.tls_inspector
++      typedConfig:
++        '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
++    name: listener-8443
++    socketOptions:
++    - description: Enable TCP keep-alive (default to enabled)
++      intValue: "1"
++      level: "1"
++      name: "9"
++    - description: TCP keep-alive idle time (in seconds) (defaults to 10s)
++      intValue: "10"
++      level: "6"
++      name: "4"
++    - description: TCP keep-alive probe intervals (in seconds) (defaults to 5s)
++      intValue: "5"
++      level: "6"
++      name: "5"
++    - description: TCP keep-alive probe max failures.
++      intValue: "10"
++      level: "6"
++      name: "6"
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-insecure
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-443
++    virtualHosts:
++    - domains:
++      - web.example.test
++      - web.example.test:*
++      name: web.example.test
++      routes:
++      - match:
++          prefix: /
++        route:
++          cluster: gateway-conformance-infra:infra-backend-v1:8080
++          maxStreamDuration:
++            maxStreamDuration: 0s
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-8443
++    virtualHosts:
++    - domains:
++      - api.example.test
++      - api.example.test:*
++      name: api.example.test
++      routes:
++      - match:
++          prefix: /
++        route:
++          cluster: gateway-conformance-infra:infra-backend-v1:8080
++          maxStreamDuration:
++            maxStreamDuration: 0s
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/infra-backend-v1:8080
++    name: gateway-conformance-infra:infra-backend-v1:8080
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++    typedExtensionProtocolOptions:
++      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
++        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
++        commonHttpProtocolOptions:
++          idleTimeout: 60s
++        useDownstreamProtocolConfig:
++          http2ProtocolOptions: {}
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/tls-backend:443
++    name: gateway-conformance-infra:tls-backend:443
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++  services:
++  - listener: listener-443
++    name: cilium-gateway-same-port-https-and-tls-passthrough-w-bc7tk66g54
++    namespace: gateway-conformance-infra
++    ports:
++    - 443
++  - listener: listener-8443
++    name: cilium-gateway-same-port-https-and-tls-passthrough-w-bc7tk66g54
++    namespace: gateway-conformance-infra
++    ports:
++    - 8443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-api-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-api-route.yaml
+new file mode 100644
+index 0000000000..840d18527b
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-api-route.yaml
+@@ -0,0 +1,33 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: api-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - api.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-https-port
++    sectionName: https-8443
++  rules:
++  - backendRefs:
++    - name: infra-backend-v1
++      port: 8080
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted HTTPRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-https-port
++      sectionName: https-8443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-web-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-web-route.yaml
+new file mode 100644
+index 0000000000..15324fecd6
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/httproute-web-route.yaml
+@@ -0,0 +1,33 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: web-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - web.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-https-port
++    sectionName: https-443
++  rules:
++  - backendRefs:
++    - name: infra-backend-v1
++      port: 8080
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted HTTPRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-https-port
++      sectionName: https-443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/same-port-https-and-tls-passthrough-with-second-https-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/same-port-https-and-tls-passthrough-with-second-https-port.yaml
+new file mode 100644
+index 0000000000..960bb02ce0
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/same-port-https-and-tls-passthrough-with-second-https-port.yaml
+@@ -0,0 +1,129 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: same-port-https-and-tls-passthrough-with-second-https-port
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  gatewayClassName: cilium
++  listeners:
++  - allowedRoutes:
++      namespaces:
++        from: Same
++    hostname: web.example.test
++    name: https-443
++    port: 443
++    protocol: HTTPS
++    tls:
++      certificateRefs:
++      - group: ""
++        kind: Secret
++        name: multi-port-https-tls
++        namespace: gateway-conformance-infra
++  - allowedRoutes:
++      namespaces:
++        from: Same
++    hostname: api.example.test
++    name: https-8443
++    port: 8443
++    protocol: HTTPS
++    tls:
++      certificateRefs:
++      - group: ""
++        kind: Secret
++        name: multi-port-https-tls
++        namespace: gateway-conformance-infra
++  - allowedRoutes:
++      kinds:
++      - kind: TLSRoute
++      namespaces:
++        from: Same
++    hostname: a.example.test
++    name: tls-443
++    port: 443
++    protocol: TLS
++    tls:
++      mode: Passthrough
++status:
++  addresses:
++  - type: IPAddress
++    value: 172.18.255.200
++  conditions:
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway successfully scheduled
++    reason: Accepted
++    status: "True"
++    type: Accepted
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway Programmed
++    reason: Programmed
++    status: "True"
++    type: Programmed
++  listeners:
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: https-443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: HTTPRoute
++    - group: gateway.networking.k8s.io
++      kind: GRPCRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: https-8443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: HTTPRoute
++    - group: gateway.networking.k8s.io
++      kind: GRPCRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: tls-443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: TLSRoute
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/tlsroute-tls-route-a.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/tlsroute-tls-route-a.yaml
+new file mode 100644
+index 0000000000..7d0675488c
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-https-port/output/tlsroute-tls-route-a.yaml
+@@ -0,0 +1,35 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: TLSRoute
++metadata:
++  name: tls-route-a
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - a.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-https-port
++    namespace: gateway-conformance-infra
++    sectionName: tls-443
++  rules:
++  - backendRefs:
++    - name: tls-backend
++      port: 443
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted TLSRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-https-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/input/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/input/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+new file mode 100644
+index 0000000000..eacf269cd5
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/input/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+@@ -0,0 +1,116 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++  namespace: gateway-conformance-infra
++spec:
++  gatewayClassName: cilium
++  listeners:
++    - name: https-443
++      protocol: HTTPS
++      port: 443
++      hostname: "web.example.test"
++      tls:
++        certificateRefs:
++          - group: ""
++            kind: Secret
++            name: multi-port-https-tls
++            namespace: gateway-conformance-infra
++      allowedRoutes:
++        namespaces:
++          from: Same
++    - name: tls-443
++      protocol: TLS
++      port: 443
++      hostname: "a.example.test"
++      tls:
++        mode: Passthrough
++      allowedRoutes:
++        namespaces:
++          from: Same
++        kinds:
++          - kind: TLSRoute
++    - name: tls-8443
++      protocol: TLS
++      port: 8443
++      hostname: "b.example.test"
++      tls:
++        mode: Passthrough
++      allowedRoutes:
++        namespaces:
++          from: Same
++        kinds:
++          - kind: TLSRoute
++---
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: web-route
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      sectionName: https-443
++  hostnames:
++    - web.example.test
++  rules:
++    - backendRefs:
++        - name: infra-backend-v1
++          port: 8080
++---
++apiVersion: gateway.networking.k8s.io/v1alpha2
++kind: TLSRoute
++metadata:
++  name: tls-route-a
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-443
++  hostnames:
++    - a.example.test
++  rules:
++    - backendRefs:
++        - name: tls-backend
++          port: 443
++---
++apiVersion: gateway.networking.k8s.io/v1alpha2
++kind: TLSRoute
++metadata:
++  name: tls-route-b
++  namespace: gateway-conformance-infra
++spec:
++  parentRefs:
++    - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-8443
++  hostnames:
++    - b.example.test
++  rules:
++    - backendRefs:
++        - name: tls-backend-2
++          port: 443
++---
++apiVersion: v1
++kind: Secret
++metadata:
++  name: multi-port-https-tls
++  namespace: gateway-conformance-infra
++type: kubernetes.io/tls
++data:
++  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVORENDQXB5Z0F3SUJBZ0lSQUtEL0JMRkJmd0tJWjBXR3JIdFRINmd3RFFZSktvWklodmNOQVFFTEJRQXcKZHpFZU1Cd0dBMVVFQ2hNVmJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElFTkJNU1l3SkFZRFZRUUxEQjEwWVcxdApZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tURXRNQ3NHQTFVRUF3d2tiV3RqWlhKMElIUmhiVzFoClkyaEFabVZrYjNKaExteGhiaUFvVkdGdElFMWhZMmdwTUI0WERUSXpNREl5TVRFeE1EZzBNMW9YRFRJMU1EVXkKTVRFeU1EZzBNMW93VVRFbk1DVUdBMVVFQ2hNZWJXdGpaWEowSUdSbGRtVnNiM0J0Wlc1MElHTmxjblJwWm1sagpZWFJsTVNZd0pBWURWUVFMREIxMFlXMXRZV05vUUdabFpHOXlZUzVzWVc0Z0tGUmhiU0JOWVdOb0tUQ0NBU0l3CkRRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFNSVp5KzBKUlZqcXBXZ2VxMmRQKzFvbGlPNEEKQ2Zabk1nNHRTcVBhbGhEUUw2TWY2OEhZTGZpenlKSXBSek1KOTA1cllkMEFjbVhtdS9nMEVvOHlrSHhGRHo1VApzZVBzMlhRbmc4TU40YXpzUm1tMWw0Zjc0b3Zhd1F6UWNiODIyUVAxQ1M2SUxaM1Z0d05qUmgybkF3dGhZQk1vCkNrbmdER2VROEdsMHRqSExGbkJkVGRTd1FSbUUyanREQmNBZ3lFR3BxKzZSZVl0Ky80N25ObjdkQ2Z0c1ZxaEUKQllyOVhIM2l0ZWZIbXNiZmo3eldGYnB0ZGtvN3E5bE1Id25CZCswaGQ0ME1tSklYTVpyT0dHRlpqYXdKREJxUwpzQnEyUTNsNlhRejhYN1AvR0E0RG44aDR3M3JwcG1pYU43TE9tR1hla2kzeFgyd3FuTSswczZhWlpac0NBd0VBCkFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnV2dNQk1HQTFVZEpRUU1NQW9HQ0NzR0FRVUZCd01CTUI0R0ExVWQKSXdRWU1CYUFGR1EyREIwNkNkUUZRQnNZUHllME5Cd0VyVU5FTUJjR0ExVWRFUVFRTUE2Q0RIVnVhWFIwWlhOMApMbU52YlRBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVlFQXJ0SGRLV1hSNmFFTHBmYWwxN2JpYWJDUHZJRjlqNm53CnVEemNkTVlRTHJYbThNK05IZTh4M2RwSTd1M2xsdE8rZHpMbmcrblZLUU9SM2FsUUFDU21SRDljN2llOGVUNWQKN3pLT1RrNmtlWTE5NUkxd1ZWNGpiTkxiTldhOXk0UkpRUlR2QkxBdkFQOU5WdFV3MlEvdy9FclVUcVN5eitvYgpkd250NGdZQ3c2ZEdubHVMeGxmRjM0REI5S2ZsdlZOU25reU1CL2dzQjRBM3IxR1BPSW8wR3lmNzRpZzNGV3JTCndIWUtuQmJ0WmZZTzBKVjBMQ29QeUhlOGcwWGFqWmU4RENiUC9FNlNtbFROQW1KRVNWamlnVFRjSUJBa0ZJK24KdG9CQWR4ZmhqS1VHYUNsT0hTMjljcGFpeW5qU2F5R200UmtIa3g3bWNBdWE5bFdQZjdwU2EzbUNjRmIrd0ZyMwpBQmtIRFBKSDJhY2ZhVUsxdmdLVGdPd2NHLzZLQTgyMC9QcmFvU2loTGFQSy9BN2VnNzdyMUVlWXB0ME5lcHBiClhqdlVwM1ltVmxJTVpYUHpyak9zYXN0b0RTcnN5Z2o1amRWdG00UHNsdjluUGh6RHJCamxacEVKU2NXNEpsYisKNnd0ZDdwMDNVREJTS2ZUYlZST1ZBZTVtdkp2QTBob1MKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
++  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2QUlCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktZd2dnU2lBZ0VBQW9JQkFRRENHY3Z0Q1VWWTZxVm8KSHF0blQvdGFKWWp1QUFuR1p6SU9MVXFqMnBZUTBDK2pIK3ZCMkMzNHM4aVNLVWN6Q2ZkT2EySGRBSEpsNXJ2NApOQktQTXBCOFJROCtVN0hqN05sMEo0UEREZUdzN0VacHRaZUgrK0tMMnNFTTBIRy9OdGtEOVFrdWlDMmQxYmNEClkwWWRwd01MWVdBVEtBcEo0QXhua1BCcGRMWXh5eFp3WFUzVXNFRVpoTm83UXdYQUlNaEJxYXZ1a1htTGZ2K08KNXpaKzNRbjdiRmFvUkFXSy9WeDk0clhueDVyRzM0KzgxaFc2YlhaS082dlpUQjhKd1hmdElYZU5ESmlTRnpHYQp6aGhoV1kyc0NRd2FrckFhdGtONWVsME0vRit6L3hnUEE1L0llTU42NmFab21qZXl6cGhsM3BJdDhWOXNLcHpQCnRMT21tV0diQWdNQkFBRUNnZ0VBRWpBU29NSjJvZzlTc24vMU5iZ1Q2RzJOK0NjK3d6MldQaWZXVDZaQzI0NTIKZUVXY2RNeUoranoyZFdPeXpVQ0kwT3RVL3oxMGVzSDFLUnZRQldVS2p1cDF0RFJwZmQ4S3ZVeWFseU5zMnlSRQpzTkVZUXVEQ2FMSjExbnFOdmdvb3FhdERVZjNtc0Z4L1NxejV1L3VUV0hTbWFRVWVlYStwMmVhRjhJdkVLc1FmCjZRTmtsa2VIc3YrR1ZQditpaWJmYlhYbmU2STVhVjM1UmM0UTA4elJDZ1lYL0JOMUFZWFY2aG80UkM5ZFpWR1AKSlVrU0x6UmFkZWdvay9FT05La3JxTFpPRkpWYjJ3dEZxODVnSjAxbE9ETS9najdHcU01OU0vd2s1NUNhUUlSRAo5eDVINFg0cnBNMnJobWlOTGtJTjB0R0xLTzhYMzF1cDdoVHg5YnZKY1FLQmdRRDUxTUxXWVlVUHovdW12U3JOClFPVDlVaEVISS9ieHRDYldRdGhXM0wxcXJWVDdEQjhKa28vNi94WWxYaGw3bndWd0p6MjRqSmY5dnV4V2JCcEwKSFpSZjBRc0RPMi9PNHJxaEtEb3YvR01VQ3gyc2h6YytKN2srVDkzS05WQU5ZYTA1Z3VxTWVCOG4zMEhQcm9rRgpMZ2loVkZGMjBrOVo2U2liVXZnVE1wRjFFd0tCZ1FERzVNQmdjOG9GWG1sci83cEhLaXpDNEYzZURBWFV4VkhNCldDSWJTd015ek9YS3FEY2RYTkR6OGNRcmpoS2EyckQxZktoRTBvUlIrUXZIejhJUEMrME1zVDdRNlFzSUhZajUKQ1h1YkhyMHM1azhQSkFwK0xrMkVkSGVQWlFNL0kvdmovZ1N3eG5KOVFzNjRGV1oyNUs5elluTk5zaW9qUWVsNwpXVm1JOUlWYVdRS0JnRDNCWWdnc1F3QU5vVjh1RTQ1NUpDR2FUNnM4TUthK3FYcjlPd3o5czdUUzg5YTZ3RkZWCmNWSFNERjlnUzF4TGlzU1dicU5YM1pwVHY0ZjlZT0tBaFZUS0Q3YlUwbWFKbFNpUkVSRWJpa0pDSFN1d29PODAKVW80Y24rNkVEeTIvbjFwQUNrcCt4dlRNTXpCckxHT2paVzY3c1FkMkpUZE1jMFV4MVRDcHAxc1JBb0dBYUVWSQpyY2hHWXlZcDhwcXcxOW8rZVRRVFFmUGZvcnFIdGErR3dmUkRpd0JzZ0NCTU5MS1NRVUhBZkcwUlIrbmExL2d3CloxUk9Wb05RTDhLMXBCbkdmdDcxWmFTblNldmlBVjE5VmNkNXVlNU1DRTRHeWp3UUc1N0xoM3VYaGlTaFM5ZkMKTWNMNEJyOWRqSmg3alYwNnRpMG84ZFN6enFRaGVhOVFCMExhSHBFQ2dZQXBjOG9Cb2lLNjlzMHdYeUk0K1BoeApTY0JKMFhxREJZRmt4eVhyOFk1cEVhckVhcUN0bDFPUFBNT2lRUkRXb3hSUitGd0EvMGxhU2ZoNXh3MFUzYitxCmlaMlhwa3JiUXAwMzRyQzBVUjZwK0ttMVN2OUFWQ0FDQWpyY1EzTlphZjhiRE9XcXZwbGE3QXVxMG9HOGk2VVgKaEVLQ0tmL04zZ0Uxb01yVHhWelVEUT09Ci0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
++---
++apiVersion: v1
++kind: Service
++metadata:
++  name: cilium-gateway-same-port-https-and-tls-passthrough-w-kdh28ck9f2
++  namespace: gateway-conformance-infra
++spec:
++  type: LoadBalancer
++status:
++  loadBalancer:
++    ingress:
++      - ip: 172.18.255.200
++        ipMode: VIP
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/cec-same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/cec-same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+new file mode 100644
+index 0000000000..0afca9b32d
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/cec-same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+@@ -0,0 +1,189 @@
++metadata:
++  annotations:
++    cec.cilium.io/use-original-source-address: "false"
++  labels:
++    gateway.networking.k8s.io/gateway-name: same-port-https-and-tls-passthrough-with-second-pass-2d4m8htd97
++  name: cilium-gateway-same-port-https-and-tls-passthrough-w-kdh28ck9f2
++  namespace: gateway-conformance-infra
++  ownerReferences:
++  - apiVersion: gateway.networking.k8s.io/v1
++    controller: true
++    kind: Gateway
++    name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++    uid: ""
++  resourceVersion: "1"
++spec:
++  backendServices:
++  - name: infra-backend-v1
++    namespace: gateway-conformance-infra
++    number:
++    - "8080"
++  - name: tls-backend
++    namespace: gateway-conformance-infra
++    number:
++    - "443"
++  - name: tls-backend-2
++    namespace: gateway-conformance-infra
++    number:
++    - "443"
++  resources:
++  - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
++    filterChains:
++    - filterChainMatch:
++        serverNames:
++        - web.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.http_connection_manager
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
++          commonHttpProtocolOptions:
++            maxStreamDuration: 0s
++          httpFilters:
++          - name: envoy.filters.http.grpc_web
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
++          - name: envoy.filters.http.grpc_stats
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.grpc_stats.v3.FilterConfig
++              emitFilterState: true
++              enableUpstreamStats: true
++          - name: envoy.filters.http.router
++            typedConfig:
++              '@type': type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
++          internalAddressConfig: {}
++          rds:
++            routeConfigName: listener-443
++          statPrefix: listener-443
++          streamIdleTimeout: 300s
++          upgradeConfigs:
++          - upgradeType: websocket
++          useRemoteAddress: true
++      transportSocket:
++        name: envoy.transport_sockets.tls
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
++          commonTlsContext:
++            tlsCertificateSdsSecretConfigs:
++            - name: cilium-secrets/cilium-sync-secret-62f4462c70564aa40ef22396762652f4b3bd572448747e332d134b0c028c0cfb
++    - filterChainMatch:
++        serverNames:
++        - a.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.tcp_proxy
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
++          cluster: gateway-conformance-infra:tls-backend:443
++          statPrefix: tls-passthrough:a.example.test
++    listenerFilters:
++    - name: envoy.filters.listener.tls_inspector
++      typedConfig:
++        '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
++    name: listener-443
++    socketOptions:
++    - description: Enable TCP keep-alive (default to enabled)
++      intValue: "1"
++      level: "1"
++      name: "9"
++    - description: TCP keep-alive idle time (in seconds) (defaults to 10s)
++      intValue: "10"
++      level: "6"
++      name: "4"
++    - description: TCP keep-alive probe intervals (in seconds) (defaults to 5s)
++      intValue: "5"
++      level: "6"
++      name: "5"
++    - description: TCP keep-alive probe max failures.
++      intValue: "10"
++      level: "6"
++      name: "6"
++  - '@type': type.googleapis.com/envoy.config.listener.v3.Listener
++    filterChains:
++    - filterChainMatch:
++        serverNames:
++        - b.example.test
++        transportProtocol: tls
++      filters:
++      - name: envoy.filters.network.tcp_proxy
++        typedConfig:
++          '@type': type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
++          cluster: gateway-conformance-infra:tls-backend-2:443
++          statPrefix: tls-passthrough:b.example.test
++    listenerFilters:
++    - name: envoy.filters.listener.tls_inspector
++      typedConfig:
++        '@type': type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
++    name: listener-8443
++    socketOptions:
++    - description: Enable TCP keep-alive (default to enabled)
++      intValue: "1"
++      level: "1"
++      name: "9"
++    - description: TCP keep-alive idle time (in seconds) (defaults to 10s)
++      intValue: "10"
++      level: "6"
++      name: "4"
++    - description: TCP keep-alive probe intervals (in seconds) (defaults to 5s)
++      intValue: "5"
++      level: "6"
++      name: "5"
++    - description: TCP keep-alive probe max failures.
++      intValue: "10"
++      level: "6"
++      name: "6"
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-insecure
++  - '@type': type.googleapis.com/envoy.config.route.v3.RouteConfiguration
++    name: listener-443
++    virtualHosts:
++    - domains:
++      - web.example.test
++      - web.example.test:*
++      name: web.example.test
++      routes:
++      - match:
++          prefix: /
++        route:
++          cluster: gateway-conformance-infra:infra-backend-v1:8080
++          maxStreamDuration:
++            maxStreamDuration: 0s
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/infra-backend-v1:8080
++    name: gateway-conformance-infra:infra-backend-v1:8080
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++    typedExtensionProtocolOptions:
++      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
++        '@type': type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
++        commonHttpProtocolOptions:
++          idleTimeout: 60s
++        useDownstreamProtocolConfig:
++          http2ProtocolOptions: {}
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/tls-backend-2:443
++    name: gateway-conformance-infra:tls-backend-2:443
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++  - '@type': type.googleapis.com/envoy.config.cluster.v3.Cluster
++    edsClusterConfig:
++      serviceName: gateway-conformance-infra/tls-backend:443
++    name: gateway-conformance-infra:tls-backend:443
++    outlierDetection:
++      splitExternalLocalOriginErrors: true
++    type: EDS
++  services:
++  - listener: listener-443
++    name: cilium-gateway-same-port-https-and-tls-passthrough-w-kdh28ck9f2
++    namespace: gateway-conformance-infra
++    ports:
++    - 443
++  - listener: listener-8443
++    name: cilium-gateway-same-port-https-and-tls-passthrough-w-kdh28ck9f2
++    namespace: gateway-conformance-infra
++    ports:
++    - 8443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/httproute-web-route.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/httproute-web-route.yaml
+new file mode 100644
+index 0000000000..213d17b8f4
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/httproute-web-route.yaml
+@@ -0,0 +1,33 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: web-route
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - web.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++    sectionName: https-443
++  rules:
++  - backendRefs:
++    - name: infra-backend-v1
++      port: 8080
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted HTTPRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      sectionName: https-443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+new file mode 100644
+index 0000000000..0d6a29ab4a
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/same-port-https-and-tls-passthrough-with-second-passthrough-port.yaml
+@@ -0,0 +1,125 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: Gateway
++metadata:
++  name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  gatewayClassName: cilium
++  listeners:
++  - allowedRoutes:
++      namespaces:
++        from: Same
++    hostname: web.example.test
++    name: https-443
++    port: 443
++    protocol: HTTPS
++    tls:
++      certificateRefs:
++      - group: ""
++        kind: Secret
++        name: multi-port-https-tls
++        namespace: gateway-conformance-infra
++  - allowedRoutes:
++      kinds:
++      - kind: TLSRoute
++      namespaces:
++        from: Same
++    hostname: a.example.test
++    name: tls-443
++    port: 443
++    protocol: TLS
++    tls:
++      mode: Passthrough
++  - allowedRoutes:
++      kinds:
++      - kind: TLSRoute
++      namespaces:
++        from: Same
++    hostname: b.example.test
++    name: tls-8443
++    port: 8443
++    protocol: TLS
++    tls:
++      mode: Passthrough
++status:
++  addresses:
++  - type: IPAddress
++    value: 172.18.255.200
++  conditions:
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway successfully scheduled
++    reason: Accepted
++    status: "True"
++    type: Accepted
++  - lastTransitionTime: "2026-10-08T17:18:53Z"
++    message: Gateway Programmed
++    reason: Programmed
++    status: "True"
++    type: Programmed
++  listeners:
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: https-443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: HTTPRoute
++    - group: gateway.networking.k8s.io
++      kind: GRPCRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: tls-443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: TLSRoute
++  - attachedRoutes: 1
++    conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Resolved Refs
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Accepted
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Listener Programmed
++      reason: Programmed
++      status: "True"
++      type: Programmed
++    name: tls-8443
++    supportedKinds:
++    - group: gateway.networking.k8s.io
++      kind: TLSRoute
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-a.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-a.yaml
+new file mode 100644
+index 0000000000..d859d5dcce
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-a.yaml
+@@ -0,0 +1,35 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: TLSRoute
++metadata:
++  name: tls-route-a
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - a.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++    namespace: gateway-conformance-infra
++    sectionName: tls-443
++  rules:
++  - backendRefs:
++    - name: tls-backend
++      port: 443
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted TLSRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-443
+\ No newline at end of file
+diff --git a/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-b.yaml b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-b.yaml
+new file mode 100644
+index 0000000000..1ddedaf4d0
+--- /dev/null
++++ b/operator/pkg/gateway-api/testdata/gateway/gateway-same-port-https-and-tls-passthrough-with-second-passthrough-port/output/tlsroute-tls-route-b.yaml
+@@ -0,0 +1,35 @@
++apiVersion: gateway.networking.k8s.io/v1
++kind: TLSRoute
++metadata:
++  name: tls-route-b
++  namespace: gateway-conformance-infra
++  resourceVersion: "1000"
++spec:
++  hostnames:
++  - b.example.test
++  parentRefs:
++  - name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++    namespace: gateway-conformance-infra
++    sectionName: tls-8443
++  rules:
++  - backendRefs:
++    - name: tls-backend-2
++      port: 443
++status:
++  parents:
++  - conditions:
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Accepted TLSRoute
++      reason: Accepted
++      status: "True"
++      type: Accepted
++    - lastTransitionTime: "2026-10-08T17:18:53Z"
++      message: Service reference is valid
++      reason: ResolvedRefs
++      status: "True"
++      type: ResolvedRefs
++    controllerName: io.cilium/gateway-controller
++    parentRef:
++      name: same-port-https-and-tls-passthrough-with-second-passthrough-port
++      namespace: gateway-conformance-infra
++      sectionName: tls-8443
+\ No newline at end of file
+diff --git a/operator/pkg/model/translation/cec_translator.go b/operator/pkg/model/translation/cec_translator.go
+index a83070a9f3..c042e87b9b 100644
+--- a/operator/pkg/model/translation/cec_translator.go
++++ b/operator/pkg/model/translation/cec_translator.go
+@@ -233,10 +233,15 @@ func (i *cecTranslator) desiredServicesWithPortsSplit(namespace string, name str
+ 		})
+ 	}
+ 
+-	// TLS passthrough ports.
++	// TLS passthrough ports. A port shared with HTTPS is already mapped to
++	// its HTTPS listener above, which also carries the passthrough chains.
++	sharedPorts := httpsAndTLSPassthroughPorts(m)
+ 	if m.NeedsPerPortTLSPassthroughListeners() {
+ 		// One entry per TLS passthrough port.
+ 		for _, port := range m.TLSPassthroughPorts() {
++			if sharedPorts[port] {
++				continue
++			}
+ 			envoyListenerName := listenerNameForPort(port)
+ 			result = append(result, &ciliumv2.ServiceListener{
+ 				Namespace: namespace,
+@@ -248,7 +253,7 @@ func (i *cecTranslator) desiredServicesWithPortsSplit(namespace string, name str
+ 	} else {
+ 		var ptPorts []uint16
+ 		for _, tlsl := range m.TLSPassthrough {
+-			if len(tlsl.Routes) > 0 {
++			if len(tlsl.Routes) > 0 && !sharedPorts[tlsl.Port] {
+ 				ptPorts = append(ptPorts, uint16(tlsl.Port))
+ 			}
+ 		}
+diff --git a/operator/pkg/model/translation/envoy_listener.go b/operator/pkg/model/translation/envoy_listener.go
+index f0a88163a6..ec6f7245fb 100644
+--- a/operator/pkg/model/translation/envoy_listener.go
++++ b/operator/pkg/model/translation/envoy_listener.go
+@@ -55,6 +55,22 @@ func listenerNameForPort(port uint32) string {
+ 	return fmt.Sprintf("%s-%d", listenerName, port)
+ }
+ 
++// httpsAndTLSPassthroughPorts returns the ports that carry both an HTTPS
++// listener and a routed TLS passthrough listener.
++func httpsAndTLSPassthroughPorts(m *model.Model) map[uint32]bool {
++	https := map[uint32]bool{}
++	for _, p := range m.HTTPSPortsSorted() {
++		https[p] = true
++	}
++	shared := map[uint32]bool{}
++	for _, p := range m.TLSPassthroughPorts() {
++		if https[p] {
++			shared[p] = true
++		}
++	}
++	return shared
++}
++
+ type ListenerMutator func(*envoy_config_listener.Listener) *envoy_config_listener.Listener
+ 
+ func withProxyProtocol() ListenerMutator {
+@@ -411,6 +427,12 @@ func (i *cecTranslator) desiredEnvoyListenerPerPort(m *model.Model) ([]ciliumv2.
+ 		tlsPassthroughPorts[p] = true
+ 	}
+ 
++	// A port carrying both HTTPS and TLS passthrough gets a single Envoy
++	// listener holding both sets of filter chains: Envoy rejects a resource set
++	// with two listeners of the same name, and two listeners would not share
++	// the port anyway.
++	sharedPorts := httpsAndTLSPassthroughPorts(m)
++
+ 	hasInsecure := false
+ 	for _, l := range m.HTTP {
+ 		if len(l.TLS) == 0 && !tlsPassthroughPorts[l.Port] {
+@@ -419,7 +441,7 @@ func (i *cecTranslator) desiredEnvoyListenerPerPort(m *model.Model) ([]ciliumv2.
+ 		}
+ 	}
+ 
+-	hasTLSPassthroughForBase := !needsPerPortTLS && m.IsTLSPassthroughListenerConfigured()
++	hasTLSPassthroughForBase := !needsPerPortTLS && m.IsTLSPassthroughListenerConfigured() && len(sharedPorts) == 0
+ 
+ 	if hasInsecure || hasTLSPassthroughForBase {
+ 		var filterChains []*envoy_config_listener.FilterChain
+@@ -477,6 +499,9 @@ func (i *cecTranslator) desiredEnvoyListenerPerPort(m *model.Model) ([]ciliumv2.
+ 		if err != nil {
+ 			return nil, err
+ 		}
++		if sharedPorts[port] {
++			httpsFC = append(httpsFC, tlsPassthroughFilterChainsForPort(port, m)...)
++		}
+ 		if len(httpsFC) == 0 {
+ 			continue
+ 		}
+@@ -506,6 +531,9 @@ func (i *cecTranslator) desiredEnvoyListenerPerPort(m *model.Model) ([]ciliumv2.
+ 	// One Listener per TLS passthrough port.
+ 	if needsPerPortTLS {
+ 		for _, port := range m.TLSPassthroughPorts() {
++			if sharedPorts[port] {
++				continue
++			}
+ 			lName := listenerNameForPort(port)
+ 
+ 			tlsFC := tlsPassthroughFilterChainsForPort(port, m)

@@ -30,6 +30,14 @@ tests:
             name: kubernetes
             path: apps/kubernetes
             libraries: ["cozy-lib"]
+      # Phase 2 split worker pools into apps/kubernetes-nodes; the module renders
+      # one pool HelmRelease per nodeGroup against this re-sourced artifact.
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: kubernetes-nodes
+            path: apps/kubernetes-nodes
+            libraries: ["cozy-lib"]
       - contains:
           path: spec.variants[0].components
           content:

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	celopenapi "k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
@@ -113,6 +114,23 @@ func TestPatchSpecKeepsObjectFormAdditionalProperties(t *testing.T) {
 	}
 	if v, ok := specSchema.Extensions.GetBool("x-kubernetes-preserve-unknown-fields"); ok && v {
 		t.Errorf("must not add preserve-unknown-fields when a real map schema is declared")
+	}
+}
+
+// TestPatchSpecLeavesNameDeclarationOffSpec keeps the published spec from
+// carrying a declaration about metadata.name.
+func TestPatchSpecLeavesNameDeclarationOffSpec(t *testing.T) {
+	raw := `{"type":"object","x-cozystack-name":{"type":"string","maxLength":32},"x-other":true,"properties":{}}`
+	target := newObjectContainer()
+	if err := patchSpec(target, raw); err != nil {
+		t.Fatalf("patchSpec: %v", err)
+	}
+	specSchema := target.Properties["spec"]
+	if _, ok := specSchema.Extensions[appsv1alpha1.NameSchemaExtension]; ok {
+		t.Errorf("published spec carries %s", appsv1alpha1.NameSchemaExtension)
+	}
+	if _, ok := specSchema.Extensions["x-other"]; !ok {
+		t.Errorf("unrelated vendor extension dropped from spec")
 	}
 }
 

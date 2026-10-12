@@ -73,6 +73,19 @@
       "schedule": ["before 6am on monday"]
     },
     {
+      "description": "The Harbor rebuilds reproduce one upstream release, so their build bases follow upstream's Makefile at that tag (GOBUILDIMAGE, NODEBUILDIMAGE) rather than the newest image. A golang tag bump builds Harbor with a toolchain upstream never shipped it with, and a node major breaks the Angular portal build. Tag bumps are disabled here; digest refreshes of the same tag still arrive through the digest group above. Move the tags by hand with HARBOR_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/harbor/images/**"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "The cilium-operator rebuild compiles one upstream release with the Go toolchain upstream's builder image pins at that tag, and `make update` in packages/system/cilium re-pins the builder line from there. A Renovate bump, by tag or by digest, builds with a toolchain upstream never shipped the release with, and the next `make update` silently reverts it. The operator-generic base stage and its VERSION and UPSTREAM_DIGEST args are pinned by the same recipe, and VERSION also selects the source archive SOURCE_SHA256 checks. Updates are disabled here; all of them move with the Cilium version.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/cilium/images/cilium-operator/**"],
+      "enabled": false
+    },
+    {
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],

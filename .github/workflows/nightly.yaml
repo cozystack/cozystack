@@ -10,7 +10,8 @@ name: Nightly
 # cozy-installer chart are re-published on GHCR so the whole install closure is
 # self-contained there. The only thing genuinely built is the Talos nocloud disk
 # (assembled from upstream profiles, independent of the registry), published as a
-# GHCR OCI artifact so a nightly is installable on real hardware, not just e2e.
+# GHCR OCI artifact so a nightly is installable on real hardware. The nightly
+# e2e does not boot it.
 #
 # No GitHub release and no api/apps/v1alpha1 Go-module tag are created — a
 # nightly is an installable artifact set on GHCR, nothing more. retention.yaml
@@ -52,11 +53,24 @@ jobs:
       packages_ref:    ${{ steps.resolve.outputs.packages_ref }}
       packages_digest: ${{ steps.publish.outputs.packages_digest }}
     steps:
-      - name: Set up toolchain (skopeo, flux, yq, helm)
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+      - name: Set up toolchain (skopeo, yq, helm)
+        env:
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          command -v flux   >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
-          command -v yq     >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
           command -v helm   >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
       - name: Login to registries
@@ -116,7 +130,7 @@ jobs:
           echo "Resolved main build: sha=$sha version=$version packages_ref=$packages_ref"
 
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
@@ -183,7 +197,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
@@ -201,6 +215,9 @@ jobs:
       # rebuild of any cozystack image.
       - name: Build nocloud disk
         run: make -C packages/core/talos talos-nocloud
+        env:
+          # The e2e sandbox boots amd64 only.
+          PLATFORM: linux/amd64
       - name: Publish disk to GHCR
         env:
           VERSION: ${{ needs.mirror.outputs.version }}
@@ -217,33 +234,43 @@ jobs:
           oras tag "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" nightly
           echo "Published cozystack-nocloud:${VERSION} (+ :nightly) to GHCR."
 
-  # ── Full e2e against the published GHCR closure (chart + images + disk).
+  # ── Full e2e against the published GHCR closure (chart + images), on the
+  #    same Talos-container substrate as the PR lanes. The nodes boot the
+  #    upstream Talos image, so the nocloud disk built above is published but
+  #    not exercised here, and e2e does not wait for it.
   e2e:
     name: E2E (full suite)
-    needs: [mirror, build-disk]
-    runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 180
+    needs: [mirror]
+    # Same sandbox as the other e2e lanes: three nodes at 8 vCPU / 24 GiB each
+    # (hack/e2e-compose.yaml) commit 24 vCPU for the whole run, so the runner
+    # class has to be strictly larger, leaving the host its own cycles for
+    # containerd and the runner agent. Enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
+    timeout-minutes: 215
     permissions:
       contents: read
       packages: read
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Set up toolchain (flux, oras)
-        run: |
-          command -v flux >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
-          command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
       - name: Login to GHCR
         env:
           GHCR_USER:  ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GHCR_TOKEN" | docker login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
-          echo "$GHCR_TOKEN" | oras login  "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
 
       # Overlay the GHCR-rewritten tree (operator image, .e2e.image and every
       # component now point at GHCR), then pin the installer chart to the GHCR
@@ -262,27 +289,49 @@ jobs:
           yq -i ".cozystackOperator.platformSourceUrl = \"oci://${DST_REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
           yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
 
-      - name: Fetch nocloud disk from GHCR
-        env:
-          VERSION: ${{ needs.mirror.outputs.version }}
-        run: |
-          set -eu
-          mkdir -p _out/assets
-          oras pull "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" --output _out/assets
-
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      # Talos cannot load kernel modules in container mode, so the nodes get
+      # exactly what this host has loaded. Why each module, and why failing
+      # here is better than an hour later: the same step in pull-requests.yaml.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules && continue
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            exit 1
+          fi
 
       - name: Prepare environment
         run: |
           attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env-container; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
             echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
           done
 
       - name: Install Cozystack into sandbox
+        env:
+          # No ARP VIP in container mode: .11 is a plain control-plane node.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # The nodes share the runner kernel and cannot load DRBD.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
             echo "❌ Install failed (no retry — diagnostics below)"
@@ -306,9 +355,11 @@ jobs:
       # Always the FULL app suite — a nightly has no diff to scope against, so
       # Test Impact Analysis does not apply (empty CHAINSAW_SUITES = whole suite).
       - name: Run E2E tests (full suite)
+        env:
+          COZY_E2E_STORAGE_CLASS: local
         run: |
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"
@@ -334,10 +385,36 @@ jobs:
           path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
+      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
       - name: Collect report
+        id: collect_report
         if: always()
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more: a step can end
+      # non-zero without any ceiling firing, so naming the timeout as the cause
+      # would be the false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
 
       - name: Upload cozyreport.tgz
         if: always()
@@ -347,6 +424,10 @@ jobs:
           path: _out/cozyreport.tgz
           if-no-files-found: warn
 
+      # The compose project owns the nodes and the zpools outlive it, so both
+      # halves go, in this order.
       - name: Tear down sandbox
         if: always()
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true

@@ -9,6 +9,45 @@ TEST_FILE=${1:?Usage: ./cozytest.sh <file.bats> [pattern]}
 PATTERN=${2:-*}
 LINE='----------------------------------------------------------------'
 
+# Live per-line streaming of each test's xtrace and command output, prefixed
+# with a timestamp. Default on, because for a long e2e suite that stream is the
+# only progress signal, and the only record at all when a step timeout or a dead
+# runner kills the job before the fail handler below can dump anything.
+#
+# Set COZYTEST_TRACE=0 to keep only the per-test start/end lines. For a test that
+# RETURNS, nothing diagnostic is lost: run_one tees the raw stream to $log and
+# the fail handler prints all of it, so quiet mode drops the output of passing
+# tests only -- which by definition did not establish the result. On the unit
+# lane that is a ~40x cut (1338 tests: 239k lines/15M of which 98% was trace),
+# and it is why the Makefile's bats-posix-compat-tests target sets it.
+#
+# One exception, stated because it is the whole exposure quiet mode adds: the
+# fail handler runs only after the pipeline returns, and there is no INT/TERM
+# trap here, so a test killed rather than failed -- a hang reaped by the job's
+# timeout-minutes, a SIGKILLed process group -- never dumps $log at all. The
+# A start line with no matching end still names which test was in flight, but
+# under quiet mode its trace is gone rather than already printed.
+#
+# An INT/TERM trap that flushed the tail of $log is the obvious repair and it
+# does not work -- built, measured, reverted. POSIX sh defers a trap until the
+# current foreground command returns, so installing one stops the runner from
+# dying on the signal at all: a suite hung on `sleep 30` took 30s to exit with
+# the trap versus 2s under the default disposition. GitHub's cancellation
+# escalates INT, TERM, then KILL, so the deferred handler would be SIGKILLed
+# before it ever ran -- no dump, and the grace period spent waiting. Making it
+# work means running the test pipeline in the background and `wait`ing on it,
+# since `wait` is the interruptible one; that is surgery on the path every
+# suite in the repo takes, for a partial trace in a rare case.
+#
+# So the escape hatch stands instead: re-run that suite with COZYTEST_TRACE=1,
+# which for the unit lane costs 48s and needs no cluster. That asymmetry is
+# also why e2e keeps the stream on by default -- there, re-running is an hour
+# and a live cluster, so the record has to be written as it goes.
+#
+# Anything other than the literal 0 leaves the stream on, so a typo fails
+# open to the verbose behaviour rather than silently swallowing a suite.
+COZYTEST_TRACE=${COZYTEST_TRACE:-1}
+
 cols() { stty size 2>/dev/null | awk '{print $2}' || echo 80; }
 if [ -t 1 ]; then
   MAXW=$(( $(cols) - 12 )); [ "$MAXW" -lt 40 ] && MAXW=70
@@ -38,6 +77,7 @@ run_one() {
     )
     printf '__RC__%s\n' "$?"
   } 2>&1 | tee "$log" | while IFS= read -r line; do
+        if [ "$COZYTEST_TRACE" = 0 ]; then continue; fi
         case "$line" in
           '__RC__'*) : ;;
           '+ '*)   cmd=${line#'+ '}
@@ -53,7 +93,10 @@ run_one() {
         printf '┊[%02d:%02d] %s\n' $((now/60)) $((now%60)) "$out"
   done
 
-  rc=$(awk '/^__RC__/ {print substr($0,7)}' "$log" | tail -n1)
+  # LC_ALL=C so BSD awk scans the captured log byte-wise: a test whose trace or
+  # output carries a multibyte character would otherwise abort this scan ("towc:
+  # multibyte conversion failure") and leave the exit code unread.
+  rc=$(LC_ALL=C awk '/^__RC__/ {print substr($0,7)}' "$log" | tail -n1)
   [ -z "$rc" ] && rc=1
   now=$(( $(date +%s) - START ))
 
@@ -93,6 +136,54 @@ TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
 # forward — so a test that creates tenant clusters (run-kubernetes.sh) captures
 # them from its OWN in-subshell EXIT trap, while the forward is still alive.
 COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
+# Which suites get the cluster captures below. They read cluster state, so they
+# belong to the e2e suites and to nothing else. `command -v kubectl` does not
+# tell the two apart: a unit runner has the binary and no cluster, so a red unit
+# test used to walk into the legs below on its way out.
+#
+# What that costs depends on how kubectl fails. Against an endpoint that refuses
+# immediately it is a second; against one that hangs -- an unreachable address, a
+# context left pointing at a torn-down cluster -- it was measured at ~28s for the
+# previous-logs leg, which self-bounds its pod list and so never reaches the 300s
+# ceiling set below it. The data-plane leg bounds its own reads as well, 28s for
+# a list and 20s for a single read, so it returns in tens of seconds rather than
+# holding its 600s ceiling. Dead waiting inside a job budget either way, for a
+# failure that should cost seconds.
+#
+# Where crust-gather is installed as well the bill stops being empty and starts
+# being wrong: that leg does not need a reachable cluster to be pointless, it
+# needs an ambient KUBECONFIG, and it can hold the trap for 390s -- its 360s
+# deadline plus the -k 30 kill grace -- snapshotting whatever cluster the
+# current context happens to name.
+#
+# The discriminator is the e2e- prefix, on the suite's own name or on the
+# directory holding it. At the top level the prefix is what the project already
+# sorts on: the Makefile builds BATS_UNIT_FILES as
+# $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats)), so a top-level e2e-*
+# suite is precisely one `make unit-tests` refuses to run and
+# packages/core/testing/Makefile runs against a live cluster instead.
+#
+# That wildcard is not recursive, so it says nothing about subdirectories, and
+# hack/e2e-apps/ historically held live-cluster suites whose own filenames
+# carried no prefix. Keep matching the directory so captures stay armed if that
+# layout returns; matching only the basename would silently disarm them. Neither
+# test claims every future live-cluster suite will be named this way -- these are
+# the only signals the runner has, and a suite outside both shapes gets no
+# captures.
+#
+# Deliberately not a reachability probe. Gating on "can I talk to an apiserver"
+# would disarm the captures in the case they exist for: a failing e2e run is
+# often one whose apiserver is degraded, and a probe answering "no" there would
+# skip the snapshot precisely when it is the evidence.
+case "$(basename "$TEST_FILE")" in
+  e2e-*) _cozy_cluster_captures=1 ;;
+  *)
+    case "$(basename "$(dirname "$TEST_FILE")")" in
+      e2e-*) _cozy_cluster_captures=1 ;;
+      *)     _cozy_cluster_captures=0 ;;
+    esac
+    ;;
+esac
 _cozy_on_exit() {
   _rc=$?
   if [ "$_rc" -ne 0 ]; then
@@ -107,7 +198,7 @@ _cozy_on_exit() {
     # per pod by default, so each further restart of a still-looping pod drops
     # the instance we are here to read — and the snapshot leg alone can hold the
     # trap for 390s. The other two captures read state that keeps.
-    if command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-previous-logs.sh" ]; then
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-previous-logs.sh" ]; then
       _prev_rc=0
       timeout -k 30 300 "$(dirname "$0")/e2e-capture-previous-logs.sh" \
         "$_snap/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1 || _prev_rc=$?
@@ -117,14 +208,14 @@ _cozy_on_exit() {
       # capture would read as a complete one listing fewer crash-loops than
       # actually occurred. This handler's whole worst case is ~1350s (330 + 390
       # + 630, each leg including its 30s kill grace) against a job capped at
-      # 180 minutes with no per-step timeout —
+      # 215 minutes with no per-step timeout —
       # deliberate, for the same reason recorded in hack/e2e-chainsaw/.chainsaw.yaml:
       # a bounded, honest wait beats a kill that collects nothing.
       if [ "$_prev_rc" -ne 0 ]; then
         echo "» previous-instance capture INCOMPLETE (exit $_prev_rc); kept what landed in $_snap/previous-logs"
       fi
     fi
-    if command -v crust-gather >/dev/null 2>&1; then
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v crust-gather >/dev/null 2>&1; then
       echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
       # Bound with a timeout: crust-gather collect has hung indefinitely on a
       # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
@@ -145,7 +236,10 @@ _cozy_on_exit() {
       # "is this snapshot complete or truncated?" is answerable from the
       # uploaded artifact rather than guessed, matching the Chainsaw catch.
       _cg_rc=0
-      timeout -k 30 360 crust-gather collect --duration 180s \
+      # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+      # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+      # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+      timeout -k 30 360 crust-gather collect --disable-additional-logs --duration 180s \
         --exclude-kind Secret -f "$_snap/host" >"$_snap/crust-gather.log" 2>&1 || _cg_rc=$?
       case "$_cg_rc" in
         0) echo "» crust-gather host snapshot complete" ;;
@@ -160,12 +254,27 @@ _cozy_on_exit() {
     # delegates host->local-pod routing to kube-ovn/ovn0) can be root-caused
     # from the uploaded artifact. crust-gather captures object state but not the
     # node's L3 forwarding state. This NEVER affects the test outcome: every
-    # capture is time-boxed and `|| true`, and the whole run is wrapped in a
-    # wall-clock backstop so it cannot stall the job. It no-ops when there are no
-    # affected pods or when kubectl/the tooling is absent.
-    if command -v kubectl >/dev/null 2>&1; then
+    # capture inside is time-boxed and `|| true`, the whole run is wrapped in a
+    # wall-clock backstop so it cannot stall the job, and the backstop's own
+    # status is read only to print a line. It no-ops when there are no affected
+    # pods or when kubectl/the tooling is absent.
+    # The `-x` check matches the previous-logs leg above and the Chainsaw
+    # caller, and it stopped being cosmetic once the status below is printed: a
+    # tree without the collector would otherwise report "INCOMPLETE (exit 127);
+    # kept what landed" about a directory nothing ever created.
+    if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-dataplane.sh" ]; then
       echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
-      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || true
+      _dp_rc=0
+      COZY_DATAPLANE_BUDGET=570 timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
+      # Read, not propagated: the status still cannot change the job's outcome,
+      # it only gets a line. The collector names every read of its own that it
+      # could not finish, which leaves this backstop as the one remaining way
+      # for that leg to die silently -- and a truncated dataplane/ is otherwise
+      # indistinguishable from a complete one that found little. Same discipline
+      # as the previous-logs leg above, whose comment carries the arithmetic.
+      if [ "$_dp_rc" -ne 0 ]; then
+        echo "» data-plane capture INCOMPLETE (exit $_dp_rc); kept what landed in $_snap/dataplane"
+      fi
     fi
   fi
   if command -v cozy_cleanup >/dev/null 2>&1; then
@@ -175,7 +284,14 @@ _cozy_on_exit() {
   rm -f "$TMP_SH"
 }
 trap '_cozy_on_exit' EXIT
-awk '
+# LC_ALL=C pins a single-byte ctype for the title scan below. It walks each title
+# one character at a time with substr(), and BSD awk aborts that walk on the first
+# multibyte byte ("towc: multibyte conversion failure") instead of returning it,
+# so a file with a non-ASCII @test title never parses and none of its tests run.
+# Under C every byte is its own character, which is all the scan needs: the title
+# is preserved verbatim for display and only the derived function name is mangled.
+# The run-selection pass below is pinned the same way so the two agree on names.
+LC_ALL=C awk '
   /^@test[[:space:]]+"/ {
     line  = substr($0, index($0, "\"") + 1)
     title = substr(line, 1, index(line, "\"") - 1)
@@ -198,13 +314,23 @@ awk '
 ' "$TEST_FILE" > "$TMP_SH"
 
 [ -f "$TMP_SH" ] || { echo "Failed to generate test functions" >&2; exit 1; }
+
+# Compatibility with unit files shared with Bats. Only adjacent .bash helpers
+# are supported; cozytest already enables nounset when it runs a test body.
+load() {
+  _lib="$(dirname "$TEST_FILE")/$1.bash"
+  [ -f "$_lib" ] || { echo "load: no such helper: $_lib" >&2; return 1; }
+  # shellcheck disable=SC1090
+  . "$_lib"
+}
+
 # shellcheck disable=SC1090
 . "$TMP_SH"
 
 ###############################################################################
 # run selected tests                                                          #
 ###############################################################################
-awk -v pat="$PATTERN" '
+LC_ALL=C awk -v pat="$PATTERN" '
   /^### / {
     title = substr($0, 5)
     name = "test_"

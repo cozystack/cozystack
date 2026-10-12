@@ -3,5 +3,6 @@ mariadb-operator:
   metrics:
     enabled: true
   webhook:
-    certificate:
-      certManager: true
+    cert:
+      certManager:
+        enabled: true

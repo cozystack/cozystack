@@ -1,0 +1,283 @@
+suite: shared-central tracing holds each tenant to a write rate
+# A store sharing one disk among tenants is protected by its disk cap only as
+# long as no tenant writes faster than the cap can absorb: VictoriaTraces always
+# keeps the last two days, so a tenant that fills the cap within two days fills
+# the disk for all of them. The platform sets the rate, it reaches every tenant
+# in _cluster, and each central tenant's collector enforces it.
+templates:
+  - templates/vtraces/collector.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-foo
+
+tests:
+  - it: limits a central tenant's collector to the rate the platform sets
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "100000"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^  ratelimit/tenant:\\n    strategy: bytes\\n    rate: 100000\\n    burst: 5242880\\n    throttle_behavior: error$"
+      # Before batch: the batch processor sends asynchronously, so a refusal
+      # behind it would never reach the application and its spans would be
+      # dropped without the sender knowing. Right after memory_limiter: the
+      # sampler adds a tracestate to every span it keeps and resource/tenant
+      # an attribute to every resource, either of which would push a request
+      # the receiver admitted at its cap past burst, and such a request never
+      # passes.
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, ratelimit/tenant, probabilistic_sampler, resource/tenant, batch\\]"
+
+  - it: counts a request before redaction as well
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+        redactAttributes:
+          - http.request.header.authorization
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, ratelimit/tenant, probabilistic_sampler, attributes/redact, resource/tenant, batch\\]"
+
+  - it: splits the tenant rate across collector replicas
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "100000"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 3
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 33334$"
+
+  # A request larger than burst can never pass the limiter, so burst never
+  # drops below what one second of the rate needs.
+  - it: raises burst to one second of a rate above 5 MiB per second
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "200000000"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 200000000\\n    burst: 200000000$"
+
+  # Without a rate from the platform, and on one that is not a positive number,
+  # the collector holds the tenant to the default: floor(2 vtstorage replicas *
+  # 80% of a 10Gi volume / 172800 s), never to no limit.
+  - it: falls back to the default rate when the platform sets none
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  - it: falls back to the default rate on a value that is not a positive number
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "fast"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  # int64 returns 0 for digits beyond int64, which the processor refuses at
+  # start; the platform never writes such a value, but a collector that cannot
+  # start would take the tenant's tracing down with it.
+  - it: falls back to the default rate on digits beyond int64
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "99999999999999999999"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  - it: falls back to the default rate on 0
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "0"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  - it: falls back to the default rate on -1
+    template: templates/vtraces/collector.yaml
+    set:
+      _cluster:
+        tracing-central-tenant-bytes-per-second: "-1"
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^    rate: 99420$"
+
+  # The limiter sees requests the receiver admits, so the receiver caps them at
+  # 3 MiB, decompressed for HTTP. The limiter counts a request as the collector
+  # re-encodes it, which is larger: pdata writes the empty value of an
+  # attribute the wire may omit, so a valid request of spans with empty-valued
+  # attributes is counted 1.4x. 1.4 x 3 MiB stays below the 5 MiB burst, so an
+  # admitted request always fits it; a 4 MiB cap would not, and a larger burst
+  # would be what each new pod lets through above the rate.
+  - it: caps a central collector's requests so their re-encoding fits the burst floor
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 1
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^      grpc:\\n        endpoint: 0\\.0\\.0\\.0:4317\\n        max_recv_msg_size_mib: 3$"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?m)^      http:\\n        endpoint: 0\\.0\\.0\\.0:4318\\n        max_request_body_size: 3145728$"
+
+  - it: leaves a local collector's request size at the receiver defaults
+    template: templates/vtraces/collector.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "max_recv_msg_size_mib|max_request_body_size"
+
+  - it: sets no rate limit on a collector writing to its own store
+    template: templates/vtraces/collector.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "ratelimit"
+
+  # Each replica starts with a full bucket, so the replica count bounds what a
+  # central tenant writes above its rate on a rollout. A collector writing to
+  # the tenant's own store has no rate, so its replica count stays free.
+  - it: refuses more than ten replicas for a central tenant's collector
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 11
+    asserts:
+      - failedTemplate:
+          errorPattern: "shared-central tracing allows at most 10 collector replicas"
+
+  - it: accepts ten replicas for a central tenant's collector
+    template: templates/vtraces/collector.yaml
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        replicas: 10
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 10
+
+  - it: accepts more than ten replicas for a collector writing to its own store
+    template: templates/vtraces/collector.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+      tracingCollector:
+        replicas: 12
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 12

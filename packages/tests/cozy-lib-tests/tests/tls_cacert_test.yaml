@@ -111,7 +111,7 @@ tests:
         -----END EC PRIVATE KEY-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must not contain private key material"
 
   - it: refuses private key material regardless of PEM header casing
     templates:
@@ -125,7 +125,7 @@ tests:
         -----end private key-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must not contain private key material"
 
   - it: refuses a certificate bundle that also carries a private key block
     templates:
@@ -152,7 +152,7 @@ tests:
         -----END PRIVATE KEY-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must not contain private key material"
 
   - it: rejects input that is not a PEM certificate
     templates:
@@ -162,7 +162,7 @@ tests:
         this is not a certificate at all
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   # The three cases below carry a BEGIN CERTIFICATE line and no key header, so a
   # header-only guard admitted them and rendered an anchor with nothing usable.
@@ -176,7 +176,7 @@ tests:
         MIIBExampleCertificateBodyWithNoClosingLine0000000000000000000000
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   - it: rejects empty certificate armour
     templates:
@@ -187,7 +187,7 @@ tests:
         -----END CERTIFICATE-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   # The guard rejects a body only for characters outside the base64 alphabet — it
   # cannot check base64 validity itself. The trailing "!" is what makes this body
@@ -202,7 +202,7 @@ tests:
         -----END CERTIFICATE-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   # Documented gap: a body spelled in base64 characters passes this guard however
   # meaningless. Only the Go controller's x509.ParseCertificate can refuse it.
@@ -235,7 +235,7 @@ tests:
         -----END PGP PRIVATE KEY BLOCK-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must not contain private key material"
 
   # An unquoted numeric scalar in values.yaml parses to a float64, and any string
   # operation on it dies with a raw Go template error. The guard must fail closed
@@ -247,7 +247,7 @@ tests:
       caCert: 12345
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   # Coercion wart, pinned: `default ""` treats 0 as empty before printf runs, so a
   # supplied zero reports "required". Fails closed either way — 0 is no certificate.
@@ -319,7 +319,7 @@ tests:
         -----END CERTIFICATE-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   # The whole-value anchor rejects a valid block carrying bytes before or after it,
   # since the value is emitted verbatim. The controller strips such bytes by
@@ -346,7 +346,7 @@ tests:
         -----END CERTIFICATE-----
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   - it: rejects a certificate trailed by arbitrary bytes
     templates:
@@ -367,7 +367,7 @@ tests:
         and then some trailing bytes
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.validateCACert: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   - it: fails closed when name is empty
     templates:

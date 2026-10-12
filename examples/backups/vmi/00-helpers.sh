@@ -65,38 +65,10 @@ resource_exists() {
     fi
 }
 
-# Wait for a resource field to reach a desired value
-wait_for_field() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local jsonpath="$3"
-    local desired="$4"
-    local namespace="${5:-}"
-    local timeout="${6:-300}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-
-    local elapsed=0
-    local ns_flag=""
-    [[ -n "$namespace" ]] && ns_flag="-n $namespace"
-
-    while true; do
-        local current
-        # shellcheck disable=SC2086
-        current=$(kubectl get "$resource_type" "$resource_name" $ns_flag -o jsonpath="$jsonpath" 2>/dev/null || true)
-        if [[ "$current" == "$desired" ]]; then
-            log_success "$resource_type/$resource_name reached '$desired'"
-            return 0
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-        echo -n "." >&2
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # Print a separator line
 separator() {

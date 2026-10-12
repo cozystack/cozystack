@@ -1,8 +1,6 @@
 # Scenario: Cluster admin prepares NATS backups
 
-A cluster administrator performs the cluster-level preparation once. Tenants
-will then be able to back up and restore their NATS applications by referencing
-the BackupClass created here, with no further admin action.
+A cluster administrator performs the cluster-level preparation once. Tenant admins can then back up and restore their NATS applications with a `BackupJob` or `RestoreJob` that references the BackupClass created here. The demo scripts around those jobs still need admin access, because they create Secrets and work through a CLI Pod; the README's step table says which part of each step a tenant admin can do.
 
 ## Prerequisites
 
@@ -10,9 +8,7 @@ the BackupClass created here, with no further admin action.
   backupstrategy-controller installed.
 - `kubectl` access with permissions to create cluster-scoped
   `Job.strategy.backups.cozystack.io` and `BackupClass.backups.cozystack.io`.
-- Reachable S3-compatible storage. The demo uses the in-cluster `Bucket` app
-  (step 03); the tenant turns its coordinates into a `<app>-backup-s3` Secret
-  that the strategy Pod reads (step 04 / 07).
+- Reachable S3-compatible storage. The demo uses the in-cluster `Bucket` app (step 03), and steps 04 and 07 turn its coordinates into a `<app>-backup-s3` Secret that the strategy Pod reads. Creating that Secret needs admin access, since no tenant role grants `create` on `secrets`.
 
 ## Steps
 

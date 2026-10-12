@@ -74,6 +74,7 @@ function KnownRowEditor({ row, value, onChange, readonly }: KnownRowEditorProps)
     const hasValue = value !== undefined && value !== ""
     setChecked(hasValue)
     if (hasValue && value) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- re-syncs local inputs after an external reset of the form value
       setLocalNum(row.units ? parseSize(value, row.units).num : value)
       if (row.units) setLocalUnit(parseSize(value, row.units).unit)
     } else {

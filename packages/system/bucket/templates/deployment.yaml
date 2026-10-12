@@ -1,4 +1,5 @@
-{{- $endpoint := printf "s3.%s" .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
+{{- $endpoint := printf "s3.%s" $host }}
 {{- range $name, $user := .Values.users }}
   {{- $secretName := printf "%s-%s" $.Values.bucketName $name }}
   {{- $existingSecret := lookup "v1" "Secret" $.Release.Namespace $secretName }}

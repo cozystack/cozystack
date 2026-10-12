@@ -1,6 +1,6 @@
 {{- $secretSyncEnabled := eq (include "secretSyncEnabled" .) "true" -}}
 
-{{- if and .Values.operator.enabled .Values.serviceAccounts.operator.create .Values.ingressController.enabled .Values.ingressController.secretsNamespace.sync .Values.ingressController.secretsNamespace.name }}
+{{- if and .Values.operator.enabled (not .Values.preflight.enabled) .Values.serviceAccounts.operator.create .Values.ingressController.enabled .Values.ingressController.secretsNamespace.sync .Values.ingressController.secretsNamespace.name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -13,6 +13,7 @@ metadata:
   {{- end }}
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -28,7 +29,7 @@ rules:
   - patch
 {{- end }}
 
-{{- if and .Values.operator.enabled .Values.serviceAccounts.operator.create .Values.gatewayAPI.enabled .Values.gatewayAPI.secretsNamespace.sync .Values.gatewayAPI.secretsNamespace.name }}
+{{- if and .Values.operator.enabled (not .Values.preflight.enabled) .Values.serviceAccounts.operator.create .Values.gatewayAPI.enabled .Values.gatewayAPI.secretsNamespace.sync .Values.gatewayAPI.secretsNamespace.name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -41,6 +42,7 @@ metadata:
   {{- end }}
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -56,7 +58,7 @@ rules:
   - patch
 {{- end }}
 
-{{- if and .Values.operator.enabled .Values.serviceAccounts.operator.create $secretSyncEnabled .Values.tls.secretsNamespace.name }}
+{{- if and .Values.operator.enabled (not .Values.preflight.enabled) .Values.serviceAccounts.operator.create $secretSyncEnabled .Values.tls.secretsNamespace.name }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -69,6 +71,7 @@ metadata:
   {{- end }}
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -84,7 +87,7 @@ rules:
   - patch
 {{- end }}
 
-{{- if and .Values.operator.enabled .Values.serviceAccounts.operator.create }}
+{{- if and .Values.operator.enabled (not .Values.preflight.enabled) .Values.serviceAccounts.operator.create }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -97,6 +100,7 @@ metadata:
   {{- end }}
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -111,6 +115,14 @@ rules:
   verbs:
   - create
   - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
   - get
   - list
   - watch

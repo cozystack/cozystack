@@ -1,0 +1,161 @@
+suite: proxmox switches off the in-cluster CCM and CSI
+
+# kccm and kubevirt-csi exist to reach the workers' VirtualMachines and their
+# DataVolumes IN THIS cluster. On proxmox the VMs are on an external hypervisor
+# and the equivalents are separate packages, so every one of these objects has
+# to disappear — and the in-tenant -csi HelmRelease with them, or Flux installs
+# a driver for a hypervisor that is not there.
+#
+# The negations carry `any: true`: without it a negated containsDocument passes
+# whatever the render contains.
+templates:
+  - templates/helmreleases/csi.yaml
+  - templates/csi/deploy.yaml
+  - templates/csi/infra-cluster-service-account.yaml
+  - templates/kccm/manager.yaml
+  - templates/kccm/service_account.yaml
+  - templates/kccm/kccm_role.yaml
+  - templates/kccm/kccm_role_binding.yaml
+  - templates/kccm/kccm_cluster_role.yaml
+  - templates/kccm/kccm_cluster_role_binding.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+tests:
+  - it: renders the in-cluster pair on kubevirt
+    asserts:
+      - template: templates/helmreleases/csi.yaml
+        containsDocument:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          name: kubernetes-test-csi
+          any: true
+      - template: templates/kccm/manager.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-kccm
+          any: true
+      - template: templates/csi/deploy.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-kcsi-controller
+          any: true
+      - template: templates/kccm/service_account.yaml
+        containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          name: kubernetes-test-kccm
+          any: true
+      - template: templates/csi/infra-cluster-service-account.yaml
+        containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          name: kubernetes-test-kcsi
+          any: true
+      - template: templates/kccm/kccm_role.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          name: kubernetes-test-kccm
+          any: true
+      - template: templates/kccm/kccm_cluster_role.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: tenant-test-kubernetes-test-kccm
+          any: true
+      - template: templates/kccm/kccm_role_binding.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          name: kubernetes-test-kccm
+          any: true
+      - template: templates/kccm/kccm_cluster_role_binding.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          name: tenant-test-kubernetes-test-kccm
+          any: true
+
+  - it: renders none of it on proxmox
+    set:
+      substrate: proxmox
+      proxmox:
+        allowedNodes: [prox-home]
+        dnsServers: ["8.8.8.8"]
+        ipv4Config:
+          addresses: ["10.0.0.160-10.0.0.170"]
+          gateway: "10.0.0.1"
+          prefix: 24
+    asserts:
+      - template: templates/helmreleases/csi.yaml
+        containsDocument:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          name: kubernetes-test-csi
+          any: true
+        not: true
+      - template: templates/kccm/manager.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-kccm
+          any: true
+        not: true
+      - template: templates/csi/deploy.yaml
+        containsDocument:
+          apiVersion: apps/v1
+          kind: Deployment
+          name: kubernetes-test-kcsi-controller
+          any: true
+        not: true
+      - template: templates/kccm/service_account.yaml
+        containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          name: kubernetes-test-kccm
+          any: true
+        not: true
+      - template: templates/csi/infra-cluster-service-account.yaml
+        containsDocument:
+          apiVersion: v1
+          kind: ServiceAccount
+          name: kubernetes-test-kcsi
+          any: true
+        not: true
+      - template: templates/kccm/kccm_role.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          name: kubernetes-test-kccm
+          any: true
+        not: true
+      - template: templates/kccm/kccm_cluster_role.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: tenant-test-kubernetes-test-kccm
+          any: true
+        not: true
+      - template: templates/kccm/kccm_role_binding.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          name: kubernetes-test-kccm
+          any: true
+        not: true
+      - template: templates/kccm/kccm_cluster_role_binding.yaml
+        containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          name: tenant-test-kubernetes-test-kccm
+          any: true
+        not: true

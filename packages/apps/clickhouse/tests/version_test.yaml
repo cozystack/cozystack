@@ -1,0 +1,84 @@
+suite: version selection
+
+# The chart pins a single ClickHouse version, shared by the server and the
+# Keeper images, resolved from files/versions.yaml via the version enum.
+# The default must stay 24.9.2.42 so existing installations are not bumped
+# to a new major on upgrade.
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+
+tests:
+  - it: "default version v24.9 renders 24.9.2.42 on the ClickHouse server"
+    templates:
+      - templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-server:24.9.2.42
+
+  - it: "default version v24.9 renders 24.9.2.42 on the Keeper"
+    templates:
+      - templates/chkeeper.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-keeper:24.9.2.42
+
+  # Upgrade lines assert the major.minor only (the patch is regenerated from
+  # Docker Hub by update-versions.sh and would otherwise drift the test); the
+  # frozen default above keeps its exact-tag assertion.
+  - it: "version v25.8 selects a 25.8 tag for both server and Keeper"
+    set:
+      version: v25.8
+    asserts:
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          pattern: "^clickhouse/clickhouse-server:25\\.8\\."
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          pattern: "^clickhouse/clickhouse-keeper:25\\.8\\."
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+
+  - it: "version v25.3 selects a 25.3 tag on the server"
+    set:
+      version: v25.3
+    templates:
+      - templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          pattern: "^clickhouse/clickhouse-server:25\\.3\\."
+
+  # An unsupported version is rejected — by the schema enum first, and by the
+  # versionMap fail as defense-in-depth. Match either so the assertion is not
+  # tied to Helm's exact JSON-schema error phrasing.
+  - it: "an unsupported version is rejected"
+    set:
+      version: v1.0
+    templates:
+      - templates/clickhouse.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "(must be one of|is not supported)"

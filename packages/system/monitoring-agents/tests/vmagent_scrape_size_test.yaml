@@ -1,0 +1,69 @@
+suite: kube-apiserver scrape size limit and its alert
+
+# kube-apiserver's /metrics grows with the number of resources and CRDs, and a
+# full install pushes it past the global 32MB -promscrape.maxScrapeSize. vmagent
+# then refuses every scrape of it, so up == 0 and KubeAPIDown fires on a
+# healthy API server. The apiserver endpoint carries its own max_scrape_size,
+# which replaces the global flag for that job only (upward too), so the guard
+# for every other target stays at 32MB. vmagent buffers the whole uncompressed
+# body even with streamParse, so the per-job limit is a memory ceiling and must
+# stay finite.
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: apiserver endpoint gets its own scrape size limit by default
+    template: templates/apiserver-scrape.yaml
+    asserts:
+      - equal:
+          path: spec.endpoints[0].max_scrape_size
+          value: 128MB
+
+  - it: apiserver scrape size limit follows the value
+    template: templates/apiserver-scrape.yaml
+    set:
+      vmagent.apiserverMaxScrapeSize: 512MB
+    asserts:
+      - equal:
+          path: spec.endpoints[0].max_scrape_size
+          value: 512MB
+
+  - it: a byte count renders as a string, as the CRD field requires
+    template: templates/apiserver-scrape.yaml
+    set:
+      vmagent.apiserverMaxScrapeSize: 134217728
+    asserts:
+      - matchRegex:
+          path: spec.endpoints[0].max_scrape_size
+          pattern: ^[0-9.e+]+$
+
+  - it: an empty value falls back to the global flag
+    template: templates/apiserver-scrape.yaml
+    set:
+      vmagent.apiserverMaxScrapeSize: ""
+    asserts:
+      - notExists:
+          path: spec.endpoints[0].max_scrape_size
+
+  - it: the global limit for every other target is not loosened
+    template: templates/vmagent.yaml
+    asserts:
+      - equal:
+          path: spec.extraArgs["promscrape.maxScrapeSize"]
+          value: 32MB
+
+  - it: a refused oversized scrape raises its own alert
+    template: templates/alerts.yaml
+    documentSelector:
+      path: metadata.name
+      value: alerts-vmagent
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: VMAgentScrapeSizeExceeded
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: increase(vm_promscrape_max_scrape_size_exceeded_errors_total[10m]) > 0
+      - equal:
+          path: spec.groups[0].rules[0].labels.severity
+          value: warning

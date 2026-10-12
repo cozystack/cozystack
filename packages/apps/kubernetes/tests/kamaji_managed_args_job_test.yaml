@@ -1,0 +1,29 @@
+suite: extraArgs the post-upgrade Job patches onto the KamajiControlPlane
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+templates:
+  - templates/oidc-rbac-job.yaml
+
+tests:
+  - it: leaves a moved entry out of the extraArgs the Job patches onto the KamajiControlPlane
+    # The Job's merge patch replaces the whole array, so it has to carry the
+    # list cluster.yaml renders, not the raw values.
+    set:
+      controlPlane.apiServer.extraArgs:
+        - --profiling=false
+        - --enable-admission-plugins=NodeRestriction
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\\"extraArgs\\":\[\\"--profiling=false\\"\]'
+        documentIndex: 3
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'enable-admission-plugins'
+        documentIndex: 3

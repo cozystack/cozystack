@@ -366,10 +366,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		}
 	}
 
-	// For a SendInitialEvents (WatchList) request, ask the backing watch for
-	// bookmarks — the apiserver omits them by default, which would leave the
-	// terminating initial-events-end bookmark with no reliable trigger.
-	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(options)
 
 	// Start watch on HelmRelease with label selector only
 	// Field selectors are not supported by controller-runtime cache
@@ -378,7 +375,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
-		Raw:           &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
+		// Backing bookmarks are forwarded to the client, so ask for them only
+		// when the client did; a WatchList client always does, which keeps
+		// the terminating bookmark's trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: options.AllowWatchBookmarks},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
@@ -387,7 +387,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 	// Emit the initial-events-end bookmark after the initial ADDED events so
 	// client-go reflectors reach HasSynced.
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, options.ResourceVersion, func() runtime.Object {
 		module := &corev1alpha1.TenantModule{}
 		module.TypeMeta = metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -705,7 +705,7 @@ func (r *REST) buildTableFromTenantModules(modules []corev1alpha1.TenantModule) 
 	for i := range modules {
 		module := &modules[i]
 		row := metav1.TableRow{
-			Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
+			Cells:  []any{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
 			Object: runtime.RawExtension{Object: module},
 		}
 		table.Rows = append(table.Rows, row)
@@ -729,7 +729,7 @@ func (r *REST) buildTableFromTenantModule(module corev1alpha1.TenantModule) meta
 
 	m := module
 	row := metav1.TableRow{
-		Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
+		Cells:  []any{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
 		Object: runtime.RawExtension{Object: &m},
 	}
 	table.Rows = append(table.Rows, row)

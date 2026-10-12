@@ -26,6 +26,13 @@ import (
 	"github.com/fluxcd/pkg/apis/kustomize"
 )
 
+// ReleaseAnnotationPrefix is the prefix shared by every ApplicationDefinition
+// metadata annotation that changes how cozystack-api builds the generated
+// HelmRelease (the four constants below). cozystack-api reads them once, at
+// start-up, so cozystack-controller has to roll the api Deployment when one of
+// them changes; it selects them by this prefix when hashing the definitions.
+const ReleaseAnnotationPrefix = "release.cozystack.io/"
+
 // HelmInstallTimeoutAnnotation is the ApplicationDefinition metadata
 // annotation key that overrides the Flux HelmRelease Install.Timeout and
 // Upgrade.Timeout for a given Application kind.
@@ -57,6 +64,39 @@ const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
 // setting both gets no health gating at all, silently. Prefer dropping this
 // annotation over adding expressions that will never run.
 const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
+
+// HelmServerSideApplyAnnotation is the ApplicationDefinition metadata annotation
+// that overrides the Helm apply strategy for every HelmRelease the kind emits.
+// The platform's helm-controller (v1.5.0) defaults to server-side apply, under
+// which Helm force-owns every field it renders and reverts any value a runtime
+// writer (e.g. an HPA writing the engine CR's /scale subresource) later sets.
+// Setting this to "false" forces client-side apply, under which helm-controller
+// patches a CRD from the previous-vs-new rendered manifest and does not consult
+// live state (it leaves Helm's threeWayMergeForUnstructured at the default), so a
+// field rendered as an unchanged constant yields no patch and the co-writer's
+// live value survives.
+// Required by the postgres read-replica autoscaler, whose seeded spec.instances
+// must not be reverted from KEDA's live /scale value. Accepts "true"/"enabled" or
+// "false"/"disabled" (case-insensitive); empty leaves the helm-controller default.
+//
+// The switch is deliberately kind-wide, not per-instance: it applies to EVERY
+// HelmRelease the kind emits, including the ones that never enable the co-writing
+// feature. That is a considered trade-off, not an oversight:
+//   - Lifecycle stability. helm-controller resolves an unset Upgrade.ServerSideApply
+//     through "auto" from the last release's apply method, so gating client-side on
+//     "autoscaling active" would force an SSA->client-side ownership handoff on the
+//     live spec.instances the moment a tenant enables autoscaling - the exact live
+//     field handoff this design was chosen to avoid. Keeping the method stable for
+//     the kind's whole lifecycle makes enable/dry-run/transition/disable clean
+//     two-way merges with no apply-method transition.
+//   - Cost, acknowledged. A release that never autoscales is client-side too, so
+//     helm-controller no longer re-asserts a chart-rendered field that has drifted
+//     on the live CR (client-side diffs previous-vs-new render only, never live
+//     state) and driftDetection is not configured. The platform relies on GitOps
+//     re-render for correctness rather than SSA drift-correction; a per-instance
+//     apply strategy is a follow-up if drift-correction on non-feature releases of
+//     the kind is ever required.
+const HelmServerSideApplyAnnotation = "release.cozystack.io/helm-server-side-apply"
 
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux
 // helm-controller on HelmReleaseSpec.Install.Timeout (ms/s/m/h units only).
@@ -126,6 +166,26 @@ func ParseHelmInstallDisableWaitAnnotation(raw string) (bool, error) {
 	}
 }
 
+// ParseHelmServerSideApplyAnnotation parses the value of the
+// release.cozystack.io/helm-server-side-apply annotation. Returns a pointer to the
+// desired serverSideApply state, or nil for an empty value (leave the helm-controller
+// default). Accepts "true"/"enabled" and "false"/"disabled" (case-insensitive).
+func ParseHelmServerSideApplyAnnotation(raw string) (*bool, error) {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return nil, nil
+	case strings.EqualFold(raw, "true"), strings.EqualFold(raw, "enabled"):
+		v := true
+		return &v, nil
+	case strings.EqualFold(raw, "false"), strings.EqualFold(raw, "disabled"):
+		v := false
+		return &v, nil
+	default:
+		return nil, fmt.Errorf("must be \"true\"/\"enabled\" or \"false\"/\"disabled\", got %q", raw)
+	}
+}
+
 // ResourceConfig represents the structure of the configuration file.
 type ResourceConfig struct {
 	Resources []Resource `yaml:"resources"`
@@ -151,14 +211,14 @@ type ReleaseConfig struct {
 	Prefix   string            `yaml:"prefix"`
 	Labels   map[string]string `yaml:"labels"`
 	ChartRef ChartRefConfig    `yaml:"chartRef"`
-	// HelmInstallTimeout is a per-Application override of Install.Timeout
-	// and Upgrade.Timeout. When non-zero, it wins over
+	// HelmInstallTimeout is a per-kind override of Install.Timeout and
+	// Upgrade.Timeout. When non-zero, it wins over
 	// HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout below.
 	// Populated from the release.cozystack.io/helm-install-timeout
 	// annotation on the ApplicationDefinition at start-up.
 	HelmInstallTimeout time.Duration `yaml:"helmInstallTimeout,omitempty"`
-	// HelmUpgradeTimeout is a per-Application override of Upgrade.Timeout
-	// only. When non-zero, it wins over both HelmReleaseUpgradeTimeout and
+	// HelmUpgradeTimeout is a per-kind override of Upgrade.Timeout only.
+	// When non-zero, it wins over both HelmReleaseUpgradeTimeout and
 	// the Upgrade.Timeout value HelmInstallTimeout would otherwise apply,
 	// so a kind can carry an asymmetric install/upgrade budget. Populated
 	// from the release.cozystack.io/helm-upgrade-timeout annotation on the
@@ -176,12 +236,13 @@ type ReleaseConfig struct {
 	// without polling healthy releases at the same cadence.
 	HelmReleaseRetryInterval time.Duration `yaml:"helmReleaseRetryInterval,omitempty"`
 	// HelmReleaseInstallTimeout is the global default for
-	// Spec.Install.Timeout. Overridden per-Application by HelmInstallTimeout
-	// when the annotation is set.
+	// Spec.Install.Timeout. Overridden for this Application kind by
+	// HelmInstallTimeout from its ApplicationDefinition.
 	HelmReleaseInstallTimeout time.Duration `yaml:"helmReleaseInstallTimeout,omitempty"`
 	// HelmReleaseUpgradeTimeout is the global default for
-	// Spec.Upgrade.Timeout. Overridden per-Application by HelmInstallTimeout
-	// when the annotation is set.
+	// Spec.Upgrade.Timeout. Overridden for this Application kind by
+	// HelmInstallTimeout, or by HelmUpgradeTimeout with higher precedence,
+	// from its ApplicationDefinition.
 	HelmReleaseUpgradeTimeout time.Duration `yaml:"helmReleaseUpgradeTimeout,omitempty"`
 	// HelmReleaseMaxHistory is the global default for Spec.MaxHistory.
 	// 0 means unlimited per Helm semantics; matches the cozystack-operator
@@ -194,6 +255,12 @@ type ReleaseConfig struct {
 	// from the release.cozystack.io/helm-install-disable-wait
 	// annotation on the ApplicationDefinition at start-up.
 	HelmInstallDisableWait bool `yaml:"helmInstallDisableWait,omitempty"`
+	// HelmServerSideApply overrides the Helm apply strategy for this Application
+	// kind: nil leaves the helm-controller default (server-side apply on v1.5.0),
+	// false forces client-side apply. Populated from the
+	// release.cozystack.io/helm-server-side-apply annotation on the
+	// ApplicationDefinition at start-up. See HelmServerSideApplyAnnotation.
+	HelmServerSideApply *bool `yaml:"helmServerSideApply,omitempty"`
 	// WaitStrategy sets HelmReleaseSpec.WaitStrategy.Name (poller|legacy) for
 	// this Application kind. Populated from spec.release.waitStrategy on the
 	// ApplicationDefinition at start-up. Empty leaves the flux default, unless

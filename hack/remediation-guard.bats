@@ -12,12 +12,15 @@
 # are useless there because flux's ClearFailures zeroes them on successful
 # reconciliation; .status.history retains the snapshot trail.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on
-# its own line; there is no bats `run` or `$status`. Assertions are
-# expressed as direct shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
 #
-# Run with: hack/cozytest.sh hack/remediation-guard.bats
+# Run with: bats hack/remediation-guard.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "empty history returns not-detected" {
     . hack/e2e-chainsaw/_lib/remediation-guard.sh
@@ -81,47 +84,15 @@
     fi
 }
 
-@test "status.history extraction pins HR v2 status.history shape" {
-    # Pins the Flux HelmRelease v2 .status.history[].status shape that
-    # run-kubernetes.sh relies on. If a future flux release renames the
-    # field, the jsonpath returns nothing, the guard reports no cycle,
-    # and real remediation loops slip past the e2e assertion. This test
-    # uses yq to read the exact path used in the e2e script; the upstream
-    # Snapshot type lives at
-    # github.com/fluxcd/helm-controller/api/v2.Snapshot (via go.mod).
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-
-    cat > "$tmp/hr.yaml" <<'YAML'
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata:
-  name: kubernetes-test
-  namespace: tenant-test
-status:
-  history:
-    - name: kubernetes-test
-      namespace: tenant-test
-      version: 1
-      status: uninstalled
-    - name: kubernetes-test
-      namespace: tenant-test
-      version: 2
-      status: deployed
-YAML
-
-    # Default yq output is yaml scalar format, which for string values emits
-    # bare unquoted tokens - matching what kubectl -o jsonpath produces in
-    # e2e. Do not switch to JSON output here; that would quote the values
-    # and break the loop in helmrelease_has_remediation_cycle.
-    statuses=$(yq '.status.history[].status' "$tmp/hr.yaml")
-
-    [ -n "$statuses" ]
-    echo "$statuses" | grep --quiet '^uninstalled$'
-
+@test "the predicate does not overwrite a caller variable named statuses" {
+    # This library is sourced rather than executed, and the helper assigns
+    # "statuses" internally, so without a local the argument lands in the
+    # caller's scope.
     . hack/e2e-chainsaw/_lib/remediation-guard.sh
-    if ! helmrelease_has_remediation_cycle "$statuses"; then
-        echo "expected detected for pinned HR snippet with uninstalled + deployed history" >&2
+    statuses=sentinel
+    helmrelease_has_remediation_cycle "failed"
+    if [ "${statuses}" != sentinel ]; then
+        echo "helmrelease_has_remediation_cycle replaced the caller's statuses with: ${statuses}" >&2
         exit 1
     fi
 }

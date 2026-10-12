@@ -6,7 +6,34 @@ metadata:
     app.kubernetes.io/name: flux-plunger
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
+  {{- /*
+  flux-plunger treats a suspension its own field manager owns, seen in a fresh
+  reconcile, as its own interrupted run, so exactly one process may act on a
+  HelmRelease at a time. No rollout strategy gives that: the next pod starts as
+  soon as the old one is terminating, and an eviction or a node drain replaces a
+  pod the same way, while the old one stops its manager and drains its fences
+  (cmd/flux-plunger/main.go). What keeps a single writer is the leader Lease
+  (--leader-elect), which the old pod holds through the drain and which outlasts
+  it, so the next pod waits for it before it acts. maxSurge 0 only keeps a rollout
+  from starting the next pod before the old one is told to stop. This stays
+  RollingUpdate rather than Recreate because existing installs carry the
+  apiserver-defaulted rollingUpdate block (the chart shipped without a strategy),
+  and helm-controller applies server-side, where type Recreate over that block is
+  rejected on upgrade.
+  */}}
+  {{- $grace := int .Values.shutdownGracePeriodSeconds }}
+  {{- if ne (toString .Values.shutdownGracePeriodSeconds) (toString $grace) }}
+  {{- fail "shutdownGracePeriodSeconds must be a whole number of seconds: terminationGracePeriodSeconds takes an integer" }}
+  {{- end }}
+  {{- if or (lt $grace 40) (gt $grace 140) }}
+  {{- fail "shutdownGracePeriodSeconds must be between 40 and 140: below, the drain gets no time after the manager's 10s stop; above, the pre-delete hook cannot wait the pod out inside its deadline" }}
+  {{- end }}
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: flux-plunger
@@ -18,6 +45,7 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: flux-plunger
+      terminationGracePeriodSeconds: {{ .Values.shutdownGracePeriodSeconds }}
       containers:
       - name: flux-plunger
         image: "{{ .Values.image }}"
@@ -29,6 +57,9 @@ spec:
         {{- end }}
         - --metrics-bind-address=:8080
         - --metrics-secure=false
+        - --leader-elect
+        # The manager's stop takes up to 10s; the rest leaves 15s before SIGKILL.
+        - --shutdown-drain-timeout={{ sub .Values.shutdownGracePeriodSeconds 25 }}s
         ports:
         - name: metrics
           containerPort: 8080

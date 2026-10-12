@@ -1,0 +1,23 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cap1
+spec:
+  users:
+    admin: {}
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cap2
+spec:
+  users:
+    admin: {}
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: cap3
+spec:
+  users:
+    admin: {}

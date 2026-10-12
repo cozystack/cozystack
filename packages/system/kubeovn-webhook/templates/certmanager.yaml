@@ -38,7 +38,7 @@ metadata:
 spec:
   secretName: {{ include "namespace-annotation-webhook.fullname" . }}-tls
   duration: 8760h
-  renewBefore: 24h
+  renewBefore: 720h
   issuerRef:
     name: {{ include "namespace-annotation-webhook.fullname" . }}-ca-issuer
   commonName: {{ include "namespace-annotation-webhook.fullname" . }}-tls

@@ -31,6 +31,7 @@ this table names the people and is kept in step with it.
 | Kirill Ilin | [@sircthulhu](https://github.com/sircthulhu) | Ænix | Controllers, Keycloak, system operators |
 | Andrey Kolkov | [@androndo](https://github.com/androndo) | Ænix | Backups |
 | Aleksei Artamonov | [@scooby87](https://github.com/scooby87) | Ænix | Virtualization (KubeVirt, vm-instance, vm-disk) |
+| Marian Koreniuk | [@themoriarti](https://github.com/themoriarti) | CageForge | Proxmox integration (Cluster API infrastructure provider, CCM, CSI) |
 
 ## Emeritus Maintainers
 

@@ -1,0 +1,112 @@
+{{- /* The Proxmox counterpart of helmreleases/csi.yaml, and like that one it
+      ships only the tenant-side half: the node plugin, the CSIDriver object and
+      the storage classes. The controller — the only part that holds the
+      hypervisor token — runs in the management cluster, in
+      templates/csi-proxmox/controller.yaml. Nothing in this release carries a
+      credential, and the vendored chart's Secret template is gated on a
+      non-empty config.clusters, so with the list left empty it renders nothing.
+
+      Kept as its own file rather than a branch inside csi.yaml: the two drivers
+      share nothing but the role. kubevirt-csi reaches DataVolumes in this cluster over the
+      management API; proxmox-csi reaches the hypervisor over its own API with
+      its own credentials, lands in its own namespace, and takes an entirely
+      different values shape. Splitting them keeps the KubeVirt path rendering
+      byte-for-byte what it rendered before Proxmox existed. */}}
+{{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if and .Values._namespace.etcd .Values.proxmox.csi.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-csi
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  interval: 5m
+  timeout: 10m
+  releaseName: csi
+  chartRef:
+    kind: ExternalArtifact
+    {{- /* The artifact keeps the kubevirt- prefix because that is the variant
+          of kubernetes-application it is published under, not a statement
+          about the substrate. Naming it otherwise would mean a second variant
+          and a rename of all eighteen tenant addon artifacts. */}}
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-proxmox-csi
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: csi-proxmox
+  storageNamespace: csi-proxmox
+  {{- /* Same reasoning as the kubevirt release: install remediation is an
+         uninstall, which would take the tenant's StorageClasses down between
+         attempts. */}}
+  install:
+    createNamespace: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  {{- /* The chart hardcodes CSIDriver.storageCapacity: true, and with the
+        split it has to be false. CSIStorageCapacity objects are published by
+        the provisioner sidecar, which now runs in the management cluster and
+        owns them through an ownerReference to a Pod that does not exist in the
+        tenant, so nothing here ever publishes them — and the scheduler refuses
+        every Pod with "node(s) did not have enough free storage" while it waits.
+        Measured on a live cluster: with the flag true the Pod never schedules,
+        with it false the PVC binds in seconds. Patched rather than forked so the
+        vendored chart still reproduces from `helm pull`. */}}
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              kind: CSIDriver
+              name: csi.proxmox.sinextra.dev
+            patch: |
+              - op: replace
+                path: /spec/storageCapacity
+                value: false
+  values:
+    proxmox-csi-plugin:
+      {{- /* The vendored chart has no switch for the controller, so its
+            replica count is what turns it off here. The Deployment object
+            still renders, with zero replicas and therefore no Pod and no
+            mount of a Secret that does not exist in this cluster. */}}
+      replicaCount: 0
+      options:
+        {{- /* Off for the reason the postRenderer above gives. The chart value
+              alone does not do it: CSIDriver.storageCapacity is hardcoded. */}}
+        enableCapacity: false
+      config:
+        {{- /* Empty on purpose. It is what keeps the chart's templates/secrets.yaml
+              from rendering, and the node plugin needs no cluster credentials:
+              its DaemonSet mounts none. */}}
+        clusters: []
+      storageClass:
+        {{- range .Values.proxmox.csi.storageClasses }}
+        - name: {{ .name | quote }}
+          storage: {{ .storage | quote }}
+          {{- with .fstype }}
+          fstype: {{ . | quote }}
+          {{- end }}
+          {{- with .reclaimPolicy }}
+          reclaimPolicy: {{ . | quote }}
+          {{- end }}
+          {{- if .ssd }}
+          ssd: true
+          {{- end }}
+        {{- end }}
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -15,15 +15,19 @@
 #      never skipped — and the script fails loudly if the target is unresolvable;
 #   2. the staged credentials Secret is tenant-invisible (managed-by set,
 #      tenantresource stripped); and
-#   3. the operator is scaled to 0 BEFORE etcd-migrate --apply and back to 1
-#      AFTER, with --apply always carrying the S3 backup destination.
+#   3. the operator is scaled to 0 BEFORE etcd-migrate --apply, with --apply
+#      always carrying the S3 backup destination, and stays at 0 after a
+#      successful adoption. Only a failed adoption restores it to 1.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
-# shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, and setup() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/migration-50-etcd-adopt.bats
+# Run with: bats hack/migration-50-etcd-adopt.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-50"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/50"
@@ -80,7 +84,7 @@ lineno() {
   # are upgrading FROM and its plaintext in-cluster default cannot be reached.
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
-  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  if echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"; then echo "FAIL: --apply must not carry the in-cluster S3 endpoint"; false; fi
   # https is forced because a BucketClaim is provisioned into exactly the bucket
   # the creds advertise, not because the projected endpoint happens to exist.
   grep -qF -- "BUCKETCLAIM-LIST" "$FAKE_CMDLOG"
@@ -90,7 +94,7 @@ lineno() {
   echo "$apply" | grep -qF -- "--backup-s3-force-path-style"
   # snapshots land under a system key prefix, not a tenant <ns>/<name>/ path.
   echo "$apply" | grep -qF -- "--backup-s3-key=cozy-system/etcd-adoption/"
-  ! echo "$apply" | grep -qF -- "--skip-backup"
+  if echo "$apply" | grep -qF -- "--skip-backup"; then echo "FAIL: --apply must not carry --skip-backup"; false; fi
   # --agent-image is explicit (the scaled-down Deployment is still the legacy operator).
   echo "$apply" | grep -qF -- "--agent-image=ghcr.io/cozystack/etcd-operator:v0.5.2"
 
@@ -105,17 +109,30 @@ lineno() {
   [ "$(jq -r '.data.AWS_ACCESS_KEY_ID' "$staged")" = "QUtJQUVYQU1QTEU=" ]
   [ "$(jq -r '.metadata.namespace // "absent"' "$staged")" = "absent" ]
 
-  # Order: stage creds -> scale operator down -> --apply -> scale up -> stamp.
+  # Steps run in this order, stage creds, scale the operator down, --apply, stamp.
   s_stage=$(lineno "STAGE tenant-foo")
   s_down=$(lineno "SCALE 0")
   s_apply=$(lineno "ETCD-MIGRATE --apply")
-  s_up=$(lineno "SCALE 1")
   s_stamp=$(lineno "STAMP")
-  [ -n "$s_stage" ] && [ -n "$s_down" ] && [ -n "$s_apply" ] && [ -n "$s_up" ] && [ -n "$s_stamp" ]
+  [ -n "$s_stage" ] && [ -n "$s_down" ] && [ -n "$s_apply" ] && [ -n "$s_stamp" ]
   [ "$s_stage" -lt "$s_down" ]
   [ "$s_down" -lt "$s_apply" ]
-  [ "$s_apply" -lt "$s_up" ]
-  [ "$s_up" -lt "$s_stamp" ]
+  [ "$s_apply" -lt "$s_stamp" ]
+  rm -rf "$WORK"
+}
+
+@test "successful adoption leaves the legacy operator at 0 for the v1alpha2 operator to replace" {
+  prep
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # A legacy operator back at 1 takes etcd-headless away from the adopted
+  # members, see the success path of migration 50.
+  grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 1" "$FAKE_CMDLOG"; then echo "FAIL: the legacy operator was scaled back up after a successful adoption"; false; fi
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
 
@@ -143,7 +160,7 @@ lineno() {
   cat "$WORK/out"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -qF -- "APPLY-CRDS" "$FAKE_CMDLOG"
+  if grep -qF -- "APPLY-CRDS" "$FAKE_CMDLOG"; then echo "FAIL: no CRDs must have been applied"; false; fi
   # Adoption still proceeds.
   grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
   rm -rf "$WORK"
@@ -190,7 +207,7 @@ lineno() {
   [ "$s_down" -lt "$s_apply" ]
   [ "$s_apply" -lt "$s_up" ]
   # The version must NOT be stamped on a failed adoption (the Job retries).
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -214,9 +231,9 @@ lineno() {
   grep -qF -- "package.cozystack.io cozystack.cozystack-platform" "$WORK/out"
   grep -qF -- "etcdAdoptSkipBackup: true" "$WORK/out"
   # Nothing destructive must have run: no scale-down, no --apply, no version stamp.
-  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 0" "$FAKE_CMDLOG"; then echo "FAIL: the operator must not have been scaled down"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -233,13 +250,13 @@ lineno() {
   cat "$WORK/out"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -qF -- "refusing to adopt" "$WORK/out"
+  if grep -qF -- "refusing to adopt" "$WORK/out"; then echo "FAIL: adoption must not have been refused"; false; fi
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
   echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
   echo "$apply" | grep -qF -- "--backup-s3-force-path-style"
-  ! echo "$apply" | grep -qF -- "--skip-backup"
+  if echo "$apply" | grep -qF -- "--skip-backup"; then echo "FAIL: --apply must not carry --skip-backup"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -276,10 +293,10 @@ lineno() {
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://minio.internal:9000"
   # The projected bare host must NOT be promoted to https.
-  ! echo "$apply" | grep -qF -- "https://minio.internal:9000"
+  if echo "$apply" | grep -qF -- "https://minio.internal:9000"; then echo "FAIL: the projected bare host must not be promoted to https"; false; fi
   echo "$apply" | grep -qF -- "--backup-s3-bucket=minio-bucket"
   # A missing CRD is answered, not retried: the list is never even attempted.
-  ! grep -qF -- "BUCKETCLAIM-LIST" "$FAKE_CMDLOG"
+  if grep -qF -- "BUCKETCLAIM-LIST" "$FAKE_CMDLOG"; then echo "FAIL: BucketClaims must not have been listed"; false; fi
   rm -rf "$WORK"
 }
 
@@ -313,8 +330,8 @@ lineno() {
   echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
   echo "$apply" | grep -qF -- "--backup-s3-force-path-style"
   # Not one projected coordinate may leak into the external destination.
-  ! echo "$apply" | grep -qF -- "stale-secret-bucket"
-  ! echo "$apply" | grep -qF -- "eu-west-9"
+  if echo "$apply" | grep -qF -- "stale-secret-bucket"; then echo "FAIL: --apply must not carry the stale bucket from the Secret"; false; fi
+  if echo "$apply" | grep -qF -- "eu-west-9"; then echo "FAIL: --apply must not carry the stale region from the Secret"; false; fi
   rm -rf "$WORK"
 }
 
@@ -333,7 +350,7 @@ lineno() {
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
-  ! echo "$apply" | grep -qF -- "cr-bucket-should-lose"
+  if echo "$apply" | grep -qF -- "cr-bucket-should-lose"; then echo "FAIL: --apply must not carry the bucket from the Strategy CR"; false; fi
   rm -rf "$WORK"
 }
 
@@ -358,7 +375,7 @@ lineno() {
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://minio.internal:9000"
-  ! echo "$apply" | grep -qF -- "https://minio.internal:9000"
+  if echo "$apply" | grep -qF -- "https://minio.internal:9000"; then echo "FAIL: the projected bare host must not be promoted to https"; false; fi
   rm -rf "$WORK"
 }
 
@@ -379,7 +396,7 @@ lineno() {
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
-  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  if echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"; then echo "FAIL: --apply must not carry the in-cluster S3 endpoint"; false; fi
   rm -rf "$WORK"
 }
 
@@ -408,7 +425,7 @@ lineno() {
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
   echo "$apply" | grep -qF -- "--backup-s3-bucket=bucket-0bb5096a-956e-4630-91f4-e1d265de5f51"
   # The v1.5.x CR endpoint must never be what a large cluster falls back to.
-  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  if echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"; then echo "FAIL: --apply must not carry the in-cluster S3 endpoint"; false; fi
   rm -rf "$WORK"
 }
 
@@ -433,12 +450,12 @@ lineno() {
   grep -qF -- "TERMINATING BucketClaim" "$WORK/out"
   grep -qF -- "could not determine" "$WORK/out"
   # It must not have silently taken either branch.
-  ! grep -qF -- "treating as external S3" "$WORK/out"
-  ! grep -qF -- "forcing https" "$WORK/out"
+  if grep -qF -- "treating as external S3" "$WORK/out"; then echo "FAIL: the endpoint must not have been treated as external S3"; false; fi
+  if grep -qF -- "forcing https" "$WORK/out"; then echo "FAIL: the endpoint scheme must not have been forced to https"; false; fi
   # Nothing destructive ran.
-  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 0" "$FAKE_CMDLOG"; then echo "FAIL: the operator must not have been scaled down"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -456,7 +473,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
-  ! grep -qF -- "TERMINATING BucketClaim" "$WORK/out"
+  if grep -qF -- "TERMINATING BucketClaim" "$WORK/out"; then echo "FAIL: no terminating BucketClaim must have been reported"; false; fi
   rm -rf "$WORK"
 }
 
@@ -471,9 +488,9 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -qF -- "unexpected BucketClaim list shape" "$WORK/out"
-  ! grep -qF -- "treating as external S3" "$WORK/out"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "treating as external S3" "$WORK/out"; then echo "FAIL: the endpoint must not have been treated as external S3"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -493,11 +510,11 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   grep -qF -- "could not determine" "$WORK/out"
   grep -qF -- "refusing to adopt" "$WORK/out"
   # It must NOT have silently taken the external path.
-  ! grep -qF -- "treating as external S3" "$WORK/out"
+  if grep -qF -- "treating as external S3" "$WORK/out"; then echo "FAIL: the endpoint must not have been treated as external S3"; false; fi
   # Nothing destructive ran.
-  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 0" "$FAKE_CMDLOG"; then echo "FAIL: the operator must not have been scaled down"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -511,8 +528,8 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -qF -- "could not determine" "$WORK/out"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAMP" "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -531,7 +548,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   # No scheme-only endpoint reaches etcd-migrate...
-  ! echo "$apply" | grep -qE -- "--backup-s3-endpoint=https://( |$)"
+  if echo "$apply" | grep -qE -- "--backup-s3-endpoint=https://( |$)"; then echo "FAIL: --apply must not carry an endpoint whose host is empty"; false; fi
   # ...and the CR supplies the real one instead.
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://seaweedfs-s3.tenant-root.svc.cozy.local:8333"
   rm -rf "$WORK"
@@ -550,7 +567,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
-  ! echo "$apply" | grep -qF -- "--skip-backup"
+  if echo "$apply" | grep -qF -- "--skip-backup"; then echo "FAIL: --apply must not carry --skip-backup"; false; fi
   grep -qF -- "STAGE tenant-foo" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -569,9 +586,9 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--skip-backup"
-  ! echo "$apply" | grep -qF -- "--backup-s3-endpoint"
+  if echo "$apply" | grep -qF -- "--backup-s3-endpoint"; then echo "FAIL: --apply must not carry a backup S3 endpoint"; false; fi
   # No snapshot Job runs, so no credentials are staged.
-  ! grep -qF -- "STAGE " "$FAKE_CMDLOG"
+  if grep -qF -- "STAGE " "$FAKE_CMDLOG"; then echo "FAIL: no credentials must have been staged"; false; fi
   # Adoption still runs and stamps: scale down -> --apply -> scale up -> stamp.
   grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
@@ -592,8 +609,8 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--skip-backup"
-  ! echo "$apply" | grep -qF -- "--backup-s3-endpoint"
-  ! grep -qF -- "STAGE " "$FAKE_CMDLOG"
+  if echo "$apply" | grep -qF -- "--backup-s3-endpoint"; then echo "FAIL: --apply must not carry a backup S3 endpoint"; false; fi
+  if grep -qF -- "STAGE " "$FAKE_CMDLOG"; then echo "FAIL: no credentials must have been staged"; false; fi
   rm -rf "$WORK"
 }
 
@@ -608,7 +625,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
-  ! echo "$apply" | grep -qF -- "--skip-backup"
+  if echo "$apply" | grep -qF -- "--skip-backup"; then echo "FAIL: --apply must not carry --skip-backup"; false; fi
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
   rm -rf "$WORK"
 }
@@ -628,7 +645,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$WORK/out"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -qF -- "refusing to adopt" "$WORK/out"
+  if grep -qF -- "refusing to adopt" "$WORK/out"; then echo "FAIL: adoption must not have been refused"; false; fi
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--skip-backup"
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
@@ -645,9 +662,9 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
-  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
-  ! grep -qF -- "STAGE " "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 0" "$FAKE_CMDLOG"; then echo "FAIL: the operator must not have been scaled down"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
+  if grep -qF -- "STAGE " "$FAKE_CMDLOG"; then echo "FAIL: no credentials must have been staged"; false; fi
   rm -rf "$WORK"
 }
 
@@ -660,8 +677,8 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
-  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
-  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 0" "$FAKE_CMDLOG"; then echo "FAIL: the operator must not have been scaled down"; false; fi
+  if grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"; then echo "FAIL: etcd-migrate --apply must not have run"; false; fi
   rm -rf "$WORK"
 }
 
@@ -709,7 +726,7 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   # authenticates via the SA token file + CA.
   [ -s "$ETCD_MIGRATE_KUBECONFIG" ]
   grep -qF -- "server: https://kubernetes.default.svc" "$ETCD_MIGRATE_KUBECONFIG"
-  ! grep -qF -- "fd00::1" "$ETCD_MIGRATE_KUBECONFIG"
+  if grep -qF -- "fd00::1" "$ETCD_MIGRATE_KUBECONFIG"; then echo "FAIL: the synthesized kubeconfig must not name the bare IPv6 host"; false; fi
   grep -qF -- "tokenFile: $sa/token" "$ETCD_MIGRATE_KUBECONFIG"
   grep -qF -- "certificate-authority: $sa/ca.crt" "$ETCD_MIGRATE_KUBECONFIG"
   rm -rf "$WORK"

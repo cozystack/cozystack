@@ -1,4 +1,4 @@
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- if $gateway }}
 apiVersion: gateway.networking.k8s.io/v1

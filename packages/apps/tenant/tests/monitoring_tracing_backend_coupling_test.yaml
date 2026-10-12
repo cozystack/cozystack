@@ -1,0 +1,82 @@
+suite: shared-central tracing couples the collector backend to tracingCentral
+# _namespace.tracingCentral is the only switch to the shared store; it is
+# published under the same condition as the egress rules, and the monitoring
+# HelmRelease's spec.values stays the Monitoring application's.
+templates:
+  - templates/monitoring.yaml
+  - templates/namespace.yaml
+
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+
+tests:
+  - it: publishes tracingCentral=true for an opted-in tenant with monitoring
+    set:
+      monitoring: true
+      tracingCentral: true
+    template: templates/namespace.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack-values
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^_namespace:\\n(  .*\\n)*  tracingCentral: true$"
+
+  # Every app in the tenant reads this Secret, so a key that is always written
+  # would re-upgrade all of them on the platform upgrade.
+  - it: leaves the flag out when the tenant did not opt in
+    set:
+      monitoring: true
+    template: templates/namespace.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack-values
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracingCentral"
+
+  # The egress rules exist only for the tenant that opts in and select only its
+  # own namespace, so a child inheriting the flag from a central parent would
+  # export to the shared store with no path to it, every object Ready.
+  - it: does not pass a central parent's flag on to a child with its own monitoring
+    release:
+      name: tenant-bar
+      namespace: tenant-foo
+    set:
+      monitoring: true
+      _namespace:
+        tracingCentral: true
+        monitoring: tenant-foo
+    template: templates/namespace.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack-values
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracingCentral"
+
+  - it: leaves the flag out without monitoring, which deploys no collector
+    set:
+      monitoring: false
+      tracingCentral: true
+    template: templates/namespace.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack-values
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracingCentral"
+
+  - it: leaves the monitoring HelmRelease values to the Monitoring application
+    set:
+      monitoring: true
+      tracingCentral: true
+    template: templates/monitoring.yaml
+    asserts:
+      - notExists:
+          path: spec.values

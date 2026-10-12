@@ -3,11 +3,31 @@ NAME := sandbox
 CLEAN := 1
 TESTING_APPS := $(shell find ../../apps -maxdepth 1 -mindepth 1 -type d | awk -F/ '{print $$NF}')
 SANDBOX_NAME := cozy-e2e-sandbox-$(shell echo "$$(hostname):$$(pwd)" | sha256sum | cut -c -6)
+COZY_E2E_NODE_CPUS ?= 8
+COZY_E2E_NODE_MEMORY_MIB ?= 24576
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
+# One container lane per host. Unlike SANDBOX_NAME above, these names are not
+# per-checkout, and hack/e2e-compose.yaml's `container_name: srv1..3` and the
+# `data-srvN` zpools are global besides -- so a second checkout on the same host
+# adopts this one's nodes and pools, and its delete-cluster-container destroys
+# them. Not reachable in CI, where the lane already fills the largest runner
+# shape (3 x 8 vCPU / 24 GiB against 32 / 128), and left as a known limit rather
+# than fixed because isolating it properly means renaming the pools, which the
+# LINSTOR storage-pool registration reads.
+COMPOSE_PROJECT ?= cozy-e2e
+COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
+ZPOOL_BACKING_DIR ?= /var/lib/cozy-e2e-zpools
+
+# The e2e sandbox image is pinned to amd64 as a whole: its VM lane boots the
+# amd64 Talos disk under qemu-system-x86_64 with KVM
+# (hack/e2e-prepare-cluster.bats), which an arm64 sandbox cannot run.
+# `override` beats any PLATFORM given on the command line, an explicit
+# linux/arm64 as much as one passed to a whole `make build`. It must precede
+# the include: common-envs.mk expands BUILDX_ARGS immediately.
+override PLATFORM := linux/amd64
 
 include ../../../hack/common-envs.mk
-
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -33,23 +53,130 @@ e2e: test-openapi test-chainsaw ## Run the end-to-end tests in existing sandbox
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
+# Live BATS suites need a literal invocation here: the root unit glob excludes
+# hack/e2e-* and subdirectories. hack/bats-runner-coverage.bats checks for files
+# with no runner and for runner paths whose files no longer exist.
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
 
+# Container lane: Talos nodes as containers instead of QEMU guests, so tenant
+# workloads sit one nesting level shallower. Sits BESIDE prepare-cluster rather
+# than replacing it; nothing downstream changes, because the addressing, CPU and
+# memory in hack/e2e-compose.yaml mirror the QEMU lane exactly.
+#
+# Two steps, not one, because the halves must run in different places. The nodes
+# have to be siblings on the runner's docker daemon for the /dev and /run/udev
+# binds in hack/e2e-compose.yaml to resolve against the real host devtmpfs --
+# that bind is what lets this lane carry LINSTOR at all -- so the host-side half
+# needs a docker socket the sandbox does not have. Everything Talos-side then
+# runs inside the sandbox exactly as the QEMU lane does.
+#
+# No copy-nocloud-image dependency: containers boot from the Talos image
+# directly and need no nocloud asset, which also means this lane does not wait
+# on `make -C packages/core/talos assets`.
+prepare-cluster-container: delete-cluster-container
+	SANDBOX_NAME="${SANDBOX_NAME}" COMPOSE_PROJECT="${COMPOSE_PROJECT}" COMPOSE_FILE="${COMPOSE_FILE}" ZPOOL_BACKING_DIR="${ZPOOL_BACKING_DIR}" COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" $(ROOT_DIR)hack/e2e-container-up.sh
+	docker exec -e COZY_E2E_NODE_CPUS="${COZY_E2E_NODE_CPUS}" -e COZY_E2E_NODE_MEMORY_MIB="${COZY_E2E_NODE_MEMORY_MIB}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster-container.bats'
+
+# Tear the container lane down. Docker volumes hold etcd and kubelet state, and
+# the host zpools hold LINSTOR data, so both halves must disappear before a
+# retry or the next run can adopt a half-dead cluster.
+# USERDATA is set to a placeholder because compose interpolates the whole file
+# before it decides what the subcommand needs, so the `${USERDATA:?}` guard that
+# makes a missing machine config fail loudly on `up` also fails `down`, where no
+# machine config is required. The value is never read: `down` matches containers
+# by project and service name. Without it teardown always errored, and ignoring
+# that error left the nodes and their /var volumes alive for the next run -- the
+# exact half-dead cluster this target exists to prevent.
+delete-cluster-container:
+	@set -u; \
+		cleanup_rc=0; \
+		if USERDATA=teardown docker compose -p "${COMPOSE_PROJECT}" -f "${COMPOSE_FILE}" down -v; then \
+			:; \
+		else \
+			step_rc=$$?; \
+			echo "container compose teardown failed with exit $$step_rc; continuing host-storage cleanup" >&2; \
+			cleanup_rc=$$step_rc; \
+		fi; \
+		if [ -z "${ZPOOL_BACKING_DIR}" ] || [ "${ZPOOL_BACKING_DIR}" = / ]; then \
+			echo "refusing unsafe ZPOOL_BACKING_DIR '${ZPOOL_BACKING_DIR}'" >&2; \
+			exit 1; \
+		fi; \
+		if [ "$$(id -u)" -eq 0 ]; then sudo_cmd=; else sudo_cmd=sudo; fi; \
+		for n in 1 2 3; do \
+			pool_detached=1; \
+			if $$sudo_cmd zpool list "data-srv$${n}" >/dev/null 2>&1; then \
+				if $$sudo_cmd zpool destroy "data-srv$${n}"; then \
+					:; \
+				else \
+					step_rc=$$?; \
+					echo "failed to destroy zpool data-srv$${n} (exit $$step_rc)" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+					pool_detached=0; \
+				fi; \
+			else \
+				direct_list_rc=$$?; \
+				inventory_rc=0; \
+				pool_names=$$($$sudo_cmd zpool list -H -o name 2>/dev/null) || inventory_rc=$$?; \
+				if [ "$$inventory_rc" -ne 0 ]; then \
+					echo "failed to inventory zpools after data-srv$${n} lookup returned exit $$direct_list_rc (inventory exit $$inventory_rc); keeping its backing file" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$inventory_rc; fi; \
+					pool_detached=0; \
+				elif printf '%s\n' "$$pool_names" | grep -Fxq "data-srv$${n}"; then \
+					echo "zpool inventory still lists data-srv$${n} after its direct lookup returned exit $$direct_list_rc; keeping its backing file" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$direct_list_rc; fi; \
+					pool_detached=0; \
+				fi; \
+			fi; \
+			if [ "$$pool_detached" -eq 0 ]; then \
+				echo "keeping ${ZPOOL_BACKING_DIR}/srv$${n}.img because data-srv$${n} is still imported" >&2; \
+			else \
+				if $$sudo_cmd rm -f "${ZPOOL_BACKING_DIR}/srv$${n}.img"; then \
+					:; \
+				else \
+					step_rc=$$?; \
+					echo "failed to remove ${ZPOOL_BACKING_DIR}/srv$${n}.img (exit $$step_rc)" >&2; \
+					if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+				fi; \
+			fi; \
+		done; \
+		if [ -d "${ZPOOL_BACKING_DIR}" ]; then \
+			if $$sudo_cmd rmdir "${ZPOOL_BACKING_DIR}"; then \
+				:; \
+			else \
+				step_rc=$$?; \
+				echo "failed to remove backing directory ${ZPOOL_BACKING_DIR} (exit $$step_rc)" >&2; \
+				if [ "$$cleanup_rc" -eq 0 ]; then cleanup_rc=$$step_rc; fi; \
+			fi; \
+		fi; \
+		exit "$$cleanup_rc"
+
+# The API endpoint and E2E-only storage mode cross into the sandbox explicitly:
+# docker exec starts a fresh environment, so values exported by the caller do
+# not reach the manifest generator or root-tenant setup. Empty values retain the
+# QEMU defaults; the container lane supplies its node endpoint, disables DRBD,
+# and selects local storage because its Talos nodes share one kernel.
+# COZY_DISABLED_PACKAGES is the space-separated output of
+# hack/select-install.sh --disabled; empty installs the whole platform.
 install-cozystack:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" -e COZY_DISABLED_PACKAGES="${COZY_DISABLED_PACKAGES}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
 # Run the Chainsaw E2E app suite. Chainsaw loads .chainsaw.yaml from the cwd,
-# discovers every chainsaw-test.yaml under hack/e2e-chainsaw/, polls each
+# discovers each Test in or below a suite dir of hack/e2e-chainsaw/, polls each
 # assertion to its own timeout, and writes a JUnit chainsaw-report.xml the CI
 # job uploads. CHAINSAW_SUITES restricts the run to the named suite dirs
 # (space-separated, e.g. "postgres bucket"); empty runs the whole suite. The
 # CI Test-Impact-Analysis step (hack/select-e2e.sh) sets it from the PR diff.
+# hack/e2e-chainsaw-run.sh runs one `chainsaw test` per suite directory, so it
+# can fail the suite whose pods outlive its cleanup, and merges the per-suite
+# reports into that same chainsaw-report.xml.
+# COZY_E2E_STORAGE_CLASS is passed both to script operations and as a Chainsaw
+# value for templated resource files; empty keeps the QEMU default, replicated.
 test-chainsaw:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test ${CHAINSAW_SUITES}'
+	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
@@ -60,6 +187,14 @@ collect-images: ## Collect the list of images used in the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/collect-images.sh'
 	mkdir -p ../../../_out
 	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
+	docker cp "${SANDBOX_NAME}":/workspace/image-refs.txt ../../../_out/image-refs.txt
+
+# Install for the isp-hosted lane (.github/workflows/e2e-isp-hosted.yaml): the
+# hosted installer variant and the isp-hosted platform variant, on a kind
+# cluster the workflow attaches the sandbox to. Nothing to pass in, unlike
+# install-cozystack: the endpoint and storage belong to the cluster.
+install-cozystack-hosted:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack-hosted.bats'
 
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
@@ -67,7 +202,25 @@ delete: ## Remove sandbox from existing Kubernetes cluster.
 exec:  ## Opens an interactive shell in the sandbox container.
 	docker exec -ti "${SANDBOX_NAME}" bash
 
+# Which machine this run landed on, recorded before the container exists.
+#
+# Here rather than in a workflow step for two reasons. The metadata service
+# answers on a link-local address the container is not guaranteed to reach, so
+# the read has to happen on this side of `docker run`; and the record has to be
+# inside the tree the `docker cp` below carries in, or hack/cozyreport.sh cannot
+# fold it into the artifact from inside. Every workflow that runs the suite reaches
+# the sandbox through `make prepare-env`, so one call here covers each of them on
+# both the green and the red path, with no per-workflow step to keep in step. No
+# count of those workflows here on purpose: the count is what goes stale, and the
+# funnel is the property worth stating.
+#
+# Ahead of `docker run`, so a runner whose sandbox fails to start is still
+# identified. Never fatal: the script says why it could not read something and
+# exits 0. On a machine with no metadata service -- a laptop running this target
+# directly -- it costs the read's own ceiling once, against a target that then
+# boots three QEMU guests.
 apply: delete
+	COZY_RUNNER_IDENTITY_FILE="$(ROOT_DIR)_out/runner-identity.txt" $(ROOT_DIR)hack/e2e-runner-identity.sh
 	docker run \
 		-d --rm --name "${SANDBOX_NAME}" --privileged \
 		-e TALOSCONFIG=/workspace/talosconfig \

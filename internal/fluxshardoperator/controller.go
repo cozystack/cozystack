@@ -347,7 +347,7 @@ func (r *PlacementReconciler) patchLabel(ctx context.Context, gvk schema.GroupVe
 func (r *PlacementReconciler) report(views map[string]*tenantView, desired map[string]string, shardCount, totalHRs, pending int) {
 	shardLoadGauge.Reset()
 	load := map[string]int{}
-	for i := 0; i < shardCount; i++ {
+	for i := range shardCount {
 		load[ShardName(i)] = 0
 	}
 	for tenantNS, shard := range desired {

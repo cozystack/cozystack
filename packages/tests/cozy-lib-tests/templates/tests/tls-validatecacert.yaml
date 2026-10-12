@@ -1,0 +1,13 @@
+{{- /* Probe for cozy-lib.tls.validateCACert: validates .Values.caCert under
+       the caller-supplied .Values.field, then renders a marker document so a
+       passing case has something to assert on — the helper itself emits
+       nothing. */ -}}
+{{- if .Values.nonDict -}}
+{{ include "cozy-lib.tls.validateCACert" "not-a-dict" }}
+{{- else -}}
+{{- include "cozy-lib.tls.validateCACert" (dict "caCert" .Values.caCert "field" .Values.field) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: validatecacert-probe
+{{- end -}}

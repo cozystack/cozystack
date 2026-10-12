@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   validSpec: {
     backupRef: { name: "backup-1" },
   },
+  emitSpec: {} as unknown,
 }))
 
 vi.mock("../lib/tenant-context.tsx", () => ({
@@ -36,7 +37,7 @@ vi.mock("../components/SchemaForm.tsx", () => ({
     function MockSchemaForm({ onChange }, ref) {
       useImperativeHandle(ref, () => ({ validate: () => h.validateReturn }))
       useEffect(() => {
-        onChange(h.validSpec)
+        onChange(h.emitSpec)
       }, [onChange])
       return null
     },
@@ -58,6 +59,7 @@ describe("BackupRestoreJobCreatePage submit validation gate", () => {
     h.createMutateAsync.mockReset()
     h.createMutateAsync.mockResolvedValue({})
     h.validateReturn = true
+    h.emitSpec = h.validSpec
   })
 
   it("does not POST when the form fails RJSF validation", async () => {
@@ -80,5 +82,20 @@ describe("BackupRestoreJobCreatePage submit validation gate", () => {
     await user.click(screen.getByRole("button", { name: /create/i }))
 
     expect(h.createMutateAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it("runs RJSF validation before the page-level required-field alerts", async () => {
+    h.validateReturn = false
+    h.emitSpec = {}
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {})
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.type(screen.getByRole("textbox"), "my-restore")
+    await user.click(screen.getByRole("button", { name: /create/i }))
+
+    expect(h.createMutateAsync).not.toHaveBeenCalled()
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
   })
 })

@@ -24,9 +24,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
@@ -36,6 +38,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	mutatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/mutating"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -93,7 +96,27 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 		HelmReleaseMaxHistory:     5,
 	}
 	o.RecommendedOptions.Etcd = nil
+	disableUnsyncableAdmissionPlugins(o.RecommendedOptions.Admission)
 	return o
+}
+
+// disableUnsyncableAdmissionPlugins keeps MutatingAdmissionPolicy out of the
+// chain. It is on by default from k8s.io/apiserver v0.36 and refuses every
+// write until it has synced mutatingadmissionpolicies, which this server has
+// no RBAC to list and which clusters older than 1.36 do not serve. It runs
+// again in Complete because --disable-admission-plugins replaces the list.
+// Naming the plugin in --enable-admission-plugins wins: the operator has
+// granted it what it needs, and both lists at once fail validation.
+func disableUnsyncableAdmissionPlugins(a *genericoptions.AdmissionOptions) {
+	if slices.Contains(a.EnablePlugins, mutatingadmissionpolicy.PluginName) {
+		a.DisablePlugins = slices.DeleteFunc(a.DisablePlugins, func(p string) bool {
+			return p == mutatingadmissionpolicy.PluginName
+		})
+		return
+	}
+	if !slices.Contains(a.DisablePlugins, mutatingadmissionpolicy.PluginName) {
+		a.DisablePlugins = append(a.DisablePlugins, mutatingadmissionpolicy.PluginName)
+	}
 }
 
 // NewCommandStartCozyServer provides a CLI handler for the 'start apps-server' command
@@ -134,15 +157,15 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 			"same cadence.")
 	flags.StringVar(&o.HelmReleaseInstallTimeout, "helmrelease-install-timeout", o.HelmReleaseInstallTimeout,
 		"Default timeout for the Helm install action of HelmReleases generated from Application "+
-			"resources (Spec.Install.Timeout). Overridden per-Application by the "+
-			"release.cozystack.io/helm-install-timeout annotation on the ApplicationDefinition; the "+
+			"resources (Spec.Install.Timeout). Overridden for an Application kind by the "+
+			"release.cozystack.io/helm-install-timeout annotation on its ApplicationDefinition; the "+
 			"same annotation also overrides --helmrelease-upgrade-timeout.")
 	flags.StringVar(&o.HelmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", o.HelmReleaseUpgradeTimeout,
 		"Default timeout for the Helm upgrade action of HelmReleases generated from Application "+
-			"resources (Spec.Upgrade.Timeout). Overridden per-Application by the "+
-			"release.cozystack.io/helm-install-timeout annotation (which sets both install and "+
-			"upgrade), or by release.cozystack.io/helm-upgrade-timeout to override only the upgrade "+
-			"side for a kind that needs an asymmetric budget.")
+			"resources (Spec.Upgrade.Timeout). Overridden for an Application kind by the "+
+			"release.cozystack.io/helm-install-timeout annotation on its ApplicationDefinition (which "+
+			"sets both install and upgrade), or with higher precedence by "+
+			"release.cozystack.io/helm-upgrade-timeout to override only the upgrade side.")
 	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
 		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
 			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
@@ -192,6 +215,8 @@ func (o *CozyServerOptions) parseAndValidateHelmReleaseFlags() (helmReleaseFlagV
 
 // Complete fills in the fields that are not set
 func (o *CozyServerOptions) Complete() error {
+	disableUnsyncableAdmissionPlugins(o.RecommendedOptions.Admission)
+
 	hrFlags, err := o.parseAndValidateHelmReleaseFlags()
 	if err != nil {
 		return err
@@ -240,95 +265,151 @@ func (o *CozyServerOptions) Complete() error {
 		fmt.Printf("Failed to list ApplicationDefinitions (retrying in %v): %v\n", delay, err)
 		time.Sleep(delay)
 
-		delay = time.Duration(float64(delay) * 1.5)
-		if delay > maxDelay {
-			delay = maxDelay
-		}
+		delay = min(time.Duration(float64(delay)*1.5), maxDelay)
 	}
 
-	// Convert to ResourceConfig
-	o.ResourceConfig = &config.ResourceConfig{}
-	for _, crd := range crdList.Items {
-		release := config.ReleaseConfig{
-			Prefix: crd.Spec.Release.Prefix,
-			Labels: crd.Spec.Release.Labels,
-			ChartRef: config.ChartRefConfig{
-				Kind:      crd.Spec.Release.ChartRef.Kind,
-				Name:      crd.Spec.Release.ChartRef.Name,
-				Namespace: crd.Spec.Release.ChartRef.Namespace,
-			},
-			// Per-Application HelmRelease generation defaults from server
-			// flags. The same five values are applied to every Resource,
-			// matching cozystack-operator's PackageReconciler. The
-			// per-Application HelmInstallTimeout annotation populated below
-			// still wins over HelmReleaseInstallTimeout/UpgradeTimeout.
-			HelmReleaseInterval:       hrFlags.interval,
-			HelmReleaseRetryInterval:  hrFlags.retryInterval,
-			HelmReleaseInstallTimeout: hrFlags.installTimeout,
-			HelmReleaseUpgradeTimeout: hrFlags.upgradeTimeout,
-			HelmReleaseMaxHistory:     hrFlags.maxHistory,
-			// kstatus readiness (issue #2642): typed spec.release fields, read
-			// directly (no annotation parsing). WaitStrategy/HealthCheckExprs
-			// are threaded into the generated HelmRelease by the REST storage
-			// layer; see config.ResolveWaitStrategy for the poller default.
-			WaitStrategy:     crd.Spec.Release.WaitStrategy,
-			HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
-		}
-		// Per-Application HelmRelease Install/Upgrade timeout. Applications
-		// whose parent chart contains asynchronously-provisioned resources
-		// the chart itself depends on (for example, the Kamaji-provisioned
-		// admin-kubeconfig Secret for Kubernetes tenants) need a longer
-		// wait budget than the Flux default. Consumed by the REST storage
-		// layer when building the HelmRelease Spec. The parser rejects
-		// units Flux would reject at webhook time, so a bad annotation
-		// surfaces as a loud startup failure instead of a silent drop to
-		// defaults. helm-install-timeout covers both install and upgrade;
-		// helm-upgrade-timeout overrides only the upgrade side for kinds
-		// that need an asymmetric budget.
-		installTimeout, err := config.ParseHelmTimeoutAnnotation(
-			crd.Annotations[config.HelmInstallTimeoutAnnotation],
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmInstallTimeoutAnnotation, err,
-			)
-		}
-		release.HelmInstallTimeout = installTimeout
-		upgradeTimeout, err := config.ParseHelmTimeoutAnnotation(
-			crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
-			)
-		}
-		release.HelmUpgradeTimeout = upgradeTimeout
-		disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
-			crd.Annotations[config.HelmInstallDisableWaitAnnotation],
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"ApplicationDefinition %q has invalid %s annotation: %w",
-				crd.Name, config.HelmInstallDisableWaitAnnotation, err,
-			)
-		}
-		release.HelmInstallDisableWait = disableWait
-		resource := config.Resource{
-			Application: config.ApplicationConfig{
-				Kind:          crd.Spec.Application.Kind,
-				Singular:      crd.Spec.Application.Singular,
-				Plural:        crd.Spec.Application.Plural,
-				ShortNames:    []string{}, // TODO: implement shortnames
-				OpenAPISchema: crd.Spec.Application.OpenAPISchema,
-			},
-			Release: release,
-		}
-		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
+	resourceConfig, err := resourceConfigFrom(crdList.Items, hrFlags)
+	if err != nil {
+		return err
 	}
+	o.ResourceConfig = resourceConfig
 
 	return nil
+}
+
+// resourceConfigFrom converts the ApplicationDefinitions to the resource config
+// cozystack-api serves. A kind declared by more than one definition is
+// registered once, for the definition that owns it, rather than as two
+// resources for one GVK; the definitions left out are logged.
+func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (*config.ResourceConfig, error) {
+	owned, skipped := ownedDefinitions(defs)
+	for _, msg := range skipped {
+		fmt.Printf("Skipping %s\n", msg)
+	}
+	resourceConfig := &config.ResourceConfig{}
+	for _, crd := range owned {
+		resource, err := buildResourceFromCRD(crd, hrFlags)
+		if err != nil {
+			return nil, err
+		}
+		resourceConfig.Resources = append(resourceConfig.Resources, resource)
+	}
+	return resourceConfig, nil
+}
+
+// ownedDefinitions returns the definitions that own their application kind
+// under the shared rule in appdefowner, and a message for each one left out
+// because an older definition already owns its kind. The same rule decides which
+// definition the chartRef reconciler and the lineage webhook treat as the owner.
+func ownedDefinitions(defs []v1alpha1.ApplicationDefinition) ([]v1alpha1.ApplicationDefinition, []string) {
+	owners := appdefowner.Owners(defs)
+	var kept []v1alpha1.ApplicationDefinition
+	var skipped []string
+	for _, d := range defs {
+		kind := d.Spec.Application.Kind
+		if kind != "" && owners[kind] != d.Name {
+			skipped = append(skipped, fmt.Sprintf("ApplicationDefinition %q declares kind %s already owned by %q", d.Name, kind, owners[kind]))
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept, skipped
+}
+
+// buildResourceFromCRD assembles the config.Resource (typed release fields plus
+// the four parsed release.cozystack.io/* annotations) for one ApplicationDefinition.
+// Extracted from Complete's loop so the annotation-to-config wiring is unit-testable
+// without a live discovery client: a mutation that drops any of the four assignments
+// below (e.g. release.HelmServerSideApply = serverSideApply) turns TestBuildResourceFromCRD
+// red instead of shipping a silent nil that reverts the field's effect on every release.
+func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (config.Resource, error) {
+	release := config.ReleaseConfig{
+		Prefix: crd.Spec.Release.Prefix,
+		Labels: crd.Spec.Release.Labels,
+		ChartRef: config.ChartRefConfig{
+			Kind:      crd.Spec.Release.ChartRef.Kind,
+			Name:      crd.Spec.Release.ChartRef.Name,
+			Namespace: crd.Spec.Release.ChartRef.Namespace,
+		},
+		// HelmRelease generation defaults from server flags. The same five
+		// values are applied to every Resource, matching cozystack-operator's
+		// PackageReconciler. The kind-wide HelmInstallTimeout and
+		// HelmUpgradeTimeout overrides from the ApplicationDefinition
+		// populated below still take precedence over these defaults.
+		HelmReleaseInterval:       hrFlags.interval,
+		HelmReleaseRetryInterval:  hrFlags.retryInterval,
+		HelmReleaseInstallTimeout: hrFlags.installTimeout,
+		HelmReleaseUpgradeTimeout: hrFlags.upgradeTimeout,
+		HelmReleaseMaxHistory:     hrFlags.maxHistory,
+		// kstatus readiness (issue #2642): typed spec.release fields, read
+		// directly (no annotation parsing). WaitStrategy/HealthCheckExprs
+		// are threaded into the generated HelmRelease by the REST storage
+		// layer; see config.ResolveWaitStrategy for the poller default.
+		WaitStrategy:     crd.Spec.Release.WaitStrategy,
+		HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
+	}
+	// Kind-wide HelmRelease Install/Upgrade timeout from this
+	// ApplicationDefinition. Kinds whose parent chart contains asynchronously-
+	// provisioned resources the chart itself depends on (for example, the
+	// Kamaji-provisioned admin-kubeconfig Secret for Kubernetes tenants) need a
+	// longer wait budget than the Flux default. Consumed by the REST storage
+	// layer when building the HelmRelease Spec. The parser rejects
+	// units Flux would reject at webhook time, so a bad annotation
+	// surfaces as a loud startup failure instead of a silent drop to
+	// defaults. helm-install-timeout covers both install and upgrade;
+	// helm-upgrade-timeout overrides only the upgrade side for kinds
+	// that need an asymmetric budget.
+	installTimeout, err := config.ParseHelmTimeoutAnnotation(
+		crd.Annotations[config.HelmInstallTimeoutAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmInstallTimeoutAnnotation, err,
+		)
+	}
+	release.HelmInstallTimeout = installTimeout
+	upgradeTimeout, err := config.ParseHelmTimeoutAnnotation(
+		crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
+		)
+	}
+	release.HelmUpgradeTimeout = upgradeTimeout
+	disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
+		crd.Annotations[config.HelmInstallDisableWaitAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmInstallDisableWaitAnnotation, err,
+		)
+	}
+	release.HelmInstallDisableWait = disableWait
+
+	serverSideApply, err := config.ParseHelmServerSideApplyAnnotation(
+		crd.Annotations[config.HelmServerSideApplyAnnotation],
+	)
+	if err != nil {
+		return config.Resource{}, fmt.Errorf(
+			"ApplicationDefinition %q has invalid %s annotation: %w",
+			crd.Name, config.HelmServerSideApplyAnnotation, err,
+		)
+	}
+	release.HelmServerSideApply = serverSideApply
+	return config.Resource{
+		Application: config.ApplicationConfig{
+			Kind:          crd.Spec.Application.Kind,
+			Singular:      crd.Spec.Application.Singular,
+			Plural:        crd.Spec.Application.Plural,
+			ShortNames:    []string{}, // TODO: implement shortnames
+			OpenAPISchema: crd.Spec.Application.OpenAPISchema,
+		},
+		Release: release,
+	}, nil
 }
 
 // Validate checks the correctness of the options

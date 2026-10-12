@@ -1,4 +1,11 @@
-{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- /* _cluster is injected by the platform, so it is absent whenever the chart
+       is rendered on its own, as `helm lint` and `helm template` do. `index`
+       errors on a nil map before any `| default` on its result can apply, so
+       the guard has to sit on the map rather than on the looked-up value. With
+       _cluster present this yields exactly what indexing it directly yielded;
+       with it absent the lookup is nil and the block below stays unrendered,
+       which is what an unconfigured tenant should produce. */ -}}
+{{- $oidcEnabled := index (.Values._cluster | default dict) "oidc-enabled" }}
 {{- if eq $oidcEnabled "true" }}
 {{- if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
 apiVersion: v1.edp.epam.com/v1

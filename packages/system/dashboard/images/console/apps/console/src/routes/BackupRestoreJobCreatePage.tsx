@@ -3,17 +3,23 @@ import { useNavigate } from "react-router"
 import { Archive, Save } from "lucide-react"
 import { Button, Section, Spinner } from "@cozystack/ui"
 import { useK8sCreate, useK8sList } from "@cozystack/k8s-client"
+import type { K8sResource } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
 import { useApplicationDefinitions } from "../lib/app-definitions.ts"
 import { useCRDSchema } from "../lib/use-crd-schema.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
-import { enrichSchemaWithEnums } from "../lib/backup-utils.ts"
+import { enrichSchemaWithEnums, type BackupFormRef } from "../lib/backup-utils.ts"
+
+interface RestoreJobFormData {
+  backupRef?: BackupFormRef
+  targetApplicationRef?: BackupFormRef
+}
 
 export function BackupRestoreJobCreatePage() {
   const navigate = useNavigate()
   const { tenantNamespace } = useTenantContext()
   const { data: appDefs } = useApplicationDefinitions()
-  const [formData, setFormData] = useState<any>({})
+  const [formData, setFormData] = useState<RestoreJobFormData>({})
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
@@ -39,7 +45,7 @@ export function BackupRestoreJobCreatePage() {
     [appDefs, selectedKind]
   )
 
-  const { data: instancesData } = useK8sList<any>({
+  const { data: instancesData } = useK8sList<K8sResource>({
     apiGroup: "apps.cozystack.io",
     apiVersion: "v1alpha1",
     plural: selectedAppDef?.spec?.application.plural ?? "",
@@ -63,7 +69,7 @@ export function BackupRestoreJobCreatePage() {
       console.error("Failed to parse RestoreJob schema:", e)
       return null
     }
-    const instances = instancesData?.items.map((inst: any) => inst.metadata.name) ?? []
+    const instances = instancesData?.items.map((inst) => inst.metadata.name) ?? []
 
     const enumMap: Record<string, string[]> = {}
 
@@ -118,6 +124,10 @@ export function BackupRestoreJobCreatePage() {
       return
     }
 
+    // Run RJSF validation before the page-level checks so schema-required
+    // fields render inline errors instead of being masked by the alerts below.
+    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
+
     if (!formData.backupRef?.name) {
       alert("Backup reference is required")
       return
@@ -133,10 +143,6 @@ export function BackupRestoreJobCreatePage() {
       alert("Target reference requires both Kind and Name, or leave both empty to restore into the source application")
       return
     }
-
-    // The submit button lives outside RJSF and bypasses its validation, so
-    // trigger it explicitly; an invalid spec renders errors inline and aborts.
-    if (schemaFormRef.current && !schemaFormRef.current.validate()) return
 
     // Strip an empty targetApplicationRef so the API does not receive an empty
     // object that the API server would reject as malformed.
@@ -219,7 +225,7 @@ export function BackupRestoreJobCreatePage() {
                 ref={schemaFormRef}
                 openAPISchema={schema}
                 formData={formData}
-                onChange={setFormData}
+                onChange={setFormData as (data: unknown) => void}
               >
                 <div className="hidden" />
               </SchemaForm>

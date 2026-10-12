@@ -1,0 +1,40 @@
+suite: cozystack-api resources knob
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: cozystack-api
+  namespace: cozy-system
+
+# The shipped default is `{}`, which renders no resources key at all, so no
+# existing pod moves on upgrade; only an admin who sets the value under the
+# Package CR gets requests or limits. The empty default is what makes the change
+# safe to land, hence a case on each half.
+
+tests:
+  - it: the shipped default renders no resources key
+    asserts:
+      - isKind:
+          of: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].resources
+
+  - it: a set value renders on the container, not the pod
+    set:
+      cozystackAPI.resources:
+        requests:
+          cpu: 5m
+          memory: 160Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 5m
+              memory: 160Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

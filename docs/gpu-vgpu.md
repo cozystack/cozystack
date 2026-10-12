@@ -2,7 +2,7 @@
 
 This document describes how to configure the GPU Operator package with NVIDIA vGPU support so that a single physical GPU can be sliced and shared across multiple virtual machines.
 
-**Last verified:** 2026-04-29 against KubeVirt `main` (`virt-handler` nightly `20260429_74d7c52588`) + this PR's `vgpu` variant + NVIDIA vGPU 20.0 host driver `595.58.02` + GRID guest driver `595.58.03`.
+**Last verified:** 2026-04-29 against KubeVirt `main` (`virt-handler` nightly `20260429_74d7c52588`) + the `vgpu` variant + NVIDIA vGPU 20.0 host driver `595.58.02` + GRID guest driver `595.58.03`.
 
 ## Two driver models
 
@@ -17,7 +17,7 @@ This guide focuses on the **SR-IOV path**, which is the only model NVIDIA suppor
 
 - An Ada Lovelace (or newer) NVIDIA GPU that supports SR-IOV vGPU (L4, L40, L40S, etc.).
 - Ubuntu 24.04 host OS. Older Ubuntu releases also work if the upstream `gpu-driver-container` repo has a matching `vgpu-manager/` Dockerfile. **Talos Linux is not recommended** for vGPU. NVIDIA does not publicly distribute the vGPU guest driver — it requires NVIDIA Enterprise Portal access — and Sidero [closed siderolabs/extensions#461](https://github.com/siderolabs/extensions/issues/461) noting that they cannot support vGPU "unless NVIDIA changes their licensing terms or provides us a way to obtain, test, and distribute the software". Building a Talos system extension that includes the driver in-tree is therefore not feasible without a private fork that violates the EULA.
-- KubeVirt with [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890) ("vGPU: SRIOV support", merged to `main` 2026-04-10). Targeted at the next minor release (v1.9.0); track the PR for the actual release tag. Released tags up to and including v1.8.x do not include the patch and backports are not planned. If you need vGPU before v1.9.0 lands you have to run a `main`-based nightly build of `virt-handler`; the rest of the operator can stay on the latest released tag.
+- KubeVirt v1.9.0 or newer, which is the release the platform bundles. [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890) ("vGPU: SRIOV support") shipped in v1.9.0; v1.8.x and older do not include it and backports are not planned.
 - An NVIDIA vGPU Software / NVIDIA AI Enterprise subscription (the `.run` is not redistributable).
 - A reachable NVIDIA Delegated License Service (DLS) instance and a matching `client_configuration_token.tok` file.
 
@@ -39,9 +39,9 @@ The `default` (passthrough) variant assumes the GPU is **owned by the host kerne
 
 **`FORCE_REINSTALL` does not bypass this.** `k8s-driver-manager` v0.10.0 exposes a `FORCE_REINSTALL` / `--force-reinstall` env+flag pair (visible in the binary's strings table), but it gates a later "same-config already loaded" branch inside `uninstallDriver`, not the `isHostDriver` short-circuit at the top — operators who set it and expect a bypass will report a false bug. There is currently no opt-out for the `isHostDriver` guard itself.
 
-**Current mitigation.** The only mitigation available on `main` today is to remove the host NVIDIA stack before enabling the variant (the "Clean-host workaround" section below).
+**Current mitigation.** The only mitigation that keeps VM passthrough working is to remove the host NVIDIA stack before enabling the variant (the "Clean-host workaround" section below).
 
-**Future alternatives and scope.** An upcoming `container` variant of `cozystack.gpu-operator` is tracked in [#2766](https://github.com/cozystack/cozystack/pull/2766) — once merged it will give operators a no-purge path that keeps the host driver and exposes GPUs to pods rather than VMs — but it is not part of the current package and is **not** a usable workaround until it lands. Talos is unaffected because the Talos image ships only the `vfio-pci` extension; this section applies to Linux distributions where you installed the host driver yourself (typically Ubuntu / Debian / RHEL with `apt install nvidia-driver-*` or equivalent). See also [`packages/system/gpu-operator/examples/README.md`](../packages/system/gpu-operator/examples/README.md) for the native-pod-workload reference flow that predates the `container` variant.
+**Alternatives and scope.** The `container` variant of `cozystack.gpu-operator` is the no-purge path: it keeps the host driver and exposes GPUs to pods rather than VMs, so it does not replace passthrough for anyone who actually needs a GPU inside a VM. Talos is unaffected because the Talos image ships only the `vfio-pci` extension; this section applies to Linux distributions where you installed the host driver yourself (typically Ubuntu / Debian / RHEL with `apt install nvidia-driver-*` or equivalent). See also [`packages/system/gpu-operator/examples/README.md`](../packages/system/gpu-operator/examples/README.md) for the Talos native-pod-workload reference flow.
 
 ### Symptom
 
@@ -147,10 +147,10 @@ kubectl label node <NODE> nvidia.com/gpu.deploy.driver-
 
 ### Known limitation
 
-The skip-on-pre-installed behavior lives in the upstream [`NVIDIA/k8s-driver-manager`](https://github.com/NVIDIA/k8s-driver-manager) Go binary at `cmd/driver-manager/main.go`: the method `(*DriverManager).isHostDriver` is called from `(*DriverManager).uninstallDriver` and has no in-band opt-out in `:v0.10.0`. `FORCE_REINSTALL` exists as an env / CLI flag in the same binary but gates the later "same-config already loaded" branch inside `uninstallDriver`, not the `isHostDriver` short-circuit. Hosts that need to keep the NVIDIA host driver installed for non-Kubernetes workloads cannot currently share the same GPU with the passthrough variant. Two future mitigation paths are in flight; **neither is available today**:
+The skip-on-pre-installed behavior lives in the upstream [`NVIDIA/k8s-driver-manager`](https://github.com/NVIDIA/k8s-driver-manager) Go binary at `cmd/driver-manager/main.go`: the method `(*DriverManager).isHostDriver` is called from `(*DriverManager).uninstallDriver` and has no in-band opt-out in `:v0.10.0`. `FORCE_REINSTALL` exists as an env / CLI flag in the same binary but gates the later "same-config already loaded" branch inside `uninstallDriver`, not the `isHostDriver` short-circuit. Hosts that need to keep the NVIDIA host driver installed for non-Kubernetes workloads cannot currently share the same GPU with the passthrough variant. Two mitigation paths:
 
-- **`container` variant — not yet merged** — [#2766](https://github.com/cozystack/cozystack/pull/2766) adds a third variant of `cozystack.gpu-operator` that targets the apt-installed-driver host shape and exposes GPUs to pods (not VMs) without unbinding the host driver. Once it lands, operators on hosts where the purge workaround is unacceptable will have a path that does not require touching the host driver.
-- **Upstream override** — an env-var override of `isHostDriver` is the only structural fix that would let the passthrough variant coexist with a host driver. Requested in [NVIDIA/k8s-driver-manager#191](https://github.com/NVIDIA/k8s-driver-manager/issues/191).
+- **`container` variant** — a third variant of `cozystack.gpu-operator` that targets the apt-installed-driver host shape and exposes GPUs to pods (not VMs) without unbinding the host driver. Available now, and selectable from platform values with `bundles.iaas.gpuOperatorVariant: container`. It solves the host-driver conflict by giving up VM passthrough, so it is a mitigation only for workloads that can run in a pod.
+- **Upstream override** — an env-var override of `isHostDriver` is the only structural fix that would let the passthrough variant coexist with a host driver. Not available today; requested in [NVIDIA/k8s-driver-manager#191](https://github.com/NVIDIA/k8s-driver-manager/issues/191).
 
 ## Building the vGPU Manager image
 
@@ -184,7 +184,7 @@ gpu:
     - nvidia-registry-secret
 ```
 
-The platform forwards `gpu.vgpuManager` into the emitted gpu-operator Package CR's `components.gpu-operator.values.gpu-operator.vgpuManager`, so the bundle handles the variant + image coordinates in one place. If you need to override anything else on the gpu-operator chart (driver, validator, dcgmExporter, custom node selectors), hand-craft a `Package` CR named `cozystack.gpu-operator` with the full `components.gpu-operator.values` block — that takes precedence over the bundle render.
+The platform forwards `gpu.vgpuManager` into the emitted gpu-operator Package CR's `components.gpu-operator.values.gpu-operator.vgpuManager`, so the bundle handles the variant + image coordinates in one place. If you need to override anything else on the gpu-operator chart (driver, validator, dcgmExporter, custom node selectors), hand-craft a `Package` CR named `cozystack.gpu-operator` with the full `components.gpu-operator.values` block and put that name in `bundles.disabledPackages`. A hand-written Package CR does not take precedence over the bundle: as long as the platform emits its own copy of that package, the next platform render replaces whatever you wrote.
 
 The `nvidia-registry-secret` should be a docker-registry Secret created beforehand in `cozy-gpu-operator`.
 
@@ -218,13 +218,13 @@ For Pascal–Ampere GPUs (V100, T4, A100, A30) the mdev model still applies. Fli
 
 ## KubeVirt configuration
 
-When `cozystack.gpu-operator` is in `bundles.enabledPackages` (and not also in `bundles.disabledPackages`), the platform mirrors the chosen GPU variant into the `KubeVirt` CR automatically. There is no manual `kubectl patch` step.
+When `cozystack.gpu-operator` is in `bundles.enabledPackages` (and not also in `bundles.disabledPackages`), the platform mirrors the chosen GPU variant into the `KubeVirt` CR automatically. There is no manual `kubectl patch` step. This applies to the two VM variants only: `container` serves GPUs to pods and never to VMs, so selecting it emits the gpu-operator Package with no host-device wiring on the KubeVirt side.
 
-If you opt out of bundle management and hand-craft a `cozystack.gpu-operator` Package CR directly — typically to apply overrides the bundle does not expose (driver settings, custom node selectors, validator / dcgmExporter tweaks, etc.) — the platform does NOT auto-wire `HostDevices` or `permittedHostDevices` into the KubeVirt CR. In that flow you also hand-craft a `cozystack.kubevirt` Package CR with `components.kubevirt.values.extraFeatureGates: [HostDevices]` and the appropriate `permittedHostDevices` block. The escape-hatch values shape under `.gpu` (below) is intentionally documented in the bundle-managed flow only; the manual Package-CR override path takes precedence over the bundle render whenever both exist.
+If you opt out of bundle management and hand-craft a `cozystack.gpu-operator` Package CR directly — typically to apply overrides the bundle does not expose (driver settings, custom node selectors, validator / dcgmExporter tweaks, etc.) — the platform does NOT auto-wire `HostDevices` or `permittedHostDevices` into the KubeVirt CR. In that flow you also hand-craft a `cozystack.kubevirt` Package CR with `components.kubevirt.values.extraFeatureGates: [HostDevices]` and the appropriate `permittedHostDevices` block. The escape-hatch values shape under `.gpu` (below) is intentionally documented in the bundle-managed flow only. Both hand-crafted Package CRs need their names in `bundles.disabledPackages`: the iaas bundle emits `cozystack.kubevirt` on every render and `cozystack.gpu-operator` on every render that has it in `bundles.enabledPackages`, and that render replaces the hand-written spec rather than merging with it.
 
 - `developerConfiguration.featureGates` gets `HostDevices` appended (current KubeVirt splits this from the `GPU` gate; the admission webhook rejects `spec.template.spec.domain.devices.hostDevices` without it).
-- `permittedHostDevices.pciHostDevices` is filled from `packages/core/platform/files/gpu-passthrough-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: default` (the package default). The table covers Hopper (H100/H200), Ada Lovelace (L4/L40/L40S), Ampere (A100 PCIe/SXM, A40, A30, A10), Turing (T4), Volta (V100/V100S). All entries carry `externalResourceProvider: true` because the resource names come from `nvidia-sandbox-device-plugin`, not from KubeVirt's in-tree device plugin.
-- `permittedHostDevices.mediatedDevices` is filled from `packages/core/platform/files/gpu-vgpu-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: vgpu`. This list only EXPOSES, by profile name (`mdevNameSelector`), mdevs that the GPU Operator's vGPU Device Manager CREATES on the node; the platform does not ship a numeric `mediatedDevicesConfiguration` default (those `nvidia-NNN` type ids are per-SKU/driver sysfs indices with no portable value — set `.gpu.mediatedDevicesConfiguration` yourself, with host-verified ids, only if you want KubeVirt rather than the Device Manager to create mdevs). The starter set covers Pascal–Ampere mdev profiles (A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q) — the same family range as the upstream `vgpu-device-manager` walks `/sys/class/mdev_bus/` for. Ada Lovelace / Blackwell SR-IOV vGPU is out of scope for the chart's default list; advertise those VFs via the user-override hook below.
+- `permittedHostDevices.pciHostDevices` is filled from `packages/core/platform/files/gpu-passthrough-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: default` (the package default) and `gpu.replaceDefaults` is left at `false`. The table covers Hopper (H100/H200), Ada Lovelace (L4/L40/L40S), Ampere (A100 PCIe/SXM, A40, A30, A10), Turing (T4), Volta (V100/V100S). All entries carry `externalResourceProvider: true` because the resource names come from `nvidia-sandbox-device-plugin`, not from KubeVirt's in-tree device plugin.
+- `permittedHostDevices.mediatedDevices` is filled from `packages/core/platform/files/gpu-vgpu-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: vgpu` **and** `gpu.vgpuDeviceManager.enabled: true` — that knob defaults to `false`, so a stock vgpu cluster ships no mdev table at all (see the Ada Lovelace / Blackwell note below for why). `gpu.replaceDefaults: true` also suppresses it. This list only EXPOSES, by profile name (`mdevNameSelector`), mdevs that the GPU Operator's vGPU Device Manager CREATES on the node; the platform does not ship a numeric `mediatedDevicesConfiguration` default (those `nvidia-NNN` type ids are per-SKU/driver sysfs indices with no portable value — set `.gpu.mediatedDevicesConfiguration` yourself, with host-verified ids, only if you want KubeVirt rather than the Device Manager to create mdevs). The starter set covers Pascal–Ampere mdev profiles (A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q) — the same family range as the upstream `vgpu-device-manager` walks `/sys/class/mdev_bus/` for. Ada Lovelace / Blackwell SR-IOV vGPU is out of scope for the chart's default list; advertise those VFs via the user-override hook below.
 
 ### Extending or replacing the default table
 
@@ -232,11 +232,13 @@ The platform exposes three knobs under `.gpu`:
 
 ```yaml
 gpu:
-  # Extend the platform defaults with cluster-specific entries. Both list
-  # keys are read in both variants: pciHostDevices feeds the passthrough
+  # Extend the platform defaults with cluster-specific entries. Read by
+  # the two VM variants only; the container variant reads neither key.
+  # pciHostDevices is read in both of them — it feeds the passthrough
   # (vfio-pci) path AND the post-kubevirt#16890 SR-IOV vGPU VF path on
-  # Ada Lovelace / Blackwell; mediatedDevices feeds the pre-#16890 mdev
-  # path on Pascal–Ampere. Both render into the same KubeVirt CR.
+  # Ada Lovelace / Blackwell. mediatedDevices is read in vgpu alone, for
+  # the pre-#16890 mdev path on Pascal–Ampere; the passthrough variant
+  # ignores it. Both render into the same KubeVirt CR.
   permittedHostDevices:
     pciHostDevices:
     - pciVendorSelector: "10DE:26B9"   # L40S, advertised as a VF for SR-IOV vGPU

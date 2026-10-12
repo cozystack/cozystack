@@ -9,12 +9,12 @@ spec:
     platform:
       values:
         publishing:
-          host: "dev5.infra.aenix.org"
-          apiServerEndpoint: "https://api.dev5.infra.aenix.org"
+          host: "example.org"
+          apiServerEndpoint: "https://api.example.org"
           externalIPs:
-          - 10.4.0.94
-          - 10.4.0.179
-          - 10.4.0.26
+          - 192.0.2.10
+          - 192.0.2.11
+          - 192.0.2.12
         authentication:
           oidc:
             enabled: true

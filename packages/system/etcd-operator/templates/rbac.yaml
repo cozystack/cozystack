@@ -5,13 +5,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
 ---
 # Manager ClusterRole — vendored from github.com/cozystack/etcd-operator
-# config/rbac/role.yaml. Cluster-scoped because etcd clusters live in tenant
-# namespaces. Refresh via `make update` when the operator's role.yaml changes.
+# charts/etcd-operator/files/manager-role-rules.yaml. Cluster-scoped because
+# etcd clusters live in tenant namespaces. Refresh via `make update` when the
+# operator's role rules change.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: etcd-operator-manager-role
 rules:
+- apiGroups: [""]
+  resources: [events]
+  verbs: [create, patch]
 - apiGroups: [""]
   resources: [persistentvolumeclaims]
   verbs: [create, delete, get, list, patch, update, watch]
@@ -40,10 +44,13 @@ rules:
   resources: [etcdclusters/finalizers, etcdmembers/finalizers, etcdsnapshots/finalizers]
   verbs: [update]
 - apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdclusters/status, etcdmembers/status, etcdsnapshots/status]
+  resources: [etcdclusters/status, etcddefragpolicies/status, etcddefrags/status, etcdmembers/status, etcdsnapshots/status]
   verbs: [get, patch, update]
 - apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdmembers, etcdsnapshots]
+  resources: [etcddefragpolicies]
+  verbs: [get, list, patch, update, watch]
+- apiGroups: [etcd-operator.cozystack.io]
+  resources: [etcddefrags, etcdmembers, etcdsnapshots]
   verbs: [create, delete, get, list, patch, update, watch]
 - apiGroups: [policy]
   resources: [poddisruptionbudgets]

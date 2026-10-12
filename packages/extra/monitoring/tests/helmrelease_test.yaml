@@ -25,6 +25,23 @@ tests:
           path: spec.waitStrategy.name
           value: poller
 
+  - it: passes tenant-set oidc values through to the inner chart
+    set:
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.values.oidc.mode
+          value: System
+      - equal:
+          path: spec.values.oidc.users[0].email
+          value: alice@example.com
+      - equal:
+          path: spec.values.oidc.users[0].role
+          value: Admin
+
   - it: gates readiness on the VLCluster status.updateStatus
     asserts:
       - equal:
@@ -42,3 +59,103 @@ tests:
       - equal:
           path: spec.healthCheckExprs[0].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The traces backend (VTCluster/VTSingle from tracingStorages) is gated the
+  # same way and by the same operator status contract. tracingStorages is empty
+  # by default, so these exprs are usually inert (no CR to match); when a backend
+  # is configured they gate readiness on it. Pin both entries so a
+  # dropped/reordered block or a typo'd CEL expression fails a test rather than
+  # silently regressing the gate.
+  - it: gates readiness on the VTCluster status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[1].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[1].kind
+          value: VTCluster
+      - equal:
+          path: spec.healthCheckExprs[1].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[1].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[1].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  - it: gates readiness on the VTSingle status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[2].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[2].kind
+          value: VTSingle
+      - equal:
+          path: spec.healthCheckExprs[2].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[2].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[2].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The shared-central vmauth carries the same operator status contract. Every
+  # central tenant writes and reads through it, so a failed vmauth must not
+  # leave tenant-root's release Ready; outside a hosting tenant-root no VMAuth
+  # is in the inventory and the entry is inert.
+  - it: gates readiness on the VMAuth status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[3].apiVersion
+          value: operator.victoriametrics.com/v1beta1
+      - equal:
+          path: spec.healthCheckExprs[3].kind
+          value: VMAuth
+      - equal:
+          path: spec.healthCheckExprs[3].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[3].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[3].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The collector a central tenant writes through enforces the rate the
+  # platform sets for it, so its image is the platform's. The apps API defaults the
+  # Monitoring spec but does not prune keys its schema leaves out, so a key set
+  # there would otherwise reach the inner chart and swap the collector for one
+  # without the limiter.
+  - it: does not pass a collector image set on the Monitoring application through
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+        image: docker.io/example/collector:1
+    asserts:
+      - notExists:
+          path: spec.values.tracingCollector.image
+      - equal:
+          path: spec.values.tracingCollector.replicas
+          value: 1
+
+  # The Grafana pod may reach a central tenant's vmauth and mounts the Secret
+  # a tenant names in oidc.customConfig.secretRef, so an image of the tenant's
+  # choosing could read a login from it; the image is the platform's too.
+  - it: does not pass a Grafana image set on the Monitoring application through
+    set:
+      grafana:
+        image: docker.io/example/grafana:1
+        resources:
+          requests:
+            cpu: 100m
+    asserts:
+      - notExists:
+          path: spec.values.grafana.image
+      - equal:
+          path: spec.values.grafana.resources.requests.cpu
+          value: 100m

@@ -4,6 +4,9 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/clastix/kamaji | grep -E 'refs/tags/[0-9]+\.[0-9]+\.[0-9]+-edge$$' | awk -F/ 'END{print $$NF}') && \
@@ -12,8 +15,10 @@ update:
 	sed -i "/ARG VERSION/ s|=.*|=$${tag}|g" images/kamaji/Dockerfile
 	# Re-apply Cozystack-side patches over the freshly extracted chart so
 	# `make update` stays reproducible. Mirrors the pattern used by
-	# packages/system/fluxcd-operator and packages/system/ingress-nginx.
+	# packages/system/ingress-nginx.
 	patch --no-backup-if-mismatch -p1 < patches/1.diff
+	# cozy-kamaji declares no dependencies, so Helm's processDependencyEnabled never evaluates kamaji-etcd.deploy and any subchart here always renders.
+	rm -rf charts/kamaji/charts
 
 image:
 	docker buildx build images/kamaji \

@@ -92,7 +92,7 @@ httpAndHttps:
     https: 443
   endpoints: []
 
-## @param {bool} whitelistHTTP - Secure HTTP by whitelisting client networks (default: false).
+## @param {bool} whitelistHTTP - Secure HTTP and HTTPS by whitelisting client networks. Requires a non-empty `whitelist` (default: false).
 whitelistHTTP: false
 ## Example:
 ## whitelistHTTP: true

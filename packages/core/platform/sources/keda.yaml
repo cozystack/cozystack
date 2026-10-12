@@ -1,0 +1,36 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.keda
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    # Install-order dependencies only:
+    # - cozystack.networking: CNI must be reconciled before the operator pod schedules.
+    # - cozystack.prometheus-operator-crds: the shim enables a ServiceMonitor, whose
+    #   CRD must exist before the manifest is applied.
+    #
+    # cert-manager is intentionally NOT listed: the KEDA chart generates its own
+    # admission-webhook TLS (built-in CA), so cert-manager is not a prerequisite.
+    #
+    # KEDA is an OPTIONAL package (enabled via bundles.enabledPackages) and must
+    # never appear in a default package's dependsOn, or the platform HelmRelease
+    # would stay DependenciesNotReady whenever KEDA is not enabled. It claims the
+    # cluster-wide external.metrics.k8s.io APIService (distinct from metrics-server's
+    # metrics.k8s.io, so no conflict) — the deliberate platform-wide dependency
+    # database read-replica autoscaling rests on.
+    dependsOn:
+    - cozystack.networking
+    - cozystack.prometheus-operator-crds
+    components:
+    - name: keda
+      path: system/keda
+      install:
+        namespace: cozy-keda
+        releaseName: keda

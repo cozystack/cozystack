@@ -1,0 +1,38 @@
+suite: shared-central traces egress is off by default
+# The cross-boundary egress exists only for a tenant that opted in; by default
+# no tenant may reach the shared store.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+tests:
+  - it: does not render the egress rule by default (tracingCentral unset)
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+        not: true
+
+  # Without Monitoring there is no collector to grant the hop to.
+  - it: does not render the egress rule when monitoring is off (no collector)
+    set:
+      tracingCentral: true
+      monitoring: false
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central
+        not: true
+
+  - it: renders the egress rule when both tracingCentral and monitoring are on
+    set:
+      tracingCentral: true
+      monitoring: true
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-egress-traces-central

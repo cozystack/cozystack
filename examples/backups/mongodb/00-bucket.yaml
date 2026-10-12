@@ -1,0 +1,14 @@
+# Cozystack-managed S3 bucket for storing MongoDB backups. The Bucket
+# controller provisions a Secret named "bucket-<bucket>-<username>" per user
+# (the bucket app carries the "bucket-" release prefix); run-all.sh reads the
+# "backup" user's BucketInfo and projects the access keys into the MongoDB
+# application's backup config.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: mongodb-backups
+spec:
+  users:
+    backup:
+      readonly: false

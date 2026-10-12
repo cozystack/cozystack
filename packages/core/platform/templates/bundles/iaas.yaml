@@ -1,17 +1,55 @@
 {{- if and .Values.bundles.iaas.enabled (not (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic"))) }}
 {{- fail "bundles.iaas.enabled can only be true when bundles.system.variant is 'isp-full' or 'isp-full-generic'" }}
 {{- end }}
+{{- /* Same hole as the paas/naas guards closed: bundles.system.variant keeps its
+       value when bundles.system.enabled is false, so the check above passes on a
+       configuration that skips the system bundle entirely. Every package below
+       depends on its control-plane body — rendering iaas without it leaves all 12
+       Packages in DependenciesNotReady with nothing naming the cause. */ -}}
+{{- if and .Values.bundles.iaas.enabled (not .Values.bundles.system.enabled) }}
+{{- fail "bundles.iaas.enabled requires bundles.system.enabled: the iaas bundle depends on packages emitted by the system bundle (cozystack.networking, cozystack.cozystack-engine, cozystack.cert-manager, cozystack.prometheus-operator-crds and cozystack.cozystack-basics). Enable the system bundle with bundles.system.variant: isp-full or isp-full-generic." }}
+{{- end }}
 {{- if and .Values.bundles.iaas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic")) }}
 {{- $kubevirtValues := dict -}}
 {{- if .Values.resources.cpuAllocationRatio -}}
 {{- $_ := set $kubevirtValues "cpuAllocationRatio" (.Values.resources.cpuAllocationRatio | int) -}}
 {{- end -}}
 {{- /*
+  Feature gates the cluster declines, forwarded verbatim. This include is the
+  only writer of the cozystack.kubevirt Package, and patching that Package by
+  hand is reverted the next time the platform re-renders it (see
+  docs/operations/backup-classes.md for the same trap on backupStorage), so
+  without this hop the chart value has no supported setter. The parenthesized
+  walk is nil-safe for the reason the gpu block below spells out.
+*/ -}}
+{{- $disabledFeatureGates := (.Values.kubevirt).disabledFeatureGates -}}
+{{- if $disabledFeatureGates -}}
+{{- $_ := set $kubevirtValues "disabledFeatureGates" $disabledFeatureGates -}}
+{{- end -}}
+{{- with (.Values.kubevirt).migrations -}}
+{{- $_ := set $kubevirtValues "migrations" . -}}
+{{- end -}}
+{{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
-  into the KubeVirt CR: the HostDevices feature gate plus a starter
-  permittedHostDevices block. Without this the admission webhook rejects
-  any VM that references a host-device GPU by resourceName. See
-  docs/gpu-vgpu.md for the user-facing knobs.
+  into the KubeVirt CR: the HostDevices feature gate, without which the
+  admission webhook rejects any VM that references a host-device GPU by
+  resourceName, plus a permittedHostDevices block assembled per variant.
+  The platform's own tables are the passthrough one in the default
+  variant and the mdev one in vgpu behind gpu.vgpuDeviceManager.enabled;
+  gpu.replaceDefaults drops whichever would apply, and the operator's own
+  .gpu entries are appended on top (see the per-key comment below for
+  which key each variant reads). A vgpu cluster at stock values therefore
+  gets the gate and no device table. See docs/gpu-vgpu.md for the
+  user-facing knobs.
+
+  Both pieces are VM-facing and are emitted only for the two variants
+  that hand a GPU resource to a VM: default (the whole card, rebound to
+  vfio-pci) and vgpu (mdev profiles or SR-IOV VFs carved out by the host
+  vGPU driver). The container variant serves GPUs to ordinary pods
+  through the device plugin and runs no VM-facing GPU stack at all —
+  sandboxWorkloads and vfioManager are both off — so the gate would
+  advertise a capability the node cannot serve and the device table
+  would list resources no plugin ever registers there.
 */ -}}
 {{- /*
   Mirror the cozystack.platform.package.optional helper's enable/disable
@@ -24,16 +62,21 @@
 {{- $gpuEnabled := and (has $gpuName (default (list) .Values.bundles.enabledPackages)) (not (has $gpuName (default (list) .Values.bundles.disabledPackages))) -}}
 {{- $gpuVariant := .Values.bundles.iaas.gpuOperatorVariant | default "default" -}}
 {{- /*
-  Validate the variant up front, not behind $gpuEnabled — a typo like
+  The accepted set is the variant list of the cozystack.gpu-operator
+  PackageSource in sources/gpu-operator.yaml — default, vgpu, container.
+  A variant added there needs adding here too, or the bundle rejects a
+  value the package ships.
+
+  Validate up front, not behind $gpuEnabled — a typo like
   gpuOperatorVariant: passthrough (instead of "default") would otherwise
   render fine until someone flips gpu-operator into enabledPackages, at
   which point the bundle breaks. Failing fast here surfaces the typo on
   the first render after the values file changes.
 */ -}}
-{{- if not (or (eq $gpuVariant "default") (eq $gpuVariant "vgpu")) -}}
-{{- fail (printf "bundles.iaas.gpuOperatorVariant must be \"default\" or \"vgpu\", got %q" $gpuVariant) -}}
+{{- if not (or (eq $gpuVariant "default") (eq $gpuVariant "vgpu") (eq $gpuVariant "container")) -}}
+{{- fail (printf "bundles.iaas.gpuOperatorVariant must be \"default\", \"vgpu\" or \"container\", got %q" $gpuVariant) -}}
 {{- end -}}
-{{- if $gpuEnabled }}
+{{- if and $gpuEnabled (ne $gpuVariant "container") }}
 {{- $_ := set $kubevirtValues "extraFeatureGates" (list "HostDevices") -}}
 {{- /*
   Each .Values.gpu access is fully parenthesized — (((.Values.gpu).x).y) —
@@ -52,9 +95,10 @@
 {{- $userMdevConfig := default (dict) (.Values.gpu).mediatedDevicesConfiguration -}}
 {{- $replace := default false (.Values.gpu).replaceDefaults -}}
 {{- /*
-  pciHostDevices applies in both variants — passthrough (vfio-pci, whole
-  GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace / Blackwell
-  with the vGPU 17/20 driver branch) both advertise via pciHostDevices.
+  pciHostDevices applies in both VM variants — passthrough (vfio-pci,
+  whole GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace /
+  Blackwell with the vGPU 17/20 driver branch) both advertise via
+  pciHostDevices. The container variant never reaches this block.
   mediatedDevices is vgpu-only: it EXPOSES, by stable profile name
   (mdevNameSelector), the mdev devices the GPU Operator's vGPU Device
   Manager creates on the node. Emitting it in the passthrough variant
@@ -121,6 +165,25 @@
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
 {{- /*
+  Forward the platform-level worker image catalog overrides into the emitted
+  cozystack.kubernetes-worker-image Package CR's
+  components.kubernetes-worker-image.values, so the supported override path
+  on the cozystack-platform Package -- spec.components.platform.values.kubernetesWorkerImage
+  -- actually reaches that chart's HelmRelease. Same pattern as the kubevirt /
+  gpu-operator forwarding above and backupStorage in bundles/system.yaml. The
+  catalog's own knobs are the two the feature exists for: an air-gapped or
+  rate-limited cluster repoints imageFactoryURL, and a cluster whose worker pools
+  do not sit on `replicated` moves the golden onto their class -- without which
+  the pool-side StorageClass guard refuses the render while naming a fix the
+  operator cannot apply. Unset (the default) emits no components block and keeps
+  the Package identical to the historical render.
+*/ -}}
+{{- $workerImageComponents := dict -}}
+{{- if .Values.kubernetesWorkerImage -}}
+{{- $_ := set $workerImageComponents "kubernetes-worker-image" (dict "values" .Values.kubernetesWorkerImage) -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.kubernetes-worker-image" $ $workerImageComponents) }}
+{{- /*
   Forward platform-level vGPU knobs into the emitted cozystack.gpu-operator
   Package CR's components.gpu-operator.values. Only applies to the vgpu
   variant — passthrough does not consume them. Each knob is forwarded
@@ -155,11 +218,76 @@
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-core" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
+{{- /*
+  The Proxmox infrastructure provider is opt-in where the KubeVirt one is not,
+  and the asymmetry is not a matter of taste. capmox talks to a hypervisor that
+  lives outside this cluster, and it needs a capmox-config Secret holding a
+  Proxmox API token: capi-operator reads that Secret before it installs
+  anything, so with no Secret the provider is never deployed at all. Enabling
+  this by default would ask every Cozystack install that has no Proxmox to
+  supply hypervisor credentials.
+
+  Enable it by adding cozystack.capi-provider-infra-proxmox to
+  bundles.enabledPackages. The in-cluster IPAM provider comes with it, for the
+  reason written next to the dependsOn edge in
+  sources/capi-provider-infra-proxmox.yaml. IPAM is also independently
+  enableable — it is a generic Cluster API addon, useful to any provider that
+  assigns rather than leases.
+*/ -}}
+{{- $proxmoxName := "cozystack.capi-provider-infra-proxmox" -}}
+{{- $ipamName := "cozystack.capi-provider-ipam-in-cluster" -}}
+{{- $pkgDisabled := default (list) .Values.bundles.disabledPackages -}}
+{{- $pkgEnabled := default (list) .Values.bundles.enabledPackages -}}
+{{- $proxmoxEnabled := and (has $proxmoxName $pkgEnabled) (not (has $proxmoxName $pkgDisabled)) -}}
+{{- /*
+  Naming the pair in conflicting lists is the one case worth stopping for. The
+  cluster catches it on its own: the capmox PackageSource depends on the IPAM
+  Package, so with that Package absent the capmox one goes Ready=False with
+  DependenciesNotReady and no HelmRelease is created. What it does not do is
+  say why. Failing the render names the two list entries that conflict, at the
+  moment someone writes them, instead of leaving a condition to decode later.
+*/ -}}
+{{- if and $proxmoxEnabled (has $ipamName $pkgDisabled) -}}
+{{- fail (printf "%s requires %s, which is listed in bundles.disabledPackages: capmox allocates worker addresses from an InClusterIPPool and has no DHCP mode, so without the IPAM provider no ProxmoxCluster ever becomes Ready" $proxmoxName $ipamName) -}}
+{{- end -}}
+{{- if or $proxmoxEnabled (has $ipamName $pkgEnabled) }}
+{{include "cozystack.platform.package.default" (list $ipamName $) }}
+{{- end }}
+{{- if $proxmoxEnabled }}
+{{include "cozystack.platform.package.default" (list $proxmoxName $) }}
+{{- end }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.computeplane-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{- /*
+  VM import is opt-in: the Forklift operator ships a large manifest with its own
+  CRDs and broad RBAC, and the migration controller holds cluster-wide access to
+  PersistentVolumes so it can hand a transferred volume to a VMDisk without
+  copying it. That surface is worth it for a cluster migrating off vSphere and
+  pure cost for every other iaas cluster, so add these three to
+  bundles.enabledPackages to turn it on.
+
+  The VDDK image travels here as configuration rather than living in the tree:
+  it is built from a proprietary VMware SDK that Cozystack can neither ship nor
+  mirror, so an operator who holds a licence builds it and names it in
+  vmImport.vddkImage. Only the reference travels, never a credential. Empty is
+  the normal state and makes the vSphere path report itself unavailable on each
+  VMImportSource instead of failing midway through a transfer.
+
+  The key is vmImport rather than migration because the platform already has a
+  top-level `migrations` for its own schema migrations, and two neighbouring
+  keys differing by one letter is a configuration mistake waiting to happen.
+*/ -}}
+{{- $migrationComponents := dict -}}
+{{- with .Values.vmImport -}}
+{{- with .vddkImage -}}
+{{- $_ := set $migrationComponents "migration-controller" (dict "values" (dict "vddkImage" .)) -}}
+{{- end -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.forklift-operator" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.forklift" $) }}
+{{include "cozystack.platform.package.optional" (list "cozystack.migration-controller" "default" $ $migrationComponents) }}
 {{- end }}

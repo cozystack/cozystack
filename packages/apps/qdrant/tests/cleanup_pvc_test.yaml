@@ -35,6 +35,22 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: qdrant-test-qdrant-cleanup
+      # The script exits non-zero when a delete or a listing failed, so the Job
+      # can now fail. Under the Kubernetes default of 6 it would back off across
+      # seven pods for about ten minutes and outlast the hook timeout, and Helm
+      # would report that timeout instead of the hook's own error.
+      - equal:
+          path: spec.backoffLimit
+          value: 1
+      # Pinned exactly, because the whole point of the non-zero exit is that the
+      # failed Job survives to be read. Adding hook-failed here hands the Job
+      # straight back to Helm to delete on failure, destroying the only account
+      # of what was left behind — and until this assert existed, that one-line
+      # reversal left this chart's whole suite green, because nothing else here
+      # read the annotation.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "kubectl get pvc -n tenant-test -o name"
@@ -48,6 +64,26 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'grep "\^persistentvolumeclaim/qdrant-storage-qdrant-test-"'
+
+  - it: "bounds the cleanup Job so a claim that will not go cannot hang the uninstall"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'xargs kubectl delete -n tenant-test --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
 
   - it: "creates qdrant-scoped RBAC for the cleanup hook"
     templates:
@@ -64,4 +100,4 @@ tests:
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]

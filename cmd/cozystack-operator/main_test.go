@@ -18,9 +18,12 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,7 +78,7 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 	}
 
 	// Verify variants
-	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic"}
+	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic", "isp-slim", "isp-slim-generic", "isp-hosted-slim"}
 	if len(ps.Spec.Variants) != len(expectedVariants) {
 		t.Fatalf("expected %d variants, got %d", len(expectedVariants), len(ps.Spec.Variants))
 	}
@@ -91,49 +94,90 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 
 func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 	s := newTestScheme()
+	k8sClient := fake.NewClientBuilder().WithScheme(s).Build()
+	ctx := context.Background()
 
-	existing := &cozyv1alpha1.PackageSource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            "cozystack.cozystack-platform",
-			ResourceVersion: "1",
-			Labels: map[string]string{
-				"custom-label": "should-be-preserved",
-			},
-		},
-		Spec: cozyv1alpha1.PackageSourceSpec{
-			SourceRef: &cozyv1alpha1.PackageSourceRef{
-				Kind:      "OCIRepository",
-				Name:      "old-name",
-				Namespace: "cozy-system",
-			},
-		},
+	// The first apply establishes the operator as the owner of the object.
+	if err := installPlatformPackageSource(ctx, k8sClient, "cozystack-platform", "OCIRepository"); err != nil {
+		t.Fatalf("first apply: %v", err)
 	}
-
-	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(existing).Build()
-
-	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Re-applying as the same owner is a legitimate update, so it must not
+	// conflict even though Force is no longer set. (A conflict would only arise
+	// against a different manager, which the refusal tests cover.)
+	if err := installPlatformPackageSource(ctx, k8sClient, "cozystack-platform", "OCIRepository"); err != nil {
+		t.Fatalf("re-apply for the operator's own object must not conflict: %v", err)
 	}
 
 	ps := &cozyv1alpha1.PackageSource{}
-	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
 		t.Fatalf("PackageSource not found: %v", err)
 	}
-
-	// Verify sourceRef was updated
 	if ps.Spec.SourceRef.Name != "cozystack-platform" {
-		t.Errorf("expected updated sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
+		t.Errorf("expected sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
 	}
-
-	// Verify all 4 variants are present after update
-	if len(ps.Spec.Variants) != 4 {
-		t.Errorf("expected 4 variants after update, got %d", len(ps.Spec.Variants))
+	if len(ps.Spec.Variants) != 7 {
+		t.Errorf("expected 7 variants, got %d", len(ps.Spec.Variants))
 	}
+}
 
-	// Verify that labels set by other controllers are preserved (SSA does not overwrite unmanaged fields)
-	if ps.Labels["custom-label"] != "should-be-preserved" {
-		t.Errorf("expected custom-label to be preserved, got %q", ps.Labels["custom-label"])
+// TestInstallPlatformPackageSource_RefusesTapOwned asserts that when a
+// marketplace tap has materialized a PackageSource under a name the platform
+// later ships, the platform refuses to overwrite it, names the conflict, and
+// leaves the object untouched.
+func TestInstallPlatformPackageSource_RefusesTapOwned(t *testing.T) {
+	s := newTestScheme()
+	tapOwned := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "cozystack.cozystack-platform",
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.SourceAnnotation: "tap-acme-platform"},
+		},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "tap-acme-platform", Namespace: "cozy-system"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(tapOwned).Build()
+
+	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
+	if err == nil || !strings.Contains(err.Error(), "owned by a marketplace tap") {
+		t.Fatalf("expected refusal naming the tap owner, got %v", err)
+	}
+	// The tapped object is left exactly as it was.
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.Spec.SourceRef.Name != "tap-acme-platform" {
+		t.Errorf("the tapped PackageSource must be left untouched, sourceRef=%q", ps.Spec.SourceRef.Name)
+	}
+}
+
+// TestInstallPlatformPackageSource_RefusesForeignOwner asserts that a
+// PackageSource owned by any other field manager (no tap label) is not
+// force-overwritten: the server-side apply conflict surfaces as an error and the
+// object is left untouched.
+func TestInstallPlatformPackageSource_RefusesForeignOwner(t *testing.T) {
+	s := newTestScheme()
+	// WithObjects seeds an object owned by a foreign manager (before-first-apply)
+	// with a conflicting sourceRef and no tap label.
+	foreign := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack.cozystack-platform"},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Kind: "OCIRepository", Name: "old-name", Namespace: "cozy-system"},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(foreign).Build()
+
+	err := installPlatformPackageSource(context.Background(), k8sClient, "cozystack-platform", "OCIRepository")
+	if err == nil || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("expected a field-ownership conflict error, got %v", err)
+	}
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "cozystack.cozystack-platform"}, ps); err != nil {
+		t.Fatal(err)
+	}
+	if ps.Spec.SourceRef.Name != "old-name" {
+		t.Errorf("a foreign-owned PackageSource must be left untouched, sourceRef=%q", ps.Spec.SourceRef.Name)
 	}
 }
 
@@ -216,6 +260,9 @@ func TestInstallPlatformPackageSource_VariantValuesFiles(t *testing.T) {
 		"isp-full":         {"values.yaml", "values-isp-full.yaml"},
 		"isp-hosted":       {"values.yaml", "values-isp-hosted.yaml"},
 		"isp-full-generic": {"values.yaml", "values-isp-full-generic.yaml"},
+		"isp-slim":         {"values.yaml", "values-isp-slim.yaml"},
+		"isp-slim-generic": {"values.yaml", "values-isp-slim-generic.yaml"},
+		"isp-hosted-slim":  {"values.yaml", "values-isp-hosted-slim.yaml"},
 	}
 
 	for _, v := range ps.Spec.Variants {
@@ -602,5 +649,120 @@ func TestGenerateGitRepository_WithSecret(t *testing.T) {
 	}
 	if obj.Spec.SecretRef.Name != "my-git-creds" {
 		t.Errorf("expected SecretRef.Name %q, got %q", "my-git-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
+// The system namespace memory flags are the only ones on this binary whose bad values do
+// not surface here at all: a limit and a request that parse but contradict each other
+// produce a LimitRange the API server rejects, once per system namespace, on every Package
+// reconcile, with nothing in the error pointing back at a flag. Each branch below is a way
+// that has happened or could.
+func TestParseSystemNamespaceMemory(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawLimit    string
+		rawRequest  string
+		wantErr     bool
+		wantLimit   string
+		wantRequest string
+	}{
+		{
+			// Inputs follow the constants registered as flag defaults; literal
+			// expectations pin the shipped contract so changing either constant
+			// requires an intentional test update.
+			name:        "defaults",
+			rawLimit:    DefaultSystemNamespaceMemoryLimit,
+			rawRequest:  DefaultSystemNamespaceMemoryRequest,
+			wantLimit:   "32Gi",
+			wantRequest: "32Mi",
+		},
+		{
+			// Empty is the documented off switch, not a missing value: the chart
+			// leaves both keys empty unless an operator sets them.
+			name:        "empty disables both",
+			rawLimit:    "",
+			rawRequest:  "",
+			wantLimit:   "0",
+			wantRequest: "0",
+		},
+		{
+			// An explicit 0 limit is the other way to disable, and it must not
+			// trip the pair check against a request that is still set.
+			name:        "zero limit disables and ignores the request",
+			rawLimit:    "0",
+			rawRequest:  "32Mi",
+			wantLimit:   "0",
+			wantRequest: "32Mi",
+		},
+		{
+			// Supported on purpose: the container still gets memory.max, the
+			// scheduler reserves nothing. See the flag help.
+			name:        "zero request against a real limit is accepted",
+			rawLimit:    "4Gi",
+			rawRequest:  "0",
+			wantLimit:   "4Gi",
+			wantRequest: "0",
+		},
+		{
+			name:     "malformed limit",
+			rawLimit: "4GB",
+			wantErr:  true,
+		},
+		{
+			name:       "malformed request",
+			rawLimit:   "4Gi",
+			rawRequest: "thirty-two",
+			wantErr:    true,
+		},
+		{
+			// Parses as a Quantity and is meaningless as memory.
+			name:     "negative limit",
+			rawLimit: "-1Gi",
+			wantErr:  true,
+		},
+		{
+			name:       "negative request",
+			rawLimit:   "4Gi",
+			rawRequest: "-32Mi",
+			wantErr:    true,
+		},
+		{
+			// The one the API server would otherwise reject per namespace, per
+			// reconcile, forever.
+			name:       "request above limit",
+			rawLimit:   "1Gi",
+			rawRequest: "2Gi",
+			wantErr:    true,
+		},
+		{
+			// Equal is the boundary and is legal: defaultRequest may equal default.
+			name:        "request equal to limit",
+			rawLimit:    "1Gi",
+			rawRequest:  "1Gi",
+			wantLimit:   "1Gi",
+			wantRequest: "1Gi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limit, request, err := parseSystemNamespaceMemory(tt.rawLimit, tt.rawRequest)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseSystemNamespaceMemory(%q, %q) = %s/%s, want an error",
+						tt.rawLimit, tt.rawRequest, limit.String(), request.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSystemNamespaceMemory(%q, %q): %v", tt.rawLimit, tt.rawRequest, err)
+			}
+			if want := resource.MustParse(tt.wantLimit); limit.Cmp(want) != 0 {
+				t.Errorf("limit = %s, want %s", limit.String(), want.String())
+			}
+			if want := resource.MustParse(tt.wantRequest); request.Cmp(want) != 0 {
+				t.Errorf("request = %s, want %s", request.String(), want.String())
+			}
+		})
 	}
 }

@@ -1,0 +1,32 @@
+suite: tenant SeaweedFS release leaves spec.values to the instance
+
+# The SeaweedFS instance this module creates is stored as the HelmRelease below,
+# and its spec.values is the instance's own spec. Platform migration 57 pins
+# master.volumeSizeLimitMB there, and a Helm upgrade of this chart leaves the
+# pin alone only because this template never renders spec.values: a key absent
+# from both the previous and the new manifest is not patched. A key this
+# template rendered into spec.values would be patched on every reconcile, so
+# the whole map stays out, which is the state the migration was measured
+# against.
+#
+# The name is asserted first because notExists alone also passes when the
+# template renders nothing.
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+set:
+  seaweedfs: true
+
+tests:
+  - it: renders the seaweedfs release without spec.values
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs
+      - notExists:
+          path: spec.values

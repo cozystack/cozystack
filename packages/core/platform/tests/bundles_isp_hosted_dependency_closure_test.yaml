@@ -1,0 +1,146 @@
+suite: isp-hosted emits the dependency closure its app catalog needs
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The isp-hosted preset drops the data-plane head (the host provides CNI,
+  # storage and virtualisation) but MUST still emit the system bundle's
+  # variant-agnostic control-plane body. Shipping bundles.system.enabled: false
+  # while paas/naas stayed on rendered an app catalog whose entire dependency
+  # closure was absent: all 24 Packages sat in DependenciesNotReady forever and
+  # the cozystack-platform HelmRelease never went Ready. Each package below is a
+  # dependsOn edge of a paas/naas application PackageSource, so losing any one of
+  # them reproduces that wedge.
+  - it: emits every package the paas/naas catalog depends on
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        iaas:
+          enabled: false
+        paas:
+          enabled: true
+        naas:
+          enabled: true
+    asserts:
+      # Sole source of the application-definition-crd component, i.e. the
+      # ApplicationDefinition CRD every *-rd component renders against. Without
+      # it the *-rd HelmReleases fail with `no matches for kind
+      # "ApplicationDefinition" in version "cozystack.io/v1alpha1"`.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      # The noop networking Package for this variant. 23 of the catalog's
+      # PackageSources declare dependsOn: cozystack.networking.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.objectstorage-controller
+          any: true
+
+  # bucket-application lives in the system bundle rather than iaas: its own
+  # dependsOn closure is networking + objectstorage-controller + cozystack-engine
+  # and nothing in it needs KubeVirt or CAPI, while cozystack.backupstrategy-controller
+  # — a default package of the system bundle — hard-depends on it. Keeping it in
+  # iaas left every system-on/iaas-off configuration with a permanently
+  # DependenciesNotReady backupstrategy-controller.
+  - it: emits bucket-application from the system bundle even when iaas is disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        iaas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.bucket-application
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backupstrategy-controller
+          any: true
+
+  # The tests above drive the templates through `set:`, so they pin the template
+  # logic but would not notice values-isp-hosted.yaml itself regressing. Load the
+  # shipped preset unmodified — this is the assertion that actually fails if
+  # bundles.system.enabled goes back to false, which is how the wedge shipped.
+  - it: ships the isp-hosted preset with the system bundle enabled
+    values:
+      - ../values-isp-hosted.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.bucket-application
+          any: true
+
+  # The hosted variant must not drag in the data-plane it exists to exclude.
+  #
+  # `any: true` is load-bearing on a negated containsDocument. Without it the
+  # assertion negates "EVERY rendered document matches", which any multi-document
+  # render satisfies trivially — the case then passes even with cozystack.linstor
+  # emitted into the hosted branch. With `any: true` it negates "SOME document
+  # matches", which is the intended meaning.
+  - it: does not emit data-plane packages on the hosted variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        iaas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.linstor
+          any: true
+        not: true
+      # securitygroup-controller is emitted from the common-packages helper, which
+      # only the isp-full branches call — it watches cilium.io CRDs that the noop
+      # networking variant never installs. Emitted on isp-full, absent here.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.securitygroup-controller
+          any: true
+        not: true

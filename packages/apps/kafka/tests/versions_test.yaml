@@ -1,0 +1,29 @@
+suite: Name-length guard
+
+# kafka.assertNameLength is invoked from kafka.yaml (the always-rendered Kafka
+# CR), so a release name whose derived KRaft controller node name would exceed
+# the 63-char DNS-1123 pod-hostname limit fails the whole render early with an
+# actionable message, instead of Strimzi silently never bringing the pod up.
+templates:
+  - templates/kafka.yaml
+
+tests:
+  - it: fails the render when the release name exceeds the 63-char controller node budget
+    release:
+      # "kafka-" + 47 chars = 53; derived controller node <release>-c-<hash>-<id>
+      # is 66 characters, over the limit.
+      name: kafka-01234567890123456789012345678901234567890123456
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "over the 63-character"
+
+  - it: renders normally for a release name within budget
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Kafka

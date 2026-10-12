@@ -3,16 +3,20 @@ package backupcontroller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -44,7 +48,7 @@ func TestBackupCleanup_CNPG_DeletesUnderlyingCNPGBackup(t *testing.T) {
 	c := newBackupTestClient(t, backup, cnpgBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -75,7 +79,7 @@ func TestBackupCleanup_CNPG_NoMetadataIsNoOp(t *testing.T) {
 	c := newBackupTestClient(t, backup)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned unexpected error %v", err)
 	}
 }
@@ -103,7 +107,7 @@ func TestBackupCleanup_Velero_DispatchUnchanged(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -152,7 +156,7 @@ func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -204,7 +208,7 @@ func TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -252,7 +256,7 @@ func TestBackupCleanup_FoundationDB_DoesNotFallThroughToVelero(t *testing.T) {
 	c := newBackupTestClient(t, backup, veleroBk)
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete returned %v", err)
 	}
 
@@ -265,6 +269,53 @@ func TestBackupCleanup_FoundationDB_DoesNotFallThroughToVelero(t *testing.T) {
 	}
 	got := &velerov1.Backup{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb-fdb"}, got); err != nil {
+		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
+	}
+}
+
+// TestBackupCleanup_MongoDB_DoesNotFallThroughToVelero locks in the same
+// invariant as the Altinity / MariaDB / FoundationDB variants for the MongoDB
+// strategy. The dispatcher must route MongoDB-strategy Backups to the MongoDB
+// cleanup (which prunes a system-bucket archive through the operator CR's
+// finalizer and leaves a legacy one alone) rather than fall through to the
+// Velero default. Without the explicit case a future refactor that
+// incidentally stamps velero.io/backup-name onto MongoDB driverMetadata would
+// silently synthesise a DeleteBackupRequest. The test seeds those keys plus a
+// matching velero.io/Backup and no MongoDB metadata; with the explicit branch
+// no DBR is created and the Velero Backup survives.
+func TestBackupCleanup_MongoDB_DoesNotFallThroughToVelero(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "stale-vb-mongo"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk-mongo"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.MongoDBStrategyKind, Name: "mongodb-strategy-default",
+			},
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "stale-vb-mongo",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 0 {
+		t.Fatalf("expected no DeleteBackupRequests for MongoDB Backup, got %d (Velero fall-through leak)", len(dbrList.Items))
+	}
+	got := &velerov1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb-mongo"}, got); err != nil {
 		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
 	}
 }
@@ -309,4 +360,245 @@ func newBackupTestClient(t *testing.T, objs ...client.Object) client.Client {
 	_ = velerov1.AddToScheme(s)
 	_ = cnpgtypes.AddToScheme(s)
 	return clientfake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+}
+
+// newRabbitmqBackupReconcilerClient builds a client for the Reconcile-level
+// Rabbitmq cleanup tests: it registers the Rabbitmq strategy CRD and a Job
+// status subresource (so the delete Job's completion can be simulated).
+func newRabbitmqBackupReconcilerClient(objs ...client.Object) (client.Client, *runtime.Scheme) {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	return clientfake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&batchv1.Job{}).
+		WithObjects(objs...).Build(), s
+}
+
+// TestBackupReconcile_HoldsFinalizerWhileRabbitmqCleanupRuns pins the
+// deletion-blocking wiring: while the delete Job runs, Reconcile keeps the
+// finalizer (the Backup is not removed until the object is gone), and removes it
+// once the Job completes. Deleting the requeue block in Reconcile turns this red.
+func TestBackupReconcile_HoldsFinalizerWhileRabbitmqCleanupRuns(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := rabbitmqBackup("rmq-src") // status.artifact.uri set by the fixture
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRabbitmqStrategy("cozy-default-rabbitmq")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	// Delete the Backup: the finalizer holds it in Terminating.
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected Reconcile to requeue while the delete Job runs")
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatalf("Backup must still exist while cleanup runs: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, backupFinalizer) {
+		t.Error("expected the finalizer to be retained while the delete Job runs")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the cleanup Job, got %d", len(jobs.Items))
+	}
+
+	// Complete the Job; the next reconcile removes the finalizer -> Backup gone.
+	job := jobs.Items[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() second call error = %v", err)
+	}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup removed after the delete Job completed, got err=%v", err)
+	}
+}
+
+// TestBackupReconcile_ReleasesInTerminatingNamespace pins the teardown fix: a
+// Rabbitmq Backup in a Terminating namespace must release (CREATE is forbidden
+// there, so the delete Job cannot run) rather than wedge the namespace, and must
+// record a Warning Event naming the object left behind.
+func TestBackupReconcile_ReleasesInTerminatingNamespace(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test", Finalizers: []string{"kubernetes"}}}
+	backup := rabbitmqBackup("rmq-src")
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRabbitmqStrategy("cozy-default-rabbitmq")
+	rec := record.NewFakeRecorder(10)
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	ctx := context.Background()
+
+	// Put both the namespace and the Backup into Terminating.
+	if err := c.Delete(ctx, ns); err != nil {
+		t.Fatalf("delete namespace: %v", err)
+	}
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup released in a terminating namespace (no wedge), got err=%v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job created in a terminating namespace, got %d", len(jobs.Items))
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "ArtifactNotDeleted") {
+			t.Errorf("expected an ArtifactNotDeleted Warning Event, got %q", ev)
+		}
+	default:
+		t.Error("expected a Warning Event naming the object left behind")
+	}
+}
+
+// redisCleanupBackup is a Redis Backup carrying the object key on its
+// DriverMetadata - the object cleanupRedisBackup must delete.
+func redisCleanupBackup(name, objectKey string) *backupsv1alpha1.Backup {
+	return &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
+				Kind:     "Redis",
+				Name:     "cache",
+			},
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+				Kind:     strategyv1alpha1.RedisStrategyKind,
+				Name:     "cozy-default-redis",
+			},
+			TakenAt:        metav1.Now(),
+			DriverMetadata: map[string]string{redisObjectMetaKey: objectKey},
+		},
+	}
+}
+
+// newRedisCleanupStrategy renders in cleanup mode: its template references only
+// .Mode and .ObjectKey (never .Application), which cleanup passes as nil.
+func newRedisCleanupStrategy(name string) *strategyv1alpha1.Redis {
+	return &strategyv1alpha1.Redis{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: strategyv1alpha1.RedisSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:  "cleanup",
+						Image: "redis-backup:test",
+						Args:  []string{"--mode={{ .Mode }}", "--key={{ .ObjectKey }}"},
+					}},
+				},
+			},
+		},
+	}
+}
+
+// TestBackupReconcile_HoldsFinalizerWhileRedisCleanupRuns pins that a deleted
+// Redis Backup deletes its object (the Redis driver owns it) instead of falling
+// through to the Velero no-op: Reconcile spawns a cleanup Job, holds the
+// finalizer while it runs, and removes the Backup once the Job completes.
+// Dropping the Redis case in cleanupOnDelete turns this red (no Job, Backup
+// removed immediately with its object orphaned).
+func TestBackupReconcile_HoldsFinalizerWhileRedisCleanupRuns(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := redisCleanupBackup("redis-src", "tenant-test/cache/redis-src.rdb")
+	backup.Finalizers = []string{backupFinalizer}
+	strategy := newRedisCleanupStrategy("cozy-default-redis")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	if err := c.Delete(ctx, backup); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(backup)
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected Reconcile to requeue while the delete Job runs")
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(ctx, key, got); err != nil {
+		t.Fatalf("Backup must still exist while cleanup runs: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(got, backupFinalizer) {
+		t.Error("expected the finalizer to be retained while the delete Job runs")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected the cleanup Job, got %d", len(jobs.Items))
+	}
+	if got := jobs.Items[0].Labels[redisLabelMode]; got != redisModeCleanup {
+		t.Errorf("expected the Job labelled mode=%q, got %q", redisModeCleanup, got)
+	}
+
+	// Complete the Job; the next reconcile removes the finalizer -> Backup gone.
+	job := jobs.Items[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile() second call error = %v", err)
+	}
+	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected the Backup removed after the delete Job completed, got err=%v", err)
+	}
+}
+
+// TestBackupCleanup_Redis_NoObjectKeyIsNoOp pins that a legacy Redis Backup
+// with no recorded object key releases without spawning a Job (nothing to
+// delete), rather than wedging.
+func TestBackupCleanup_Redis_NoObjectKeyIsNoOp(t *testing.T) {
+	backup := redisCleanupBackup("redis-legacy", "")
+	backup.Spec.DriverMetadata = nil
+	c, s := newRabbitmqBackupReconcilerClient(backup)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Error("expected no requeue when there is no object to delete")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job for a keyless Backup, got %d", len(jobs.Items))
+	}
 }

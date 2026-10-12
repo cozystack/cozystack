@@ -1,0 +1,25 @@
+{{- if and (include "tenant.ciliumPolicies" .) (include "tenant.tracingCentralEgress" .) }}
+# Write hop of shared-central tracing: the collector reaches the tenant-root
+# vmauth, never vtinsert, which takes the account from the writer's headers.
+# vmauth sets it from the tenant's VMUser login, so a pod that only carries
+# the collector's label reaches no account but this tenant's.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress-traces-central
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      "k8s:app.kubernetes.io/name": "otel-traces"
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:app.kubernetes.io/name": vmauth
+        "k8s:app.kubernetes.io/instance": traces-central
+        "k8s:io.kubernetes.pod.namespace": tenant-root
+    toPorts:
+    - ports:
+      - port: "8427"
+        protocol: TCP
+{{- end }}

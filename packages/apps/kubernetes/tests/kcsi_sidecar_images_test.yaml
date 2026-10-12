@@ -1,0 +1,36 @@
+suite: KubeVirt CSI sidecar images
+
+templates:
+  - templates/csi/deploy.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  - it: uses versioned upstream sig-storage sidecars
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: csi-provisioner
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: registry.k8s.io/sig-storage/csi-provisioner:v6.1.0
+      - equal:
+          path: spec.template.spec.containers[2].name
+          value: csi-attacher
+      - equal:
+          path: spec.template.spec.containers[2].image
+          value: registry.k8s.io/sig-storage/csi-attacher:v4.10.0
+      - equal:
+          path: spec.template.spec.containers[3].name
+          value: csi-liveness-probe
+      - equal:
+          path: spec.template.spec.containers[3].image
+          value: registry.k8s.io/sig-storage/livenessprobe:v2.17.0

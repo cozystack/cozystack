@@ -1,0 +1,80 @@
+suite: MachineHealthCheck maxUnhealthy int-vs-percent rendering
+
+# CAPI MachineHealthCheck admission accepts spec.maxUnhealthy as an IntOrString
+# but rejects a bare numeric STRING ("0"): a percentage must be a quoted string
+# and a count must be an unquoted int. nodegroup.yaml renders it as
+#   maxUnhealthy: {{ if hasSuffix "%" ... }}{{ . | quote }}{{ else }}{{ . | int }}{{ end }}
+# Ported from the parent chart's mhc_rendering_test after the pool moved to
+# kubernetes-nodes.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: renders a percentage maxUnhealthy as a quoted string
+    set:
+      maxUnhealthy: "50%"
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - equal:
+          path: spec.maxUnhealthy
+          value: "50%"
+
+  - it: renders a bare-integer maxUnhealthy as an unquoted int
+    set:
+      maxUnhealthy: "0"
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - equal:
+          path: spec.maxUnhealthy
+          value: 0
+
+  - it: passes nodeStartupTimeout through verbatim
+    set:
+      maxUnhealthy: "50%"
+      nodeStartupTimeout: "20m"
+    documentSelector:
+      path: kind
+      value: MachineHealthCheck
+    asserts:
+      - equal:
+          path: spec.nodeStartupTimeout
+          value: "20m"
+
+  - it: rejects a non-integer percentage maxUnhealthy
+    set:
+      maxUnhealthy: "50.5%"
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be a bare integer"
+
+  - it: rejects a decimal maxUnhealthy
+    set:
+      maxUnhealthy: "1.5"
+    asserts:
+      - failedTemplate:
+          errorPattern: "must be a bare integer"

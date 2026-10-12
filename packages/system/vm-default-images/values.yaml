@@ -1,6 +1,13 @@
 ##
 ## @section Global Golden Image Collection
 ##
+## The package reports Ready only once every image below has imported. One image
+## that cannot be fetched, such as a removed upstream URL, keeps the whole package
+## not Ready, retrying with no time limit, until that image imports or its entry
+## is removed from the list. An import that reached phase Failed does not start
+## again by itself: delete its DataVolume and the next retry recreates it. The
+## images that did import stay usable meanwhile.
+##
 
 ## @param {string} storageClass - Default StorageClass for all images. If empty, uses the cluster default StorageClass.
 ## NOTE: The default set of images requires approximately 320Gi of storage (16 images × 20Gi each).

@@ -7,11 +7,13 @@ gh release upload --clobber $version _out/assets/cozystack-crds.yaml
 gh release upload --clobber $version _out/assets/cozystack-operator-talos.yaml
 gh release upload --clobber $version _out/assets/cozystack-operator-generic.yaml
 gh release upload --clobber $version _out/assets/cozystack-operator-hosted.yaml
-gh release upload --clobber $version _out/assets/metal-amd64.iso
-gh release upload --clobber $version _out/assets/metal-amd64.raw.xz
-gh release upload --clobber $version _out/assets/nocloud-amd64.raw.xz
-gh release upload --clobber $version _out/assets/kernel-amd64
-gh release upload --clobber $version _out/assets/initramfs-metal-amd64.xz
+for arch in amd64 arm64; do
+  gh release upload --clobber $version _out/assets/metal-$arch.iso
+  gh release upload --clobber $version _out/assets/metal-$arch.raw.xz
+  gh release upload --clobber $version _out/assets/nocloud-$arch.raw.xz
+  gh release upload --clobber $version _out/assets/kernel-$arch
+  gh release upload --clobber $version _out/assets/initramfs-metal-$arch.xz
+done
 gh release upload --clobber $version _out/assets/cozypkg-*.tar.gz
 gh release upload --clobber $version _out/assets/cozypkg-checksums.txt
 gh release upload --clobber $version _out/assets/openapi.json

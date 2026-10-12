@@ -1,9 +1,15 @@
 {{- if .Values.bootstrap.enabled }}
+{{- if .Values.backup.useSystemBucket }}
+{{- fail "mongodb: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. bootstrap.enabled is not reset after a bootstrap restore completes, so set bootstrap.enabled=false before opting in; to restore from the system bucket use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass instead. See docs/operations/backup-classes.md." }}
+{{- end }}
 {{- if not .Values.bootstrap.backupName }}
 {{- fail "bootstrap.backupName is required when bootstrap.enabled is true" }}
 {{- end }}
 {{- if not .Values.backup.destinationPath }}
 {{- fail "backup.destinationPath is required when bootstrap.enabled is true" }}
+{{- end }}
+{{- if not (include "mongodb.backup.bucket" .) }}
+{{- fail "backup.destinationPath must name a bucket (s3://bucket/path/) when bootstrap.enabled is true" }}
 {{- end }}
 {{- if not .Values.backup.endpointURL }}
 {{- fail "backup.endpointURL is required when bootstrap.enabled is true" }}
@@ -30,8 +36,10 @@ spec:
     type: logical
     destination: {{ .Values.backup.destinationPath | trimSuffix "/" }}/{{ .Values.bootstrap.backupName }}
     s3:
+      bucket: {{ include "mongodb.backup.bucket" . | quote }}
+      prefix: {{ include "mongodb.backup.prefix" . | quote }}
       credentialsSecret: {{ .Release.Name }}-s3-creds
       endpointUrl: {{ .Values.backup.endpointURL }}
-      insecureSkipTLSVerify: false
+      insecureSkipTLSVerify: {{ .Values.backup.insecureSkipTLSVerify | default false }}
       forcePathStyle: true
 {{- end }}

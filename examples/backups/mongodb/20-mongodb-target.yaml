@@ -1,0 +1,24 @@
+# Empty MongoDB target for the to-copy restore. The psmdb operator replays the
+# logical dump into this running cluster, so it needs the percona-backup-mongodb
+# agents too — hence backup.enabled: true. It uses the SAME bucket as the source
+# but its OWN prefix (mongodb-target/): the restore reads the source archive via
+# backupSource, so the target never needs to write into the source's prefix, and
+# a shared prefix would interleave the two clusters' oplog/backup metadata (both
+# run replset rs0) — a source PITR could then resolve oplog chunks the target
+# wrote. No "app" user or database is declared: the restore recreates the demo
+# database from the dump.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: mongodb-target
+spec:
+  replicas: 1
+  size: 1Gi
+  backup:
+    enabled: true
+    destinationPath: "s3://REPLACE_WITH_COSI_BUCKET_NAME/mongodb-target/"
+    endpointURL: "REPLACE_WITH_S3_ENDPOINT"
+    insecureSkipTLSVerify: true
+    s3AccessKey: "REPLACE_WITH_S3_ACCESS_KEY"
+    s3SecretKey: "REPLACE_WITH_S3_SECRET_KEY"

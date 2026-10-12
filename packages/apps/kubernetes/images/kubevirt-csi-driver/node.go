@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -81,15 +85,23 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create temp mount dir: %v", err)
 	}
-	defer os.Remove(tmpMount)
 
 	rootSource := fmt.Sprintf("%s:%s", host, path)
-	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port)}
+	// nosharecache gives the temp mount a superblock of its own: the forced
+	// unmount below kills every RPC in flight on its superblock, which would
+	// otherwise be the one the pods on this node use for the same export.
+	// The price is a cache of its own too: pods already holding /data may not
+	// see the entries the migration moves in until their attribute cache
+	// expires (acdirmax).
+	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port), "nosharecache"}
 	if err := w.mounter.Mount(rootSource, tmpMount, "nfs", rootOpts); err != nil {
+		if rmErr := os.Remove(tmpMount); rmErr != nil {
+			klog.Warningf("Failed to remove temp dir %s: %v", tmpMount, rmErr)
+		}
 		return nil, status.Errorf(codes.Internal, "NFS temp mount failed: %v", err)
 	}
 	defer func() {
-		if err := w.mounter.Unmount(tmpMount); err != nil {
+		if err := unmountTempMount(w.mounter, tmpMount); err != nil {
 			klog.Warningf("Failed to unmount temp dir %s: %v", tmpMount, err)
 		}
 	}()
@@ -132,6 +144,98 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil
+}
+
+const (
+	// Well inside the 2m kubelet puts on NodePublishVolume (csiTimeout in
+	// kubernetes pkg/volume/csi/csi_plugin.go). Bounds the unmount only: the
+	// temp mount is a hard mount, so the mount and the migration before it
+	// still block for as long as the server is gone.
+	tempUnmountTimeout = 30 * time.Second
+	// How long umount's output pipe may stay open once umount has exited or
+	// been killed; the umount.nfs helper it forked can hold it.
+	umountPipeGrace = time.Second
+)
+
+// unmountTempMount bounds the unmount: a plain umount of an NFS mount whose
+// server is gone blocks forever, which hangs the publish and leaks the mount.
+func unmountTempMount(m mount.Interface, dir string) error {
+	return unmountWithin(m, dir, tempUnmountTimeout)
+}
+
+// unmountWithin gives the whole unmount one deadline. On timeout the unmount
+// keeps running in the background and logs its result when it ends; an umount
+// stuck in uninterruptible sleep cannot be killed, so no deadline on the
+// process itself can be relied on.
+//
+// The dir is removed by the worker once the unmount succeeds, so an unmount
+// that finishes after the deadline still cleans up; removed by the caller it
+// would still be a mount point at that moment. A failed unmount keeps the dir.
+// Plain Remove rather than RemoveAll: if the unmount did not take, the dir's
+// contents are the export's.
+func unmountWithin(m mount.Interface, dir string, budget time.Duration) error {
+	done := make(chan error)
+	abandoned := make(chan struct{})
+	go func() {
+		var err error
+		if _, ok := m.(*mount.Mounter); ok {
+			err = umountForcedAfter(dir, budget/3)
+		} else {
+			err = m.Unmount(dir)
+		}
+		if err == nil {
+			if rmErr := os.Remove(dir); rmErr != nil && !os.IsNotExist(rmErr) {
+				klog.Warningf("Failed to remove temp dir %s: %v", dir, rmErr)
+			}
+		}
+		select {
+		case done <- err:
+		case <-abandoned:
+			if err != nil {
+				klog.Warningf("unmount of %s failed after the deadline: %v", dir, err)
+			} else {
+				klog.Infof("unmount of %s finished after the deadline", dir)
+			}
+		}
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(budget):
+		close(abandoned)
+		return fmt.Errorf("unmount of %s still running after %v", dir, budget)
+	}
+}
+
+// umountForcedAfter replaces mount-utils' UnmountWithForce, which retries with
+// -f only once its first umount has returned. That umount forks umount.nfs;
+// killed on the deadline, it leaves the helper stuck on the vanished server
+// holding the output pipe, and CombinedOutput waits for that pipe, so the -f
+// never runs. WaitDelay closes the pipe instead.
+func umountForcedAfter(dir string, timeout time.Duration) error {
+	err := runUmount(timeout, dir)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	klog.V(2).Infof("Timed out waiting for unmount of %s, trying with -f", dir)
+	return runUmount(timeout, "-f", dir)
+}
+
+func runUmount(timeout time.Duration, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "umount", args...)
+	cmd.WaitDelay = umountPipeGrace
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("umount %s: %w", strings.Join(args, " "), ctx.Err())
+	}
+	// umount2 detaches the mount before it blocks tearing the superblock down,
+	// so the -f after a killed umount can find nothing left to unmount.
+	if err != nil && !strings.Contains(string(out), "not mounted") {
+		return fmt.Errorf("umount %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+	return nil
 }
 
 // NodeExpandVolume for NFS volumes is a no-op (LINSTOR handles NFS resize automatically).

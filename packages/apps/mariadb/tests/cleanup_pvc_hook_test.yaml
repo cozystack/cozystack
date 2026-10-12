@@ -73,3 +73,43 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].image
           pattern: //
+
+  # cert-manager runs with enableCertificateOwnerRef=false, so deleting the
+  # Certificates does not delete the Secrets they issued. Without this, the CA
+  # private key and the server private key outlive the release in a namespace
+  # the tenant shares with its other applications.
+  - it: deletes the key-bearing cert-manager Secrets on uninstall
+    documentIndex: 0
+    asserts:
+      # Bound to the delete, and to this one invocation of it: a name reachable
+      # by any other verb says nothing about whether the key outlives the
+      # release, and a `(?s).*` gap between verb and name binds them no better,
+      # since it crosses newlines and therefore crosses commands. Only
+      # whitespace and the shell's line continuations may sit between the
+      # arguments, so the match cannot leave the command it started in. The
+      # operator-generated names are in the pattern because they share that
+      # invocation, not because this case is about them.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete secret -n \\S+[\\s\\\\]+mariadb-test-metrics-password mariadb-test-repl-password[\\s\\\\]+mariadb-test\\.ca-tls mariadb-test\\.tls --ignore-not-found"
+      # -ca-bundle carries an ownerRef to the MariaDB resource, so Kubernetes
+      # collects it; deleting it here would need a grant that is not warranted.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-ca-bundle"
+
+  - it: grants delete on exactly the Secrets it removes
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test.ca-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test.tls
+      - lengthEqual:
+          path: rules[1].resourceNames
+          count: 4

@@ -1,0 +1,19 @@
+suite: shared-central traces egress never renders for tenant-root
+# tenant-root hosts the shared store, so it gets no egress to it even with
+# tracingCentral set.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-root
+  namespace: tenant-root
+set:
+  tracingCentral: true
+  monitoring: true
+tests:
+  - it: is excluded even when tracingCentral is opted in
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-root-egress-traces-central
+        not: true

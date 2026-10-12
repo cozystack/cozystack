@@ -22,15 +22,19 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas >= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
-	// +kubebuilder:default:={}
-	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
 	// External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
 	// +kubebuilder:default:=""
 	Host string `json:"host"`
+	// Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.
+	// +kubebuilder:default:="kubevirt"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="substrate is immutable"
+	Substrate string `json:"substrate"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox Proxmox `json:"proxmox"`
 	// Cluster addons configuration.
 	// +kubebuilder:default:={}
 	Addons Addons `json:"addons"`
@@ -43,16 +47,16 @@ type ConfigSpec struct {
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
-	// MachineHealthCheck tuning for worker node groups.
-	// +kubebuilder:default:={}
-	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
 }
 
 type APIServer struct {
-	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+	// Admission plugins the tenant kube-apiserver enables, passed through to KamajiControlPlane `spec.admissionControllers`, which the control plane renders as `--enable-admission-plugins`. A non-empty list replaces the control plane's default set instead of adding to it. The kube-apiserver enables these plugins in addition to its own default ones, so leaving a plugin out does not turn it off; to turn one off, name it in `--disable-admission-plugins` in `controlPlane.apiServer.extraArgs` and keep it out of this list, since the apiserver refuses to start with a plugin in both, and the control plane's default set names several. Empty by default, which keeps that default set, taken from the TenantControlPlane CRD: CertificateApproval, CertificateSigning, CertificateSubjectRestriction, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, LimitRanger, MutatingAdmissionWebhook, NamespaceLifecycle, PersistentVolumeClaimResize, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionWebhook. `NodeRestriction` is not in it.
+	// +kubebuilder:default:={}
+	AdmissionControllers []AdmissionController `json:"admissionControllers,omitempty"`
+	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. The tenant control plane sets each of the following flags itself and drops an entry naming one before the apiserver sees it. The chart moves an `--enable-admission-plugins=` entry into `controlPlane.apiServer.admissionControllers` and a `--kubelet-preferred-address-types=` entry into `controlPlane.kubelet.preferredAddressTypes` while that field is empty, and refuses any other entry naming one of them: `--advertise-address`, `--client-ca-file`, `--enable-admission-plugins`, `--service-cluster-ip-range`, `--kubelet-client-certificate`, `--kubelet-client-key`, `--kubelet-preferred-address-types`, `--proxy-client-cert-file`, `--proxy-client-key-file`, `--requestheader-allowed-names`, `--requestheader-client-ca-file`, `--secure-port`, `--service-account-key-file`, `--service-account-signing-key-file`, `--tls-cert-file`, `--tls-private-key-file`, `--etcd-servers`, `--etcd-cafile`, `--etcd-certfile`, `--etcd-keyfile`, `--etcd-prefix`, `--etcd-compaction-interval`, `--egress-selector-config-file`. When `spec.oidc.mode` is not `None` the chart also renders OIDC flags here, reads what you have written on them, and refuses some combinations outright; `docs/oidc-tenant.md` carries which flags, which combinations, and why. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
 	// +kubebuilder:default:={}
 	ExtraArgs []string `json:"extraArgs,omitempty"`
 	// Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
@@ -73,15 +77,12 @@ type Addons struct {
 	// Cert-manager addon.
 	// +kubebuilder:default:={}
 	CertManager CertManagerAddon `json:"certManager"`
-	// Cilium CNI plugin.
+	// Cilium CNI plugin. Always installed as the tenant cluster's CNI; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	Cilium CiliumAddon `json:"cilium"`
-	// CoreDNS addon.
+	// CoreDNS addon. Always installed as the tenant cluster's DNS; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	Coredns CoreDNSAddon `json:"coredns"`
-	// FluxCD GitOps operator.
-	// +kubebuilder:default:={}
-	Fluxcd FluxCDAddon `json:"fluxcd"`
 	// Gateway API addon.
 	// +kubebuilder:default:={}
 	GatewayAPI GatewayAPIAddon `json:"gatewayAPI"`
@@ -103,7 +104,7 @@ type Addons struct {
 	// Velero backup/restore addon.
 	// +kubebuilder:default:={}
 	Velero VeleroAddon `json:"velero"`
-	// Vertical Pod Autoscaler.
+	// Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values.
 	// +kubebuilder:default:={}
 	VerticalPodAutoscaler VerticalPodAutoscalerAddon `json:"verticalPodAutoscaler"`
 }
@@ -133,6 +134,9 @@ type ControlPlane struct {
 	// Konnectivity configuration.
 	// +kubebuilder:default:={}
 	Konnectivity Konnectivity `json:"konnectivity"`
+	// Kubelet connection settings.
+	// +kubebuilder:default:={}
+	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Number of control-plane replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -154,20 +158,6 @@ type CoreDNSAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type FluxCDAddon struct {
-	// Enable FluxCD.
-	// +kubebuilder:default:=false
-	Enabled bool `json:"enabled"`
-	// Custom Helm values overrides.
-	// +kubebuilder:default:={}
-	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type GPU struct {
-	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
-	Name string `json:"name"`
 }
 
 type GPUOperatorAddon struct {
@@ -237,20 +227,9 @@ type KonnectivityServer struct {
 }
 
 type Kubelet struct {
-	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
-	// +kubebuilder:default:="7%"
-	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
-	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
-	// +kubebuilder:default:="10%"
-	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
-	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
-	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
-	// CPU reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
-	// Memory reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
+	// Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`, or the list of a `--kubelet-preferred-address-types=` entry in `controlPlane.apiServer.extraArgs` when there is one.
+	// +kubebuilder:default:={}
+	PreferredAddressTypes []NodeAddressType `json:"preferredAddressTypes,omitempty"`
 }
 
 type MonitoringAgentsAddon struct {
@@ -262,49 +241,11 @@ type MonitoringAgentsAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
-type NodeGroup struct {
-	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
-	// +kubebuilder:default:="20Gi"
-	DiskSize resource.Quantity `json:"diskSize"`
-	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
-	Gpus []GPU `json:"gpus,omitempty"`
-	// Virtual machine instance type.
-	// +kubebuilder:default:="u1.medium"
-	InstanceType string `json:"instanceType"`
-	// Kubelet resource reservations for this node group.
-	Kubelet Kubelet `json:"kubelet,omitempty"`
-	// Maximum number of replicas.
-	// +kubebuilder:default:=10
-	MaxReplicas int `json:"maxReplicas"`
-	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
-	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
-	// Minimum number of replicas.
-	// +kubebuilder:default:=0
-	MinReplicas int `json:"minReplicas"`
-	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
-	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
-	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
-	Resources Resources `json:"resources,omitempty"`
-	// List of node roles.
-	Roles []string `json:"roles,omitempty"`
-	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
-	StorageClass string `json:"storageClass,omitempty"`
-}
-
-type NodeHealthCheck struct {
-	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
-	// +kubebuilder:default:="50%"
-	MaxUnhealthy string `json:"maxUnhealthy"`
-	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
-	// +kubebuilder:default:="10m"
-	NodeStartupTimeout string `json:"nodeStartupTimeout"`
-}
-
 type OIDC struct {
 	// Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
 	// +kubebuilder:default:={}
 	CustomConfig OIDCCustomConfig `json:"customConfig,omitempty"`
-	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform Keycloak realm (`cozy` by default) via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
 	// +kubebuilder:default:="None"
 	Mode OIDCMode `json:"mode"`
 	// Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
@@ -343,6 +284,70 @@ type OuroborosAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
+type Proxmox struct {
+	// Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
+	// +kubebuilder:default:={}
+	AllowedNodes []string `json:"allowedNodes,omitempty"`
+	// Proxmox cloud-controller-manager settings.
+	// +kubebuilder:default:={}
+	Ccm ProxmoxCCM `json:"ccm,omitempty"`
+	// Proxmox CSI driver settings.
+	// +kubebuilder:default:={}
+	Csi ProxmoxCSI `json:"csi,omitempty"`
+	// Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
+	// +kubebuilder:default:={}
+	DnsServers []string `json:"dnsServers,omitempty"`
+	// Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
+	// +kubebuilder:default:=false
+	Insecure bool `json:"insecure,omitempty"`
+	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+	// +kubebuilder:default:={}
+	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+}
+
+type ProxmoxCCM struct {
+	// Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
+}
+
+type ProxmoxCSI struct {
+	// Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
+	// +kubebuilder:default:=""
+	CredentialsSecretName string `json:"credentialsSecretName"`
+	// Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.
+	// +kubebuilder:default:=true
+	Enabled bool `json:"enabled"`
+	// StorageClasses to create in the tenant.
+	// +kubebuilder:default:={}
+	StorageClasses []ProxmoxStorageClass `json:"storageClasses,omitempty"`
+}
+
+type ProxmoxIPv4 struct {
+	// Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
+	// +kubebuilder:default:={}
+	Addresses []string `json:"addresses,omitempty"`
+	// Default gateway for the workers.
+	// +kubebuilder:default:=""
+	Gateway string `json:"gateway"`
+	// Netmask prefix length.
+	// +kubebuilder:default:=24
+	Prefix int `json:"prefix"`
+}
+
+type ProxmoxStorageClass struct {
+	// Filesystem the driver formats volumes with: ext4 or xfs.
+	Fstype string `json:"fstype,omitempty"`
+	// StorageClass name inside the tenant cluster.
+	Name string `json:"name"`
+	// Delete or Retain.
+	ReclaimPolicy string `json:"reclaimPolicy,omitempty"`
+	// Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.
+	Ssd bool `json:"ssd,omitempty"`
+	// Proxmox storage id the volumes are created on (as it appears in `pvesm status`).
+	Storage string `json:"storage"`
+}
+
 type Resources struct {
 	// CPU available.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
@@ -366,6 +371,9 @@ type Talos struct {
 	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 	// +kubebuilder:default:="factory.talos.dev/installer"
 	InstallerRepository string `json:"installerRepository"`
+	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
+	// +kubebuilder:default:={}
+	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
@@ -389,8 +397,14 @@ type VerticalPodAutoscalerAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
+// +kubebuilder:validation:Enum="AlwaysAdmit";"AlwaysDeny";"AlwaysPullImages";"CertificateApproval";"CertificateSigning";"CertificateSubjectRestriction";"DefaultIngressClass";"DefaultStorageClass";"DefaultTolerationSeconds";"DenyEscalatingExec";"DenyExecOnPrivileged";"DenyServiceExternalIPs";"EventRateLimit";"ExtendedResourceToleration";"ImagePolicyWebhook";"LimitPodHardAntiAffinityTopology";"LimitRanger";"MutatingAdmissionWebhook";"NamespaceAutoProvision";"NamespaceExists";"NamespaceLifecycle";"NodeRestriction";"OwnerReferencesPermissionEnforcement";"PersistentVolumeClaimResize";"PersistentVolumeLabel";"PodNodeSelector";"PodSecurity";"PodSecurityPolicy";"PodTolerationRestriction";"Priority";"ResourceQuota";"RuntimeClass";"SecurityContextDeny";"ServiceAccount";"StorageObjectInUseProtection";"TaintNodesByCondition";"ValidatingAdmissionWebhook"
+type AdmissionController string
+
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string
+
+// +kubebuilder:validation:Enum="Hostname";"InternalIP";"ExternalIP";"InternalDNS";"ExternalDNS"
+type NodeAddressType string
 
 // +kubebuilder:validation:Enum="None";"System";"CustomConfig"
 type OIDCMode string

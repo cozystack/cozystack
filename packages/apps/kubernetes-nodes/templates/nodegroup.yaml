@@ -13,35 +13,174 @@
   rendered for the same group — the KubevirtMachineTemplate is content-hash-named,
   so any drift would roll every live worker VM.
 
-  Talos -> Kubernetes support matrix. Each Talos minor release supports a bounded
-  window of Kubernetes minor versions; running a kubelet outside that window
-  produces a silently broken Talos+kubelet combination. Fail the render instead.
-  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+  Talos -> Kubernetes support matrix, against the pool default. The pool can also
+  reach a different Talos release through osImage.builtin.version /
+  osImage.factory.version, and that override is checked against the same matrix at
+  the point it is resolved, below. Both call sites share one table, in
+  templates/_helpers.tpl.
 */}}
-{{- $talosK8sSupportMatrix := dict
-      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
-}}
-{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" .Values.talos.version }}
-{{- with index $talosK8sSupportMatrix $talosMinor }}
-{{-   if not (has $.Values.version .) }}
-{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
-{{-   end }}
-{{- end }}
+{{- include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+      "talosVersion" .Values.talos.version
+      "kubernetesVersion" .Values.version
+      "remedy" "Bump 'version' or set talos.version explicitly.") }}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
+{{- include "kubernetes-nodes.assertParentVersion" . }}
+{{- include "kubernetes-nodes.assertSubstrateMatches" . }}
 {{- $kubevirtmachinetemplateNames := list }}
-{{- $group := dict
-      "minReplicas" .Values.minReplicas
-      "maxReplicas" .Values.maxReplicas
-      "instanceType" .Values.instanceType
-      "diskSize" .Values.diskSize
-      "storageClass" .Values.storageClass
-      "roles" .Values.roles
-      "resources" .Values.resources
-      "gpus" .Values.gpus
-      "kubelet" .Values.kubelet
-}}
+{{- /* Substrate selects which infrastructure provider renders this pool's
+       machine template. Everything downstream of the template — autoscaler
+       capacity annotations, kubelet reservations, MachineDeployment,
+       MachineHealthCheck, WorkloadMonitor, the talos-reconcile Job — is
+       substrate-agnostic and rendered once, so the two paths differ only in
+       the template object and the infrastructureRef that points at it. */}}
+{{- $substrate := .Values.substrate | default "kubevirt" }}
+{{- if not (has $substrate (list "kubevirt" "proxmox")) }}
+{{-   fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
+{{- end }}
+{{- $isProxmox := eq $substrate "proxmox" }}
+{{- if $isProxmox }}
+{{- /* Proxmox has no equivalent of a VirtualMachineClusterInstancetype, so the
+         instancetype lookup that normally supplies effective CPU and memory has
+         nothing to read. Those two numbers are not cosmetic: the kubelet
+         reservations and the cluster-autoscaler capacity annotations are both
+         derived from them, and a pool that cannot state them would be scheduled
+         against invented capacity. Require them explicitly rather than let the
+         defaults silently produce a mis-sized pool. */}}
+{{-   if not (and $.Values.resources $.Values.resources.cpu $.Values.resources.memory) }}
+{{-     fail "substrate proxmox requires resources.cpu and resources.memory: there is no instanceType to size the pool from" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.templateTags }}
+{{-     fail "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.network.bridge }}
+{{-     fail "substrate proxmox requires proxmox.network.bridge" }}
+{{-   end }}
+{{-   if not $.Values.proxmox.dnsServers }}
+{{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
+{{-   end }}
+{{- /* osImage decides where a KubeVirt worker's system disk comes from, and a
+         Proxmox worker's disk does not come from there at all: capmox clones a
+         VM template that already carries Talos. Half of the field would still
+         appear to work, which is the reason to refuse it rather than ignore it
+         — osImage.factory.version reaches the machineconfig's installer image,
+         so a pool could set it, see the Job change, and be running a different
+         Talos than it asked for, with the boot image still whatever the
+         template holds. osImage.builtin, a CDI clone of a golden image, has no
+         meaning here at all. The installer target is settable on this substrate
+         through talos.version, which does reach it. */}}
+{{-   if $.Values.osImage }}
+{{-     fail "substrate proxmox does not take osImage: the worker disk is cloned from the Proxmox VM template, not imported from an image source. Set the Talos the template carries, and use talos.version / talos.schematicID for the in-guest installer target." }}
+{{-   end }}
+{{- /* A target storage is a full-clone parameter. A linked clone always lives on
+      the template's storage, and both Proxmox and capmox's CRD refuse the pair;
+      refusing it here names the two values instead of an object the operator
+      never wrote. */}}
+{{-   if and $.Values.proxmox.storage (not $.Values.proxmox.full) }}
+{{-     fail "proxmox.storage needs full: true: a target storage is a full-clone parameter, and a linked clone always lives on the template's storage" }}
+{{-   end }}
+{{- /* KubeVirt-only knobs. Accepting them silently on Proxmox would let a pool
+         believe it had asked for something the substrate cannot deliver. */}}
+{{-   if $.Values.gpus }}
+{{-     fail "gpus is a kubevirt-only field; pass GPUs through on the Proxmox template instead" }}
+{{-   end }}
+{{-   if $.Values.logSerialConsole }}
+{{-     fail "logSerialConsole is a kubevirt-only field; use the Proxmox serial console on the VM" }}
+{{-   end }}
+{{-   if or (not (kindIs "invalid" $.Values.podCpuLimit)) (not (kindIs "invalid" $.Values.podCpuRequest)) }}
+{{-     fail "podCpuLimit/podCpuRequest size the virt-launcher pod and are kubevirt-only" }}
+{{-   end }}
+{{- end }}
+{{- /* On kubevirt, resources.cpu is emitted verbatim into domain.cpu.cores,
+       an integer in the KubevirtMachineTemplate CRD and a uint32 in
+       KubeVirt, and the same raw value decides below whether the
+       instancetype matcher is dropped. A quantity such as 500m counts as
+       sizing there and is then refused by the CRD, so a value that cannot
+       be a core count stops here. Proxmox needs no such check: it converts
+       the quantity to millicores and rounds up to whole cores.
+
+       The value is decoded as YAML, the way `cores: <raw>` is, so +2, 2.0
+       or 1e1 pass as the integers they decode to, and a leading-zero
+       spelling passes as whatever YAML reads it as. A bare numeric zero
+       is left alone: it is falsy, so the pool renders without domain.cpu
+       and is sized by its instancetype. */}}
+{{- $cpuValue := (.Values.resources | default dict).cpu }}
+{{- if and (not $isProxmox) (not (kindIs "invalid" $cpuValue)) (not (and (not (kindIs "string" $cpuValue)) (eq (float64 $cpuValue) 0.0))) }}
+{{-   $cpu := printf "%v" $cpuValue }}
+{{-   $cores := (printf "v: %s" $cpu | fromYaml).v }}
+{{-   $isNumber := or (kindIs "int" $cores) (kindIs "int64" $cores) (kindIs "float64" $cores) }}
+{{-   if not (and $isNumber (gt (float64 $cores) 0.0) (lt (float64 $cores) 4294967296.0) (eq (floor $cores) (float64 $cores))) }}
+{{-     fail (printf "nodeGroup %s: resources.cpu (%s) must be a whole number of vCPU cores between 1 and 4294967295, such as 2. On the kubevirt substrate it becomes the worker VM's domain.cpu.cores, which KubeVirt declares as an unsigned 32-bit integer, so a millicore or fractional quantity cannot size the guest. Set a core count, or remove the field." $groupName $cpu) }}
+{{-   end }}
+{{- end }}
+{{- /* Assembled once in _helpers.tpl and read back here and in
+       talos-reconcile-job.yaml, so the TalosConfigTemplate name this file
+       hashes into configRef and the one the Job hashes into TCT_NAME cannot
+       be computed from different inputs. */}}
+{{- $group := include "kubernetes-nodes.group" . | fromYaml }}
+{{- define "proxmoxmachinetemplate" -}}
+spec:
+  {{- /* Talos carries qemu-guest-agent only when its schematic adds it, and
+        never a cloud-init status file, while capmox blocks a Machine on both
+        probes until they answer. Left on, the VM boots, joins nothing, and the
+        provider reports
+        "error waiting for agent: the operation has timed out" forever. This is
+        the same class of problem the KubeVirt path solves with
+        virtualMachineBootstrapCheck.checkStrategy: none for its SSH probe —
+        capmox's own CRD names TalOS in the skipCloudInitStatus description. */}}
+  checks:
+    skipQemuGuestAgent: true
+    skipCloudInitStatus: true
+  {{- /* capmox clones an existing VM template; it has no image URL to fetch, so
+        the Talos image is not a chart input the way it is on KubeVirt. The
+        template must carry the nocloud platform image, NOT the openstack one
+        the KubeVirt path uses: capmox injects bootstrap data as a nocloud ISO,
+        and an openstack image ignores it exactly as silently as a nocloud image
+        ignores configdrive.
+
+        Nor is it the platform release's nocloud-amd64.raw.xz, the bare-metal
+        node image: its zfs extension's service waits for a /dev/zfs no VM has,
+        the boot sequence never completes, and Talos reboots the guest each time
+        the boot timeout runs out. The template carries this pool's
+        talos.schematicID at talos.version, the same build as the installer the
+        machineconfig names. The default schematic's qemu-guest-agent service
+        waits the same way for the agent's virtio port, so the template has the
+        agent enabled. hack/proxmox-talos-template.sh builds it that way.
+
+        matchTags is set equality, not containment. capmox sorts both sides and
+        compares them with slices.Equal, so a template tagged
+        {a,b,c} is invisible to a selector listing {a,b}, and the error says
+        "found 0 VM templates" rather than pointing at the extra tag. */}}
+  templateSelector:
+    matchTags:
+      {{- range .group.proxmox.templateTags }}
+      - {{ . | quote }}
+      {{- end }}
+  full: {{ .group.proxmox.full }}
+  numSockets: 1
+  {{- /* divf takes its arguments in order, and a pipeline would feed the
+        millicores in as the divisor: `x | divf 1000.0` is 1000/x, which
+        silently sizes every pool at one core. */}}
+  numCores: {{ ceil (divf (include "kubernetes.cpuToMillicores" .group.resources.cpu | float64) 1000.0) | int }}
+  memoryMiB: {{ divf (include "cozy-lib.resources.toFloat" .group.resources.memory | float64) 1048576.0 | ceil | int }}
+  {{- with .group.proxmox.storage }}
+  storage: {{ . | quote }}
+  {{- end }}
+  {{- with .group.proxmox.pool }}
+  pool: {{ . | quote }}
+  {{- end }}
+  network:
+    default:
+      bridge: {{ .group.proxmox.network.bridge | quote }}
+      model: virtio
+      {{- with .group.proxmox.network.vlan }}
+      vlan: {{ . }}
+      {{- end }}
+      {{- with .group.proxmox.network.mtu }}
+      mtu: {{ . }}
+      {{- end }}
+{{- end }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
   {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
@@ -70,10 +209,271 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
+      {{- /* This pool selects its worker OS image source via .Values.osImage (the
+             WorkerImage union in values.yaml); every field defaults to the pool's
+             talos.*:
+               * osImage omitted / osImage.factory — import the raw image over HTTP from
+                 the Talos Image Factory (or a mirror): one download per worker.
+               * osImage.builtin — CDI storage-layer clone of a golden image in the
+                 opt-in worker image catalog (packages/system/kubernetes-worker-image)
+                 in cozy-public, named talos-worker-<schematicID>-<version>. A clone
+                 is a CSI copy, so N workers no longer each stream the OS image across
+                 the pod network — the source of the kubernetes-* e2e node-join flake
+                 (cozystack/cozystack#3231) and a per-worker Factory dependency.
+
+             The disk-system source is derived purely from .Values.osImage, so it is
+             deterministic across re-renders: with osImage omitted a pool renders
+             byte-identically to the pre-feature chart (its workers do not roll on
+             upgrade), and there is no cluster-state-driven flip to guard against.
+             Because the source is content-hashed into the KubevirtMachineTemplate
+             name (see the KMT block below), intentionally changing .Values.osImage on an
+             existing pool reimages that pool — expected, like editing any
+             workload's image. lookup() is empty under `helm template`, so a builtin
+             pool's golden must be mocked in unit tests. */}}
+      {{- $resolved := dict }}
+      {{- include "kubernetes-nodes.resolveOsImage" (dict
+            "osImage" .group.osImage
+            "talos" $.Values.talos
+            "out" $resolved
+            "groupName" .groupName) }}
+      {{- $reqSchematicID := $resolved.schematicID }}
+      {{- $reqVersion := $resolved.version }}
+      {{- $reqFactoryURL := $resolved.imageFactoryURL }}
+      {{- $useClone := $resolved.clone }}
+      {{- /* The guard at the top of this file keys on .Values.talos.version. An
+             image override moves the Talos release this pool actually boots and
+             installs, so re-run the same matrix against the resolved version;
+             without this a pool could keep a supported talos.version and still
+             boot a Talos minor whose kubelet window excludes .Values.version,
+             which is exactly the silently-broken pairing the guard exists to
+             refuse. No-op when osImage pins nothing, since the resolved version is
+             then the one already checked above. */}}
+      {{- if ne ($reqVersion | toString) ($.Values.talos.version | toString) }}
+      {{-   include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+              "talosVersion" $reqVersion
+              "kubernetesVersion" $.Values.version
+              "remedy" (printf "nodeGroup %s reaches this Talos release through its osImage override, not through talos.version. Bump 'version', change the osImage version, or drop the override so the pool follows talos.version." .groupName)) }}
+      {{- end }}
+      {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
+      {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
+      {{- /* A builtin pool whose golden is absent, failed to import, or on a
+             StorageClass the worker disk cannot CSI-clone from fails loudly here
+             rather than degrading silently. And because a CDI clone target must be
+             at least as large as its source, a worker diskSize below the golden's
+             storage would fail the clone at runtime — reject it at render when the
+             golden's size is known.
+
+             What `lookup` returning nothing means differs by guard, and the
+             difference is worth knowing before running any of this offline. The
+             phase, StorageClass and size guards read fields of a golden that was
+             found, so an empty lookup makes them no-ops. The absence guard below is
+             the opposite: an empty lookup IS its failure condition. So a pool on
+             osImage.builtin cannot be rendered by anything that has no cluster to
+             read -- `helm template`, `helm lint`, a dashboard preview -- and its
+             unit tests have to mock the golden through kubernetesProvider. That is
+             the price of failing loudly instead of degrading into an HTTP import
+             nobody asked for. */}}
+      {{- /* The pool's effective StorageClass, resolved once inside the clone branch
+             and read twice: by the cross-class guard, and by the disk template that
+             renders storageClassName. Empty on the HTTP path, where the disk
+             template keeps its original two-level fallback. */}}
+      {{- $cloneWorkerSC := "" }}
+      {{- $cloneWorkerSCFromDefault := false }}
+      {{- $cloneDefaultSC := "" }}
+      {{- if $useClone }}
+      {{- /* Has this pool already got a worker disk cloned from this golden?
+
+             The two guards below abort the ENTIRE KubernetesNodes HelmRelease —
+             every resource, not just the disk — and for a pool whose workers all
+             cloned months ago that price buys nothing: replica changes, kubelet
+             retuning and MachineHealthCheck timeouts have no stake in the golden,
+             and no CR edit is needed to trigger the abort, only the next periodic
+             reconcile. The comment below rejects exactly that blast radius for a
+             mid-import golden; applying the same reasoning to a golden that is
+             absent or Failed is what it costs to be consistent.
+
+             So the loud failure stays where it is the only signal — a pool still
+             waiting for its first disk — and a pool that is past that point is
+             left to CDI, which reports a source it cannot clone on the pending
+             DataVolume of the worker that actually needs one.
+
+             The disk names itself as its pool, and the match is on that rather than
+             on the disk's own name. CAPK names a worker disk
+             disk-system-<clusterName>-<groupName>-<machine id>, and a name prefix
+             cannot separate pool md0 from pool md0-gpu: the sibling's disks start
+             with md0's prefix, so a sibling that had cloned would answer for a pool
+             that never had, and suppress both guards while md0's new workers point
+             at a source that is gone. An annotation carrying the exact pool is
+             unambiguous and costs nothing, since the disk template already carries
+             one naming the golden. */}}
+      {{-   $poolID := printf "%s-%s" .clusterName .groupName }}
+      {{-   $poolCloned := false }}
+      {{-   $poolDiskName := "" }}
+      {{-   range (dig "items" (list) ((lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace "") | default dict)) }}
+      {{-     if and (eq (dig "metadata" "annotations" "kubernetes-worker-image.cozystack.io/pool" "" . | toString) $poolID)
+                     (eq (dig "metadata" "annotations" "kubernetes-worker-image.cozystack.io/golden" "" . | toString) $goldenName)
+                     (eq (dig "status" "phase" "" . | toString) "Succeeded") }}
+      {{-       $poolCloned = true }}
+      {{-       $poolDiskName = dig "metadata" "name" "" . | toString }}
+      {{-     end }}
+      {{-   end }}
+      {{- /* Resolve the pool's class here rather than inside the guard, because the
+             guard is not its only reader: the disk template renders storageClassName
+             from it too, and the two disagreeing is how a pool at storageClass ""
+             passed the comparison on the class its existing disks are bound to and
+             then bound its next disk on whatever the cluster default had become by
+             then -- taking the host-assisted copy the guard exists to refuse, with
+             the guard reporting no drift.
+
+             A pool that declares no class took the default in force when ITS disks
+             were bound, exactly as the golden did, so it reads that class back from
+             its own bound PVC. Substituting today's default instead means an admin
+             moving storageclass.kubernetes.io/is-default-class -- which the
+             resolver's own comment calls the normal state midway through a swap --
+             fails the whole release of a pool whose disks are all on the right class
+             and which changed nothing. Only a pool with no disk yet resolves to
+             today's default, which is the class its first clone will actually get. */}}
+      {{-   $cloneWorkerSC = .group.storageClass | default $.Values.storageClass | toString }}
+      {{-   if and (not $cloneWorkerSC) $poolDiskName }}
+      {{-     $poolPVC := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $poolDiskName }}
+      {{-     if $poolPVC }}
+      {{-       $cloneWorkerSC = dig "spec" "storageClassName" "" $poolPVC | toString }}
+      {{-     end }}
+      {{-   end }}
+      {{-   if not $cloneWorkerSC }}
+      {{-     $cloneDefaultSC = include "kubernetes-nodes.defaultStorageClassName" $ }}
+      {{-     $cloneWorkerSC = $cloneDefaultSC }}
+      {{-     $cloneWorkerSCFromDefault = true }}
+      {{-   end }}
+      {{- /* CDI clones the golden's PVC, so a golden whose DataVolume is gone
+             (CDI garbage collection, a PVC restored on its own) is still a
+             source, and only the absence of both is refused. With no DataVolume
+             the guards below read an empty spec and fall through to that PVC. */}}
+      {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
+      {{-   if and (not $goldenDV) (not (lookup "v1" "PersistentVolumeClaim" "cozy-public" $goldenName)) }}
+      {{-     if not $poolCloned }}
+      {{-       fail (printf "nodeGroup %q: osImage.builtin requested golden image %q not found in cozy-public, neither as a DataVolume nor as a PVC — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this pool to osImage.factory." .groupName $goldenName) }}
+      {{-     end }}
+      {{-   else }}
+      {{- /* Fail only on the golden's terminal failure phase, not on "not yet
+             Succeeded". A golden mid-import is transient: CDI holds the worker
+             DataVolume until the source is populated, which is the correct
+             behaviour and recovers unattended. Hard-failing the render there would
+             abort the ENTIRE KubernetesNodes HelmRelease — every resource, not just
+             this disk — for every pool pinned to that golden, blocking unrelated
+             scale operations for the length of an import. Only Failed, which
+             never recovers without operator action, justifies that blast radius.
+             Falling back to the HTTP import is deliberately not an option either: it
+             would make disk-system's source depend on cluster state, so the source —
+             and with it the content-hashed KubevirtMachineTemplate name — would flip
+             once the golden went Ready and roll every worker in the pool. */}}
+      {{-     $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
+      {{-     if and (eq $goldenPhase "Failed") (not $poolCloned) }}
+      {{-       fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this pool's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
+      {{-     end }}
+      {{- /* CDI takes the storage-layer CSI-clone path only when source and target
+             share a StorageClass; across classes it silently falls back to a
+             host-assisted copy over the pod network — exactly the per-worker
+             network transfer osImage.builtin exists to avoid (#3231). Reject the
+             case we can prove. An empty class on either side means "the cluster
+             default", which is resolvable against a live cluster and is resolved
+             here: leaving it unresolved is what let the one corner that CANNOT be
+             a clone — a pool at storageClass "" whose golden is on an explicit
+             class — pass unchecked. With no cluster to read (helm template) both
+             stay empty and the comparison is skipped, as before. This rules out
+             the guaranteed-host-assisted case, not every one: a matching
+             StorageClass still leaves the strategy to the CDI StorageProfile,
+             which the worker DataVolume inherits. */}}
+      {{-     $workerSC := $cloneWorkerSC }}
+      {{-     $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
+      {{- /* A golden that declares no class is not on "the cluster default" as it
+             stands today -- it is on whatever default was in force when CDI bound
+             its PVC, and that PVC keeps the concrete class after the cluster's
+             default moves on. Reading the spec alone would substitute today's
+             default for it and then either wave through a cross-class copy or
+             refuse a pool that does match. The PVC is the authority; CDI names it
+             after the DataVolume, and status.claimName says so explicitly when it
+             is set. */}}
+      {{-     if not $goldenSC }}
+      {{-       $goldenPVCName := dig "status" "claimName" $goldenName $goldenDV | toString }}
+      {{-       $goldenPVC := lookup "v1" "PersistentVolumeClaim" "cozy-public" $goldenPVCName }}
+      {{-       if $goldenPVC }}
+      {{-         $goldenSC = dig "spec" "storageClassName" "" $goldenPVC | toString }}
+      {{-       end }}
+      {{-     end }}
+      {{-     $defaultSC := $cloneDefaultSC }}
+      {{-     $resolvedFromDefault := $cloneWorkerSCFromDefault }}
+      {{-     if not $goldenSC }}
+      {{-       if not $defaultSC }}{{- $defaultSC = include "kubernetes-nodes.defaultStorageClassName" $ }}{{- end }}
+      {{-       $goldenSC = $defaultSC }}
+      {{-       $resolvedFromDefault = true }}
+      {{-     end }}
+      {{-     if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
+      {{- /* Only mention the cluster default when a side was actually resolved from
+             it. On two explicit differing classes -- what the shipped defaults
+             produce -- the sentence otherwise reports a lookup the render never
+             made, and reports it as the empty string. */}}
+      {{-       $defaultNote := "" }}
+      {{-       if $resolvedFromDefault }}
+      {{-         $defaultNote = printf " An empty storageClass was resolved to the cluster default StorageClass %q." $defaultSC }}
+      {{-       end }}
+      {{-       fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network.%s Neither side can be moved in place: this golden's class is fixed for its lifetime, because a DataVolume spec cannot be patched, and the pool's storageClass is immutable on an existing pool. So add a NEW kubernetes-worker-image catalog entry with a different (schematicID, version) on storageClass %q (kubernetesWorkerImage.images in the cozystack-platform Package values) and point this pool's osImage.builtin at it; or, once no pool clones this golden, delete it and let the catalog recreate it on that class. Switching this pool to osImage.factory also resolves it." .groupName $workerSC $goldenName $goldenSC $defaultNote $workerSC) }}
+      {{-     end }}
+      {{-     $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
+      {{- /* Same authority argument as the class one line up: a golden whose spec
+             states no size still has a bound PVC that states the allocated one, and
+             that is the size a clone target has to meet. Reading only the spec made
+             this guard skip on a golden it could in fact size, and made the skip
+             itself unobservable -- the term could be forced either way with no test
+             noticing, which is how it survived a mutation pass. */}}
+      {{-     if not $goldenStorage }}
+      {{-       $goldenPVCName := dig "status" "claimName" $goldenName $goldenDV | toString }}
+      {{-       $goldenSizePVC := lookup "v1" "PersistentVolumeClaim" "cozy-public" $goldenPVCName }}
+      {{-       if $goldenSizePVC }}
+      {{-         $goldenStorage = dig "spec" "resources" "requests" "storage" "" $goldenSizePVC }}
+      {{-       end }}
+      {{-     end }}
+      {{-     if $goldenStorage }}
+      {{-       $workerDisk := .group.diskSize | default "20Gi" | toString }}
+      {{-       $workerBytes := include "cozy-lib.resources.toFloat" $workerDisk | float64 }}
+      {{-       $goldenBytes := include "cozy-lib.resources.toFloat" ($goldenStorage | toString) | float64 }}
+      {{-       if lt $workerBytes $goldenBytes }}
+      {{-         fail (printf "nodeGroup %q: diskSize %s is smaller than golden image %q storage %s — a CDI clone target must be at least the source size. Raise diskSize to %s or larger." .groupName $workerDisk $goldenName ($goldenStorage | toString) ($goldenStorage | toString)) }}
+      {{-       end }}
+      {{-     end }}
+      {{-   end }}
+      {{- end }}
       - metadata:
           name: disk-system
+          {{- /* usePopulator=false stays ONLY on the HTTP/import path: it preserves
+                 the legacy import behaviour and keeps an image-omitted DV — hence the
+                 KMT hash — byte-identical to the pre-feature render, so those workers
+                 never roll on upgrade. The clone path omits it so CDI's populator
+                 performs a storage-layer CSI clone of the golden (verified on a
+                 LINSTOR-backed cluster: temp PVC CSI-cloned + resized, no
+                 host-assisted upload pod) instead of a slower pod-network copy. */}}
+          {{- if $useClone }}
+          {{- /* Names the golden this disk was cloned from. A golden is referenced
+                 only from inside a VM dataVolumeTemplates source, so before this
+                 there was no query that told an operator which pools still pin
+                 `talos-worker-<id>-<ver>` -- and a pool on `builtin: {}` does not
+                 name it in its own CR either, because the schematic and version
+                 come from talos.* defaults. With this the answer is one read:
+
+                   kubectl get datavolume -A -o jsonpath=\
+                     '{range .items[?(@.metadata.annotations.kubernetes-worker-image\
+                     \.cozystack\.io/golden=="talos-worker-<id>-<ver>")]}\
+                     {.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+
+                 An annotation rather than a label because a schematic ID is 64
+                 characters and a label value stops at 63. */}}
+          annotations:
+            kubernetes-worker-image.cozystack.io/golden: {{ $goldenName | quote }}
+            kubernetes-worker-image.cozystack.io/pool: {{ printf "%s-%s" .clusterName .groupName | quote }}
+          {{- else }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
+          {{- end }}
         spec:
           {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
                 injects bootstrap data via cloudInitConfigDrive (OpenStack
@@ -81,8 +481,31 @@ spec:
                 is the one that reads it. The nocloud-amd64 image silently
                 ignores configdrive and never applies the machineconfig. */}}
           source:
+          {{- if $useClone }}
+            pvc:
+              namespace: cozy-public
+              name: {{ $goldenName | quote }}
+          {{- else }}
             http:
-              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              {{- /* Deliberately unquoted. This is the pre-feature render for a pool
+                     with `osImage` omitted, and the KubevirtMachineTemplate is named by
+                     a hash of its own content -- quoting the scalar changes those
+                     bytes and rolls every live worker on upgrade. The components are
+                     validated above instead, which is what makes an unquoted scalar
+                     safe here. The clone path's name below is quoted because no
+                     existing worker renders it. */}}
+              url: {{ $httpURL }}
+              {{- /* Only when talos.imageFactoryCA is set: a self-hosted factory
+                    served with a certificate from an internal CA. CDI appends the
+                    bundle to the system pool instead of replacing it, so a
+                    publicly-trusted endpoint verifies either way. The ConfigMap
+                    is rendered by templates/image-factory-ca.yaml. certConfigMap
+                    is a field of source.http only, so the clone path above never
+                    carries it. */}}
+              {{- if (include "kubernetes-nodes.talosImageFactoryCA" $) }}
+              certConfigMap: {{ include "kubernetes-nodes.talosImageFactoryCAConfigMapName" $ }}
+              {{- end }}
+          {{- end }}
           storage:
             resources:
               requests:
@@ -97,8 +520,20 @@ spec:
               default, which may be a non-DRBD class that the CSI driver would
               reject. Both empty still omits the field so the cluster default
               applies.
+
+              A builtin pool instead renders the class the guard above resolved for
+              it. Omitting the field there would let the disk bind on whatever the
+              cluster default is at bind time, and CDI takes the storage-layer path
+              only when source and target share a class -- so a default that moved
+              after the pool's earlier disks were bound turns the next clone into a
+              host-assisted copy over the pod network, the transfer the guard exists
+              to refuse, while the guard reports no drift because it compared the
+              class those earlier disks sit on. With both levels empty and no cluster
+              to resolve against the field is still omitted, so the HTTP path renders
+              exactly as before and the KubevirtMachineTemplate hash named after it
+              does not move.
             */}}
-            {{- with .group.storageClass | default $.Values.storageClass }}
+            {{- with $cloneWorkerSC | default (.group.storageClass | default $.Values.storageClass) }}
             storageClassName: {{ . | quote }}
             {{- end }}
       template:
@@ -106,6 +541,11 @@ spec:
           annotations:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
           labels:
+            {{- /* The VM pod is intentionally attributed to the parent Kubernetes
+                   application (kind Kubernetes, name <cluster>), not to this
+                   KubernetesNodes release: these labels are part of the byte-identical
+                   render the adoption migration relies on, and lineage/quota accounting
+                   for worker VMs stays under the cluster they belong to. */}}
             apps.cozystack.io/application.group: apps.cozystack.io
             apps.cozystack.io/application.kind: Kubernetes
             apps.cozystack.io/application.name: {{ .clusterName | trimPrefix "kubernetes-" | quote }}
@@ -150,13 +590,48 @@ spec:
               interfaces:
               - name: default
                 bridge: {}
+              {{- /* Opt-in, and rendered only when true. The enclosing
+                    KubevirtMachineTemplate is content-hash named, so emitting
+                    this key for a pool that did not ask for it renames the
+                    template and rolls every live worker VM. An explicit false
+                    therefore renders the same nothing as an absent field
+                    rather than KubeVirt's tri-state false. */}}
+              {{- if .group.logSerialConsole }}
+              logSerialConsole: true
+              {{- end }}
             {{- if and .group.resources .group.resources.memory }}
             memory:
               guest: {{ .group.resources.memory }}
             {{- end }}
             resources:
               {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
-              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
+              {{- $podResources := include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) }}
+              {{- /* Either side of the pair, and only for a pool that asked
+                    for it. KubeVirt derives both from the guest vCPU count, and
+                    each key declared here displaces one derivation: the limit
+                    stops it deriving a ceiling, the request stops its VMI
+                    defaulter (setDefaultResourceRequests) copying that declared
+                    ceiling into the request. A pool declaring only the limit
+                    therefore moves both. The enclosing KubevirtMachineTemplate
+                    is content-hash named, so a pool that sets neither has to
+                    render the same bytes it did before these fields existed,
+                    down to the whitespace.
+
+                    Presence, not truth: zero is a quantity the schema accepts
+                    and a pool can mean it, so `with` would drop a deliberate
+                    choice as though nothing had been set. Which zeroes are
+                    coherent is settled by the guards further down, not here. */}}
+              {{- if not (kindIs "invalid" .group.podCpuLimit) }}
+              {{- $limited := $podResources | fromYaml }}
+              {{- $_ := set $limited.limits "cpu" (toString .group.podCpuLimit) }}
+              {{- $podResources = toYaml $limited }}
+              {{- end }}
+              {{- if not (kindIs "invalid" .group.podCpuRequest) }}
+              {{- $requested := $podResources | fromYaml }}
+              {{- $_ := set $requested.requests "cpu" (toString .group.podCpuRequest) }}
+              {{- $podResources = toYaml $requested }}
+              {{- end }}
+              {{- $podResources | nindent 14 }}
           evictionStrategy: External
           volumes:
           - name: system
@@ -180,6 +655,76 @@ spec:
 {{- $hasMem := and $group.resources $group.resources.memory }}
 {{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
 {{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
+{{- /* Presence, not truth, for both fields below: zero is a quantity the
+       schema accepts, and a guard keyed on truthiness would wave through
+       exactly the value it exists to catch. */}}
+{{- $hasPodCpuLimit := not (kindIs "invalid" $group.podCpuLimit) }}
+{{- $hasPodCpuRequest := not (kindIs "invalid" $group.podCpuRequest) }}
+{{- /* Same conflict class, other field: podCpuLimit renders
+       domain.resources.limits.cpu, and a VM that carries an instancetype and
+       that key is refused by KubeVirt's instancetype applier, which reports it
+       as a conflict rather than resolving it. The pool has to be sized by
+       resources for the limit to be usable at all, since that is what drops
+       the instancetype from the VM. */}}
+{{- if and $hasPodCpuLimit $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.limits.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuLimit." $groupName) }}
+{{- end }}
+{{- /* Other side of the pair, same conflict and the same check upstream: the
+       instancetype applier reports domain.resources.requests.cpu alongside the
+       limit rather than resolving either. */}}
+{{- if and $hasPodCpuRequest $group.instanceType (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: podCpuRequest cannot be combined with instanceType sizing, because KubeVirt rejects a VirtualMachine that references an instancetype and also sets domain.resources.requests.cpu. Set both resources.cpu and resources.memory, which drops the instancetype from the VM, or drop podCpuRequest." $groupName) }}
+{{- end }}
+{{- /* The rest of the value domain, decided in one place rather than one edge
+       at a time. Both fields are quantities and the generated schema admits a
+       leading minus and a zero as readily as a sane value, so what each class
+       does has to be settled here:
+
+       negative -- never reaches a running Pod, the API server rejects the
+       quantity outright;
+
+       zero limit -- removes the ceiling rather than being the tightest one:
+       the kubelet turns a zero CPU limit into no CFS quota at all, and
+       declaring the key stops KubeVirt deriving one. But it only reaches a
+       Pod paired with a zero request, and that is not a style preference.
+       API server validation refuses a request above a limit that exists, and
+       zero is a limit that exists, while KubeVirt keeps deriving a request
+       from the vCPU count whenever the VM declares none -- the defaulter that
+       would have copied the limit across does not fire, because the limit is
+       itself zero. So a lone zero limit renders a Pod that is rejected on
+       creation, and is refused here instead;
+
+       zero request beside a non-zero limit -- looks like "reserve nothing
+       under this ceiling" and does the opposite. KubeVirt's defaulter tests
+       the request with IsZero, which an explicit zero satisfies exactly as an
+       absent key does, so it overwrites the zero with the limit and the worker
+       asks for the whole ceiling. That is the failure this pair exists to
+       avoid, so it is refused rather than documented;
+
+       zero request alone -- the defaulter does not fire without a limit, so it
+       survives and means what it says. Allowed.
+
+       Comparisons are on the converted numbers, not on the strings that spell
+       them: 1500m against 2 is not a string comparison. */}}
+{{- if and $hasPodCpuLimit (lt (include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit (%v) must not be negative" $groupName $group.podCpuLimit) }}
+{{- end }}
+{{- if and $hasPodCpuRequest (lt (include "cozy-lib.resources.toFloat" $group.podCpuRequest | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuRequest (%v) must not be negative" $groupName $group.podCpuRequest) }}
+{{- end }}
+{{- if and $hasPodCpuLimit (not $hasPodCpuRequest) (eq (include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64) 0.0) }}
+{{-   fail (printf "nodeGroup %s: podCpuLimit 0 needs podCpuRequest 0 beside it. A zero limit removes the ceiling, but KubeVirt still derives a CPU request from the guest vCPU count when the VM declares none, and a request above a declared limit of zero is rejected when the worker's Pod is created." $groupName) }}
+{{- end }}
+{{- if and $hasPodCpuRequest $hasPodCpuLimit }}
+{{-   $requestF := include "cozy-lib.resources.toFloat" $group.podCpuRequest | float64 }}
+{{-   $limitF := include "cozy-lib.resources.toFloat" $group.podCpuLimit | float64 }}
+{{-   if and (eq $requestF 0.0) (ne $limitF 0.0) }}
+{{-     fail (printf "nodeGroup %s: podCpuRequest 0 beside a podCpuLimit does not reserve nothing. KubeVirt replaces a zero CPU request with the declared limit (%v), so the worker would ask the scheduler for its whole ceiling, which is what podCpuRequest exists to prevent. Give podCpuRequest a non-zero value, or drop it and accept the same outcome deliberately." $groupName $group.podCpuLimit) }}
+{{-   end }}
+{{-   if gt $requestF $limitF }}
+{{-     fail (printf "nodeGroup %s: podCpuRequest (%v) exceeds podCpuLimit (%v), and a container cannot request more CPU than its limit" $groupName $group.podCpuRequest $group.podCpuLimit) }}
+{{-   end }}
 {{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
@@ -353,18 +898,28 @@ spec:
        the TalosConfigTemplate with a KamajiControlPlane ownerReference for
        natural GC. The MachineDeployment below references the TCT name; CAPI's
        Machine controller blocks on its absence and unblocks the moment the Job
-       applies it. */}}
+       applies it.
+
+       The name it references carries a hash of the rendered machine config,
+       computed here from the same named template the Job renders into its
+       heredoc, because TalosConfigTemplate.spec is immutable and can only ever
+       be created, never updated — see _talosconfigtemplate.tpl. */}}
+{{- $talosConfigTemplateName := printf "%s-%s-%s" $clusterName $groupName (include "kubernetes.talosConfigTemplateHash" (dict "root" $ "group" $group)) }}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
 {{- $_ := set $context "groupName" $groupName }}
 {{- $_ := set $context "clusterName" $clusterName }}
-{{- $kubevirtmachinetemplate := include "kubevirtmachinetemplate" $context }}
+{{- /* These variables hold either kind despite their names. The content hash
+       below is taken over the rendered template, so the names reach nothing
+       outside this block. */}}
+{{- $machineTemplateKind := ternary "ProxmoxMachineTemplate" "KubevirtMachineTemplate" $isProxmox }}
+{{- $kubevirtmachinetemplate := include (ternary "proxmoxmachinetemplate" "kubevirtmachinetemplate" $isProxmox) $context }}
 {{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
 {{- $kubevirtmachinetemplateName := printf "%s-%s-%s" $clusterName $groupName $kubevirtmachinetemplateHash }}
 {{- $kubevirtmachinetemplateNames = append $kubevirtmachinetemplateNames $kubevirtmachinetemplateName }}
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
+kind: {{ $machineTemplateKind }}
 metadata:
   name: {{ $clusterName }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
   namespace: {{ $.Release.Namespace }}
@@ -380,6 +935,7 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
+    cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: {{ include "kubernetes.positiveDuration" (dict "field" "maxNodeProvisionTime" "value" $.Values.maxNodeProvisionTime) | quote }}
     {{- if $effectiveMemory }}
     {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
     {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
@@ -444,12 +1000,12 @@ spec:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: TalosConfigTemplate
-          name: {{ $clusterName }}-{{ $groupName }}
+          name: {{ $talosConfigTemplateName }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $clusterName }}
       infrastructureRef:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-        kind: KubevirtMachineTemplate
+        kind: {{ $machineTemplateKind }}
         name: {{ $clusterName }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
         namespace: {{ $.Release.Namespace }}
       version: {{ include "kubernetes.versionMap" $}}
@@ -486,10 +1042,10 @@ spec:
   unhealthyConditions:
   - type: Ready
     status: Unknown
-    timeout: 30s
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyUnknownTimeout" "value" $.Values.readyUnknownTimeout) | quote }}
   - type: Ready
     status: "False"
-    timeout: 300s
+    timeout: {{ include "kubernetes.positiveDuration" (dict "field" "readyFalseTimeout" "value" $.Values.readyFalseTimeout) | quote }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -497,7 +1053,19 @@ metadata:
   name: {{ $clusterName }}-{{ $groupName }}
   namespace: {{ $.Release.Namespace }}
 spec:
+  {{- /* The controller counts PODS matching the selector below and reports
+         Operational=false while fewer than minReplicas of them are ready. On
+         kubevirt those Pods exist — they are the virt-launcher Pods, and the
+         VMI template carries the deployment-name label further down. A proxmox
+         worker is a VM on another machine with no Pod here at all, so the count
+         is always zero and any minReplicas above zero would pin the pool, and
+         through the lineage labels its whole application, to WorkloadsReady=False
+         while every node is healthy. The object still renders: the dashboard and
+         the lineage read it. What it cannot carry on proxmox is a threshold
+         counted in Pods. */}}
+  {{- if ne ($.Values.substrate | default "kubevirt") "proxmox" }}
   minReplicas: {{ $group.minReplicas }}
+  {{- end }}
   kind: kubernetes
   type: worker
   selector:
@@ -514,13 +1082,17 @@ the same namespace never re-emit and fight over each other's templates. A bare
 name prefix is unsafe here: pool "gpu" would match sibling "gpu-large"'s
 hash-named KMTs; the release-name annotation is exact.
 */ -}}
+{{- /* The lookup follows the substrate: on a Proxmox pool the live templates
+       are ProxmoxMachineTemplates, and looking for the KubeVirt kind would
+       find nothing and quietly drop templates a MachineSet still references,
+       deleting the infrastructure reference out from under running workers. */}}
 {{- $mss := (lookup "cluster.x-k8s.io/v1beta1" "MachineSet" $.Release.Namespace "").items }}
 {{- $oldKubevirtmachinetemplates := dict }}
-{{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" $.Release.Namespace "").items }}
+{{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" $machineTemplateKind $.Release.Namespace "").items }}
 {{- range $or := $kmt.metadata.ownerReferences }}
 {{- if and (eq $or.kind "Cluster") (eq $or.name $clusterName) (eq (dig "annotations" "meta.helm.sh/release-name" "" $kmt.metadata) $.Release.Name) }}
 {{- range $ms := $mss }}
-{{- if and (eq $ms.spec.template.spec.infrastructureRef.kind "KubevirtMachineTemplate") (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
+{{- if and (eq $ms.spec.template.spec.infrastructureRef.kind $machineTemplateKind) (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
 {{- if not (has $kmt.metadata.name $kubevirtmachinetemplateNames) }}
 {{- $oldKubevirtmachinetemplates = merge $oldKubevirtmachinetemplates (dict $kmt.metadata.name $kmt) }}
 {{- end }}
@@ -533,7 +1105,7 @@ hash-named KMTs; the release-name annotation is exact.
 {{- range $oldKubevirtmachinetemplates }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
-kind: KubevirtMachineTemplate
+kind: {{ $machineTemplateKind }}
 metadata:
   name: {{ .metadata.name }}
   namespace: {{ .metadata.namespace }}

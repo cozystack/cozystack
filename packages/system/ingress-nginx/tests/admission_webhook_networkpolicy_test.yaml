@@ -1,0 +1,117 @@
+suite: ingress-nginx admission webhook exposure
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+templates:
+  - templates/admission-webhook-networkpolicy.yaml
+tests:
+  - it: denies pod traffic to the admission webhook port
+    # :8443 is the admission webhook. Reachability from arbitrary pods is what
+    # turned CVE-2025-1974 from a webhook bug into unauthenticated in-cluster
+    # RCE, so the deny on this port is the whole point of the policy.
+    asserts:
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports[0].port
+          value: "8443"
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports[0].protocol
+          value: TCP
+
+  - it: spans every namespace rather than only the release namespace
+    # A bare fromEndpoints in a namespaced CiliumNetworkPolicy selects only
+    # pods in the policy's own namespace, which would leave the webhook open
+    # to every other namespace — the exact gap being closed here. Both
+    # selectors therefore have to name the namespace key.
+    asserts:
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          content:
+            key: k8s:io.kubernetes.pod.namespace
+            operator: NotIn
+            values:
+              - kube-system
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[1].matchExpressions
+          content:
+            key: k8s:io.kubernetes.pod.namespace
+            operator: In
+            values:
+              - kube-system
+
+  - it: does not let a pod outside kube-system buy an exemption with a label
+    # The whole reason the deny is split in two. `k8s-app` is an ordinary pod
+    # label any workload can set on itself, and with default-deny disabled
+    # escaping the deny IS being allowed — so a selector that pairs
+    # "every namespace" with the label exemption would hand webhook access to
+    # any pod anywhere that labels itself konnectivity-agent. The selector
+    # covering everything outside kube-system must therefore carry no label
+    # condition whatsoever.
+    asserts:
+      - lengthEqual:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          count: 1
+      - notContains:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          content:
+            key: k8s-app
+            operator: NotIn
+            values:
+              - konnectivity-agent
+
+  - it: exempts the konnectivity agent only inside kube-system
+    # On a Kamaji-hosted tenant cluster the API server is outside the cluster
+    # and reaches webhooks through the konnectivity tunnel, so the connection
+    # originates from the agent pod in kube-system. Denying it would make every
+    # Ingress create/update in the tenant cluster fail on the webhook call —
+    # but the exemption has to be confined to that namespace, and a pod in
+    # kube-system without the label stays denied.
+    asserts:
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[1].matchExpressions
+          content:
+            key: k8s-app
+            operator: NotIn
+            values:
+              - konnectivity-agent
+      - lengthEqual:
+          path: spec.ingressDeny[0].fromEndpoints[1].matchExpressions
+          count: 2
+
+  - it: denies world traffic to the admission webhook port
+    asserts:
+      - contains:
+          path: spec.ingressDeny[1].fromEntities
+          content: world
+      - equal:
+          path: spec.ingressDeny[1].toPorts[0].ports[0].port
+          value: "8443"
+
+  - it: does not put the controller behind a default deny
+    # The controller also serves 80/443, metrics and the protobuf exporter.
+    # Enabling default-deny here would require enumerating all of them and
+    # would break traffic on the first one omitted.
+    asserts:
+      - equal:
+          path: spec.enableDefaultDeny.ingress
+          value: false
+      - equal:
+          path: spec.enableDefaultDeny.egress
+          value: false
+      - isNull:
+          path: spec.ingress
+
+  - it: selects only the controller pods
+    asserts:
+      - equal:
+          path: spec.endpointSelector.matchLabels["app.kubernetes.io/component"]
+          value: controller
+      - equal:
+          path: spec.endpointSelector.matchLabels["app.kubernetes.io/name"]
+          value: ingress-nginx
+
+  - it: can be disabled
+    set:
+      admissionWebhookPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

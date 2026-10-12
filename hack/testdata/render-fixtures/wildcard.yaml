@@ -1,0 +1,30 @@
+# dns01 with a platform-issued wildcard certificate: the path where charts stop
+# doing per-host ACME and use the ingress controller default certificate.
+_cluster:
+  root-host: "example.org"
+  bundle-name: "paas-full"
+  solver: "dns01"
+  issuer-name: "letsencrypt-prod"
+  wildcard-secret-name: "wildcard-tls"
+  wildcard-issue: "true"
+  oidc-enabled: "true"
+  oidc-insecure-skip-verify: "false"
+  keycloak-internal-url: "https://keycloak.cozy-keycloak.svc.cluster.local"
+  extra-keycloak-redirect-uri-for-dashboard: ""
+  expose-ingress: "tenant-root"
+  expose-services: "tenant-root"
+  cluster-domain: "cluster.local"
+  scheduling:
+    dedicatedNodesForWindowsVMs: "false"
+    globalAppTopologySpreadConstraints: |
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+_namespace:
+  etcd: "tenant-test"
+  ingress: "tenant-test"
+  gateway: ""
+  monitoring: "tenant-test"
+  seaweedfs: "tenant-test"
+  host: "example.org"

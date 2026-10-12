@@ -821,8 +821,8 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 				"recover captured EtcdCluster spec: %v", specErr))
 		}
 		// Inject bootstrap.restore.source on top of the captured spec.
-		bootstrap := map[string]interface{}{
-			"restore": map[string]interface{}{
+		bootstrap := map[string]any{
+			"restore": map[string]any{
 				"source": etcdBackupDestinationToUnstructured(dest),
 			},
 		}
@@ -926,12 +926,12 @@ const (
 // a typed unmarshal would drop everything the chart populated (replicas,
 // storage, security, options, podTemplate, ...) and the recreated
 // EtcdCluster would be an empty shell.
-func readCapturedEtcdClusterSpec(restoreJob *backupsv1alpha1.RestoreJob) (map[string]interface{}, error) {
+func readCapturedEtcdClusterSpec(restoreJob *backupsv1alpha1.RestoreJob) (map[string]any, error) {
 	cond := apimeta.FindStatusCondition(restoreJob.Status.Conditions, etcdRestoreCondClusterSpecCaptured)
 	if cond == nil || cond.Message == "" {
 		return nil, errors.New("EtcdClusterSpecCaptured condition is missing or empty; cannot rebuild EtcdCluster spec")
 	}
-	specMap := map[string]interface{}{}
+	specMap := map[string]any{}
 	if err := json.Unmarshal([]byte(cond.Message), &specMap); err != nil {
 		return nil, fmt.Errorf("decode captured spec: %w", err)
 	}
@@ -1009,13 +1009,13 @@ func buildEtcdRestoreS3Key(keyPrefix, backupName string) string {
 // endpoint / credentialsSecretRef.name; emitting them explicitly would
 // turn a partial-config into a noisier admission error than the
 // driver's own validateRenderedEtcdDestination already surfaces).
-func etcdBackupDestinationToUnstructured(d etcdtypes.EtcdBackupDestination) map[string]interface{} {
-	out := map[string]interface{}{}
+func etcdBackupDestinationToUnstructured(d etcdtypes.EtcdBackupDestination) map[string]any {
+	out := map[string]any{}
 	if s := d.S3; s != nil {
-		s3 := map[string]interface{}{
+		s3 := map[string]any{
 			"bucket":   s.Bucket,
 			"endpoint": s.Endpoint,
-			"credentialsSecretRef": map[string]interface{}{
+			"credentialsSecretRef": map[string]any{
 				"name": s.CredentialsSecretRef.Name,
 			},
 		}
@@ -1312,7 +1312,7 @@ func renderEtcdTemplate(t strategyv1alpha1.EtcdTemplate, app *etcdapp.Etcd, para
 	if err != nil {
 		return nil, fmt.Errorf("encode application for templating: %w", err)
 	}
-	templateContext := map[string]interface{}{
+	templateContext := map[string]any{
 		"Application": appAsMap,
 		"Parameters":  parameters,
 	}
@@ -1322,12 +1322,12 @@ func renderEtcdTemplate(t strategyv1alpha1.EtcdTemplate, app *etcdapp.Etcd, para
 // toJSONMapEtcd converts a typed object to a generic map via JSON tags so
 // user-authored go-templates address fields by their JSON names (e.g.
 // .Application.metadata.name).
-func toJSONMapEtcd(obj interface{}) (map[string]interface{}, error) {
+func toJSONMapEtcd(obj any) (map[string]any, error) {
 	raw, err := json.Marshal(obj)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}

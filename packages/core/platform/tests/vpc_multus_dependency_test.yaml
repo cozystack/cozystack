@@ -1,0 +1,25 @@
+suite: the vpc application depends on multus
+# Its own suite because it renders templates/sources.yaml: adding that template
+# to a suite built around templates/bundles/system.yaml makes every
+# metadata.name selector there match in two documents at once.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The vpc application uses NetworkAttachmentDefinitions, whose CRD multus
+  # installs, so vpc has to install AFTER multus; the edge below is what makes
+  # Flux wait rather than race. It lives in a
+  # static PackageSource the chart ships verbatim through .Files.Glob, which is
+  # easy to mistake for something no rendered document carries: `helm template .`
+  # on this chart fails whole on an OCIRepository lookup and emits nothing at
+  # all, and that empty output reads like absence rather than like an error.
+  - it: keeps the vpc application depending on multus
+    documentSelector:
+      path: metadata.name
+      value: cozystack.virtualprivatecloud-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.multus

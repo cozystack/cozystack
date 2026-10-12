@@ -1,0 +1,13 @@
+suite: kubeovn-webhook policy capability gate
+release:
+  name: kubeovn-webhook
+  namespace: cozy-kubeovn
+templates:
+  - templates/networkpolicy.yaml
+capabilities:
+  apiVersions: []
+tests:
+  - it: renders nothing when Cilium clusterwide policies are unavailable
+    asserts:
+      - hasDocuments:
+          count: 0

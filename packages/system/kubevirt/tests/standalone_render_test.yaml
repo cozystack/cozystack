@@ -1,0 +1,23 @@
+suite: kubevirt renders with no platform values injected
+release:
+  name: kubevirt
+  namespace: cozy-kubevirt
+
+# The platform injects _cluster through the cozystack-values Secret, so every
+# case that sets it itself renders fine whether or not values.yaml declares
+# the key. This case supplies nothing. Drop the declaration from values.yaml
+# and the render dies on "index of untyped nil" before a single assert runs;
+# the declaration is the only thing keeping the chart renderable outside a
+# cluster. No suite-level `templates:` list here on purpose: it would narrow
+# the render to the listed files and let a later template reintroduce the
+# same breakage unseen.
+
+tests:
+  - it: exposes no vm-exportproxy route when _cluster is absent
+    asserts:
+      - template: templates/vm-exportproxy-ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/vm-exportproxy-tlsroute.yaml
+        hasDocuments:
+          count: 0

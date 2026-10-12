@@ -1,0 +1,43 @@
+suite: postgres-rd ApplicationDefinition
+release:
+  name: postgres-rd
+  namespace: cozy-system
+templates:
+  - templates/cozyrd.yaml
+tests:
+  # The postgres ApplicationDefinition carries release.cozystack.io/helm-server-side-apply:
+  # "false" — the load-bearing switch for read-replica autoscaling. Under the helm-controller
+  # default (server-side apply) the rendered spec.instances would force-own and revert KEDA's
+  # live /scale value on every reconcile, collapsing an autoscaled cluster. The Go builder
+  # test (rest_serversideapply_test.go) pins the plumbing that CONSUMES the annotation but not
+  # the annotation itself; this guards it at the point it is set, so dropping it goes red.
+  - it: forces client-side Helm apply on the postgres ApplicationDefinition
+    documentSelector:
+      path: metadata.name
+      value: postgres
+    asserts:
+      - isKind:
+          of: ApplicationDefinition
+      - equal:
+          path: metadata.annotations["release.cozystack.io/helm-server-side-apply"]
+          value: "false"
+  # A ScaledObject whose Prometheus trigger cannot resolve stays Ready=False
+  # (TriggerError) forever; helm-controller's default wait would then block the
+  # WHOLE Postgres HelmRelease on it, wedging an otherwise-healthy database. The
+  # cozyrd carries a healthCheckExpr that treats the ScaledObject as always-ready
+  # for release readiness (autoscaling health is surfaced by alerts, not by the
+  # release gate). Dropping it re-opens the wedge, so this goes red.
+  - it: neutralises ScaledObject readiness so it cannot wedge the release
+    documentSelector:
+      path: metadata.name
+      value: postgres
+    asserts:
+      - equal:
+          path: spec.release.healthCheckExprs[0].apiVersion
+          value: keda.sh/v1alpha1
+      - equal:
+          path: spec.release.healthCheckExprs[0].kind
+          value: ScaledObject
+      - equal:
+          path: spec.release.healthCheckExprs[0].current
+          value: "true"

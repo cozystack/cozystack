@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POSTGRES_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VALUES_FILE="${POSTGRES_DIR}/values.yaml"
 VERSIONS_FILE="${POSTGRES_DIR}/files/versions.yaml"
+POSTGIS_VERSIONS_FILE="${POSTGRES_DIR}/files/postgis-versions.yaml"
 
 # Get supported major versions from GitHub README
 echo "Fetching supported major versions from GitHub..."
@@ -72,6 +73,27 @@ unset IFS
 
 echo "Major versions to add: ${MAJOR_VERSIONS[*]}"
 
+# The postgis flavor must stay on the same PostgreSQL minor as the default
+# flavor, so each major is pinned to the newest postgis build of the minor
+# chosen above. standard-trixie: backups go through the barman-cloud plugin,
+# so the operand does not need the deprecated system variant. Postgis images
+# are built after the PostgreSQL ones, so a fresh minor can lack one for a
+# while: stop before touching any map rather than drop that major from the
+# postgis flavor, and rerun once the image is published.
+echo "Fetching available postgis image tags from registry..."
+POSTGIS_TAGS=$(skopeo list-tags docker://ghcr.io/cloudnative-pg/postgis | jq -r '.Tags[] | select(test("^[0-9]+\\.[0-9]+-[0-9]+\\.[0-9]+\\.[0-9]+-standard-trixie$"))' | sort -V)
+
+declare -A POSTGIS_MAP
+for major_ver in "${MAJOR_VERSIONS[@]}"; do
+    minor="${VERSION_MAP[$major_ver]#v}"
+    postgis_tag=$(echo "$POSTGIS_TAGS" | grep "^${minor//./\\.}-" | tail -n1 || true)
+    if [ -z "$postgis_tag" ]; then
+        echo "Error: no postgis standard-trixie image for PostgreSQL ${minor} (${major_ver}), no file updated" >&2
+        exit 1
+    fi
+    POSTGIS_MAP[$major_ver]="$postgis_tag"
+done
+
 # Create/update versions.yaml file
 echo "Updating $VERSIONS_FILE..."
 {
@@ -81,6 +103,15 @@ echo "Updating $VERSIONS_FILE..."
 } > "$VERSIONS_FILE"
 
 echo "Successfully updated $VERSIONS_FILE"
+
+echo "Updating $POSTGIS_VERSIONS_FILE..."
+{
+    for major_ver in "${MAJOR_VERSIONS[@]}"; do
+        echo "\"${major_ver}\": \"${POSTGIS_MAP[$major_ver]}\""
+    done
+} > "$POSTGIS_VERSIONS_FILE"
+
+echo "Successfully updated $POSTGIS_VERSIONS_FILE"
 
 # Update values.yaml - enum with major versions only
 TEMP_FILE=$(mktemp)

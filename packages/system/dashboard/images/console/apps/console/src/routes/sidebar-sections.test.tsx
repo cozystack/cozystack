@@ -12,6 +12,7 @@ import {
   useAdminSidebarSections,
   useCanSeeAdmin,
   useConsoleSidebarSections,
+  useMarketplaceSidebarSections,
 } from "./sidebar-sections.tsx"
 
 const emptyAppDefList: K8sList<unknown> = {
@@ -23,9 +24,12 @@ const emptyAppDefList: K8sList<unknown> = {
 
 // The admin gates issue two SSARs (nodes/list for Cluster Usage,
 // backupclasses/update for Backup Classes); answer each by requested resource.
-function makeClient(allow: Record<string, boolean | "pending">): K8sClient {
+function makeClient(
+  allow: Record<string, boolean | "pending">,
+  appDefs: K8sList<unknown> = emptyAppDefList,
+): K8sClient {
   const client = new K8sClient()
-  vi.spyOn(client, "list").mockResolvedValue(emptyAppDefList as K8sList<unknown>)
+  vi.spyOn(client, "list").mockResolvedValue(appDefs as K8sList<unknown>)
   vi.spyOn(client, "create").mockImplementation(async (_g, _v, _p, body) => {
     const resource =
       (body as SelfSubjectAccessReview).spec?.resourceAttributes?.resource ?? ""
@@ -71,6 +75,10 @@ function hasItemTo(
   return sections.some((s) => s.items.some((i) => i.to === to))
 }
 
+function sectionIndex(sections: { title: string }[], title: string) {
+  return sections.findIndex((s) => s.title === title)
+}
+
 describe("useConsoleSidebarSections — admin areas moved out", () => {
   it("keeps the per-tenant Backups group but drops Cluster Usage and admin Backup Classes", async () => {
     const client = makeClient({ nodes: true, backupclasses: true })
@@ -83,10 +91,110 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
     // Cluster-wide admin areas are gone from Console.
     expect(findItem(result.current, "Cluster")).toBeUndefined()
     expect(hasItemTo(result.current, "/console/backups/backupclasses")).toBe(false)
+    // Administration moved to the Admin portal.
+    expect(sectionIndex(result.current, "Administration")).toBe(-1)
+    expect(findItem(result.current, "Info")).toBeUndefined()
+    expect(findItem(result.current, "Tenants")).toBeUndefined()
+  })
+
+  // Migration is a tenant area, not an admin one: a tenant registers their own
+  // vCenter and runs their own imports, so it belongs beside Backups in Console
+  // rather than in the admin portal.
+  it("offers the Migration group with both source and import entries", async () => {
+    const client = makeClient({ nodes: true, backupclasses: true })
+    const { result } = renderHook(() => useConsoleSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(result.current.length).toBeGreaterThan(0))
+    expect(findItem(result.current, "Sources")?.to).toBe("/console/migration/vmimportsources")
+    expect(findItem(result.current, "Imports")?.to).toBe("/console/migration/vmimporttasks")
+    expect(result.current.some((s) => s.title === "Migration")).toBe(true)
+  })
+})
+
+function appDef(name: string, kind: string, category: string, module = false) {
+  return {
+    apiVersion: "cozystack.io/v1alpha1",
+    kind: "ApplicationDefinition",
+    metadata: { name },
+    spec: {
+      application: { kind, plural: `${name}s` },
+      dashboard: { category, ...(module ? { module: true } : {}) },
+    },
+  }
+}
+
+// A tapped repository brings its own category next to the built-in ones.
+const tappedAppDefs: K8sList<unknown> = {
+  ...emptyAppDefList,
+  items: [
+    appDef("postgres", "Postgres", "PaaS"),
+    appDef("vminstance", "VMInstance", "IaaS"),
+    appDef("oberonvm", "OberonVM", "Paleocomputing"),
+    appDef("ingress", "Ingress", "Administration", true),
+    appDef("seaweedfs", "SeaweedFS", "Administration"),
+  ],
+}
+
+describe("custom categories from tapped repositories", () => {
+  it("lists a tapped category in the marketplace sidebar after the built-in ones", async () => {
+    const client = makeClient({}, tappedAppDefs)
+    const { result } = renderHook(() => useMarketplaceSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() =>
+      expect(findItem(result.current, "Paleocomputing")?.to).toBe(
+        "/marketplace/c/Paleocomputing",
+      ),
+    )
+    const labels = result.current[0].items.map((i) => i.label)
+    expect(labels).toEqual(["Marketplace", "IaaS", "PaaS", "Paleocomputing"])
+  })
+
+  it("gives a tapped category its own console section and keeps Administration out", async () => {
+    const client = makeClient({}, tappedAppDefs)
+    const { result } = renderHook(() => useConsoleSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(sectionIndex(result.current, "Paleocomputing")).not.toBe(-1))
+    expect(hasItemTo(result.current, "/console/oberonvms")).toBe(true)
+    expect(sectionIndex(result.current, "PaaS")).toBeLessThan(
+      sectionIndex(result.current, "Paleocomputing"),
+    )
+    expect(sectionIndex(result.current, "Administration")).toBe(-1)
+  })
+})
+
+describe("useMarketplaceSidebarSections", () => {
+  it("leaves Repositories to the Admin portal", () => {
+    const client = makeClient({})
+    const { result } = renderHook(() => useMarketplaceSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    expect(findItem(result.current, "Marketplace")?.to).toBe("/marketplace")
+    expect(findItem(result.current, "Repositories")).toBeUndefined()
   })
 })
 
 describe("useAdminSidebarSections", () => {
+  it("always shows Administration, even with no operator permissions", async () => {
+    const client = makeClient({ nodes: false, backupclasses: false })
+    const { result } = renderHook(() => useAdminSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    // Administration is present immediately — it needs no permission review.
+    expect(findItem(result.current, "Tenants")?.to).toBe("/admin/tenants")
+    expect(findItem(result.current, "Modules")?.to).toBe("/admin/modules")
+    // Per-tenant Info moved into the Tenants tree rows — no sidebar entry.
+    expect(findItem(result.current, "Info")).toBeUndefined()
+    expect(findItem(result.current, "External IPs")?.to).toBe("/admin/external-ips")
+    expect(findItem(result.current, "Repositories")?.to).toBe("/admin/taps")
+    // No operator area leaks in while the gates deny.
+    await waitFor(() => expect(client.create).toHaveBeenCalled())
+    expect(findItem(result.current, "Cluster")).toBeUndefined()
+    expect(findItem(result.current, "Backup Classes")).toBeUndefined()
+  })
+
   it("shows Cluster Usage and Backup Classes when both gates allow", async () => {
     const client = makeClient({ nodes: true, backupclasses: true })
     const { result } = renderHook(() => useAdminSidebarSections(), {
@@ -99,6 +207,11 @@ describe("useAdminSidebarSections", () => {
     expect(findItem(result.current, "Backup Classes")?.to).toBe(
       "/admin/backups/backupclasses",
     )
+    // Administration renders above the gated operator areas.
+    const admin = sectionIndex(result.current, "Administration")
+    expect(admin).toBe(0)
+    expect(admin).toBeLessThan(sectionIndex(result.current, "Capacity"))
+    expect(admin).toBeLessThan(sectionIndex(result.current, "Backups"))
   })
 
   it("shows only Backup Classes when the user lacks nodes/list", async () => {
@@ -125,28 +238,19 @@ describe("useAdminSidebarSections", () => {
 })
 
 describe("useCanSeeAdmin", () => {
-  it("is true when nodes/list is allowed", async () => {
-    const client = makeClient({ nodes: true, backupclasses: false })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(result.current).toBe(true))
-  })
-
-  it("is true when only backupclasses/update is allowed", async () => {
-    const client = makeClient({ nodes: false, backupclasses: true })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(result.current).toBe(true))
-  })
-
-  it("is false when neither admin area is allowed", async () => {
-    const client = makeClient({ nodes: false, backupclasses: false })
-    const { result } = renderHook(() => useCanSeeAdmin(), {
-      wrapper: makeWrapper(client),
-    })
-    await waitFor(() => expect(client.create).toHaveBeenCalled())
-    expect(result.current).toBe(false)
+  // The Admin tab is always visible now: Administration needs no permission.
+  it("is true regardless of operator permissions", () => {
+    for (const perms of [
+      { nodes: true, backupclasses: true },
+      { nodes: true, backupclasses: false },
+      { nodes: false, backupclasses: true },
+      { nodes: false, backupclasses: false },
+    ]) {
+      const client = makeClient(perms)
+      const { result } = renderHook(() => useCanSeeAdmin(), {
+        wrapper: makeWrapper(client),
+      })
+      expect(result.current).toBe(true)
+    }
   })
 })

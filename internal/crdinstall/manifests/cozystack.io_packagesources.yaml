@@ -110,10 +110,26 @@ spec:
                                   HealthCheckExprs maps to HelmReleaseSpec.HealthCheckExprs — CEL health
                                   expressions for the custom resource(s) this component renders, so the
                                   HelmRelease reports Ready only when the CR is actually healthy. OpenAPI
-                                  validates only the struct shape, not that the CEL compiles or that the
-                                  referenced apiVersion/kind CRD is installed; a bad expression or a
-                                  not-yet-installed CRD makes the HelmRelease hang until its timeout (the
-                                  backstop).
+                                  validates only the struct shape, so mistakes surface in helm-controller,
+                                  and they do not all fail the same way:
+                                    - An expression that does not parse, an empty current expression, or
+                                      two entries for the same group and kind stall the HelmRelease with
+                                      reason InvalidCELExpression before any Helm action runs.
+                                    - An expression that errors on the object, such as a read of a
+                                      misspelled field or a non-boolean result, does not end the wait: the
+                                      CR reads as Unknown on every poll, and the Helm action waits out its
+                                      timeout with the CEL error in the message. Reading a status field
+                                      errors this way, even inside has(), until the CR's controller writes
+                                      a status; the wait goes on and can still succeed once it does.
+                                    - A current expression that evaluates cleanly but never becomes true,
+                                      such as a comparison against the wrong value, leaves the CR
+                                      InProgress, and the Helm action waits out its timeout with no CEL
+                                      error to point at the expression.
+                                    - A group or kind that does not match the CR the chart renders leaves
+                                      the expressions unused, and that CR is judged by the built-in
+                                      kstatus rules instead.
+                                  A CR whose CRD is not installed fails the Helm action before any wait,
+                                  whatever these expressions say.
                                 items:
                                   description: CustomHealthCheck defines the health
                                     check for custom resources.

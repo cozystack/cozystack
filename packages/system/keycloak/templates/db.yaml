@@ -9,7 +9,16 @@ spec:
   imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
   storage:
     size: 20Gi
-  {{- if .Values._cluster.scheduling }}
+  {{- with .Values.database.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.database.topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range .Values.database.topologySpreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "cnpg.io/cluster" "keycloak-db")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+  {{- else if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
   {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
@@ -51,9 +60,11 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
-  # Pin the barman-cloud sidecar's S3 request checksum to when_required
-  # (rationale in cozy-lib.barman.checksumSidecarConfiguration).
-  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
+  # Give the barman-cloud sidecar explicit resources: cozy-keycloak has no
+  # LimitRange, so the plugin's default was no requests and no limit at all.
+  # The sizing and the S3 request checksum pin are explained in
+  # cozy-lib.barman.sidecarConfiguration.
+  {{- include "cozy-lib.barman.sidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}
     {{- with .Values.backup.endpointURL }}

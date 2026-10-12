@@ -17,48 +17,31 @@ tests:
       - equal:
           path: spec.template.spec.serviceAccountName
           value: flux-shard-operator
-      - contains:
+      # The whole list, so the pin fails on an argument added, removed or
+      # swapped rather than only on the ones someone thought to enumerate.
+      # This template is first-party, so a failure here is a deliberate change
+      # asking to be read, not upstream churn arriving on its own schedule.
+      #
+      # --metrics-bind-address and --metrics-secure are load-bearing among
+      # these: the README-advertised cozy_flux_shard_* gauges, autosizing
+      # recommendation included, are the operator's observability surface.
+      - equal:
           path: spec.template.spec.containers[0].args
-          content: --leader-elect
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --flux-namespace=cozy-fluxcd
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-count=auto
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-concurrent=5
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --rebalance-threshold=0.25
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-cpu-request=100m
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-memory-request=64Mi
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-memory-limit=1Gi
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --shard-cpu-limit=
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --zap-log-level=info
+          value:
+            - --leader-elect
+            - --metrics-bind-address=:8080
+            - --metrics-secure=false
+            - --flux-namespace=cozy-fluxcd
+            - --shard-count=auto
+            - --shard-concurrent=5
+            - --rebalance-threshold=0.25
+            - --shard-cpu-request=100m
+            - --shard-memory-request=64Mi
+            - --shard-memory-limit=1Gi
+            - --zap-log-level=info
       - equal:
           path: spec.template.spec.volumes[0].secret.secretName
           value: flux-shard-operator-cert
-      # The metrics endpoint must stay reachable: the README-advertised
-      # cozy_flux_shard_* gauges (incl. the autosizing recommendation) are the
-      # operator's observability surface.
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --metrics-bind-address=:8080
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --metrics-secure=false
       - equal:
           path: spec.template.metadata.annotations["prometheus.io/scrape"]
           value: "true"
@@ -72,9 +55,16 @@ tests:
   - it: does not render --pinned-tenants by default
     template: templates/workload.yaml
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --pinned-tenants=
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: flux-shard-operator
+      # Match the flag name per element, not one whole element against one
+      # value: contains and notContains compare elements for equality, so
+      # `--pinned-tenants=` never equals a rendered
+      # `--pinned-tenants=tenant-a=shard0` and the negative could not fail.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--pinned-tenants"
 
   - it: renders shardCount and pinned tenants from values
     template: templates/workload.yaml

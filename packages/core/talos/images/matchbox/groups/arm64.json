@@ -1,0 +1,8 @@
+{
+  "id": "arm64",
+  "name": "arm64",
+  "profile": "arm64",
+  "selector": {
+    "arch": "arm64"
+  }
+}

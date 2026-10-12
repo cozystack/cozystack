@@ -1,0 +1,338 @@
+suite: qdrant dashboard resourcemap tests
+
+# The Role bound here is what a tenant subject can actually read. Two of the
+# Secrets this chart creates must never appear in it: <release>-ca carries the
+# CA private key under tls.key, <release>-tls the server key. Read access to
+# the former is enough to issue certificates for anything.
+#
+# So the rules array is pinned WHOLE rather than checked for known-bad names.
+# A name-by-name check misses a rule that grants secrets with NO resourceNames
+# at all, which is not a narrow grant but an unrestricted one — "an empty set
+# means that everything is allowed" — and so adds no name to notice while
+# granting every Secret in the namespace. Pinning the whole array also makes
+# the template's spelling irrelevant, since the assertion runs on rendered
+# output.
+#
+# Pinning one document is not enough, because a grant need not live in it. A
+# second RBAC object rendered beside it reaches the same subjects, and a
+# selector addressing the Role looks straight past it. So each permutation
+# also pins the document COUNT, catching an added object, and pins the kind in
+# every slot, catching a substituted one — a count alone is satisfied by
+# swapping the WorkloadMonitor for a binding onto cluster-admin. The
+# RoleBinding is pinned across the same permutations for the same reason: its
+# roleRef is one conditional away from pointing at cluster-admin.
+#
+# Documents are addressed by kind rather than by index. An index follows the
+# slot, so inserting a document above the Role would quietly move these
+# assertions onto something else and pass green. A second Role, or none, makes
+# the selector error rather than silently pick a first match.
+#
+# What this does NOT reach, and why it is a guard rather than a proof:
+#
+#   - a grant rendered from a DIFFERENT template file, since the suite-level
+#     `templates` key scopes what is rendered;
+#   - a grant behind a `.Capabilities` check this suite does not declare.
+#     helm-unittest populates `.Capabilities`, but its default APIVersions set
+#     is empty, so `.Capabilities.APIVersions.Has "cert-manager.io/v1"` is
+#     false here and true on any cluster running cert-manager;
+#   - a grant comparing a value against a third point not sampled, e.g.
+#     `replicas` greater than two or `resourcesPreset` equal to one specific
+#     preset. The permutations below sample each value at the points that
+#     change behaviour — for `tls.enabled`, a tri-state, that means all three
+#     — which settles presence and boolean gates and nothing more.
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: test-qdrant
+  namespace: tenant-test
+
+tests:
+  ###################################################
+  # The document set: nothing added, nothing swapped
+  ###################################################
+
+  # The baseline. A grant that renders only while a value is unset shows up
+  # here and in no other permutation.
+  - it: renders three documents with default values
+    asserts: &documentSet
+      - hasDocuments:
+          count: 3
+
+  - it: renders three documents with TLS enabled
+    set: &tlsOn
+      tls:
+        enabled: true
+    asserts: *documentSet
+
+  - it: renders three documents with TLS implied by external access
+    set: &externalOn
+      external: true
+    asserts: *documentSet
+
+  # Every value a tenant can set, plus the two the platform injects, moved off
+  # their defaults at once, so a grant gated on the presence of any single one
+  # renders here.
+  - it: renders three documents with every settable value set
+    set: &allValues
+      replicas: 2
+      resources:
+        cpu: 500m
+        memory: 1Gi
+      resourcesPreset: u1.large
+      size: 20Gi
+      storageClass: replicated
+      external: true
+      tls:
+        enabled: true
+      _namespace:
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+    asserts: *documentSet
+
+  # Chart.yaml carries version 0.0.0, and it stays 0.0.0 on the path that
+  # ships: the installer pushes packages/ verbatim as an OCI artifact, and the
+  # `helm package --version` target that would stamp a real version has no
+  # caller. Sampling a second version costs one test and means a grant gated
+  # on .Chart.Version cannot hide if that ever changes.
+  - it: renders three documents with a different chart version
+    chart: &packagedChart
+      version: 1.2.3
+    asserts: *documentSet
+
+  # tls.enabled is tri-state: unset means "follow external", so an explicit
+  # false is a distinct state from leaving it out, and a grant gated on it
+  # renders in neither case above.
+  - it: renders three documents with TLS explicitly disabled
+    set: &tlsOff
+      tls:
+        enabled: false
+    asserts: *documentSet
+
+  - it: renders three documents with TLS explicitly disabled despite external access
+    set: &externalTlsOff
+      external: true
+      tls:
+        enabled: false
+    asserts: *documentSet
+
+  # helm-controller upgrades whenever the release is not up to date, so any
+  # values or chart change puts a release on the upgrade path. A grant behind
+  # .Release.IsUpgrade is live on essentially every release while rendering
+  # false in every case above.
+  - it: renders three documents on upgrade
+    release: &upgraded
+      name: test-qdrant
+      namespace: tenant-test
+      upgrade: true
+    asserts: *documentSet
+
+  # The WorkloadMonitor itself. Without this the count above is satisfied by
+  # any replacement, including one binding the tenant to cluster-admin.
+  - it: keeps the WorkloadMonitor as the third document with default values
+    documentSelector: &workloadMonitor
+      path: kind
+      value: WorkloadMonitor
+    asserts: &workloadMonitorPinned
+      - equal:
+          path: metadata.name
+          value: test-qdrant
+
+  - it: keeps the WorkloadMonitor with TLS enabled
+    set: *tlsOn
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor with TLS implied by external access
+    set: *externalOn
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor with every settable value set
+    set: *allValues
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor with a different chart version
+    chart: *packagedChart
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor with TLS explicitly disabled
+    set: *tlsOff
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor with TLS explicitly disabled despite external access
+    set: *externalTlsOff
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  - it: keeps the WorkloadMonitor on upgrade
+    release: *upgraded
+    documentSelector: *workloadMonitor
+    asserts: *workloadMonitorPinned
+
+  ###################################################
+  # The grant itself
+  ###################################################
+
+  - it: names the dashboard Role after the release
+    documentSelector: &role
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: apiVersion
+          value: rbac.authorization.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: test-qdrant-dashboard-resources
+
+  # Default values leave tls.enabled unset and external false, which the
+  # chart's helper resolves to TLS off, so the CA Secret does not exist here.
+  # Pinned to catch a grant that renders only while a value is unset.
+  - it: grants no Secret beyond the API key with default values
+    documentSelector: *role
+    asserts: &pinnedRules
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [services]
+              resourceNames: [test-qdrant, test-qdrant-headless]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [test-qdrant-apikey]
+              verbs: [get, list, watch]
+            - apiGroups: [cozystack.io]
+              resources: [workloadmonitors]
+              resourceNames: [test-qdrant]
+              verbs: [get, list, watch]
+
+  # The case that matters. With TLS on the chart mints <release>-ca and
+  # <release>-tls, so this is the permutation where a leaked grant has
+  # something to leak. A grant added inside the same `if` that creates the CA
+  # renders only here, and would sail past a check that runs on defaults.
+  - it: grants no Secret beyond the API key with TLS enabled
+    set: *tlsOn
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  # TLS is also reachable by implication: leaving tls.enabled unset makes it
+  # follow external. Pinned separately because a grant gated on `external`
+  # rather than on the TLS helper renders in neither case above.
+  - it: grants no Secret beyond the API key with TLS implied by external access
+    set: *externalOn
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  - it: grants no Secret beyond the API key with every settable value set
+    set: *allValues
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  - it: grants no Secret beyond the API key with a different chart version
+    chart: *packagedChart
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  - it: grants no Secret beyond the API key with TLS explicitly disabled
+    set: *tlsOff
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  - it: grants no Secret beyond the API key with TLS explicitly disabled despite external access
+    set: *externalTlsOff
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  - it: grants no Secret beyond the API key on upgrade
+    release: *upgraded
+    documentSelector: *role
+    asserts: *pinnedRules
+
+  ###################################################
+  # The binding: who the Role is handed to
+  ###################################################
+
+  # Pinning the Role's rules is worth nothing if the binding points somewhere
+  # else, so roleRef and the subject list are pinned across the same
+  # permutations. A conditional swapping roleRef for cluster-admin renders in
+  # exactly the case a default-values check would miss.
+  - it: binds the tenant subjects to the dashboard Role with default values
+    documentSelector: &roleBinding
+      path: kind
+      value: RoleBinding
+    asserts: &roleBindingPinned
+      - equal:
+          path: roleRef
+          value:
+            kind: Role
+            name: test-qdrant-dashboard-resources
+            apiGroup: rbac.authorization.k8s.io
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: tenant-test
+              namespace: tenant-test
+            - kind: Group
+              name: tenant-test-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-test-super-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-test-use
+              apiGroup: rbac.authorization.k8s.io
+            - kind: ServiceAccount
+              name: tenant-root
+              namespace: tenant-root
+            - kind: Group
+              name: tenant-root-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-root-super-admin
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: tenant-root-use
+              apiGroup: rbac.authorization.k8s.io
+
+  - it: binds the tenant subjects to the dashboard Role with TLS enabled
+    set: *tlsOn
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role with TLS implied by external access
+    set: *externalOn
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role with every settable value set
+    set: *allValues
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role with a different chart version
+    chart: *packagedChart
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role with TLS explicitly disabled
+    set: *tlsOff
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role with TLS explicitly disabled despite external access
+    set: *externalTlsOff
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned
+
+  - it: binds the tenant subjects to the dashboard Role on upgrade
+    release: *upgraded
+    documentSelector: *roleBinding
+    asserts: *roleBindingPinned

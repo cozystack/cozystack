@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react"
 import type { WidgetProps } from "@rjsf/utils"
-import { useK8sList } from "@cozystack/k8s-client"
+import { useK8sGet, useK8sList } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
+import { resolveSource } from "../lib/dynamic-options.ts"
 
 /**
  * Generic dropdown widget driven by the `x-cozystack-options` schema keyword.
@@ -25,7 +26,7 @@ interface OptionItem {
   default?: boolean
 }
 
-interface OptionObject {
+export interface OptionObject {
   apiVersion: string
   kind: string
   metadata: { name: string }
@@ -33,25 +34,44 @@ interface OptionObject {
 }
 
 export function DynamicOptionsWidget(props: WidgetProps) {
-  const { value, onChange, required, disabled, readonly, schema } = props
+  const { id, value, onChange, required, disabled, readonly, schema, registry } = props
   const { tenantNamespace } = useTenantContext()
 
-  const source = (schema as { "x-cozystack-options"?: { source?: string } })?.[
+  const rawSource = (schema as { "x-cozystack-options"?: { source?: string } })?.[
     "x-cozystack-options"
   ]?.source
 
-  const { data: optionList, isLoading } = useK8sList<OptionObject>(
+  const rootFormData = (registry?.formContext as { rootFormData?: unknown })?.rootFormData
+  const { name: source, parameterised } = resolveSource(rawSource, rootFormData)
+
+  // A parameterised source is deliberately absent from the Option list — it
+  // describes nothing without its argument — so it is fetched by name instead.
+  const { data: optionList, isLoading: listLoading } = useK8sList<OptionObject>(
     {
       apiGroup: "core.cozystack.io",
       apiVersion: "v1alpha1",
       plural: "options",
       namespace: tenantNamespace ?? undefined,
     },
-    { enabled: !!tenantNamespace },
+    { enabled: !!tenantNamespace && !parameterised },
   )
 
-  const items: OptionItem[] =
-    optionList?.items?.find((o) => o.metadata.name === source)?.spec?.items ?? []
+  const { data: option, isLoading: getLoading } = useK8sGet<OptionObject>(
+    {
+      apiGroup: "core.cozystack.io",
+      apiVersion: "v1alpha1",
+      plural: "options",
+      name: source ?? "",
+      namespace: tenantNamespace ?? "",
+    },
+    { enabled: !!tenantNamespace && parameterised && !!source },
+  )
+
+  const isLoading = parameterised ? getLoading : listLoading
+
+  const items: OptionItem[] = parameterised
+    ? (option?.spec?.items ?? [])
+    : (optionList?.items?.find((o) => o.metadata.name === source)?.spec?.items ?? [])
 
   const currentValue = typeof value === "string" ? value : ""
   const hasCurrentInList = items.some((it) => it.value === currentValue)
@@ -72,14 +92,19 @@ export function DynamicOptionsWidget(props: WidgetProps) {
 
   const placeholder = isLoading
     ? "Loading..."
-    : items.length === 0
-      ? "No options available"
-      : required
-        ? "Select an option..."
-        : "-- None --"
+    : // A dependent dropdown with nothing to depend on yet is waiting, not
+      // empty, and saying so points at the field that unblocks it.
+      parameterised && !source
+      ? "Select a source first..."
+      : items.length === 0
+        ? "No options available"
+        : required
+          ? "Select an option..."
+          : "-- None --"
 
   return (
     <select
+      id={id}
       value={currentValue}
       onChange={(e) => onChange(e.target.value || undefined)}
       disabled={disabled || readonly}

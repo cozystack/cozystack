@@ -21,3 +21,4 @@ spec:
         privileged: true
         namespace: cozy-velero
         releaseName: velero
+        upgradeCRDs: CreateReplace

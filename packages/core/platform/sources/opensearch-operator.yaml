@@ -18,5 +18,6 @@ spec:
     - name: opensearch-operator
       path: system/opensearch-operator
       install:
+        privileged: true
         namespace: cozy-opensearch-operator
         releaseName: opensearch-operator

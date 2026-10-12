@@ -5,6 +5,9 @@ values:
   - values-ci.yaml
 tests:
   - it: renders no gatewayAPI block when the gatewayAPI addon is disabled
+    documentSelector:
+      path: kind
+      value: HelmRelease
     set:
       addons:
         gatewayAPI:

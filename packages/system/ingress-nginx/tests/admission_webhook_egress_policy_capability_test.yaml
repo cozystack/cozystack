@@ -1,0 +1,13 @@
+suite: ingress-nginx admission webhook policy capability gate
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+templates:
+  - templates/admission-webhook-egress-policy.yaml
+capabilities:
+  apiVersions: []
+tests:
+  - it: renders nothing when Cilium clusterwide policies are unavailable
+    asserts:
+      - hasDocuments:
+          count: 0

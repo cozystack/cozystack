@@ -31,11 +31,10 @@ export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-mariadb-default}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-mariadb-src-adhoc}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-mariadb-src-to-mariadb-target}"
 export PLAN_NAME="${PLAN_NAME:-mariadb-src-daily}"
-# App user password baked into 05-mariadb-src.yaml / 30-mariadb-target.yaml
-# (REPLACE_WITH_PASSWORD). The demo writes and reads the sentinel row as this
-# user, so both the source and the target chart specs declare it.
+# App user the demo writes and reads the sentinel row as. Its password is
+# chart-generated (the charts no longer accept a plaintext password) and read
+# from the release's <cr>-credentials Secret by mysql_exec at call time.
 export MARIADB_APP_USER="${MARIADB_APP_USER:-app}"
-export MARIADB_PASSWORD="${MARIADB_PASSWORD:-Xai7Wepo0aeThie8}"
 
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
 # self-signed certificate whose CA lives in this Secret; the demo copies its
@@ -61,84 +60,10 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $1 ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string.
-# Optional 7th arg is a TERMINAL failure value: once the field reaches it the
-# wait returns 1 immediately instead of polling to the timeout. BackupJob and
-# RestoreJob settle on a terminal phase=Failed that never becomes Succeeded, so
-# failing fast on it keeps wall-clock (and the operator Job's log, before its
-# TTL reaper fires) in reach.
-wait_for_field() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local jsonpath="$3"
-    local desired="$4"
-    local namespace="${5:-}"
-    local timeout="${6:-300}"
-    local fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0
-    local ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" 2>/dev/null || true)
-        if [[ "$current" == "$desired" ]]; then
-            log_success "$resource_type/$resource_name reached '$desired'"
-            return 0
-        fi
-        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
-            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
-            return 1
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop (the
-# apps controller creates the HR asynchronously, so a bare `kubectl wait`
-# right after `kubectl apply` races it) and a fail-fast on Stalled=True —
-# a stalled HR has exhausted its remediation retries and will never turn
-# Ready, so polling to the timeout only hides the real error.
-wait_hr_ready() {
-    local name="$1"
-    local timeout="${2:-300}"
-    local elapsed=0
-
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-            if [[ "$ready" == "True" ]]; then
-                log_success "HelmRelease/$name is Ready"
-                return 0
-            fi
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
-            if [[ "$stalled" == "True" ]]; then
-                log_error "HelmRelease/$name is Stalled (terminal): $(kubectl -n "$NAMESPACE" get hr "$name" \
-                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
-                return 1
-            fi
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for HelmRelease/$name to become Ready:"
-            kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # Name of the primary pod of a k8s.mariadb.com/MariaDB CR (the writer).
 # mariadb-operator 25.10.x reports the primary identity on
@@ -154,9 +79,45 @@ mariadb_primary_pod() {
 # Args: <cr-name> <sql>
 mysql_exec() {
     local cr="$1" sql="$2"
-    local pod
+    local pod pass
     pod=$(mariadb_primary_pod "$cr")
     [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" -o json \
+        | jq -r --arg u "$MARIADB_APP_USER" '.data[$u] // empty' | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no password for '$MARIADB_APP_USER' in ${cr}-credentials"; return 1; }
     kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
-        mariadb -u"$MARIADB_APP_USER" -p"$MARIADB_PASSWORD" -h "${cr}-primary" -e "$sql"
+        mariadb -u"$MARIADB_APP_USER" -p"$pass" -h "${cr}-primary" -e "$sql"
+}
+
+# Authenticate as root against a MariaDB CR's primary over TCP, using the
+# chart-generated root password in <cr>-credentials. root is the sharp edge on a
+# restore into a copy: the operator only applies rootPasswordSecretKeyRef at
+# datadir bootstrap, so if a restore overwrote the grant table with the source's
+# root hash the target's advertised root would be wrong for good. Args: <cr-name>
+mysql_root_login() {
+    local cr="$1"
+    local pod pass
+    pod=$(mariadb_primary_pod "$cr")
+    [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['root']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no root password in ${cr}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
+        mariadb -uroot -p"$pass" -h "${cr}-primary" -e "SELECT 1;"
+}
+
+# Run a single SQL statement against a MariaDB CR's primary as root over TCP.
+# Used for statements the app user is not privileged for (CREATE USER / GRANT),
+# e.g. seeding an out-of-band account the chart does not declare. root has no dot,
+# so a plain jsonpath read of its key is safe here. Args: <cr-name> <sql>
+mysql_root_exec() {
+    local cr="$1" sql="$2"
+    local pod pass
+    pod=$(mariadb_primary_pod "$cr")
+    [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
+    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" \
+        -o "jsonpath={.data['root']}" | base64 -d)
+    [[ -n "$pass" ]] || { log_error "no root password in ${cr}-credentials"; return 1; }
+    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
+        mariadb -uroot -p"$pass" -h "${cr}-primary" -e "$sql"
 }

@@ -359,6 +359,33 @@ spec:
                         nullable: true
                         type: boolean
                     type: object
+                  confidentialCompute:
+                    description: QGS configuration for attestation on the Intel TDX
+                      Platform
+                    nullable: true
+                    properties:
+                      tdx:
+                        description: TDX configuration for attestation on the Intel
+                          TDX Platform
+                        nullable: true
+                        properties:
+                          attestation:
+                            description: QGSConfiguration holds QGS configuration
+                            properties:
+                              enforced:
+                                default: false
+                                description: Indicates whether TDX VM should enforce
+                                  the existence of QGS (required for attestation)
+                                  to be scheduled
+                                type: boolean
+                              qgsSocketPath:
+                                default: /var/run/tdx-qgs/qgs.socket
+                                description: Socket path pointing to the Quote Generation
+                                  Service
+                                type: string
+                            type: object
+                        type: object
+                    type: object
                   controllerConfiguration:
                     description: |-
                       ReloadableComponentConfiguration holds all generic k8s configuration options which can
@@ -573,8 +600,10 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                   imagePullPolicy:
-                    description: PullPolicy describes a policy for if/when to pull
-                      a container image
+                    description: |-
+                      The ImagePullPolicy to use for user workload pods and their containers
+                      (launcher pods, exporter pods, etc.).
+                      For KubeVirt infrastructure images, use spec.imagePullPolicy instead.
                     type: string
                   instancetype:
                     description: Instancetype configuration
@@ -787,6 +816,14 @@ spec:
                           That will ensure the target virt-launcher doesn't share categories with another pod on the node.
                           However, migrations will fail when using RWX volumes that don't automatically deal with SELinux levels.
                         type: boolean
+                      maxDowntimeMs:
+                        description: |-
+                          MaxDowntimeMs specifies the maximum tolerable downtime (in milliseconds) during switchover.
+                          Defaults to 900
+                        format: int64
+                        maximum: 2000000
+                        minimum: 1
+                        type: integer
                       network:
                         description: |-
                           Network is the name of the CNI network to use for live migrations. By default, migrations go
@@ -1003,14 +1040,27 @@ spec:
                         type: array
                         x-kubernetes-list-type: atomic
                     type: object
+                  persistentReservationConfiguration:
+                    description: PersistentReservationConfiguration controls the deployment
+                      of additional resources required for using SCSI persistent reservation
+                      in VMs
+                    nullable: true
+                    properties:
+                      enabled:
+                        description: |-
+                          Enabled controls the deployment of additional resources like the pr-helper container
+                          for enabling the use of the SCSI persistent reservation VMs, defaults to False.
+                        nullable: true
+                        type: boolean
+                    type: object
                   roleAggregationStrategy:
                     description: |-
                       RoleAggregationStrategy controls whether RBAC cluster roles should be aggregated
                       to the default Kubernetes roles (admin, edit, view).
                       When set to "AggregateToDefault" (default) or not specified, the aggregate-to-* labels are added to the cluster roles.
                       When set to "Manual", the labels are not added, and roles will not be aggregated to the default roles.
-                      Setting this field to "Manual" requires the OptOutRoleAggregation feature gate to be enabled.
-                      This is an Alpha feature and subject to change.
+                      Setting RoleAggregationStrategy to "Manual" requires the OptOutRoleAggregation feature gate
+                      to be enabled (Beta, enabled by default since v1.9.0).
                     enum:
                     - AggregateToDefault
                     - Manual
@@ -1248,7 +1298,11 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               imagePullPolicy:
-                description: The ImagePullPolicy to use.
+                description: |-
+                  The ImagePullPolicy to use for KubeVirt operator-managed infrastructure
+                  images (virt-api, virt-controller, virt-handler, virt-exportproxy, etc.).
+                  For pull policy of user workload pods, see
+                  spec.configuration.imagePullPolicy.
                 type: string
               imagePullSecrets:
                 description: |-
@@ -3805,6 +3859,33 @@ spec:
                         nullable: true
                         type: boolean
                     type: object
+                  confidentialCompute:
+                    description: QGS configuration for attestation on the Intel TDX
+                      Platform
+                    nullable: true
+                    properties:
+                      tdx:
+                        description: TDX configuration for attestation on the Intel
+                          TDX Platform
+                        nullable: true
+                        properties:
+                          attestation:
+                            description: QGSConfiguration holds QGS configuration
+                            properties:
+                              enforced:
+                                default: false
+                                description: Indicates whether TDX VM should enforce
+                                  the existence of QGS (required for attestation)
+                                  to be scheduled
+                                type: boolean
+                              qgsSocketPath:
+                                default: /var/run/tdx-qgs/qgs.socket
+                                description: Socket path pointing to the Quote Generation
+                                  Service
+                                type: string
+                            type: object
+                        type: object
+                    type: object
                   controllerConfiguration:
                     description: |-
                       ReloadableComponentConfiguration holds all generic k8s configuration options which can
@@ -4019,8 +4100,10 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                   imagePullPolicy:
-                    description: PullPolicy describes a policy for if/when to pull
-                      a container image
+                    description: |-
+                      The ImagePullPolicy to use for user workload pods and their containers
+                      (launcher pods, exporter pods, etc.).
+                      For KubeVirt infrastructure images, use spec.imagePullPolicy instead.
                     type: string
                   instancetype:
                     description: Instancetype configuration
@@ -4233,6 +4316,14 @@ spec:
                           That will ensure the target virt-launcher doesn't share categories with another pod on the node.
                           However, migrations will fail when using RWX volumes that don't automatically deal with SELinux levels.
                         type: boolean
+                      maxDowntimeMs:
+                        description: |-
+                          MaxDowntimeMs specifies the maximum tolerable downtime (in milliseconds) during switchover.
+                          Defaults to 900
+                        format: int64
+                        maximum: 2000000
+                        minimum: 1
+                        type: integer
                       network:
                         description: |-
                           Network is the name of the CNI network to use for live migrations. By default, migrations go
@@ -4449,14 +4540,27 @@ spec:
                         type: array
                         x-kubernetes-list-type: atomic
                     type: object
+                  persistentReservationConfiguration:
+                    description: PersistentReservationConfiguration controls the deployment
+                      of additional resources required for using SCSI persistent reservation
+                      in VMs
+                    nullable: true
+                    properties:
+                      enabled:
+                        description: |-
+                          Enabled controls the deployment of additional resources like the pr-helper container
+                          for enabling the use of the SCSI persistent reservation VMs, defaults to False.
+                        nullable: true
+                        type: boolean
+                    type: object
                   roleAggregationStrategy:
                     description: |-
                       RoleAggregationStrategy controls whether RBAC cluster roles should be aggregated
                       to the default Kubernetes roles (admin, edit, view).
                       When set to "AggregateToDefault" (default) or not specified, the aggregate-to-* labels are added to the cluster roles.
                       When set to "Manual", the labels are not added, and roles will not be aggregated to the default roles.
-                      Setting this field to "Manual" requires the OptOutRoleAggregation feature gate to be enabled.
-                      This is an Alpha feature and subject to change.
+                      Setting RoleAggregationStrategy to "Manual" requires the OptOutRoleAggregation feature gate
+                      to be enabled (Beta, enabled by default since v1.9.0).
                     enum:
                     - AggregateToDefault
                     - Manual
@@ -4694,7 +4798,11 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               imagePullPolicy:
-                description: The ImagePullPolicy to use.
+                description: |-
+                  The ImagePullPolicy to use for KubeVirt operator-managed infrastructure
+                  images (virt-api, virt-controller, virt-handler, virt-exportproxy, etc.).
+                  For pull policy of user workload pods, see
+                  spec.configuration.imagePullPolicy.
                 type: string
               imagePullSecrets:
                 description: |-
@@ -6965,6 +7073,7 @@ rules:
   - kubevirt-virt-handler-server-certs
   - kubevirt-virt-handler-migration-client-certs
   - kubevirt-virt-handler-vsock-client-certs
+  - kubevirt-virt-handler-monitoring-client-certs
   - kubevirt-operator-certs
   - kubevirt-virt-api-certs
   - kubevirt-controller-certs
@@ -7666,6 +7775,14 @@ rules:
   - delete
   - patch
 - apiGroups:
+  - template.kubevirt.io
+  resources:
+  - virtualmachinetemplates
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - pool.kubevirt.io
   resources:
   - virtualmachinepools
@@ -7830,7 +7947,6 @@ rules:
   - virtualmachineinstances
   verbs:
   - update
-  - patch
   - list
   - watch
 - apiGroups:
@@ -7891,11 +8007,13 @@ rules:
   - watch
   - patch
 - apiGroups:
-  - apps
+  - plugin.kubevirt.io
   resources:
-  - controllerrevisions
+  - plugins
   verbs:
   - get
+  - list
+  - watch
 - apiGroups:
   - export.kubevirt.io
   resources:
@@ -8082,6 +8200,19 @@ rules:
   - watch
   - deletecollection
 - apiGroups:
+  - plugin.kubevirt.io
+  resources:
+  - plugins
+  verbs:
+  - get
+  - delete
+  - create
+  - update
+  - patch
+  - list
+  - watch
+  - deletecollection
+- apiGroups:
   - export.kubevirt.io
   resources:
   - virtualmachineexports
@@ -8418,6 +8549,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - plugin.kubevirt.io
+  resources:
+  - plugins
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - instancetype.kubevirt.io
   resources:
   - virtualmachineclusterinstancetypes
@@ -8536,14 +8675,14 @@ spec:
         - virt-operator
         env:
         - name: VIRT_OPERATOR_IMAGE
-          value: quay.io/kubevirt/virt-operator:v1.8.4
+          value: quay.io/kubevirt/virt-operator:v1.9.0
         - name: WATCH_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.annotations['olm.targetNamespaces']
         - name: KUBEVIRT_VERSION
-          value: v1.8.4
-        image: quay.io/kubevirt/virt-operator:v1.8.4
+          value: v1.9.0
+        image: quay.io/kubevirt/virt-operator:v1.9.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:

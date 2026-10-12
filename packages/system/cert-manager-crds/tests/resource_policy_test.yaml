@@ -1,0 +1,24 @@
+# These CRDs carry helm.sh/resource-policy: keep, which is what stops a release
+# uninstall from deleting them and taking every Certificate, Issuer and Order in
+# the cluster with them. This suite pins it.
+#
+# The annotation comes from the upstream template, emitted under
+# `{{- if .Values.crds.keep }}`, and the value that switches it on is ours. The
+# templates themselves are refilled from the vendored upstream chart by
+# packages/system/cert-manager on its own `make update`.
+#
+# The wildcard scope covers a CRD that upstream starts shipping without editing
+# this file. The kind assertion catches a non-CRD document that carries the
+# annotation, which the annotation assertion on its own accepts.
+suite: cert-manager CRDs survive a release uninstall
+templates:
+  - templates/*.yaml
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

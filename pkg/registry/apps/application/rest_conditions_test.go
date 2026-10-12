@@ -5,12 +5,11 @@ import (
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -50,7 +49,7 @@ func TestConvertConditions_WorkloadsReadyAdded(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 
@@ -97,7 +96,7 @@ func TestConvertConditions_ReadyNotOverriddenWhenWorkloadsNotReady(t *testing.T)
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(false),
+			Operational: new(false),
 		},
 	}
 
@@ -170,7 +169,7 @@ func TestConvertConditions_ReadyStaysTrue_WhenAllOperational(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 
@@ -210,7 +209,7 @@ func TestConvertConditions_WorkloadsReadyTimestampIsNonZero(t *testing.T) {
 			},
 		},
 		Status: cozyv1alpha1.WorkloadMonitorStatus{
-			Operational: ptr.To(true),
+			Operational: new(true),
 		},
 	}
 
@@ -327,5 +326,3 @@ func TestConvertConditions_WorkloadsReadyUnknownOnError(t *testing.T) {
 		t.Errorf("expected Ready=True (fail-open on error), got %s", rc.Status)
 	}
 }
-
-

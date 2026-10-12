@@ -67,7 +67,7 @@ jobs:
       # parse-rc-tag.sh lives in the tree, so overlay the dispatch ref's hack/
       # before calling it. Gitignored; nothing in this job commits.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling
@@ -177,7 +177,7 @@ jobs:
       # parse job (before generation), so it is not re-checked here — a checkout
       # failure for a branch deleted in the meantime is a rare, self-evident race.
       - name: Checkout rc staging branch
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.parse.outputs.rc_branch }}
           fetch-depth: 0
@@ -188,7 +188,7 @@ jobs:
       # hack/validate-changelog.sh. Overlay the current tooling from the dispatch
       # ref, exactly as promote-rc and changelog-generate do. Gitignored.
       - name: Checkout release tooling from the dispatch ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.ref_name }}
           path: .release-tooling

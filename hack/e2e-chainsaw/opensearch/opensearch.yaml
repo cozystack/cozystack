@@ -1,0 +1,34 @@
+# Starts on the operator's HTTP listener, which is what every external release
+# created before this field existed is running: the release carried no tls key
+# and the operator generated the certificates.
+# `tls.issuer: operator` reproduces that state on the current chart, and the suite
+# removes the key so the tri-state resolves it from `external` — the values an
+# upgraded release arrives with, and the transition the suite exists to run.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: OpenSearch
+metadata:
+  name: test
+spec:
+  replicas: 1
+  size: 2Gi
+  # Not the empty default: for a single replica the chart maps it to
+  # replicated, a class the PR lane never creates because it runs LINSTOR
+  # without DRBD. Each lane names the class it does create through
+  # --set-string storageClass, from COZY_E2E_STORAGE_CLASS.
+  storageClass: ($values.storageClass)
+  # OpenSearch refuses to start below 2Gi of heap-backing memory; c1.medium is
+  # the chart default and the smallest preset that clears it.
+  resourcesPreset: c1.medium
+  # The move only happens for an externally published release: with external
+  # false an unset tls.issuer resolves to operator and nothing changes.
+  external: true
+  version: v2
+  # Off. The Dashboards half is a second Deployment, a second certificate and a
+  # field prune of its own, and it mounts its leaf as a whole volume rather than
+  # through subPath, so this is a coverage choice rather than a redundancy: the
+  # render tests pin its shape, and what needs a cluster is the API half, where
+  # the mount plan changes and the admin certificate has to follow the CA.
+  dashboards:
+    enabled: false
+  tls:
+    issuer: operator

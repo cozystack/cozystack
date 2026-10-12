@@ -1,3 +1,15 @@
+{{- $issuerRef := (.Values.certManager | default dict).issuerRef | default dict }}
+{{- $etcd := (index .Values "kamaji-etcd") | default dict }}
+{{- $etcdCertManager := $etcd.certManager | default dict }}
+{{- $etcdIssuerRef := $etcdCertManager.issuerRef | default dict }}
+{{/*
+kamaji-etcd carries its own issuerRef and cannot be pointed at another issuer from here, because a
+parent chart cannot set the values of a subchart conditionally. Keep the self-signed issuer as long
+as either the webhook certificate or kamaji-etcd refers to it, so that configuring certManager.issuerRef
+never leaves kamaji-etcd without an issuer.
+*/}}
+{{- $etcdNeedsSelfSigned := and $etcd.deploy $etcdCertManager.enabled (eq ($etcdIssuerRef.name | default "") "kamaji-selfsigned-issuer") }}
+{{- if or (not $issuerRef.name) $etcdNeedsSelfSigned }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -8,3 +20,4 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   selfSigned: {}
+{{- end }}

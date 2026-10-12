@@ -29,3 +29,26 @@ tests:
       - equal:
           path: spec.sentinel.resources.limits.memory
           value: 128Mi
+
+  - it: RedisFailover is adopted by the operator group and pins its engine
+    template: templates/redis.yaml
+    documentIndex: 1
+    set:
+      harbor:
+        fullnameOverride: harbor-test
+    asserts:
+      # The label is the ONLY point of contact between the CR and the
+      # freshworks operator's group selector. A typo in the key or value
+      # produces no admission error and no operator log — just a Redis that
+      # never provisions and a harbor-core CrashLoop behind it.
+      - equal:
+          path: metadata.labels["redis-failover.freshworks.com/operator-group"]
+          value: cozystack
+      # Pin the engine so an operator-default bump (6.2.6->7.2.4) cannot silently
+      # move Harbor's Redis onto an on-disk format a platform rollback cannot load.
+      - equal:
+          path: spec.redis.image
+          value: redis:6.2.6-alpine
+      - equal:
+          path: spec.sentinel.image
+          value: redis:6.2.6-alpine

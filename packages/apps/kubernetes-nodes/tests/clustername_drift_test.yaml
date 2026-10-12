@@ -1,0 +1,128 @@
+suite: worker pool clusterName-drift guard (assertNoForeignPool)
+
+# assertNoForeignPool reconstructs the pool MachineDeployment name
+# kubernetes-<cluster>-<pool> and looks it up. Beyond the pre-existing
+# foreign-owner branch, it refuses the render when a live MD of that name is
+# owned by this release but its spec.clusterName disagrees with the clusterName
+# this pool renders: that is the fingerprint of a post-create .Values.cluster
+# edit (immutable, but only dashboard-enforced) that keeps object names
+# identical while silently drifting the WorkloadMonitor selector. A matching
+# clusterName renders normally; offline (nil lookup) the guard is inert.
+#
+# The scheme registers every kind nodegroup.yaml looks up (KamajiControlPlane
+# for assertParentVersion; MachineDeployment for this guard; MachineSet and
+# KubevirtMachineTemplate for the preserve-KMT LIST) so the fake client does
+# not error once a provider is set. The parent KamajiControlPlane sits at
+# v1.34.9 and the pool at v1.34 so assertParentVersion passes and the render
+# reaches this guard.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.34"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: refuses to render when the live MachineDeployment clusterName drifts from this pool
+    kubernetesProvider:
+      scheme: &scheme
+        "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
+          gvr:
+            group: "controlplane.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kamajicontrolplanes"
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinedeployments"
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+      objects:
+        - &kcp
+          kind: KamajiControlPlane
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          metadata:
+            name: kubernetes-myk8s
+            namespace: tenant-test
+          spec:
+            version: v1.34.9
+        - &schemeMachineSet
+          kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: scheme-registration-only
+            namespace: scheme-registration-only
+          spec:
+            template:
+              spec:
+                infrastructureRef:
+                  kind: KubevirtMachineTemplate
+                  name: none
+        - &schemeKmt
+          kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata:
+            name: scheme-registration-only
+            namespace: scheme-registration-only
+          spec: {}
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-nodes-myk8s-md0
+          spec:
+            clusterName: kubernetes-otherowner
+    asserts:
+      - failedTemplate:
+          errorPattern: "spec.clusterName"
+
+  - it: renders when the live MachineDeployment clusterName matches this pool
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *kcp
+        - *schemeMachineSet
+        - *schemeKmt
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-nodes-myk8s-md0
+          spec:
+            clusterName: kubernetes-myk8s
+    asserts:
+      - documentSelector:
+          path: kind
+          value: MachineDeployment
+        exists:
+          path: metadata.name

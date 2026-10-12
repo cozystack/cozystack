@@ -1,0 +1,132 @@
+suite: flux-plunger pre-delete uninstall-fence cleanup
+# flux-plunger holds a finalizer (flux-plunger.cozystack.io/uninstall-fence) on a
+# HelmRelease it is recovering. Nothing else in the tree knows that finalizer, so
+# uninstalling this chart must release it, or a release deleted meanwhile stays
+# Terminating forever.
+release:
+  name: flux-plunger
+  namespace: cozy-fluxcd
+templates:
+  - templates/uninstall-fence-cleanup.yaml
+tests:
+  - it: runs before the release is deleted, bounded, and cleans itself up afterwards
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      # Kept after it finishes, success included, so its report can be read
+      # until ttlSecondsAfterFinished; the next run replaces it.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 600
+      # helm-controller never sets Helm's hook output writer, and a hook with
+      # this annotation makes it call the nil func
+      # (https://github.com/fluxcd/helm-controller/issues/1562).
+      - notExists:
+          path: metadata.annotations["helm.sh/hook-output-log-policy"]
+      # Under helm-controller's default 300s uninstall timeout, which bounds the
+      # hook; hack/flux-plunger-fence-hook_test.bats holds the relation.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 240
+      # One run fills the deadline, so a second pod would end the Job
+      # DeadlineExceeded and lose the first one's report; helm-controller
+      # retries the whole uninstall, with a fresh budget, instead.
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      # Same pull policy and fixed footprint as the other hooks that run this
+      # image, so the pod is scheduled and started promptly inside the deadline.
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: flux-plunger-uninstall-fence-cleanup
+      # Digest-pinned so an upstream retag does not change what runs.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+
+  - it: strips the fence by name and stops flux-plunger first
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'fence=flux-plunger\.cozystack\.io/uninstall-fence'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'scale deployment "\$deploy" --replicas=0'
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: NAMESPACE
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: cozy-fluxcd
+
+  - it: may read and patch HelmReleases cluster-wide, and nothing more there
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["helm.toolkit.fluxcd.io"]
+              resources: ["helmreleases"]
+              verbs: ["get", "list", "patch"]
+
+  - it: may scale down only its own Deployment and watch its pods go
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-fluxcd
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["apps"]
+              resources: ["deployments"]
+              resourceNames: ["flux-plunger"]
+              verbs: ["get"]
+            - apiGroups: ["apps"]
+              resources: ["deployments/scale"]
+              resourceNames: ["flux-plunger"]
+              verbs: ["patch"]
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch"]
+
+  - it: runs under the restricted pod security standard
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true

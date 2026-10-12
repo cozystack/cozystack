@@ -1,0 +1,43 @@
+suite: tenant collector egress to the shared-central traces backend
+# Only the tenant's collector pods may cross into tenant-root, and only to the
+# vmauth proxy port.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+set:
+  tracingCentral: true
+  monitoring: true
+tests:
+  - it: scopes the cross-boundary egress to only the collector pods
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-egress-traces-central
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchLabels["k8s:app.kubernetes.io/name"]
+          value: otel-traces
+      - equal:
+          path: spec.endpointSelector.matchLabels["k8s:io.kubernetes.pod.namespace"]
+          value: tenant-ktj
+
+  - it: allows egress only to the tenant-root vmauth port
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-egress-traces-central
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vmauth
+                    "k8s:app.kubernetes.io/instance": traces-central
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+              toPorts:
+                - ports:
+                    - port: "8427"
+                      protocol: TCP

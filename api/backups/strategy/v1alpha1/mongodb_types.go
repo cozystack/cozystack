@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Package v1alpha1 defines strategy.backups.cozystack.io API types.
+//
+// Group: strategy.backups.cozystack.io
+// Version: v1alpha1
+package v1alpha1
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&MongoDB{},
+			&MongoDBList{},
+		)
+		return nil
+	})
+}
+
+const (
+	MongoDBStrategyKind = "MongoDB"
+)
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
+
+// MongoDB defines a backup strategy that delegates execution to the Percona
+// Server for MongoDB operator (psmdb.percona.com). The strategy carries a
+// templated logical-backup configuration; the driver materialises
+// PerconaServerMongoDBBackup objects per BackupJob and surfaces them as
+// Cozystack Backup artifacts. Restores create a PerconaServerMongoDBRestore
+// CR with clusterName pointing at the target cluster and a backupSource
+// carrying the S3 destination read back from the source backup, so the same
+// artifact restores in-place or into a differently-named instance.
+//
+// The strategy always names the storage (spec.template.storageName) psmdb
+// resolves against the source cluster's spec.backup.storages. On the legacy
+// flow the S3/credentials for that storage live on the PerconaServerMongoDB CR
+// (the mongodb chart declares them when backup.enabled=true and
+// useSystemBucket=false). On the useSystemBucket flow the chart cannot know the
+// platform bucket at render time, so the strategy also carries the storage's S3
+// coordinates (spec.template.s3) and the driver SSA-injects them onto the
+// cluster at BackupJob time.
+type MongoDB struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   MongoDBSpec   `json:"spec,omitempty"`
+	Status MongoDBStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// MongoDBList contains a list of MongoDB backup strategies.
+type MongoDBList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []MongoDB `json:"items"`
+}
+
+// MongoDBSpec specifies the desired psmdb-operator-driven backup strategy.
+type MongoDBSpec struct {
+	// Template carries the templated PerconaServerMongoDBBackup configuration.
+	// String fields support Helm-style Go templating with two top-level
+	// values:
+	//   .Application - the application object (apps.cozystack.io/MongoDB)
+	//   .Parameters  - the parameters from the matched BackupClassStrategy.
+	//                  These values MUST NOT carry credentials — the psmdb
+	//                  storage (bucket/endpoint/credentialsSecret) lives on the
+	//                  PerconaServerMongoDB CR, referenced here only by name.
+	Template MongoDBTemplate `json:"template"`
+}
+
+// MongoDBTemplate describes the templated PerconaServerMongoDBBackup shape the
+// driver renders per BackupJob.
+type MongoDBTemplate struct {
+	// StorageName names a storage entry in the source cluster's
+	// spec.backup.storages. On the legacy flow the mongodb chart declares
+	// "s3-storage" when backup.enabled=true and useSystemBucket=false; on the
+	// useSystemBucket flow the driver injects an entry under this same name from
+	// the S3 coordinates below. Leave empty to use "s3-storage". Templating is
+	// supported.
+	// +optional
+	StorageName string `json:"storageName,omitempty"`
+
+	// Type selects the backup type. Only "logical" is supported (logical
+	// dumps are portable across clusters, which is what makes
+	// restore-to-differently-named instances work). Defaults to "logical"
+	// when empty.
+	// +kubebuilder:validation:Enum=logical
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// CompressionType is the pbm compression algorithm (e.g. "gzip", "zstd",
+	// "s2", "snappy", "lz4", "pgzip", "none"). Defaults to the operator-side
+	// default when empty. Templating is supported.
+	// +optional
+	CompressionType string `json:"compressionType,omitempty"`
+
+	// CompressionLevel tunes the compression algorithm (algorithm-specific).
+	// Left unset the operator picks its default.
+	// +optional
+	CompressionLevel *int `json:"compressionLevel,omitempty"`
+
+	// S3 carries the system-bucket storage coordinates the driver SSA-patches
+	// onto the source PerconaServerMongoDB's spec.backup.storages[StorageName]
+	// on the useSystemBucket flow. PBM takes these as static CR fields (not
+	// secret refs), and the platform bucket name / endpoint are only known at
+	// BackupJob time, so the cozy-default strategy carries them (endpointUrl
+	// already scheme'd by the endpoint helper) and the driver injects them. Nil
+	// means the legacy flow: rely on the storage the app chart rendered
+	// statically, and patch nothing.
+	// +optional
+	S3 *MongoDBStorageS3 `json:"s3,omitempty"`
+}
+
+// MongoDBStorageS3 mirrors the psmdb spec.backup.storages[<name>].s3 block the
+// driver injects. String fields support templating (e.g. Prefix uses
+// {{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}).
+type MongoDBStorageS3 struct {
+	// Bucket is the S3 bucket name (the COSI-assigned system bucket).
+	// +optional
+	Bucket string `json:"bucket,omitempty"`
+	// EndpointURL is the full S3 endpoint URL including scheme.
+	// +optional
+	EndpointURL string `json:"endpointUrl,omitempty"`
+	// Region is the S3 region.
+	// +optional
+	Region string `json:"region,omitempty"`
+	// Prefix scopes this release's backups under the bucket.
+	// +optional
+	Prefix string `json:"prefix,omitempty"`
+	// CredentialsSecret names the Secret carrying AWS_ACCESS_KEY_ID /
+	// AWS_SECRET_ACCESS_KEY. Defaults to cozy-backups-creds when empty.
+	// +optional
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	// ForcePathStyle selects path-style S3 addressing.
+	// +optional
+	ForcePathStyle *bool `json:"forcePathStyle,omitempty"`
+	// InsecureSkipTLSVerify disables S3 endpoint certificate verification.
+	// +optional
+	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
+}
+
+// MongoDBStatus reports observed state for the strategy CR. Driver controllers
+// surface diagnostic conditions here (e.g. validation issues).
+type MongoDBStatus struct {
+	// Conditions holds the latest available observations.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}

@@ -6,6 +6,7 @@ package securitygroupcontroller
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -65,12 +66,8 @@ func sg(name string, finalizer bool, attachments ...sdnv1alpha1.ApplicationRefer
 // pod builds a managed pod carrying the lineage labels of the given application.
 func pod(name, namespace string, ref sdnv1alpha1.ApplicationReference, extra map[string]string) *corev1.Pod {
 	l := map[string]string{managedByLabel: "true"}
-	for k, v := range appLabels(ref) {
-		l[k] = v
-	}
-	for k, v := range extra {
-		l[k] = v
-	}
+	maps.Copy(l, appLabels(ref))
+	maps.Copy(l, extra)
 	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: l}}
 }
 

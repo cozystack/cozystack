@@ -4,15 +4,18 @@ import validator from "@rjsf/validator-ajv8"
 import { getDefaultFormState } from "@rjsf/utils"
 import type { RJSFSchema, UiSchema, TemplatesType } from "@rjsf/utils"
 import { keysOrderToUiSchema, sanitizeSchema } from "../lib/keys-order.ts"
+import { focusFirstError } from "@/lib/focus-first-error.ts"
+import { RJSF_ID_PREFIX, RJSF_ID_SEPARATOR } from "../lib/rjsf-ids.ts"
 import { addSensitiveStringWidgets } from "../lib/sensitive-fields.ts"
 import {
   IMMUTABLE_HELP_TEXT,
   findImmutablePaths,
   type ImmutablePath,
 } from "../lib/immutable-paths.ts"
-import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
+import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
+import { FreeformObjectField } from "./FreeformObjectField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
 import { SourceField } from "./SourceField.tsx"
 import "./schema-form.css"
@@ -27,7 +30,7 @@ import "./schema-form.css"
 function addAdditionalPropertiesWidgets(schema: RJSFSchema, uiSchema: UiSchema = {}): UiSchema {
   if (!schema || typeof schema !== "object") return uiSchema
 
-  const properties = (schema as any).properties
+  const properties = schema.properties
   if (!properties || typeof properties !== "object") return uiSchema
 
   const result = { ...uiSchema }
@@ -65,6 +68,14 @@ function bindAdditionalProperties(
   uiNode: UiSchema | undefined,
 ): UiSchema | undefined {
   const node: SchemaNode = fieldSchema
+
+  if (
+    node.type === "object" &&
+    (!node.properties || Object.keys(node.properties).length === 0) &&
+    node.additionalProperties === true
+  ) {
+    return { ...uiNode, "ui:field": "FreeformObjectField" }
+  }
 
   const isAdditionalPropertiesMap =
     node.type === "object" &&
@@ -299,7 +310,9 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
     // Override resourceQuotas field with structured quota editor.
     // Scoped to schemas where resourceQuotas has additionalProperties: {type: "string"}
     // (the cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
-    const rqSchema = (schema as any).properties?.resourceQuotas
+    const rqSchema = schema.properties?.resourceQuotas as
+      | { additionalProperties?: { type?: unknown } }
+      | undefined
     if (rqSchema && rqSchema.additionalProperties?.type === "string") {
       withSensitive.resourceQuotas = {
         ...withSensitive.resourceQuotas,
@@ -313,6 +326,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
   const customFields = useMemo(
     () => ({
       AdditionalPropertiesField: AdditionalPropertiesField,
+      FreeformObjectField: FreeformObjectField,
       ResourceQuotasField: ResourceQuotasField,
       SourceField: SourceField,
     }),
@@ -342,9 +356,19 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
         templates={templatesWithoutSubmit}
         widgets={customWidgets}
         fields={customFields}
+        // A widget sees only its own value, but a dropdown may be scoped by a
+        // choice made elsewhere in the form — the VMs of the import source the
+        // user just picked. Handing the whole object down is what lets an
+        // option source name reference a sibling field.
+        formContext={{ rootFormData: formData }}
         onChange={(e) => onChange(e.formData)}
         liveValidate={false}
         showErrorList={false}
+        idPrefix={RJSF_ID_PREFIX}
+        idSeparator={RJSF_ID_SEPARATOR}
+        focusOnFirstError={(error) =>
+          focusFirstError(error, RJSF_ID_PREFIX, RJSF_ID_SEPARATOR)
+        }
       >
         {children}
       </Form>

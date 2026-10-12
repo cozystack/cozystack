@@ -1,4 +1,42 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- if and .Values.backup.useSystemBucket (not .Values.backup.enabled) }}
+{{- fail "mongodb: backup.useSystemBucket=true requires backup.enabled=true: the percona-backup-mongodb agents only run when backups are enabled, so this combination renders a cluster that can never service a BackupJob. Set backup.enabled=true (or drop useSystemBucket). See docs/operations/backup-classes.md." }}
+{{- end }}
+{{- /*
+TLS IMPLEMENTATION NOTE — operator-managed cert-manager chain
+=============================================================
+TLS is always on, and neither fact below depends on spec.secrets.ssl being set
+here: the operator defaults that name unconditionally, and runs its cert-manager
+integration regardless. TLS-on comes from spec.tls.mode defaulting to preferTLS
+together with the operator refusing a disabled-TLS CR unless unsafeFlags.tls is
+set. Setting secrets.ssl explicitly only makes the name visible in the rendered
+CR. The operator creates the full certificate chain itself:
+
+  1. Self-signed bootstrap Issuer
+  2. CA Certificate, 365-day duration renewed 730h (~30 days) before expiry.
+     The CA therefore ROTATES annually — clients must re-read the trust anchor
+     rather than bake it into an image or ConfigMap.
+  3. CA-backed Issuer
+  4. Leaf server+client cert, lifetime left to the operator's own
+     certValidityDuration default (90 days at 1.22.0 — an operator default this
+     chart deliberately does not pin, so treat the number as informational) and
+     reissued by it without client action, with a SAN
+     list covering the per-replset service (short, namespace, FQDN), the
+     matching wildcards — which is what covers the per-pod headless names,
+     rather than a separate entry each — mongos and config-replset names, and
+     localhost.
+
+The chart does NOT render cert-manager Issuer/Certificate resources to avoid
+orphaning the operator-managed ones. Chart-rendered resources would be ignored
+as trust anchors because the PSMDB operator controls the CA it embeds in pods.
+
+EXTERNAL HOSTNAME SANs:
+  When external: true, the per-pod external hostnames (<release>-rs0-<i>.<host>)
+  are advertised via replsets[].splitHorizons. PSMDB ≥ 1.22.0 folds the horizon
+  hostnames into the operator-managed leaf certificate SAN list when the CR is at
+  crVersion ≥ 1.22.0, so external clients can verify the TLS hostname. The DNS
+  names must resolve to the per-pod LoadBalancers (operational prerequisite).
+*/}}
 ---
 apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
@@ -8,12 +46,28 @@ metadata:
     - percona.com/delete-psmdb-pods-in-order
     - percona.com/delete-psmdb-pvc
 spec:
+  {{- /*
+    The backup driver matches this operator's own error text ("unable to get
+    storage") to retry the storage-injection race; bumping crVersion must be
+    paired with re-checking that wording in internal/backupcontroller/
+    psmdbstrategy_controller.go (psmdbErrorIsUnresolvedStorage).
+  */}}
   crVersion: 1.22.0
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
     users: {{ .Release.Name }}-percona-server-mongodb-users
+    ssl: {{ .Release.Name }}-ssl
   pause: false
   unmanaged: false
+
+  tls:
+    # This pins the operator's own default rather than choosing a posture: the
+    # operator defaults spec.tls.mode to preferTLS and rejects a disabled-TLS CR
+    # unless spec.unsafeFlags.tls is set, so TLS was already on before this key
+    # existed. Stated explicitly so the mode is visible in the rendered CR.
+    # preferTLS accepts plaintext connections; moving to requireTLS would break
+    # existing plaintext clients and is a separate, breaking change.
+    mode: preferTLS
   image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
   imagePullPolicy: IfNotPresent
 
@@ -111,6 +165,30 @@ spec:
         {{- else }}
         enabled: false
         {{- end }}
+      {{- if .Values.external }}
+      {{- /* Split-horizon DNS advertises per-pod external hostnames to clients
+             connecting from outside the cluster. PSMDB ≥ 1.22.0 also folds these
+             hostnames into the operator-managed leaf certificate SAN list (gated
+             on crVersion ≥ 1.22.0), so TLS hostname verification works for
+             external clients. Requires <release>-rs0-<i>.<host> to resolve to the
+             per-pod LoadBalancer (DNS is an operational prerequisite). The host
+             is injected by the cozystack controller as _namespace.host; if it is
+             absent we skip the horizons rather than render an invalid SAN.
+
+             The replicas guard is load-bearing, not defensive: with replicas: 0
+             the range body renders nothing and `splitHorizons:` would be emitted
+             with a null value. The CRD types it as object without nullable, so
+             the API server rejects the whole PerconaServerMongoDB and the
+             HelmRelease fails. Omit the key entirely instead. */}}
+      {{- $host := (.Values._namespace | default dict).host }}
+      {{- if and $host (gt (int $.Values.replicas) 0) }}
+      splitHorizons:
+        {{- range $i := until (int $.Values.replicas) }}
+        {{ $.Release.Name }}-rs0-{{ $i }}:
+          external: {{ $.Release.Name }}-rs0-{{ $i }}.{{ $host }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
     {{- end }}
 
   {{- if .Values.users }}
@@ -151,16 +229,28 @@ spec:
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
     image: percona/percona-backup-mongodb:2.11.0
-    {{- if .Values.backup.enabled }}
+    {{- /*
+      useSystemBucket: keep enabled (so the pbm agents run) but omit the static
+      storage/tasks/pitr. The chart cannot know the platform bucket/endpoint at
+      render time, so the cozy-default BackupClass driver SSA-injects
+      spec.backup.storages["s3-storage"] under its own field manager at
+      BackupJob time; Helm never owns that subtree, so a Flux re-render leaves
+      the injected storage intact (same split the postgres useSystemBucket flow
+      uses for spec.plugins). Scheduling is driven by a BackupClass Plan, not
+      the chart's tasks; PITR on the system bucket is not wired here yet.
+    */}}
+    {{- if and .Values.backup.enabled (not .Values.backup.useSystemBucket) }}
     storages:
       s3-storage:
         type: s3
         s3:
-          bucket: {{ .Values.backup.destinationPath | trimPrefix "s3://" | regexFind "^[^/]+" }}
-          prefix: {{ .Values.backup.destinationPath | trimPrefix "s3://" | splitList "/" | rest | join "/" }}
+          bucket: {{ include "mongodb.backup.bucket" . | quote }}
+          {{- with include "mongodb.backup.prefix" . }}
+          prefix: {{ . | quote }}
+          {{- end }}
           endpointUrl: {{ .Values.backup.endpointURL }}
           credentialsSecret: {{ .Release.Name }}-s3-creds
-          insecureSkipTLSVerify: false
+          insecureSkipTLSVerify: {{ .Values.backup.insecureSkipTLSVerify | default false }}
           forcePathStyle: true
     tasks:
       - name: daily-backup

@@ -5,6 +5,7 @@
 ## @typedef {struct} Subnet - Subnet of a VPC
 ## @field {string} name - Subnet name
 ## @field {string} [cidr] - IP address range
+## @field {[]string} [allowSubnets] - Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM
 
 ## @param {[]Subnet} subnets - Subnets of a VPC
 subnets: []
@@ -14,6 +15,8 @@ subnets: []
 ##     cidr: "172.16.0.0/24"
 ##   - name: mysubnet1
 ##     cidr: "172.16.1.0/24"
+##     allowSubnets:
+##       - "192.168.1.0/24"
 
 ## @typedef {struct} Peer - VPC peering target
 ## @field {string} vpcName - Logical name of the remote VPC (without "virtualprivatecloud-" prefix)

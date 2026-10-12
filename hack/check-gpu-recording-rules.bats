@@ -33,8 +33,10 @@
 #   - Only [A-Za-z0-9] from the title survives into the function name; titles
 #     differing only in punctuation collapse to the same function.
 #
-# Run with: hack/cozytest.sh hack/check-gpu-recording-rules.bats
+# Run with: bats hack/check-gpu-recording-rules.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 RULES_FILE="$REPO_ROOT/packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml"
@@ -107,7 +109,6 @@ extract_dcgm_refs() {
 
 @test "every recording rule reference in tracked GPU dashboards has a matching record" {
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
 
   extract_rules > "$TMP/rules.txt"
   [ -s "$TMP/rules.txt" ] || { echo "no recording rules extracted from $RULES_FILE" >&2; exit 1; }
@@ -136,11 +137,11 @@ extract_dcgm_refs() {
   done < "$TMP/dashboards.txt"
 
   [ "$failed" -eq 0 ]
+  rm -rf "$TMP"
 }
 
 @test "every DCGM metric referenced in tracked dashboards and rules is declared" {
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
 
   [ -f "$DCGM_DEFAULT_CSV" ] || { echo "missing $DCGM_DEFAULT_CSV" >&2; exit 1; }
   [ -f "$DCGM_CUSTOM_CSV" ]  || { echo "missing $DCGM_CUSTOM_CSV"  >&2; exit 1; }
@@ -184,11 +185,11 @@ extract_dcgm_refs() {
   fi
 
   [ "$failed" -eq 0 ]
+  rm -rf "$TMP"
 }
 
 @test "every tracked GPU dashboard listed in dashboards-infra.list exists on disk" {
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
 
   list_tracked_gpu_dashboards > "$TMP/dashboards.txt"
   [ -s "$TMP/dashboards.txt" ] || { echo "no gpu/* dashboards listed in $DASHBOARDS_LIST" >&2; exit 1; }
@@ -203,4 +204,5 @@ extract_dcgm_refs() {
   done < "$TMP/dashboards.txt"
 
   [ "$failed" -eq 0 ]
+  rm -rf "$TMP"
 }

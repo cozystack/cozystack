@@ -1,0 +1,129 @@
+suite: database-autoscaling alert rules
+templates:
+  - templates/alerts.yaml
+release:
+  name: keda
+  namespace: cozy-keda
+tests:
+  - it: renders a PrometheusRule with the database-autoscaling alerts by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: spec.groups[0].name
+          value: database-autoscaling.rules
+      # stuck scale-up with a pod that exists but cannot run (unschedulable / unbindable
+      # PVC — both leave a Pending pod): desired > current AND a Pending CNPG pod
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScaleStuck
+          any: true
+      # quota-rejected scale-up — the Pending-INDEPENDENT companion (design proposal
+      # §Failure): a ResourceQuota refuses the pod at admission, so no pod is created and
+      # ScaleStuck's Pending intersection misses it. Keyed on desired > count(CNPG pods).
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScaleBlocked
+          any: true
+      # ScaleBlocked (rules[1]) compares desired to the CNPG instance-pod count and must NOT
+      # depend on a Pending phase (that is ScaleStuck's job) — otherwise it would miss the
+      # very case it exists for.
+      - notMatchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: phase="Pending"
+      # count is per-cluster (namespace,cluster), not namespace-wide, so a sibling CNPG
+      # cluster's pods in the same namespace cannot mask one cluster's block
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: count by \(namespace,cluster\)
+      # ...and counts only INSTANCE pods (instance_role) so a transient basebackup/join Job
+      # pod does not inflate the count and hide a real block
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: label_cnpg_io_instance_role=~
+      # ...and is suppressed while a join Job is provisioning a replica (unless clause), so a
+      # healthy multi-step scale-up (serial basebackups, count lagging desired) does not fire
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: unless on\(namespace,cluster\)
+      # ScaleBlocked must not advise lowering maxReplicas (would abort a legitimate scale-up)
+      - notMatchRegex:
+          path: spec.groups[0].rules[1].annotations.description
+          pattern: lower autoscaling\.maxReplicas
+      # both scale-progress rules derive a common `cluster` label from the keda-hpa-<cluster>
+      # HPA name so the pod-side joins are per-cluster, not namespace-wide
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: (?s)label_replace\(.*horizontalpodautoscaler=~"keda-hpa-
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: keda-hpa-\(\.\+\)
+      # at the ceiling: desired >= maxReplicas (NOT the ScalingLimited condition, which is
+      # also true at the floor for an idle cluster and would make this fire on quiet DBs)
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerAtMax
+          any: true
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: kube_horizontalpodautoscaler_spec_max_replicas
+      # must NOT key on ScalingLimited (that regressed to firing at the floor)
+      - notMatchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: ScalingLimited
+      # KEDA cannot read the metric (vmselect down / bad query): scaler errors
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScalerErrors
+          any: true
+      # Guard the metric name: KEDA 2.20 renamed keda_scaler_errors_total away;
+      # the per-ScaledObject error counter is keda_scaled_object_errors_total
+      # (verified on a live 2.20.2 operator). A regression here makes the alert
+      # silently never fire.
+      - matchRegex:
+          path: spec.groups[0].rules[3].expr
+          pattern: keda_scaled_object_errors_total
+      # operator-down alert covers the "ScaledObject never became an HPA" gap
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerKedaOperatorDown
+          any: true
+      - matchRegex:
+          path: spec.groups[0].rules[4].expr
+          pattern: absent\(keda_build_info\)
+      # ...gated on keda-hpa-* existence so it cannot false-fire in a tenant vmselect that
+      # never scrapes keda_build_info (own-monitoring tenants); fires only where KEDA HPAs
+      # exist. A bare absent() would alert forever in every such tenant.
+      - matchRegex:
+          path: spec.groups[0].rules[4].expr
+          pattern: count\(kube_horizontalpodautoscaler_status_current_replicas\{.*keda-hpa
+      # ScaleStuck must intersect with a Pending pod so a healthy long basebackup
+      # (Running pod, desired > current for >15m) does not false-fire. Both selectors
+      # in the Pending term MUST pin job="kube-state-metrics" like every other selector
+      # in the file: a tenant vmselect carrying a second KSM series (federated/remote
+      # write, or a tenant-run KSM) makes the on(namespace,pod) match ambiguous and the
+      # whole rule errors out silently. Dropping the job pin re-opens that, so this goes red.
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: kube_pod_status_phase\{job="kube-state-metrics",phase="Pending"\}
+      # ...and that Pending term is scoped to CNPG pods (label_cnpg_io_cluster) so an
+      # unrelated Pending pod in the tenant namespace cannot trip the alert
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: kube_pod_labels\{job="kube-state-metrics",label_cnpg_io_cluster!=
+
+  - it: can be disabled
+    set:
+      databaseAutoscaling:
+        alerts:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

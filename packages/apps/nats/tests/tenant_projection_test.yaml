@@ -1,0 +1,123 @@
+suite: nats TenantProjection sentinel
+
+# The chart renders one TenantProjection per TLS-enabled release: the
+# declaration that tells the CA-extraction controller to lift ca.crt out of the
+# key-bearing <release>-ca into the tenant-readable <release>.tenant-ca
+# projection.
+#
+# The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
+# carry none — it owns the projection, and it is itself owned only through the
+# helm.toolkit.fluxcd.io/name label Flux stamps, which is how the lineage webhook
+# resolves the application. An ownerReference here would short-circuit that walk
+# and silently break the tenant's read path (pkg/lineage/lineage.go).
+
+release:
+  name: my-nats
+  namespace: tenant-test
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders exactly one TenantProjection named after the release
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: my-nats-ca
+
+  # The list length is asserted alongside the entry: hasDocuments counts
+  # documents, not list entries, so a second entry naming tls.key as its source
+  # renders inside this same document and leaves every other assertion here
+  # untouched. The controller refuses a multi-entry sentinel outright, which
+  # makes that a silent loss of the anchor rather than a leak.
+  - it: declares exactly one projection, of the chart's CA
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.projections
+          count: 1
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: my-nats-ca
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  # The one load-bearing invariant: an ownerReference here would short-circuit
+  # the lineage walk before it reaches the helm-label fallback, so the tenant
+  # would silently lose the anchor.
+  - it: carries no ownerReferences, so the lineage walk reaches the helm label
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
+
+  # Not an invariant — conformance to the shape the merged engines share. An
+  # explicit namespace would pin the sentinel outside the release, and chart
+  # labels would compete with the Flux label that is the whole attribution
+  # path. Pinned separately so a failure here is not read as a lineage break.
+  - it: omits namespace and chart-added labels, matching the shared shape
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: metadata.namespace
+      - notExists:
+          path: metadata.labels
+
+  # The nats CA exists only while TLS is on. An ungated sentinel would sit
+  # Ready=False/SourceNotFound forever on every plaintext release.
+  #
+  # The gate must track the chart's effective TLS state, not the raw
+  # tls.enabled value: leaving it unset means "follow external". A naive
+  # `if .Values.tls.enabled` still passes the two explicit cases below while
+  # silently publishing no anchor to exactly the releases most likely to need
+  # one, so both implied legs are pinned too.
+  - it: renders the sentinel when TLS is implied by external access
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders nothing when TLS is implied off by external being false
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when TLS is explicitly disabled despite external access
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when TLS is disabled
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

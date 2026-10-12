@@ -51,3 +51,27 @@ tests:
       - matchRegex:
           path: stringData["values.yaml"]
           pattern: 'keycloak-internal-url:\s*""'
+
+  # The default internal URL bakes the realm segment, so it must follow
+  # authentication.oidc.realmName rather than the literal "cozy" — otherwise a
+  # renamed realm points every backend call at a realm Keycloak does not serve.
+  - it: derives the default internal URL from a custom realm name
+    set:
+      authentication.oidc.enabled: true
+      authentication.oidc.realmName: acme
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/acme"'
+
+  # The escape hatch is an operator decision independent of the realm name, so a
+  # custom realm must not resurrect a derived URL over an explicit empty string.
+  - it: keeps the empty-string escape hatch even with a custom realm name
+    set:
+      authentication.oidc.enabled: true
+      authentication.oidc.realmName: acme
+      authentication.oidc.keycloakInternalUrl: ""
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*""'

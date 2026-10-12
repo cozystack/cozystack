@@ -74,9 +74,12 @@ annotations:
     be used for pooled IPAM (i.e. the multi-pool IPAM mode).\n- kind: CiliumGatewayClassConfig\n
     \ version: v2alpha1\n  name: ciliumgatewayclassconfigs.cilium.io\n  displayName:
     Cilium Gateway Class Config\n  description: |\n    CiliumGatewayClassConfig defines
-    a configuration for Gateway API GatewayClass.\n"
+    a configuration for Gateway API GatewayClass.\n- kind: CiliumDatapathPlugin\n
+    \ version: v2alpha1\n  name: ciliumdatapathplugins.cilium.io\n  displayName: Cilium
+    Datapath Plugin\n  description: |\n    CiliumDatapathPlugin is a plugin that extends
+    datapath functionality.\n"
 apiVersion: v2
-appVersion: 1.19.5
+appVersion: 1.20.2
 description: eBPF-based Networking, Security, and Observability
 home: https://cilium.io/
 icon: https://cdn.jsdelivr.net/gh/cilium/cilium@main/Documentation/images/logo-solo.svg
@@ -92,4 +95,4 @@ kubeVersion: '>= 1.21.0-0'
 name: cilium
 sources:
 - https://github.com/cilium/cilium
-version: 1.19.5
+version: 1.20.2

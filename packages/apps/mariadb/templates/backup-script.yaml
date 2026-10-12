@@ -10,8 +10,47 @@ stringData:
     set -e
     set -o pipefail
 
+    {{- /*
+      The backup image is alpine + mariadb-client, so these options are parsed
+      by the MariaDB client, which implements no ssl-mode option and rejects it
+      at argument parsing time before connecting. --ssl-ca combined with
+      --ssl-verify-server-cert is the MariaDB equivalent of MySQL's strictest
+      mode: it validates the chain against the CA and checks the server
+      hostname against the certificate SANs. Keep this rationale in a template
+      comment rather than a shell comment so the MySQL-only option name never
+      appears in the rendered script.
+
+      The options are unconditional. The server always serves TLS, and the
+      operator reconciles the CA bundle in every configuration, so verifying is
+      always possible; gating them on managed TLS would leave the backup client
+      connecting in plaintext against a server that may be enforcing TLS, and
+      every run would fail.
+    */}}
+    SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-verify-server-cert"
+
+    # The client reports a missing or unusable CA as "TLS/SSL error: No such
+    # file or directory" without naming the file, which is not enough to act on.
+    # The volume is an optional mount, so the file is absent exactly when the
+    # operator has not reconciled the trust bundle yet; say so.
+    #
+    # Empty counts as unusable: the operator drops expired certificates when it
+    # builds the bundle, so a fully expired CA set produces a present but empty
+    # ca.crt. Testing only for readability would let that through to the same
+    # opaque client error this check exists to replace.
+    #
+    # It does not cover every case. On a fresh install with managed TLS the
+    # operator writes the bundle before cert-manager has issued the chart CA, so
+    # the file can be present and non-empty while holding only the operator's
+    # client CA — the connection then fails on verification rather than here.
+    # That window closes on the next reconcile.
+    if [ ! -r /etc/mysql-ssl/ca.crt ] || [ ! -s /etc/mysql-ssl/ca.crt ]; then
+      echo "ERROR: /etc/mysql-ssl/ca.crt is missing or empty, projected from Secret ${MYSQL_CA_SECRET}." >&2
+      echo "The operator reconciles that Secret once TLS certificates settle; retry once it holds a CA." >&2
+      exit 1
+    fi
+
     JOB_ID="job-$(uuidgen|cut -f1 -d-)"
-    DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
+    DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
     echo DB_LIST=$(echo "$DB_LIST" | shuf) # shuffle list
     echo "Job ID: $JOB_ID"
     echo "Target repo: $REPO_PREFIX"
@@ -26,8 +65,8 @@ stringData:
         restic -r "s3:${REPO_PREFIX}/$db" cat config >/dev/null 2>&1 || \
           restic -r "s3:${REPO_PREFIX}/$db" init --repository-version 2
         restic -r "s3:${REPO_PREFIX}/$db" unlock --remove-all >/dev/null 2>&1 || true # no locks, k8s takes care of it
-        mysqldump -u "$MYSQL_USER" -h "$MYSQL_HOST" --single-transaction --databases $db | \
-          restic -r "s3:${REPO_PREFIX}/$db" backup --tag "$JOB_ID" --stdin --stdin-filename dump.sql 
+        mysqldump -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS --single-transaction --databases $db | \
+          restic -r "s3:${REPO_PREFIX}/$db" backup --tag "$JOB_ID" --stdin --stdin-filename dump.sql
         restic -r "s3:${REPO_PREFIX}/$db" tag --tag "$JOB_ID" --set "completed"
       )
     done

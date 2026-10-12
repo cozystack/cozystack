@@ -1,0 +1,8 @@
+## @param stageCniPlugins install the reference CNI plugins bundled in the multus image into the node's /opt/cni/bin
+## Set this through the platform, not here: networking.stageCniPlugins on the cozystack-platform
+## Package resolves the per-variant default. See packages/core/platform/values.yaml.
+##
+## Accepted spellings are true/yes/on/1 and false/no/off/0, in any case; anything else stops the
+## render rather than resolving to off.
+##
+stageCniPlugins: false

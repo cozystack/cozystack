@@ -1,6 +1,4 @@
 kamaji:
-  etcd:
-    deploy: false
   # HA-safe default: two replicas serve admission webhooks behind the
   # kamaji-webhook-service Service. --leader-elect is already enabled
   # upstream, so only one replica reconciles tenant control planes — the

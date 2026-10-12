@@ -1,0 +1,23 @@
+# These CRDs carry helm.sh/resource-policy: keep, which is what stops a release
+# uninstall from deleting them and taking every EtcdCluster, EtcdMember and
+# EtcdSnapshot in the cluster with them. This suite pins it.
+#
+# The annotation is stamped by the awk step in `make update`, anchored on the
+# controller-gen.kubebuilder.io/version: line the upstream CRDs carry. If that
+# line stops being emitted, the step matches nothing and exits zero.
+#
+# The wildcard scope covers a CRD added to the vendoring list without editing
+# this file. The kind assertion catches a non-CRD document that carries the
+# annotation, which the annotation assertion on its own accepts.
+suite: etcd-operator CRDs survive a release uninstall
+templates:
+  - templates/*.yaml
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

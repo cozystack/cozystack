@@ -1,0 +1,15 @@
+# Restore-to-copy: import the source's definitions into a DIFFERENT application
+# (rabbitmq-target) in the same namespace, leaving the source running. The
+# driver reads the object under the SOURCE's key and authenticates to the TARGET
+# broker with the target's own default-user credentials.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: rabbitmq-src-to-rabbitmq-target
+spec:
+  backupRef:
+    name: rabbitmq-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: RabbitMQ
+    name: rabbitmq-target

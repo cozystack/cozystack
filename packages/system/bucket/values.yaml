@@ -1,2 +1,7 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# defaults keep the chart renderable on its own, outside a cluster.
+_cluster: {}
+_namespace: {}
+
 bucketName: "cozystack"
 users: {}

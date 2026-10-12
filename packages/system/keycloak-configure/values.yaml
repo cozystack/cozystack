@@ -1,7 +1,17 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
 # Keycloak image used by the one-shot admin-API job that enables the
 # UPDATE_EMAIL required action. Only kcadm.sh is used, so it just needs
 # to track the Keycloak server major version (packages/system/keycloak).
 image: quay.io/keycloak/keycloak:26.5.2
+
+# Enable the Keycloak Organizations feature for the platform realm.
+# Mapped to ClusterKeycloakRealm.spec.organizationsEnabled. Defaults to
+# false to preserve the current behaviour; set to true to manage
+# organizations (and KeycloakOrganization resources) in the realm.
+organizationsEnabled: false
 
 # login:
 #   userRegistration: false

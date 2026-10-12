@@ -15,6 +15,10 @@ templates:
   - templates/strategy-mariadb-default.yaml
   - templates/strategy-etcd-default.yaml
   - templates/strategy-altinity-default.yaml
+  - templates/strategy-mongodb-default.yaml
+  - templates/strategy-rabbitmq-default.yaml
+  - templates/strategy-redis-default.yaml
+  - templates/strategy-kafka-default.yaml
   - templates/strategy-foundationdb-default.yaml
   - templates/strategy-velero-vminstance-default.yaml
   - templates/strategy-velero-vmdisk-default.yaml
@@ -49,6 +53,32 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/strategy-altinity-default.yaml
+      # MongoDB is gated like every sibling, and this count is the assertion
+      # that keeps the chart installable. Its Strategy carries the system-bucket
+      # coordinates ($bucketName), so it needs the gate for the same reason the
+      # others do: this chart ships its own CRDs as templates, Helm resolves the
+      # whole manifest through the RESTMapper before applying any of it, and one
+      # ungated Strategy CR makes the first install apply zero objects with "no
+      # matches for kind" and never recover. A count of 1 here is that bug,
+      # green, which is how it shipped once already.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-mongodb-default.yaml
+      # RabbitMQ Job strategy carries bucket coordinates (endpoint, bucket,
+      # object key), so it MUST stay off the first render like the others -
+      # an ungated Strategy CR trips the same "no matches for kind" install
+      # failure described above.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-rabbitmq-default.yaml
+      # Kafka metadata Job strategy carries bucket coordinates too, so it stays
+      # off the first render for the same ordering reason as its siblings.
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-kafka-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-redis-default.yaml
       - hasDocuments:
           count: 0
         template: templates/strategy-foundationdb-default.yaml
@@ -62,7 +92,7 @@ tests:
           count: 0
         template: templates/velero-bsl.yaml
 
-  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all six routes (FoundationDB intentionally unbound)"
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all ten routes (FoundationDB intentionally unbound)"
     asserts:
       - hasDocuments:
           count: 1
@@ -73,10 +103,47 @@ tests:
         template: templates/backupclass-default.yaml
       - lengthEqual:
           path: spec.strategies
-          count: 6
+          count: 10
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: RabbitMQ
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Rabbitmq
+              name: cozy-default-rabbitmq
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Redis
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Redis
+              name: cozy-default-redis
+        template: templates/backupclass-default.yaml
+      - contains:
+          path: spec.strategies
+          content:
+            application:
+              apiGroup: apps.cozystack.io
+              kind: Kafka
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Kafka
+              name: cozy-default-kafka
         template: templates/backupclass-default.yaml
 
   - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
+    # bucketNameOverride marks an offline render, and the MongoDB count below is
+    # what pins that the CRD gate honours it: without that short-circuit no
+    # `helm template` or CI diff could ever produce this Strategy, since neither
+    # has an apiserver to ask about the CRD.
     set:
       backupStorage.bucketNameOverride: test-bucket
     asserts:
@@ -92,6 +159,67 @@ tests:
       - hasDocuments:
           count: 1
         template: templates/strategy-altinity-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.bucket
+          value: test-bucket
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.credentialsSecret
+          value: cozy-backups-creds
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.region
+          value: us-east-1
+        template: templates/strategy-mongodb-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: true
+        template: templates/strategy-mongodb-default.yaml
+      # insecureSkipTLSVerify is plumbed end-to-end (strategy -> driver-injected
+      # storage entry). This case pins the default (knob off -> false); the
+      # "renders insecureSkipTLSVerify from the platform knob" case below flips
+      # the knob on, so the pair discriminates the rendered value from a
+      # hardcoded literal (either would redden one of the two).
+      - equal:
+          path: spec.template.s3.insecureSkipTLSVerify
+          value: false
+        template: templates/strategy-mongodb-default.yaml
+      # prefix must reach the CR as a literal go-template string: Helm must NOT
+      # evaluate it, so the driver templates it per-application at BackupJob time.
+      # A stray brace would empty it with every doc-count assertion still green.
+      - equal:
+          path: spec.template.s3.prefix
+          value: "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}"
+        template: templates/strategy-mongodb-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-rabbitmq-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-redis-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-kafka-default.yaml
+      - isKind:
+          of: Kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: metadata.name
+          value: cozy-default-kafka
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: spec.artifactURITemplate
+          value: "s3://test-bucket/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt"
+        template: templates/strategy-kafka-default.yaml
+      # The chart pins no client image: the controller fills the placeholder with
+      # the target broker's own image at reconcile time.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "{{ .ClientImage }}"
+        template: templates/strategy-kafka-default.yaml
       - hasDocuments:
           count: 1
         template: templates/strategy-foundationdb-default.yaml
@@ -114,6 +242,20 @@ tests:
           value: "true"
         template: templates/velero-bsl.yaml
 
+  - it: "the MongoDB strategy renders insecureSkipTLSVerify from the platform knob"
+    # Pairs with the default (false) assertion above: with the knob flipped on,
+    # the injected storage entry must carry true. A template that hardcoded either
+    # literal would redden one of the two cases, so together they prove the value
+    # tracks backupStorage.insecureSkipTLSVerify rather than a constant.
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+      backupStorage.insecureSkipTLSVerify: true
+    asserts:
+      - equal:
+          path: spec.template.s3.insecureSkipTLSVerify
+          value: true
+        template: templates/strategy-mongodb-default.yaml
+
   - it: "external S3 (provisionBucket=false): Strategy CRs render against the configured bucketName, no Bucket CR is created"
     set:
       backupStorage.provisionBucket: false
@@ -133,6 +275,30 @@ tests:
           path: spec.template.storage.s3.bucket
           value: ext-bucket
         template: templates/strategy-mariadb-default.yaml
+
+  - it: "MongoDB Strategy gates on its CRD too, so shipping the kind to an installed chart cannot wedge the release"
+    # provisionBucket=false is what makes this case load-bearing: it resolves
+    # $bucketName WITHOUT the offline bucketNameOverride, which is the shape of a
+    # cluster that has been running for releases — bucket gate open, and only the
+    # CRD gate still able to hold the CR back. helm-unittest renders with no
+    # apiserver, so the CRD lookup answers "absent", which is the same answer a
+    # real cluster gives on the upgrade that first ships that CRD. Rendering the
+    # CR there fails Build() for the WHOLE release ("no matches for kind
+    # MongoDB") and applies zero objects, including the CRD that would have
+    # fixed it, so a count of 1 here is that wedge, green.
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-mongodb-default.yaml
+      # A sibling whose CRD shipped in an earlier release keeps rendering, which
+      # is what makes the count above an assertion about the MongoDB gate rather
+      # than about a chart-wide render failure.
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
 
   - it: "velero.bslEnabled=false: Velero strategies and BSL drop out while other strategies keep rendering"
     set:

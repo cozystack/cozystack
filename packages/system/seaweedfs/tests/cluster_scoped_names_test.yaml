@@ -124,6 +124,9 @@ tests:
   # namespaced ones. Guards the two halves against each other.
   - it: keeps the cluster-scoped name independent of the pinned fullname
     template: charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
     set:
       global.seaweedfs.serviceAccountName: tenant-root-seaweedfs
       seaweedfs.fullnameOverride: seaweedfs
@@ -131,8 +134,6 @@ tests:
       - notMatchRegex:
           path: metadata.name
           pattern: "^seaweedfs-"
-        documentIndex: 0
       - notMatchRegex:
           path: metadata.name
           pattern: "^seaweedfs-system-"
-        documentIndex: 0

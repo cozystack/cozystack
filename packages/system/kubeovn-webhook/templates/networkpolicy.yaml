@@ -1,0 +1,161 @@
+{{- $policy := .Values.webhookPolicy | default dict -}}
+{{- if and (dig "enabled" true $policy) (.Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy") }}
+{{- $policyHash := printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 12 -}}
+---
+{{/*
+The /mutate-pods handler returns namespace-derived annotations to any caller,
+and only the API server has any business calling it (GHSA-g883-q79m-8225).
+Client-certificate verification cannot enforce that on the stock control plane
+because the API server presents no client certificate to this webhook.
+
+This is a CiliumClusterwideNetworkPolicy, not a core NetworkPolicy, and the
+distinction is why it works: packages/system/kubeovn/values.yaml sets
+ENABLE_NP: false, so kube-ovn programs no ACLs and a core NetworkPolicy would
+be created and never enforced. Cilium enforces its own policies regardless.
+
+Deny-only, and expressed from both ends because each end fails in a direction
+the other does not. The source-side spec is an egressDeny on the caller's own
+endpoint, so it holds while this webhook's endpoint policy is being recomputed
+or has overflowed its map, but it relies on Cilium performing the service DNAT
+before egress policy runs. The target-side spec is an ingressDeny on this
+webhook's endpoint, evaluated after whatever DNAT already happened, so it is
+independent of the service-LB implementation, but denying pods there needs a
+cluster-spanning peer enumerated per identity on a fail-closed endpoint.
+
+Be exact about what that means: the source-side spec was added to get a
+cluster-spanning selector OFF this endpoint, and the target-side spec puts one
+back. Shipping both does not eliminate the namespace-churn map writes here; it
+makes them non-load-bearing, because whichever end is degraded the other still
+denies, and the writes are writes rather than an outage (see the cost paragraph
+on the second spec). The alternative -- dropping the target-side rule -- buys
+the coupling back at the price of a silent fail-open if another component
+performs DNAT only after Cilium's egress hook.
+
+That coupling was not reproduced in isolation as the trigger of #3983, and the
+errno the issue reports cannot come from a policy denial; see the PR
+description. The world deny below, the other candidate that issue named, is
+retained on the evidence quoted further down. enableDefaultDeny stays false, so
+the policy subtracts one destination and port and leaves everything else
+exactly as it was.
+
+Only the BACKEND port is denied, and that is sufficient. Cilium translates a
+service to its backends BEFORE egress policy is enforced, so a pod dialling
+this webhook's ClusterIP:443 is matched against the backend identity on the
+port below. Do not add a `toServices` rule to cover the ClusterIP explicitly:
+Cilium resolves `toServices` only inside ALLOW rules
+(pkg/policy/k8s/service.go walks spec.Egress, never spec.EgressDeny), and an
+egressDeny whose only destination is an unresolved `toServices` reaches the
+datapath with a non-nil-but-empty L3 selector, which Cilium reads as a
+WILDCARD when the rule carries toPorts (pkg/policy/types/policyentry.go). That
+denies EVERY destination on that port for every selected endpoint -- a
+cluster-wide egress outage rather than a tighter deny.
+
+That ordering is Cilium's own and it is conditional: it holds while Cilium owns
+service load-balancing. This kube-ovn topology sets ENABLE_LB: false in
+packages/system/kubeovn/values.yaml, does not run kube-proxy, and supports
+ClusterIP routing only with packages/system/cilium/values.yaml
+kubeProxyReplacement set to true. Turning it false leaves no supported service
+translator, so Service traffic fails as a routing error rather than bypassing
+this policy.
+
+If a second unsupported change enabled another translator, the source-side
+rule would see dst = ClusterIP before DNAT and no longer match an endpoint
+identity. The second spec below is evaluated on the destination after whatever
+translation occurred and still denies pod traffic. The Cilium package pins the
+supported value in tests/kube_proxy_replacement_test.yaml and renders
+templates/kube-proxy-replacement-beacon.yaml for a live override that repository
+tests cannot observe.
+
+The API server and host-network workloads are not selected: a rule carrying an
+endpointSelector can never match the host endpoint, because Cilium routes host
+policy through nodeSelector instead (pkg/policy/rule.go, matchesSubject). This
+component exists only on the management cluster, so unlike ingress-nginx there
+is no konnectivity-tunnelled caller to exempt.
+
+The second spec is target-side, on the webhook endpoint, and carries two denies
+kept for different reasons.
+
+Its pod deny is deliberate belt and braces. Being on the destination's ingress
+path it is evaluated after whatever DNAT has already happened, so it still
+holds if another component translates the Service after source-side egress
+policy -- exactly the exposure the paragraph above describes. It cannot catch
+the API server: for a clusterwide policy Cilium rewrites every fromEndpoints
+selector to also require
+k8s:io.kubernetes.pod.namespace to Exist, plus the cluster label (Cilium
+v1.20.2, pkg/k8s/apis/cilium.io/utils/utils.go:120-157 getEndpointSelector,
+whose own comment at :141 says that even a wildcard must not become a truly
+empty allow-all selector), and reserved identities carry neither label. What
+WOULD catch it is `fromEntities: [all]` or an omitted peer, so the shape is
+pinned in tests/networkpolicy_test.yaml rather than left to review.
+
+Its cost, stated rather than denied: a cluster-spanning fromEndpoints peer is
+enumerated per identity, so this rule adds policy-map entries on the webhook
+endpoint in proportion to the number of pod identities in the cluster, and a
+map write on every namespace add or delete. It does not cost a drop window --
+applyPolicyMapChangesLocked in pkg/endpoint/bpf.go adds entries before deleting
+them expressly to avoid transient drops, and inverts that order only when the
+addition would overflow the map, warning when it does. The residual risk is
+therefore cardinality rather than churn: an endpoint whose policy map
+approaches MaxEntries gets the inverted order and a possible transient drop,
+and cozystack leaves endpointLockdownOnMapOverflow at false
+(charts/cilium/values.yaml), so an overflow degrades rather than locking
+the endpoint down.
+
+Its world deny is retained rather than relied upon for the API server:
+`cilium monitor` on this webhook's endpoint on a live kube-ovn cluster showed
+the API server arriving from the node InternalIP with identity `host` when it
+originates on the same node and `kube-apiserver` when it originates on
+another, never from the kube-ovn join subnet and never as `world`.
+
+Note the scope this actually has: it removes in-cluster pods and external
+traffic, not every possible caller. Any host-network workload on the
+management cluster carries the same host / remote-node identity that exempts
+the API server and keeps its reach.
+*/}}
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: kube-ovn-webhook-{{ $policyHash }}
+specs:
+- endpointSelector: {}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:io.kubernetes.pod.namespace": {{ .Release.Namespace | quote }}
+        "k8s:app.kubernetes.io/name": {{ include "namespace-annotation-webhook.name" . | quote }}
+        "k8s:app.kubernetes.io/instance": {{ .Release.Name | quote }}
+    toPorts:
+    - ports:
+      - port: {{ include "namespace-annotation-webhook.port" . | quote }}
+        protocol: TCP
+- endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": {{ .Release.Namespace | quote }}
+      "k8s:app.kubernetes.io/name": {{ include "namespace-annotation-webhook.name" . | quote }}
+      "k8s:app.kubernetes.io/instance": {{ .Release.Name | quote }}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+  ingressDeny:
+  - fromEndpoints:
+    # Every pod in the cluster. The namespace key is matched with Exists so the
+    # rule spans all namespaces rather than only this policy's own, and so the
+    # selector is explicit about the requirement Cilium would otherwise add for
+    # it (see the comment above).
+    - matchExpressions:
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
+    toPorts:
+    - ports:
+      - port: {{ include "namespace-annotation-webhook.port" . | quote }}
+        protocol: TCP
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: {{ include "namespace-annotation-webhook.port" . | quote }}
+        protocol: TCP
+{{- end }}

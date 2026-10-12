@@ -19,6 +19,7 @@ package registry
 import (
 	"testing"
 
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -166,4 +167,24 @@ func TestInitialEventsBookmarker_ObserveOverridesStartingResourceVersion(t *test
 
 	ev, _ := b.OnClose()
 	assertInitialEventsEnd(t, ev, "150")
+}
+
+func TestInitialEventsEndBookmarkRequested(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name string
+		opts metainternalversion.ListOptions
+		want bool
+	}{
+		{"watch list", metainternalversion.ListOptions{SendInitialEvents: &yes, AllowWatchBookmarks: true}, true},
+		{"plain watch defaulted by the apiserver", metainternalversion.ListOptions{SendInitialEvents: &yes}, false},
+		{"bookmarks without initial events", metainternalversion.ListOptions{SendInitialEvents: &no, AllowWatchBookmarks: true}, false},
+		{"neither", metainternalversion.ListOptions{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := InitialEventsEndBookmarkRequested(&tc.opts); got != tc.want {
+				t.Fatalf("InitialEventsEndBookmarkRequested = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

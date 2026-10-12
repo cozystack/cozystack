@@ -1,3 +1,11 @@
+{{- /* KubeVirt-only: the cloud-controller-manager and the CSI driver here
+      exist to reach the workers' VirtualMachines and their DataVolumes in
+      THIS cluster. On the proxmox substrate the VMs are on an external
+      hypervisor: the CSI node plugin comes from the proxmox-csi package and
+      its controller, with the cloud-controller-manager, runs in this cluster
+      (templates/csi-proxmox/, templates/ccm-proxmox/). Rendering these would
+      leave a controller in the tenant reconciling objects that do not exist. */}}
+{{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
 {{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -21,11 +29,36 @@ spec:
       key: super-admin.svc
   targetNamespace: cozy-csi
   storageNamespace: cozy-csi
+  {{- /* Flux defaults to the RemediateOnFailure strategy, and install
+         remediation is always an uninstall, so an install that outruns the
+         spec.timeout above is torn down between attempts: the tenant loses
+         its CSI node plugin and the StorageClasses this release propagates,
+         and the next attempt restarts the DaemonSet rollout instead of
+         resuming one already under way. RetryOnFailure keeps the manifests
+         in place and retries the failed release. Both actions carry it
+         because the controller picks the active retry by
+         .status.lastAttemptedReleaseAction and performs that retry as an
+         upgrade, so on install alone the retry's own failure falls through
+         to upgrade remediation, a rollback with no previous release to
+         reach. The cost is that a real upgrade failure retries rather than
+         rolls back, which gives up no stable safety net: with retries: -1
+         and the default rollback strategy, upgrade remediation already
+         rolled back and retried without end. The remediation blocks stay
+         for a different reason, that an absent release
+         consults install and an out-of-sync one consults upgrade, both by
+         retry count rather than by strategy, so retries: -1 keeps them
+         open. */}}
   install:
     createNamespace: true
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   values:
@@ -62,4 +95,5 @@ spec:
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

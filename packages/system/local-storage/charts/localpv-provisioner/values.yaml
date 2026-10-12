@@ -1,0 +1,174 @@
+# Default values for localpv.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+global:
+  # Global override for container image registry (when `globalImageRegistryOverride` is set to true)
+  imageRegistry: "docker.io"
+  # Global image pull secrets (merged with local imagePullSecrets and not overridden)
+  # - secret
+  imagePullSecrets: []
+  # Global override for image pull policy
+  imagePullPolicy: ""
+  analytics:
+    # Global override for analytics
+    enabled:
+
+# When set to true, the value of `global.imageRegistry` will override all image registry settings defined at local level
+globalImageRegistryOverride: false
+
+rbac:
+  # rbac.create: `true` if rbac resources should be created
+  create: true
+  # rbac.pspEnabled: `true` if PodSecurityPolicy resources should be created
+  pspEnabled: false
+
+earlyEvictionTolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 5
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 5
+
+localpv:
+  name: localpv-provisioner
+  enabled: true
+  controller:
+    # The number of concurrent worker goroutines for processing PVC create and delete events.
+    # Higher values increase provisioning throughput when many PVC events are received simultaneously.
+    workers: 4
+  image:
+    registry: "docker.io/"
+    repository: openebs/provisioner-localpv
+    tag: 4.5.1
+    pullPolicy: IfNotPresent
+  updateStrategy:
+    type: RollingUpdate
+  # If set to false, containers created by the localpv provisioner will run without extra privileges.
+  privileged: true
+  annotations: {}
+  podAnnotations: {}
+  ## Labels to be added to localpv provisioner deployment pods
+  podLabels:
+    name: openebs-localpv-provisioner
+  healthCheck:
+    initialDelaySeconds: 30
+    periodSeconds: 60
+  replicas: 1
+  enableLeaderElection: true
+  basePath: "/var/openebs/local"
+  # Node deployment configuration for distributed provisioning mode
+  nodeDeployment:
+    # Enable the NodeDeployment mode. This deploys the provisioner as a DaemonSet on
+    # cluster nodes. NodeDeployment avoids the need to spin up a HelperPod at volume
+    # creation/deletion time, and instead performs volume operations via the DaemonSet
+    # container.
+    # NOTE: This mode mounts the host '/' path on to container, as it does not use a
+    # HelperPod and must be able to cater to different BasePath paths.
+    enabled: false
+    # Additional volume mounts for the provisioner container
+    additionalVolumeMounts: []
+    # Additional volumes for the provisioner pod
+    additionalVolumes: []
+  resources:
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  #  limits:
+  #    cpu: 100m
+  #    memory: 128Mi
+  #  requests:
+  #    cpu: 100m
+  #    memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  securityContext: {}
+  ## Sets priorityClassName in pod
+  priorityClassName: ""
+
+imagePullSecrets:
+# - name: img-pull-secret
+podSecurityContext: {}
+# fsGroup: 2000
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name:
+
+hostpathClass:
+  # Name of the default hostpath StorageClass
+  name: openebs-hostpath
+  # If true, enables creation of the openebs-hostpath StorageClass
+  enabled: true
+  # Available reclaim policies: Delete/Retain, defaults: Delete.
+  reclaimPolicy: Delete
+  # If true, sets the openebs-hostpath StorageClass as the default StorageClass
+  isDefaultClass: false
+  # Path on the host where local volumes of this storage class are mounted under.
+  # NOTE: If not specified, this defaults to the value of localpv.basePath.
+  basePath: ""
+  # Custom node affinity label(s) for example "openebs.io/node-affinity-value"
+  # that will be used instead of hostnames
+  # This helps in cases where the hostname changes when the node is removed and
+  # added back with the disks still intact.
+  # Example:
+  #          nodeAffinityLabels:
+  #            - "openebs.io/node-affinity-key-1"
+  #            - "openebs.io/node-affinity-key-2"
+  nodeAffinityLabels: []
+  # Prerequisite: XFS Quota requires an XFS filesystem mounted with
+  # the 'pquota' or 'prjquota' mount option.
+  xfsQuota:
+    # If true, enables XFS project quota
+    enabled: false
+    # Detailed configuration options for XFS project quota.
+    # If XFS Quota is enabled with the default values, the usage limit
+    # is set at the storage capacity specified in the PVC.
+    softLimitGrace: "0%"
+    hardLimitGrace: "0%"
+  # Prerequisite: EXT4 Quota requires an EXT4 filesystem mounted with
+  # the 'prjquota' mount option.
+  ext4Quota:
+    # If true, enables XFS project quota
+    enabled: false
+    # Detailed configuration options for EXT4 project quota.
+    # If EXT4 Quota is enabled with the default values, the usage limit
+    # is set at the storage capacity specified in the PVC.
+    softLimitGrace: "0%"
+    hardLimitGrace: "0%"
+
+helperPod:
+  image:
+    registry: ""
+    repository: openebs/linux-utils
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: 4.5.0
+  hostNetwork: false
+  # The maximum number of seconds to wait for a helperPod (init, cleanup, quota) to complete before timing out.
+  timeoutSecs: 120
+
+# Additional labels to add to all chart resources
+extraLabels: {}
+
+loggingLabels:
+  openebs.io/logging: "true"
+
+analytics:
+  # Enable sending stats to Google Analytics
+  enabled: true
+  # Specify in hours the duration after which a ping event needs to be sent.
+  pingInterval: "24h"

@@ -20,6 +20,7 @@ import (
 	"strconv"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -58,6 +59,16 @@ func MaxResourceVersion(list runtime.Object) (string, error) {
 	return strconv.FormatUint(max, 10), nil
 }
 
+// InitialEventsEndBookmarkRequested reports whether a watch asked for the
+// WatchList initial-events-end bookmark. SendInitialEvents alone does not ask
+// for it: the apiserver defaults it on for a watch whose resourceVersion is
+// empty or "0" while leaving bookmarks off, and from k8s.io/apiserver v0.36 the
+// watch handler serving this apiserver panics when such a watch receives the
+// marker.
+func InitialEventsEndBookmarkRequested(opts *metainternalversion.ListOptions) bool {
+	return opts.SendInitialEvents != nil && *opts.SendInitialEvents && opts.AllowWatchBookmarks
+}
+
 // InitialEventsBookmarker implements the WatchList initial-events-end contract
 // for a Watch that translates events from a backing controller-runtime watcher.
 // It annotates the first backing Bookmark as the terminating marker, falling
@@ -73,16 +84,18 @@ type InitialEventsBookmarker struct {
 	lastRV      string
 }
 
-// NewInitialEventsBookmarker returns a bookmarker for a watch. When
-// sendInitialEvents is false every method is a no-op. startingRV seeds the
-// resourceVersion (the client's requested ResourceVersion) so the terminating
-// bookmark carries a valid version even if the watcher closes before any
-// backing event is observed.
-func NewInitialEventsBookmarker(sendInitialEvents bool, startingRV string, newBookmark func() runtime.Object) *InitialEventsBookmarker {
+// NewInitialEventsBookmarker returns a bookmarker for a watch; pass
+// InitialEventsEndBookmarkRequested for initialEventsEnd. When it is false the
+// bookmarker never emits a terminating bookmark and OnBackingBookmark forwards
+// backing bookmarks unannotated. startingRV seeds the resourceVersion (the
+// client's requested ResourceVersion) so the terminating bookmark carries a
+// valid version even if the watcher closes before any backing event is
+// observed.
+func NewInitialEventsBookmarker(initialEventsEnd bool, startingRV string, newBookmark func() runtime.Object) *InitialEventsBookmarker {
 	return &InitialEventsBookmarker{
 		newBookmark: newBookmark,
 		lastRV:      startingRV,
-		sent:        !sendInitialEvents,
+		sent:        !initialEventsEnd,
 	}
 }
 

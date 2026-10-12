@@ -1,0 +1,24 @@
+suite: vm-disk-rd ApplicationDefinition
+release:
+  name: vm-disk-rd
+  namespace: cozy-system
+templates:
+  - templates/cozyrd.yaml
+tests:
+  # Without this entry kstatus reads the DataVolume's Ready condition, and an
+  # import that never completes holds the install, and a helm-controller
+  # worker, for the whole timeout. Whether CDI populated the disk is reported
+  # by the WorkloadMonitor instead, so the release must not wait on it.
+  - it: keeps the Helm install from waiting on the DataVolume
+    documentSelector:
+      path: metadata.name
+      value: vm-disk
+    asserts:
+      - isKind:
+          of: ApplicationDefinition
+      - equal:
+          path: spec.release.healthCheckExprs
+          value:
+            - apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              current: "true"

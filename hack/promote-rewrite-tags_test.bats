@@ -17,16 +17,16 @@
 # registry prefix finds files it has never heard of, which is the whole failure
 # mode. Stamp wider than the rewrite, then assert the rewrite cleaned all of it.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. cozytest.sh's
-# awk parser recognizes only @test blocks and a bare `}` on its own line; there
-# is no `run`, `$status`, `$output`, `skip`, or setup()/teardown(). Each test
-# runs as a shell function under `set -eu -x`, so a non-zero exit aborts the
-# test (that is the exit-0 assertion). A test that expects a non-zero exit must
-# capture it with `|| rc=$?` so the harness's `set -e` does not abort first.
-# Paths are repo-root-relative: BATS_TEST_DIRNAME is unset here and would abort
-# the whole suite under `set -u`.
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, whose awk parser recognizes only @test blocks
+# and a bare `}` on its own line. The tests therefore avoid `run`, `$status`,
+# `$output`, `skip`, and setup()/teardown(), and capture expected non-zero exits
+# with `|| rc=$?`. Paths stay repo-root-relative for both runners.
 #
-# Run with: hack/cozytest.sh hack/promote-rewrite-tags_test.bats
+# Run with: bats hack/promote-rewrite-tags_test.bats
+
+load test_helper
 
 @test "rewrite leaves no rc reference anywhere in the tree" {
   tmp=$(mktemp -d)
@@ -38,11 +38,9 @@
   # --exclude='*.md' keeps documentation examples (which carry placeholder or
   # historical versions) out of the fixture, matching the postcondition.
   # Match 'cozystack/cozystack' WITHOUT a host prefix or trailing slash. The
-  # host is not always contiguous with the repository: keycloak-operator splits
-  # it into a sibling `registry: ghcr.io` + `repository:
-  # cozystack/cozystack/keycloak-operator`, and kubeovn puts it in
+  # host is not always contiguous with the repository: kubeovn puts it in
   # `global.registry.address: ghcr.io/cozystack/cozystack` with `repository:
-  # kubeovn`. A 'ghcr\.io/cozystack/cozystack/' pattern silently skips both
+  # kubeovn`. A 'ghcr\.io/cozystack/cozystack/' pattern silently skips such
   # files, shrinking the fixture and under-testing the split shapes.
   for f in $(grep -rIl --exclude-dir=charts --exclude='*.md' 'cozystack/cozystack' packages/); do
     mkdir -p "$tmp/$(dirname "$f")"
@@ -63,9 +61,13 @@
   # value is a version, as cilium and kubeovn write it), so the fixture
   # exercises every shape the enumeration claims to cover rather than only the
   # single-string one.
+  # `sed -i -E`: on BSD `-i` consumes the next argument as the backup suffix, so
+  # `-E` is eaten and never enables extended syntax — the `\1` backreferences
+  # then refer to groups plain BRE never captured. Route each edit through a temp
+  # file instead; `sed -E` (extended regex) is understood by both GNU and BSD.
   for f in $(grep -rIl 'cozystack/cozystack' "$tmp/packages"); do
-    sed -i -E "s|(cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f"
-    sed -i -E "s|^([[:space:]]*tag:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]*)$|\1v${RC}\2|" "$f"
+    sed -E "s|(cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    sed -E "s|^([[:space:]]*tag:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]*)$|\1v${RC}\2|" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   done
 
   # Sanity: the fixture must actually contain the rc string, otherwise the
@@ -257,7 +259,7 @@
   # Parsing every YAML under packages/ costs ~30s; this is the same file set
   # for the purpose of finding FIRST-PARTY refs (canon discards everything
   # else anyway) and runs in about a second. The marker covers the split forms
-  # too, so keycloak-operator and kubeovn are not filtered out.
+  # too, so kubeovn is not filtered out.
   grep -rIlE --exclude-dir=charts --exclude='*.md' \
     -e 'cozystack/cozystack' packages/ \
     | grep -E '\.(yaml|yml|tag)$' \
@@ -382,6 +384,11 @@ ALLOW
   printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\n  sidecar:\n    repository: someone-elses/inner\n    tag: "v1@sha256:%s"\nunrelated:\n  image:\n    repository: someone-elses/thing\n    tag: "v1@sha256:%s"\n' "$D" "$D" "$D" > "$tmp/s4.yaml"
   printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
   printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
+  # The upstream ingress-nginx layout: the repository lives in `image`, not
+  # `repository`, and the digest has its own key without an `@`, so neither
+  # shape 1 nor shape 2 sees it. The non-string digest ahead of it would abort
+  # the rule's test() for the whole file without a type guard.
+  printf 'odd:\n  image: x\n  digest: 5\ncontroller:\n  image:\n    registry: ghcr.io\n    image: cozystack/cozystack/seven\n    tag: v1\n    digest: sha256:%s\n' "$D" > "$tmp/s7.yaml"
 
   # Assert the EXACT canonical repo@digest, not a repository substring. A
   # substring match leaves the digest untested, and since the completeness
@@ -390,14 +397,14 @@ ALLOW
   # digest previously left the rewrite, retag and mirror suites entirely green.
   # The digest is the only part that decides which bytes get retagged, so it is
   # the part most worth pinning.
-  for n in one onebare two three threeb four five six; do
+  for n in one onebare two three threeb four five six seven; do
     want_d="$D"
     case "$n" in one) f=s1.yaml ;; onebare) f=s1b.yaml ;; two) f=s2.yaml ;;
                  three) f=s3.yaml ;; threeb) f=s3.yaml; want_d="$D2" ;;
                  four) f=s4.yaml ;; five) f=s5.yaml ;;
-                 six) f=s6.tag ;; esac
+                 six) f=s6.tag ;; seven) f=s7.yaml ;; esac
     want="ghcr.io/cozystack/cozystack/${n}@sha256:${want_d}"
-    # Canonicalize away the cosmetic :tag that shapes 1 and 6 carry through.
+    # Canonicalize away the cosmetic :tag that fixtures s1 and s6 carry through.
     got=$(collect_refs_from_file "$tmp/$f" | sed -E 's|:[^/@]*@|@|' | grep "cozystack/${n}@" || true)
     if [ "$got" != "$want" ]; then
       echo "shape for '$n' ($f):" >&2
@@ -414,6 +421,18 @@ ALLOW
   if collect_refs_from_file "$tmp/s4.yaml" | grep -q 'cozystack/someone-elses'; then
     echo "shape 4 stapled the global registry onto a map outside global.images:" >&2
     collect_refs_from_file "$tmp/s4.yaml" >&2
+    rm -rf "$tmp"; return 1
+  fi
+
+  # Negative for the image/digest split map: an `image` key is not enough. A
+  # map with no digest, an empty digest (the upstream default for an unpinned
+  # image) or a digest but no `image` must yield nothing, or a bare
+  # "<image>@" or "@sha256:..." fragment reaches every consumer.
+  printf 'a:\n  registry: ghcr.io\n  image: cozystack/cozystack/nodigest\n  tag: v1\nb:\n  registry: ghcr.io\n  image: cozystack/cozystack/emptydigest\n  tag: v1\n  digest: ""\nc:\n  registry: ghcr.io\n  tag: v1\n  digest: sha256:%s\n' "$D" > "$tmp/near.yaml"
+  near=$(collect_refs_from_file "$tmp/near.yaml")
+  if [ -n "$near" ]; then
+    echo "the image/digest split-map rule matched a near-miss:" >&2
+    printf '%s\n' "$near" >&2
     rm -rf "$tmp"; return 1
   fi
   rm -rf "$tmp"
@@ -596,5 +615,8 @@ ALLOW
 
   refs=$(collect_image_refs packages)
   echo "$refs" | grep -q 'cozystack/grafana-dashboards@sha256:\|cozystack/grafana-dashboards:[^ ]*@sha256:'
-  echo "$refs" | grep -q 'multus-cni'
+  # The whole ref, not just the name: the completeness oracle above builds its
+  # expected side with collect_refs_from_file, which cannot parse this file at
+  # all, so this is where the multus entry is held to a real digest.
+  echo "$refs" | grep -qE 'multus-cni[^[:space:]]*@sha256:[0-9a-f]{64}'
 }

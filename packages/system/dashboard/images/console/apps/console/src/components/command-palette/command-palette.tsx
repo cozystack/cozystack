@@ -11,7 +11,7 @@ import { cn } from "@cozystack/ui"
 import { useIsMac } from "../../hooks/use-is-mac"
 import { useKeyboardNav } from "./use-keyboard-nav"
 import { useCommandItems } from "./use-command-items"
-import { useCommandPalette } from "./command-palette-provider"
+import { useCommandPalette } from "./use-command-palette"
 import type { NavigationLevel } from "./types"
 
 export function CommandPalette() {
@@ -25,6 +25,7 @@ export function CommandPalette() {
   // Reset local state when palette closes
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the palette when it closes, whoever closed it
       setQuery("")
       setLevel({ type: "root" })
     }

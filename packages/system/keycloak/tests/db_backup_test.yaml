@@ -38,3 +38,15 @@ tests:
         documentSelector:
           path: kind
           value: ObjectStore
+      - equal:
+          path: spec.instanceSidecarConfiguration.resources.limits.memory
+          value: 1Gi
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.instanceSidecarConfiguration.resources.requests.memory
+          value: 256Mi
+        documentSelector:
+          path: kind
+          value: ObjectStore

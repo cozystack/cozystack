@@ -1,0 +1,300 @@
+diff --git a/opensearch-operator/opensearch-gateway/responses/AllocationExplainResponse.go b/opensearch-operator/opensearch-gateway/responses/AllocationExplainResponse.go
+new file mode 100644
+--- /dev/null
++++ b/opensearch-operator/opensearch-gateway/responses/AllocationExplainResponse.go
+@@ -0,0 +1,13 @@
++package responses
++
++// AllocationExplainResponse carries the part of _cluster/allocation/explain this
++// operator reads. The endpoint returns a great deal more; everything else is
++// left out on purpose, so a field the operator never consults cannot break
++// decoding when OpenSearch renames it.
++type AllocationExplainResponse struct {
++	Index string `json:"index"`
++	Shard int    `json:"shard"`
++	// CanMoveToOtherNode is "yes", "no" or "throttled", and is only present for a
++	// shard that is currently assigned.
++	CanMoveToOtherNode string `json:"can_move_to_other_node,omitempty"`
++}
+diff --git a/opensearch-operator/opensearch-gateway/services/drain_progress_test.go b/opensearch-operator/opensearch-gateway/services/drain_progress_test.go
+new file mode 100644
+--- /dev/null
++++ b/opensearch-operator/opensearch-gateway/services/drain_progress_test.go
+@@ -0,0 +1,165 @@
++package services
++
++import (
++	"encoding/json"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/go-logr/logr"
++	"github.com/jarcoal/httpmock"
++)
++
++// drainMockClient serves the endpoints a drain decision reads: health, cluster
++// settings (with the exclude list), the shard table, and one allocation
++// explanation per shard, keyed by "<index>/<shard>".
++func drainMockClient(t *testing.T, health, excluded, catShards string, explains map[string]string) (*OsClusterClient, *httpmock.MockTransport, *[]string) {
++	t.Helper()
++	tr := httpmock.NewMockTransport()
++	for _, m := range []string{http.MethodGet, http.MethodHead} {
++		tr.RegisterResponder(m, `=~^http://os.test:9200/?$`, httpmock.NewStringResponder(200, `{"version":{"number":"2.0.0"}}`))
++	}
++	tr.RegisterResponder(http.MethodGet, `=~/_cluster/health`, httpmock.NewStringResponder(200, health))
++	tr.RegisterResponder(http.MethodGet, `=~/_cluster/settings`, httpmock.NewStringResponder(200,
++		`{"transient":{"cluster":{"routing":{"allocation":{"enable":"all","exclude":{"_name":"`+excluded+`"}}}}},"persistent":{}}`))
++	puts := &[]string{}
++	tr.RegisterResponder(http.MethodPut, `=~/_cluster/settings`, func(r *http.Request) (*http.Response, error) {
++		b, _ := io.ReadAll(r.Body)
++		*puts = append(*puts, string(b))
++		return httpmock.NewStringResponse(200, `{}`), nil
++	})
++	tr.RegisterResponder(http.MethodGet, `=~/_cat/shards`, httpmock.NewStringResponder(200, catShards))
++	tr.RegisterResponder(http.MethodGet, `=~/_cat/indices`, httpmock.NewStringResponder(200, `[]`))
++	tr.RegisterResponder(http.MethodPost, `=~/_cluster/allocation/explain`, func(r *http.Request) (*http.Response, error) {
++		var req struct {
++			Index string `json:"index"`
++			Shard int    `json:"shard"`
++		}
++		b, _ := io.ReadAll(r.Body)
++		if err := json.Unmarshal(b, &req); err != nil {
++			return httpmock.NewStringResponse(400, `{}`), nil
++		}
++		body, ok := explains[req.Index]
++		if !ok {
++			return httpmock.NewStringResponse(404, `{}`), nil
++		}
++		return httpmock.NewStringResponse(200, body), nil
++	})
++	c, err := NewOsClusterClient("http://os.test:9200", "u", "p", WithTransport(tr))
++	if err != nil {
++		t.Fatal(err)
++	}
++	return c, tr, puts
++}
++
++func explainBody(canMove string) string {
++	return `{"index":"a","shard":0,"primary":true,"current_state":"started","can_remain_on_current_node":"no","can_move_to_other_node":"` + canMove + `","node_allocation_decisions":[]}`
++}
++
++func TestDrainCanProceed(t *testing.T) {
++	onNode := `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"}]`
++	tests := []struct {
++		name     string
++		shards   string
++		explains map[string]string
++		want     bool
++	}{
++		{"a shard that can move keeps the drain alive", onNode, map[string]string{"a": explainBody("yes")}, true},
++		{"a shard with nowhere to go stops it", onNode, map[string]string{"a": explainBody("no")}, false},
++		{
++			"one immovable shard is enough to stop it",
++			`[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"b","shard":"0","prirep":"p","state":"STARTED","node":"n0"}]`,
++			map[string]string{"a": explainBody("yes"), "b": explainBody("no")},
++			false,
++		},
++		{"an empty node has nothing to block it", `[]`, nil, true},
++		{"shards on other nodes are not this node's problem",
++			`[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n1"}]`,
++			map[string]string{"a": explainBody("no")}, true},
++		{"a relocating shard is already moving",
++			`[{"index":"a","shard":"0","prirep":"p","state":"RELOCATING","node":"n0 -> 10.0.0.2 id n2"}]`,
++			map[string]string{"a": explainBody("no")}, true},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			c, _, _ := drainMockClient(t, `{"status":"yellow"}`, "", tt.shards, tt.explains)
++			got, _, err := drainCanProceed(c, "n0")
++			if err != nil {
++				t.Fatal(err)
++			}
++			if got != tt.want {
++				t.Errorf("got %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++// The node holds a shard nothing else can take, so the drain will not finish.
++// The exclusion has to be released rather than held for as long as the restart
++// is stuck, and it must not be re-applied on the next pass either.
++func TestPreparePodForDeleteReleasesAnUnproductiveExclusion(t *testing.T) {
++	stuck := `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"UNASSIGNED","node":null}]`
++	quietYellow := `{"status":"yellow","number_of_data_nodes":3,"unassigned_shards":1}`
++
++	t.Run("an exclusion already in place is withdrawn", func(t *testing.T) {
++		c, _, puts := drainMockClient(t, quietYellow, "n0", stuck, map[string]string{"a": explainBody("no")})
++		ready, err := PreparePodForDelete(c, logr.Discard(), "n0", true, 3)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if ready {
++			t.Fatal("the pod is not safe to delete, it still holds a shard")
++		}
++		if len(*puts) != 1 {
++			t.Fatalf("expected exactly one settings write, got %d: %v", len(*puts), *puts)
++		}
++		if strings.Contains((*puts)[0], `"n0"`) {
++			t.Errorf("the write should clear the exclusion, got %s", (*puts)[0])
++		}
++	})
++
++	t.Run("no exclusion is applied in the first place", func(t *testing.T) {
++		c, _, puts := drainMockClient(t, quietYellow, "", stuck, map[string]string{"a": explainBody("no")})
++		ready, err := PreparePodForDelete(c, logr.Discard(), "n0", true, 3)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if ready {
++			t.Fatal("the pod is not safe to delete, it still holds a shard")
++		}
++		if len(*puts) != 0 {
++			t.Errorf("nothing should be written when the node was never excluded, got %v", *puts)
++		}
++	})
++}
++
++// A drain that can still make progress keeps the behaviour it had: exclude the
++// node and wait for it to empty.
++func TestPreparePodForDeleteStillDrainsWhenItCan(t *testing.T) {
++	movable := `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"STARTED","node":"n1"}]`
++	c, _, puts := drainMockClient(t, `{"status":"green","number_of_data_nodes":3}`, "", movable, map[string]string{"a": explainBody("yes")})
++	ready, err := PreparePodForDelete(c, logr.Discard(), "n0", true, 3)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if ready {
++		t.Fatal("the node is not empty yet")
++	}
++	if len(*puts) != 1 || !strings.Contains((*puts)[0], `n0`) {
++		t.Fatalf("expected the node to be excluded, writes were %v", *puts)
++	}
++}
++
++// While shards are actually moving there is nothing to decide, and the
++// allocation explanation must not be asked for at all.
++func TestPreparePodForDeleteDoesNotExplainWhileShardsMove(t *testing.T) {
++	moving := `[{"index":"a","shard":"0","prirep":"p","state":"STARTED","node":"n0"},{"index":"a","shard":"0","prirep":"r","state":"UNASSIGNED","node":null}]`
++	c, tr, _ := drainMockClient(t, `{"status":"yellow","number_of_data_nodes":3,"relocating_shards":1}`, "n0", moving, map[string]string{"a": explainBody("no")})
++	if _, err := PreparePodForDelete(c, logr.Discard(), "n0", true, 3); err != nil {
++		t.Fatal(err)
++	}
++	if n := tr.GetCallCountInfo()["POST =~/_cluster/allocation/explain"]; n != 0 {
++		t.Errorf("explain must not be called while the allocator is busy, got %d calls", n)
++	}
++}
+diff --git a/opensearch-operator/opensearch-gateway/services/os_client.go b/opensearch-operator/opensearch-gateway/services/os_client.go
+--- a/opensearch-operator/opensearch-gateway/services/os_client.go
++++ b/opensearch-operator/opensearch-gateway/services/os_client.go
+@@ -171,6 +171,26 @@ func (client *OsClusterClient) CatIndices() ([]responses.CatIndicesResponse, err
+ 	return response, err
+ }
+ 
++func (client *OsClusterClient) GetAllocationExplain(index string, shard int, primary bool) (responses.AllocationExplainResponse, error) {
++	body := map[string]interface{}{
++		"index":   index,
++		"shard":   shard,
++		"primary": primary,
++	}
++	req := opensearchapi.ClusterAllocationExplainRequest{Body: opensearchutil.NewJSONReader(body)}
++	explainRes, err := req.Do(context.Background(), client.client)
++	var response responses.AllocationExplainResponse
++	if err != nil {
++		return response, err
++	}
++	defer helpers.SafeClose(explainRes.Body)
++	if explainRes.IsError() {
++		return response, fmt.Errorf("failed to get allocation explanation: %s", explainRes.String())
++	}
++	err = json.NewDecoder(explainRes.Body).Decode(&response)
++	return response, err
++}
++
+ func (client *OsClusterClient) CatShards(headers []string) ([]responses.CatShardsResponse, error) {
+ 	req := opensearchapi.CatShardsRequest{Format: "json", H: headers}
+ 	indicesRes, err := req.Do(context.Background(), client.client)
+diff --git a/opensearch-operator/opensearch-gateway/services/os_data_service.go b/opensearch-operator/opensearch-gateway/services/os_data_service.go
+--- a/opensearch-operator/opensearch-gateway/services/os_data_service.go
++++ b/opensearch-operator/opensearch-gateway/services/os_data_service.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"strconv"
+ 	"strings"
+ 
+ 	"github.com/google/go-cmp/cmp"
+@@ -249,8 +250,70 @@ func ReactivateShardAllocation(service *OsClusterClient) error {
+ 	return nil
+ }
+ 
++// drainCanProceed reports whether the allocator still has somewhere to put what
++// is left on nodeName. A drain waits for the node to empty, so one shard that
++// can be placed nowhere else is what turns that wait into a permanent one; the
++// reason for the first such shard is returned for the caller's log line.
++//
++// Only STARTED copies are asked about: a relocating one is already on its way
++// out, and an unassigned one is not on this node to begin with.
++func drainCanProceed(service *OsClusterClient, nodeName string) (bool, string, error) {
++	shards, err := service.CatShards([]string{"index", "shard", "prirep", "state", "node"})
++	if err != nil {
++		return false, "", err
++	}
++	for _, shard := range shardsOnNodeFromResponse(shards, nodeName) {
++		if shard.State != "STARTED" {
++			continue
++		}
++		shardNum, err := strconv.Atoi(shard.Shard)
++		if err != nil {
++			continue
++		}
++		explain, err := service.GetAllocationExplain(shard.Index, shardNum, shard.PrimaryOrReplica == "p")
++		if err != nil {
++			return false, "", err
++		}
++		if strings.EqualFold(explain.CanMoveToOtherNode, "no") {
++			return false, fmt.Sprintf("%s[%s] has no other node to move to", shard.Index, shard.Shard), nil
++		}
++	}
++	return true, "", nil
++}
++
+ func PreparePodForDelete(service *OsClusterClient, lg logr.Logger, podName string, drainNode bool, nodeCount int32) (bool, error) {
+ 	if drainNode {
++		// Excluding a node is only worth anything while the allocator can move its
++		// shards elsewhere. When it cannot, the node never empties, the restart
++		// waits for something that will not happen, and the exclusion keeps a data
++		// node out of allocation for the whole of it. Two data nodes are exempt:
++		// that path never waits for a full drain, only for system-index primaries.
++		//
++		// Asked only while nothing is moving, so a drain in progress pays nothing:
++		// the cost is one allocation explanation per started shard on the node, and
++		// it stops at the first shard that cannot move.
++		if nodeCount != 2 {
++			health, err := service.GetHealth()
++			if err != nil {
++				return false, err
++			}
++			if !hasShardActivity(health) {
++				canDrain, reason, err := drainCanProceed(service, podName)
++				if err != nil {
++					return false, err
++				}
++				if !canDrain {
++					// Withdraw an exclusion left by an earlier pass. With an empty
++					// exclude list this writes nothing.
++					if _, err := RemoveExcludeNodeHost(service, podName); err != nil {
++						return false, err
++					}
++					lg.Info(fmt.Sprintf("Not draining %s: %s. Leaving allocation as it is until that changes", podName, reason))
++					return false, nil
++				}
++			}
++		}
++
+ 		// If we are draining nodes then drain the working node
+ 		_, err := AppendExcludeNodeHost(service, podName)
+ 		if err != nil {

@@ -1,6 +1,11 @@
 {
   "title": "Chart Values",
   "type": "object",
+  "x-cozystack-name": {
+    "type": "string",
+    "description": "Cluster name. Every worker pool is a separate KubernetesNodes release named `kubernetes-nodes-\u003cname\u003e-\u003cpool\u003e`, so the name must leave room for the default `md0` pool inside the 53-character Helm release name limit.",
+    "maxLength": 32
+  },
   "properties": {
     "storageClass": {
       "description": "Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.",
@@ -14,159 +19,6 @@
       ],
       "x-cozystack-options": {
         "source": "storageclass"
-      }
-    },
-    "nodeGroups": {
-      "description": "Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas \u003e= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.",
-      "type": "object",
-      "default": {},
-      "additionalProperties": {
-        "type": "object",
-        "required": [
-          "diskSize",
-          "instanceType",
-          "maxReplicas",
-          "minReplicas"
-        ],
-        "properties": {
-          "diskSize": {
-            "description": "System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.",
-            "default": "20Gi",
-            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "x-kubernetes-int-or-string": true
-          },
-          "gpus": {
-            "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "name"
-              ],
-              "properties": {
-                "name": {
-                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
-                  "type": "string",
-                  "x-cozystack-options": {
-                    "source": "gpu"
-                  }
-                }
-              }
-            }
-          },
-          "instanceType": {
-            "description": "Virtual machine instance type.",
-            "type": "string",
-            "default": "u1.medium",
-            "x-cozystack-options": {
-              "source": "instancetype"
-            }
-          },
-          "kubelet": {
-            "description": "Kubelet resource reservations for this node group.",
-            "type": "object",
-            "properties": {
-              "evictionHardMemory": {
-                "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).",
-                "type": "string",
-                "default": "7%"
-              },
-              "evictionSoftMemory": {
-                "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
-                "type": "string",
-                "default": "10%"
-              },
-              "kubeReservedCpu": {
-                "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "kubeReservedMemory": {
-                "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "systemReservedCpu": {
-                "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
-                "type": "string"
-              },
-              "systemReservedMemory": {
-                "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",
-                "type": "string"
-              }
-            }
-          },
-          "maxReplicas": {
-            "description": "Maximum number of replicas.",
-            "type": "integer",
-            "default": 10
-          },
-          "maxUnhealthy": {
-            "description": "Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer (\"0\", \"1\", ...) or an integer percentage (\"0%\", \"50%\").",
-            "type": "string"
-          },
-          "minReplicas": {
-            "description": "Minimum number of replicas.",
-            "type": "integer",
-            "default": 0
-          },
-          "nodeStartupTimeout": {
-            "description": "Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.",
-            "type": "string"
-          },
-          "resources": {
-            "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
-            "type": "object",
-            "properties": {
-              "cpu": {
-                "description": "CPU available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              },
-              "memory": {
-                "description": "Memory (RAM) available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              }
-            }
-          },
-          "roles": {
-            "description": "List of node roles.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "storageClass": {
-            "description": "StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.",
-            "type": "string",
-            "x-cozystack-options": {
-              "source": "storageclass"
-            }
-          }
-        }
       }
     },
     "version": {
@@ -186,6 +38,147 @@
       "type": "string",
       "default": ""
     },
+    "substrate": {
+      "description": "Which infrastructure provider backs this cluster's worker VMs. `kubevirt` runs them inside this cluster; `proxmox` runs them on an external Proxmox VE cluster through capmox. The control plane is Kamaji either way — this selects the infrastructure half only. Must match the `substrate` of every KubernetesNodes pool attached to this cluster: the pools reference this cluster's infrastructure object by kind, and a mismatch leaves their Machines unreconciled. Switching an existing cluster is not supported; create a new one.",
+      "type": "string",
+      "default": "kubevirt",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "substrate is immutable"
+        }
+      ]
+    },
+    "proxmox": {
+      "description": "Proxmox substrate settings.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "ipv4Config"
+      ],
+      "properties": {
+        "allowedNodes": {
+          "description": "Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "ccm": {
+          "description": "Proxmox cloud-controller-manager settings.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "credentialsSecretName"
+          ],
+          "properties": {
+            "credentialsSecretName": {
+              "description": "Secret in THIS namespace holding the controller's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. May name the same Secret as `csi.credentialsSecretName`; it is a separate knob so the two can hold separate tokens, since this one only reads VM inventory while the driver attaches and detaches disks.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
+        "csi": {
+          "description": "Proxmox CSI driver settings.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "credentialsSecretName",
+            "enabled"
+          ],
+          "properties": {
+            "credentialsSecretName": {
+              "description": "Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.",
+              "type": "string",
+              "default": ""
+            },
+            "enabled": {
+              "description": "Install the driver. Without it a Proxmox-backed tenant has no way to provision PersistentVolumes at all.",
+              "type": "boolean",
+              "default": true
+            },
+            "storageClasses": {
+              "description": "StorageClasses to create in the tenant.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "storage"
+                ],
+                "properties": {
+                  "fstype": {
+                    "description": "Filesystem the driver formats volumes with: ext4 or xfs.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "StorageClass name inside the tenant cluster.",
+                    "type": "string"
+                  },
+                  "reclaimPolicy": {
+                    "description": "Delete or Retain.",
+                    "type": "string"
+                  },
+                  "ssd": {
+                    "description": "Mark volumes as SSD-backed, which changes the discard/cache defaults Proxmox applies.",
+                    "type": "boolean"
+                  },
+                  "storage": {
+                    "description": "Proxmox storage id the volumes are created on (as it appears in `pvesm status`).",
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "dnsServers": {
+          "description": "Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "insecure": {
+          "description": "Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.",
+          "type": "boolean",
+          "default": false
+        },
+        "ipv4Config": {
+          "description": "Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "gateway",
+            "prefix"
+          ],
+          "properties": {
+            "addresses": {
+              "description": "Ranges or CIDRs, e.g. `[\"10.0.0.120-10.0.0.170\"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "gateway": {
+              "description": "Default gateway for the workers.",
+              "type": "string",
+              "default": ""
+            },
+            "prefix": {
+              "description": "Netmask prefix length.",
+              "type": "integer",
+              "default": 24
+            }
+          }
+        }
+      }
+    },
     "addons": {
       "description": "Cluster addons configuration.",
       "type": "object",
@@ -194,7 +187,6 @@
         "certManager",
         "cilium",
         "coredns",
-        "fluxcd",
         "gatewayAPI",
         "gpuOperator",
         "hami",
@@ -228,7 +220,7 @@
           }
         },
         "cilium": {
-          "description": "Cilium CNI plugin.",
+          "description": "Cilium CNI plugin. Always installed as the tenant cluster's CNI; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -241,10 +233,11 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         },
         "coredns": {
-          "description": "CoreDNS addon.",
+          "description": "CoreDNS addon. Always installed as the tenant cluster's DNS; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -257,29 +250,8 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
-        },
-        "fluxcd": {
-          "description": "FluxCD GitOps operator.",
-          "type": "object",
-          "default": {},
-          "required": [
-            "enabled",
-            "valuesOverride"
-          ],
-          "properties": {
-            "enabled": {
-              "description": "Enable FluxCD.",
-              "type": "boolean",
-              "default": false
-            },
-            "valuesOverride": {
-              "description": "Custom Helm values overrides.",
-              "type": "object",
-              "default": {},
-              "x-kubernetes-preserve-unknown-fields": true
-            }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         },
         "gatewayAPI": {
           "description": "Gateway API addon.",
@@ -447,7 +419,7 @@
           }
         },
         "verticalPodAutoscaler": {
-          "description": "Vertical Pod Autoscaler.",
+          "description": "Vertical Pod Autoscaler. Installed and removed together with addons.monitoringAgents.enabled; this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -460,7 +432,8 @@
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
             }
-          }
+          },
+          "x-cozystack-no-enable-switch": true
         }
       }
     },
@@ -485,8 +458,55 @@
             "resourcesPreset"
           ],
           "properties": {
+            "admissionControllers": {
+              "description": "Admission plugins the tenant kube-apiserver enables, passed through to KamajiControlPlane `spec.admissionControllers`, which the control plane renders as `--enable-admission-plugins`. A non-empty list replaces the control plane's default set instead of adding to it. The kube-apiserver enables these plugins in addition to its own default ones, so leaving a plugin out does not turn it off; to turn one off, name it in `--disable-admission-plugins` in `controlPlane.apiServer.extraArgs` and keep it out of this list, since the apiserver refuses to start with a plugin in both, and the control plane's default set names several. Empty by default, which keeps that default set, taken from the TenantControlPlane CRD: CertificateApproval, CertificateSigning, CertificateSubjectRestriction, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, LimitRanger, MutatingAdmissionWebhook, NamespaceLifecycle, PersistentVolumeClaimResize, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionWebhook. `NodeRestriction` is not in it.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string",
+                "enum": [
+                  "AlwaysAdmit",
+                  "AlwaysDeny",
+                  "AlwaysPullImages",
+                  "CertificateApproval",
+                  "CertificateSigning",
+                  "CertificateSubjectRestriction",
+                  "DefaultIngressClass",
+                  "DefaultStorageClass",
+                  "DefaultTolerationSeconds",
+                  "DenyEscalatingExec",
+                  "DenyExecOnPrivileged",
+                  "DenyServiceExternalIPs",
+                  "EventRateLimit",
+                  "ExtendedResourceToleration",
+                  "ImagePolicyWebhook",
+                  "LimitPodHardAntiAffinityTopology",
+                  "LimitRanger",
+                  "MutatingAdmissionWebhook",
+                  "NamespaceAutoProvision",
+                  "NamespaceExists",
+                  "NamespaceLifecycle",
+                  "NodeRestriction",
+                  "OwnerReferencesPermissionEnforcement",
+                  "PersistentVolumeClaimResize",
+                  "PersistentVolumeLabel",
+                  "PodNodeSelector",
+                  "PodSecurity",
+                  "PodSecurityPolicy",
+                  "PodTolerationRestriction",
+                  "Priority",
+                  "ResourceQuota",
+                  "RuntimeClass",
+                  "SecurityContextDeny",
+                  "ServiceAccount",
+                  "StorageObjectInUseProtection",
+                  "TaintNodesByCondition",
+                  "ValidatingAdmissionWebhook"
+                ]
+              }
+            },
             "extraArgs": {
-              "description": "Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).",
+              "description": "Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. The tenant control plane sets each of the following flags itself and drops an entry naming one before the apiserver sees it. The chart moves an `--enable-admission-plugins=` entry into `controlPlane.apiServer.admissionControllers` and a `--kubelet-preferred-address-types=` entry into `controlPlane.kubelet.preferredAddressTypes` while that field is empty, and refuses any other entry naming one of them: `--advertise-address`, `--client-ca-file`, `--enable-admission-plugins`, `--service-cluster-ip-range`, `--kubelet-client-certificate`, `--kubelet-client-key`, `--kubelet-preferred-address-types`, `--proxy-client-cert-file`, `--proxy-client-key-file`, `--requestheader-allowed-names`, `--requestheader-client-ca-file`, `--secure-port`, `--service-account-key-file`, `--service-account-signing-key-file`, `--tls-cert-file`, `--tls-private-key-file`, `--etcd-servers`, `--etcd-cafile`, `--etcd-certfile`, `--etcd-keyfile`, `--etcd-prefix`, `--etcd-compaction-interval`, `--egress-selector-config-file`. When `spec.oidc.mode` is not `None` the chart also renders OIDC flags here, reads what you have written on them, and refuses some combinations outright; `docs/oidc-tenant.md` carries which flags, which combinations, and why. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).",
               "type": "array",
               "default": [],
               "items": {
@@ -806,6 +826,28 @@
             }
           }
         },
+        "kubelet": {
+          "description": "Kubelet connection settings.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "preferredAddressTypes": {
+              "description": "Node address types the tenant kube-apiserver tries, in order, when it connects to a kubelet, passed through to KamajiControlPlane `spec.kubelet.preferredAddressTypes`, which the control plane renders as `--kubelet-preferred-address-types`. The KamajiControlPlane CRD rejects a repeated name. Empty by default, which renders `InternalIP`, `ExternalIP`, or the list of a `--kubelet-preferred-address-types=` entry in `controlPlane.apiServer.extraArgs` when there is one.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string",
+                "enum": [
+                  "Hostname",
+                  "InternalIP",
+                  "ExternalIP",
+                  "InternalDNS",
+                  "ExternalDNS"
+                ]
+              }
+            }
+          }
+        },
         "replicas": {
           "description": "Number of control-plane replicas.",
           "type": "integer",
@@ -940,6 +982,7 @@
       "required": [
         "imageFactoryURL",
         "installerRepository",
+        "registryMirrors",
         "schematicID",
         "version"
       ],
@@ -954,6 +997,12 @@
           "type": "string",
           "default": "factory.talos.dev/installer"
         },
+        "registryMirrors": {
+          "description": "Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        },
         "schematicID": {
           "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
           "type": "string",
@@ -963,27 +1012,6 @@
           "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
           "type": "string",
           "default": "v1.13.6"
-        }
-      }
-    },
-    "nodeHealthCheck": {
-      "description": "MachineHealthCheck tuning for worker node groups.",
-      "type": "object",
-      "default": {},
-      "required": [
-        "maxUnhealthy",
-        "nodeStartupTimeout"
-      ],
-      "properties": {
-        "maxUnhealthy": {
-          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default \"50%\" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to \"0%\" once the fleet is stable on Talos workers.",
-          "type": "string",
-          "default": "50%"
-        },
-        "nodeStartupTimeout": {
-          "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).",
-          "type": "string",
-          "default": "10m"
         }
       }
     },
@@ -1020,7 +1048,7 @@
           }
         },
         "mode": {
-          "description": "Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
+          "description": "Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform Keycloak realm (`cozy` by default) via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
           "type": "string",
           "default": "None",
           "enum": [

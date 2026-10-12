@@ -18,7 +18,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Number of Postgres replicas.
+	// Number of Postgres replicas. Under active autoscaling this is the resting/seed count, not the live count — KEDA drives the live count via `/scale`. Disabling autoscaling does NOT automatically bring the live count back to `replicas`: the client-side merge writes `instances` only when the rendered value changes, so a cluster KEDA grew past `replicas` stays there with no autoscaler left to reduce it — lower `replicas` to the count you want and it rebases down (shedding the surplus replicas + PVCs). Lowering it below the live count, or disabling/dry-running while it sits below the live count, sheds in one step past the scaleDown pacing; stage it to the live count first (suspend the HelmRelease and `kubectl scale` if needed) to avoid a transient. Must stay greater than `quorum.maxSyncReplicas`.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -40,6 +40,9 @@ type ConfigSpec struct {
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused, and a backup restores only into a cluster of the flavor it was taken from: to change flavor, create a new cluster and move the data with a logical dump (pg_dump / pg_restore).
+	// +kubebuilder:default:="postgresql"
+	Flavor Flavor `json:"flavor"`
 	// TLS configuration for server connections.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
@@ -49,7 +52,10 @@ type ConfigSpec struct {
 	// Quorum configuration for synchronous replication.
 	// +kubebuilder:default:={}
 	Quorum Quorum `json:"quorum"`
-	// Users configuration map.
+	// Read-replica autoscaling configuration.
+	// +kubebuilder:default:={}
+	Autoscaling Autoscaling `json:"autoscaling"`
+	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map.
@@ -61,6 +67,36 @@ type ConfigSpec struct {
 	// Bootstrap configuration.
 	// +kubebuilder:default:={}
 	Bootstrap Bootstrap `json:"bootstrap"`
+}
+
+type Autoscaling struct {
+	// Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders `instances: replicas` (the raw static value, which can be below the autoscaling floor); if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds down to `replicas`. No shed occurs when the rendered value is unchanged (replicas already equals the active seed) — client-side merge is then a no-op and the live count is preserved. Permanent, unlike `transition`.
+	// +kubebuilder:default:=false
+	DryRun bool `json:"dryRun"`
+	// Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed. Prerequisite: the queried vmselect must hold BOTH the CNPG metrics (cnpg_backends_total / container CPU) AND kube_pod_labels (kube-state-metrics). This holds for a tenant on the shared root monitoring stack (`monitoring: false`, both land in tenant-root). A tenant running its OWN Monitoring app (`monitoring: true`) has the CNPG metrics but not kube_pod_labels (KSM is root-only), so it must set `serverAddress` to a vmselect carrying both series or autoscaling never actuates.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas. HAZARD: lowering maxReplicas below the live count makes the HPA cut straight to the new maximum in one step (the current>max branch bypasses the scale-down pacing), shedding the surplus replicas + PVCs at once; to lower it deliberately, suspend the HelmRelease and pin the live count with `kubectl scale` first.
+	// +kubebuilder:default:=6
+	MaxReplicas int `json:"maxReplicas"`
+	// Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
+	// +kubebuilder:default:=0
+	MaxReplicationLagSeconds int `json:"maxReplicationLagSeconds"`
+	// Read-load signal to scale on.
+	// +kubebuilder:default:="ReadConnections"
+	Metric ReadMetric `json:"metric"`
+	// Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
+	// +kubebuilder:default:=2
+	MinReplicas int `json:"minReplicas"`
+	// Override the Prometheus/vmselect URL the ScaledObject queries. Empty (default) derives `http://vmselect-shortterm.<monitoring-ns>.svc:8481/select/0/prometheus`. Set it when the derived vmselect does not hold both the CNPG metrics and kube_pod_labels (e.g. `monitoring: true` tenants, or a non-default `metricsStorages` name). SSRF constraint: the host must be an in-cluster Service DNS name (`<svc>.<ns>.svc[.<clusterDomain>]`) whose namespace is within the tenant's own subtree (its namespace, its parents, or `tenant-root`) — the cluster-privileged KEDA operator fetches this URL every poll, so it is refused a metadata endpoint, an external host, or a sibling/system namespace. Residual surface (accepted trade-off): `tenant-root` is always allowed because the derived default points there, so a tenant can still aim the operator at any Service in `tenant-root` on any port/path (a blind in-cluster reachability probe — the operator reads no response body back to the tenant); the egress NetworkPolicy does not narrow that.
+	// +kubebuilder:default:=""
+	ServerAddress string `json:"serverAddress"`
+	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
+	// +kubebuilder:default:=150
+	Target int `json:"target"`
+	// Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject in both directions, so KEDA stands up with its HPA present but not actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Because the both-direction pause keeps the HPA (not the HPA-deleting full pause), KEDA is genuinely warm at phase 2 — no HPA recreate — and because the active seed is max(replicas, effectiveMin), phase 2 re-renders the same instance count phase 1 did (when `replicas` is staged at/above the floor), so the flip is a merge no-op with no dip. The HPA's scaleUp stabilization window still smooths the first actuation.
+	// +kubebuilder:default:=false
+	Transition bool `json:"transition"`
 }
 
 type Backup struct {
@@ -97,9 +133,15 @@ type Backup struct {
 }
 
 type Bootstrap struct {
+	// Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
+	// +kubebuilder:default:=""
+	BackupID string `json:"backupID,omitempty"`
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
+	// +kubebuilder:default:=""
+	NewServerName string `json:"newServerName,omitempty"`
 	// Previous cluster name before deletion.
 	// +kubebuilder:default:=""
 	OldName string `json:"oldName"`
@@ -138,10 +180,12 @@ type PostgreSQL struct {
 	// PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
 	Parameters map[string]intstr.IntOrString `json:"parameters,omitempty"`
+	// Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
+	SharedPreloadLibraries []PreloadLibrary `json:"sharedPreloadLibraries,omitempty"`
 }
 
 type Quorum struct {
-	// Maximum number of synchronous replicas allowed (must be less than total replicas).
+	// Maximum number of synchronous replicas allowed (must be less than total replicas). Under autoscaling it also sets the scale-down floor (the effective minimum is `max(minReplicas, maxSyncReplicas+1, 2)`); the chart fails to render if that floor exceeds `autoscaling.maxReplicas`.
 	// +kubebuilder:default:=0
 	MaxSyncReplicas int `json:"maxSyncReplicas"`
 	// Minimum number of synchronous replicas required for commit.
@@ -169,16 +213,29 @@ type S3CredentialsSecret struct {
 }
 
 type TLS struct {
-	// Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+	// Tri-state switch controlling whether the chart injects the external hostnames into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects them if `external: true` and skips them otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
 	Enabled *bool `json:"enabled,omitempty"`
+	// Tri-state switch controlling whether the server refuses sessions that are not encrypted. When omitted, it is on if `external: true` and off otherwise. When on, the chart renders `spec.postgresql.pg_hba` with `hostssl all all all scram-sha-256` (`md5` on PostgreSQL 13, matching CloudNativePG's default rule) followed by `host all all all reject`, so a client that connects with `sslmode=disable` is refused instead of getting a plaintext session; in-cluster clients are held to the same rule, since the pod network cannot be told apart from an external client. Set to `false` to keep accepting plaintext sessions on an external instance, or to `true` to require TLS on an in-cluster one. Rendering fails if `postgresql.parameters.ssl` is off while this is in effect.
+	Required *bool `json:"required,omitempty"`
 }
 
 type User struct {
-	// Password for the user.
-	Password string `json:"password,omitempty"`
+	// Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
+	BypassRls bool `json:"bypassRls,omitempty"`
+	// Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.
+	CreateRole bool `json:"createRole,omitempty"`
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="postgresql";"postgis"
+type Flavor string
+
+// +kubebuilder:validation:Enum="pg_stat_statements";"auto_explain";"pgaudit";"pg_prewarm"
+type PreloadLibrary string
+
+// +kubebuilder:validation:Enum="ReadConnections";"ReadCPUUtilization"
+type ReadMetric string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

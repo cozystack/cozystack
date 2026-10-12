@@ -1,0 +1,223 @@
+# Redis backup strategy for this demo. It mirrors the shipped cozy-default-redis
+# strategy
+# (packages/system/backupstrategy-controller/templates/strategy-redis-default.yaml)
+# but points at this demo's own Bucket instead of the platform cozy-backups
+# system bucket, so the round-trip is self-contained and tears down with the
+# demo. The in-Pod script is kept identical to the shipped one; only the S3
+# coordinates differ: they come from this demo's redis-backup-creds Secret and
+# the endpoint is injected literally, and the self-signed seaweedfs CA is mounted
+# at /etc/s3-ca (the script already prefers it over the system store).
+#
+# The controller re-renders the `{{ .Mode | .Release | .ObjectKey }}` templates
+# below per BackupJob/RestoreJob against the live application object. The
+# REPLACE_WITH_* markers are filled by run-all.sh from the provisioned Bucket
+# (kubectl apply happens through run-all's subst, not directly).
+---
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Redis
+metadata:
+  name: redis-strategy-default
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 1800
+      volumes:
+        # The Redis app's own CA, mounted optionally: ca.crt lands only for a
+        # tls.enabled app, and the script keys its server-TLS path off its
+        # presence — mirrors the shipped strategy.
+        - name: redis-ca
+          secret:
+            secretName: "redis-{{ .Release.Name }}.ca-cert"
+            optional: true
+        - name: s3-ca
+          secret:
+            secretName: redis-backup-ca
+      containers:
+        - name: redis-backup
+          # Reuse whatever image the platform strategy runs so the demo Pod needs
+          # no package install at run time; run-all.sh substitutes it here off the
+          # shipped cozy-default-redis strategy rather than hardcoding a tag.
+          image: "REPLACE_WITH_BACKUP_CLIENT_IMAGE"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /etc/redis-ca
+              readOnly: true
+            - name: s3-ca
+              mountPath: /etc/s3-ca
+              readOnly: true
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "redis-{{ .Release.Name }}-auth"
+                  key: password
+                  optional: true
+            # S3 coordinates come from this demo's Bucket: the access keys are
+            # projected by run-all.sh into redis-backup-creds, and the endpoint
+            # and bucket are injected literally from the provisioned Bucket.
+            - name: S3_ENDPOINT
+              value: "REPLACE_WITH_S3_ENDPOINT"
+            - name: S3_BUCKET
+              value: "REPLACE_WITH_COSI_BUCKET_NAME"
+            - name: S3_REGION
+              value: "us-east-1"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: redis-backup-creds
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: redis-backup-creds
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            # Off: the seaweedfs CA is mounted at /etc/s3-ca and the script
+            # verifies against it. Skip-verify stays an explicit opt-in.
+            - name: S3_INSECURE_SKIP_VERIFY
+              value: "false"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              : "${S3_ENDPOINT:?missing endpoint}"
+              : "${S3_BUCKET:?missing bucket}"
+              : "${S3_REGION:?missing region}"
+              : "${AWS_ACCESS_KEY_ID:?missing AWS_ACCESS_KEY_ID in redis-backup-creds}"
+              : "${AWS_SECRET_ACCESS_KEY:?missing AWS_SECRET_ACCESS_KEY in redis-backup-creds}"
+
+              MODE="{{ .Mode }}"
+              KEY="{{ .ObjectKey }}"
+
+              # S3 transport, needed by every mode (backup, restore, cleanup).
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) BASE="${S3_ENDPOINT}" ;;
+                *)                  BASE="https://${S3_ENDPOINT}" ;;
+              esac
+              TLS=""
+              case "${BASE}" in
+                https://*)
+                  if [ -f /etc/s3-ca/ca.crt ]; then TLS="--cacert /etc/s3-ca/ca.crt";
+                  elif [ -f /etc/s3-ca/tls.crt ]; then TLS="--cacert /etc/s3-ca/tls.crt";
+                  elif [ "${S3_INSECURE_SKIP_VERIFY:-false}" = "true" ]; then TLS="-k";
+                  fi
+                  ;;
+              esac
+              s3() {
+                curl -fsS ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
+              }
+              OBJ="${BASE}/${S3_BUCKET}/${KEY}"
+
+              # Cleanup deletes only this backup's object and never touches Redis,
+              # so a deleted Backup must NOT fall into the restore path (which
+              # FLUSHALLs the master). Idempotent — a 404 is success. Mirrors the
+              # shipped strategy.
+              if [ "${MODE}" = "cleanup" ]; then
+                echo "deleting s3://${S3_BUCKET}/${KEY}"
+                code=$(curl -sS -o /dev/null -w '%{http_code}' ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  -X DELETE "${OBJ}")
+                case "${code}" in
+                  2??|404) echo "deleted (HTTP ${code})"; exit 0 ;;
+                  *)       echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
+                esac
+              fi
+
+              # Server-side TLS: present iff the app has tls.enabled (see the
+              # optional redis-ca mount) — mirrors the shipped strategy.
+              RTLS=""
+              if [ -f /etc/redis-ca/ca.crt ]; then
+                RTLS="--tls --cacert /etc/redis-ca/ca.crt"
+              fi
+
+              SENTINEL="rfs-redis-{{ .Release.Name }}"
+              addr=$(redis-cli ${RTLS} -h "${SENTINEL}" -p 26379 sentinel get-master-addr-by-name mymaster)
+              MHOST=$(echo "${addr}" | sed -n '1p')
+              MPORT=$(echo "${addr}" | sed -n '2p')
+              if [ -z "${MHOST}" ] || [ -z "${MPORT}" ]; then
+                echo "could not resolve redis master from sentinel ${SENTINEL}" >&2
+                exit 1
+              fi
+
+              tgt() {
+                if [ -n "${REDIS_PASSWORD:-}" ]; then
+                  REDISCLI_AUTH="${REDIS_PASSWORD}" redis-cli ${RTLS} -h "${MHOST}" -p "${MPORT}" "$@"
+                else
+                  redis-cli ${RTLS} -h "${MHOST}" -p "${MPORT}" "$@"
+                fi
+              }
+
+              # Explicit modes only — an unrecognised MODE must NOT fall into the
+              # destructive restore branch.
+              if [ "${MODE}" = "backup" ]; then
+                echo "dumping RDB from master ${MHOST}:${MPORT}"
+                tgt --rdb /tmp/dump.rdb
+                echo "uploading s3://${S3_BUCKET}/${KEY}"
+                s3 -X PUT --upload-file /tmp/dump.rdb "${OBJ}"
+              elif [ "${MODE}" = "restore" ]; then
+                echo "downloading s3://${S3_BUCKET}/${KEY}"
+                s3 -o /tmp/dump.rdb "${OBJ}"
+                mkdir -p /tmp/restore
+                cp /tmp/dump.rdb /tmp/restore/dump.rdb
+                redis-server --dir /tmp/restore --dbfilename dump.rdb \
+                  --port 6399 --bind 127.0.0.1 --save "" --appendonly no &
+                for _ in $(seq 1 300); do
+                  redis-cli -p 6399 PING >/dev/null 2>&1 && break
+                  sleep 1
+                done
+                if ! redis-cli -p 6399 PING >/dev/null 2>&1; then
+                  echo "throwaway redis did not become ready: dataset likely exceeds the restore memory limit, or the RDB version is newer than the image" >&2
+                  exit 1
+                fi
+                redis-cli -p 6399 CONFIG SET aof-use-rdb-preamble no >/dev/null
+                redis-cli -p 6399 CONFIG SET appendonly yes >/dev/null
+                # Wait for the rewrite to FINISH (no rewrite in flight, last one
+                # ok, base AOF on disk), not merely for in_progress:0 which can
+                # fall through before the scheduled rewrite starts. find (not
+                # `ls`) returns 0 on no-match under pipefail; REPLAY is set each
+                # iteration so it survives the loop.
+                REPLAY=""
+                for _ in $(seq 1 300); do
+                  persistence=$(redis-cli -p 6399 INFO persistence | tr -d '\r')
+                  inprog=$(echo "${persistence}" | awk -F: '/aof_rewrite_in_progress:/{print $2}')
+                  status=$(echo "${persistence}" | awk -F: '/aof_last_bgrewrite_status:/{print $2}')
+                  REPLAY=$(find /tmp/restore/appendonlydir -name '*.base.aof' 2>/dev/null | head -n1 || true)
+                  if [ "${inprog}" = "0" ] && [ "${status}" = "ok" ] && [ -n "${REPLAY}" ]; then
+                    break
+                  fi
+                  sleep 1
+                done
+                if [ -z "${REPLAY}" ]; then
+                  echo "throwaway redis produced no base AOF to replay (rewrite did not finish)" >&2
+                  exit 1
+                fi
+                tgt FLUSHALL
+                tgt --pipe < "${REPLAY}"
+                redis-cli -p 6399 SHUTDOWN NOSAVE >/dev/null 2>&1 || true
+                echo "restore complete into ${MHOST}:${MPORT}"
+              else
+                echo "unknown mode: ${MODE}" >&2
+                exit 1
+              fi
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault

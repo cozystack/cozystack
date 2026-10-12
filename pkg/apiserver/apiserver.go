@@ -48,6 +48,7 @@ import (
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
+	tapstorage "github.com/cozystack/cozystack/pkg/registry/core/tap"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
@@ -224,7 +225,13 @@ func (c completedConfig) New() (*CozyServer, error) {
 		tenantmodulestorage.NewREST(cli, watchCli),
 	)
 	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
-		optionstorage.NewREST(optionstorage.DefaultProviders(dyn)),
+		optionstorage.NewRESTWithParams(
+			optionstorage.DefaultProviders(dyn),
+			optionstorage.DefaultParamProviders(dyn),
+		),
+	)
+	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
+		tapstorage.NewREST(dyn),
 	)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
@@ -262,6 +269,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 // server using the provided storage map (plural name → rest.Storage).
 func InstallAppsAPIGroup(server *genericapiserver.GenericAPIServer, storage map[string]rest.Storage) error {
 	info := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	info.NegotiatedSerializer = kindPreservingSerializer{Codecs}
 	info.VersionedResourcesStorageMap["v1alpha1"] = storage
 	return server.InstallAPIGroup(&info)
 }

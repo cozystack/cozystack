@@ -1,10 +1,140 @@
 {{- $existingDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace .Release.Name }}
+{{- $sourceAnnotation := "vm-disk.cozystack.io/source" }}
+{{- $storageClassAnnotation := "vm-disk.cozystack.io/storage-class" }}
+{{- $requestedSource := toJson (.Values.source | default dict) }}
+{{- $requestedSC := (.Values.storageClass | default "") | toString }}
+{{- /* Build the desired source spec from .Values so it can be both rendered and compared. */}}
+{{- $desiredSource := dict }}
+{{- if .Values.source }}
+  {{- if gt (len .Values.source) 1 }}
+    {{- fail "Exactly one type of source is expected!" }}
+  {{- end }}
+  {{- if hasKey .Values.source "image" }}
+    {{- $desiredSource = dict "pvc" (dict "name" (printf "vm-default-images-%s" (required "A valid .Values.source.image.name entry required!" .Values.source.image.name)) "namespace" "cozy-public") }}
+    {{- /* Refuse a golden that is missing or whose import Failed: CDI never
+           populates it, so the clone would wait forever. A golden still importing
+           is left alone because CDI holds the clone until the source is populated.
+           Missing means neither the DataVolume nor the PVC CDI clones exists, as
+           the DataVolume can precede its PVC, and counts only when the release
+           namespace is visible: helm template has no cluster and every lookup
+           comes back empty. An existing disk is exempt: its DataVolume spec is
+           immutable, so failing the render cannot rescue it and would only block
+           this release's upgrades. */}}
+    {{- if not $existingDV }}
+      {{- $golden := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $desiredSource.pvc.name }}
+      {{- if eq (dig "status" "phase" "" $golden | toString) "Failed" }}
+        {{- fail (printf "source.image %q: golden DataVolume %q in cozy-public failed to import (phase Failed), so a clone of it would never complete. Ask the platform administrator to check the importer pod in cozy-public, then delete that DataVolume to retry the import." .Values.source.image.name $desiredSource.pvc.name) }}
+      {{- else if and (not $golden) (not (lookup "v1" "PersistentVolumeClaim" "cozy-public" $desiredSource.pvc.name)) (lookup "v1" "Namespace" "" .Release.Namespace) }}
+        {{- fail (printf "source.image %q: golden image %q not found in cozy-public, so a clone of it would never start. Check the image name, or ask the platform administrator to add cozystack.vm-default-images to bundles.enabledPackages." .Values.source.image.name $desiredSource.pvc.name) }}
+      {{- end }}
+    {{- end }}
+  {{- else if hasKey .Values.source "http" }}
+    {{- $desiredSource = dict "http" (dict "url" (required "A valid .Values.source.http.url entry required!" .Values.source.http.url)) }}
+  {{- else if hasKey .Values.source "upload" }}
+    {{- $desiredSource = dict "upload" dict }}
+  {{- else if hasKey .Values.source "disk" }}
+    {{- $desiredSource = dict "pvc" (dict "name" (printf "vm-disk-%s" (required "A valid .Values.source.disk.name entry required!" .Values.source.disk.name)) "namespace" .Release.Namespace) }}
+  {{- else }}
+    {{- fail (printf "Unknown source type: %s. Expected one of: image, http, upload, disk." (keys .Values.source | join ", ")) }}
+  {{- end }}
+{{- else }}
+  {{- $desiredSource = dict "blank" dict }}
+{{- end }}
+{{- /*
+  DataVolume.spec is immutable in CDI, so editing storageClass/source on an
+  existing disk is a silent no-op that diverges the CR from the cluster (#2985);
+  fail instead. Both are compared against the operator input recorded in an
+  annotation at creation (legacy disks fall back to stored spec.source). Full
+  contract + caveats: docs/storage-immutability.md. Size growth: pvc-resize-hook.
+*/}}
+{{- if $existingDV }}
+  {{- $existingAnnotations := $existingDV.metadata.annotations | default dict }}
+  {{- if hasKey $existingAnnotations $storageClassAnnotation }}
+    {{- $recordedSC := (index $existingAnnotations $storageClassAnnotation) | toString }}
+    {{- if ne $recordedSC $requestedSC }}
+      {{- fail (printf "VMDisk storageClass is immutable after creation (current: %q, requested: %q). Delete and recreate the disk to change it." $recordedSC $requestedSC) }}
+    {{- end }}
+  {{- end }}
+  {{- $recordedSource := (index $existingAnnotations $sourceAnnotation) | default "" }}
+  {{- if $recordedSource }}
+    {{- if ne $recordedSource $requestedSource }}
+      {{- fail (printf "VMDisk source is immutable after creation (current: %s, requested: %s). Delete and recreate the disk to change it." $recordedSource $requestedSource) }}
+    {{- end }}
+  {{- else }}
+    {{- $storedSource := $existingDV.spec.source | default dict }}
+    {{- /* Legacy disk (no annotation): compare only chart-producible stored
+           shapes; anything else (sourceRef, non-map, foreign source) is left
+           alone, never crashed or deadlocked. Vars are declared before the map
+           guards so they stay in scope below. See docs/storage-immutability.md. */}}
+    {{- $storedType := "" }}
+    {{- $chartShaped := false }}
+    {{- $storedIsImageClone := false }}
+    {{- if kindIs "map" $storedSource }}
+      {{- if eq (len (keys $storedSource)) 1 }}{{- $storedType = first (keys $storedSource) }}{{- end }}
+      {{- $storedBody := index $storedSource $storedType }}
+      {{- if kindIs "map" $storedBody }}
+        {{- if or (eq $storedType "blank") (eq $storedType "upload") }}
+          {{- $chartShaped = true }}
+        {{- else if eq $storedType "http" }}
+          {{- if eq (keys $storedBody | sortAlpha | join ",") "url" }}{{- $chartShaped = true }}{{- end }}
+        {{- else if eq $storedType "pvc" }}
+          {{- /* The chart only ever clones a pvc from cozy-public (image) or the
+                 release namespace (disk); a pvc in any other namespace is a
+                 foreign source with no chart-producible provenance. */}}
+          {{- if eq (keys $storedBody | sortAlpha | join ",") "name,namespace" }}
+            {{- if or (eq ($storedBody.namespace | toString) "cozy-public") (eq ($storedBody.namespace | toString) .Release.Namespace) }}
+              {{- $chartShaped = true }}
+            {{- end }}
+            {{- if eq ($storedBody.namespace | toString) "cozy-public" }}{{- $storedIsImageClone = true }}{{- end }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- /* The image-clone exemption applies only when the request is ALSO an
+           image: the vm-image- -> vm-default-images- prefix drift is
+           indistinguishable from a real image-name change only then. A change
+           away from an image source to another type is a different shape and is
+           still caught. */}}
+    {{- $exemptImage := and $storedIsImageClone (hasKey (.Values.source | default dict) "image") }}
+    {{- if and $chartShaped (not $exemptImage) }}
+      {{- if ne (toYaml $storedSource) (toYaml $desiredSource) }}
+        {{- fail (printf "VMDisk source is immutable after creation (current: %s, requested: %s). Delete and recreate the disk to change it." (toJson $storedSource) $requestedSource) }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
-    {{- if hasKey .Values.source "upload" }}
-    cdi.kubevirt.io/storage.bind.immediate.requested: ""
+    {{- /* A `#` comment here would be part of the rendered DataVolume, so the
+           explanation lives in a template comment and the operator-facing half
+           in README.md.
+
+           On by default, for every source type, and on the existing-DV path as
+           well: a VMDisk is a standalone object populated before any VM consumes
+           it, so on a WaitForFirstConsumer class a disk nothing has attached
+           would never populate at all. CDI reads the annotation by presence.
+
+           Off is the placement-correct path for a disk a VMInstance will
+           consume: KubeVirt renders a temporary launcher pod carrying the VM's
+           own affinity and nodeSelector, so the volume binds where the VM can
+           actually run. The two cases want opposite defaults and only the
+           operator knows which one a given disk is. `replicated`, the chart
+           default, binds Immediate either way, so neither setting moves it. */}}
+    {{- if .Values.bindImmediately }}
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+    {{- end }}
+    {{- if $existingDV }}
+    {{- if hasKey ($existingDV.metadata.annotations | default dict) $sourceAnnotation }}
+    {{ $sourceAnnotation }}: {{ index ($existingDV.metadata.annotations | default dict) $sourceAnnotation | quote }}
+    {{- end }}
+    {{- if hasKey ($existingDV.metadata.annotations | default dict) $storageClassAnnotation }}
+    {{ $storageClassAnnotation }}: {{ index ($existingDV.metadata.annotations | default dict) $storageClassAnnotation | quote }}
+    {{- end }}
+    {{- else }}
+    {{ $sourceAnnotation }}: {{ $requestedSource | quote }}
+    {{ $storageClassAnnotation }}: {{ $requestedSC | quote }}
     {{- end }}
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
   labels:
@@ -13,31 +143,10 @@ metadata:
 spec:
   {{- if $existingDV }}
     {{- toYaml $existingDV.spec | nindent 2 }}
-  {{- else }} 
-  contentType: kubevirt
-  {{- if .Values.source }}
-  {{- if gt (len .Values.source) 1 }}
-    {{- fail "Exactly one type of source is expected!" }}
-  {{- end }}
-  source:
-    {{- if hasKey .Values.source "image" }}
-    pvc:
-      name: vm-default-images-{{ required "A valid .Values.source.image.name entry required!" .Values.source.image.name }}
-      namespace: cozy-public
-    {{- else if hasKey .Values.source "http" }}
-    http:
-      url: {{ required "A valid .Values.source.http.url entry required!" .Values.source.http.url }}
-    {{- else if hasKey .Values.source "upload" }}
-    upload: {}
-    {{- else if hasKey .Values.source "disk" }}
-    pvc:
-      name: vm-disk-{{ required "A valid .Values.source.disk.name entry required!" .Values.source.disk.name }}
-      namespace: {{ $.Release.Namespace }}
-    {{- end }}
   {{- else }}
+  contentType: kubevirt
   source:
-    blank: {}
-  {{- end }}
+    {{- toYaml $desiredSource | nindent 4 }}
   storage:
     resources:
       requests:

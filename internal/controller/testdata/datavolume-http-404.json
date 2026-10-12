@@ -1,0 +1,62 @@
+{
+  "apiVersion": "cdi.kubevirt.io/v1beta1",
+  "kind": "DataVolume",
+  "metadata": {
+    "annotations": {
+      "cdi.kubevirt.io/storage.usePopulator": "true",
+      "vm-disk.cozystack.io/optical": "false"
+    },
+    "labels": {
+      "app.kubernetes.io/instance": "vm-disk-test",
+      "app.kubernetes.io/managed-by": "Helm"
+    },
+    "name": "vm-disk-test",
+    "namespace": "default"
+  },
+  "spec": {
+    "contentType": "kubevirt",
+    "source": {
+      "http": {
+        "url": "https://images.example.com/missing.img"
+      }
+    },
+    "storage": {
+      "resources": {
+        "requests": {
+          "storage": "1Gi"
+        }
+      },
+      "storageClassName": "replicated"
+    }
+  },
+  "status": {
+    "claimName": "vm-disk-test",
+    "conditions": [
+      {
+        "lastHeartbeatTime": "2026-09-30T13:19:48Z",
+        "lastTransitionTime": "2026-09-30T13:19:32Z",
+        "message": "target PVC vm-disk-test Pending and [prime-9ea0ceb1-e03b-48fa-9944-3de75e766f6b] : Unable to connect to http data source: expected status code 200, got 404. Status: 404 Not Found",
+        "reason": "Pending",
+        "status": "False",
+        "type": "Bound"
+      },
+      {
+        "lastHeartbeatTime": "2026-10-07T14:50:42Z",
+        "lastTransitionTime": "2026-09-30T13:19:32Z",
+        "status": "False",
+        "type": "Ready"
+      },
+      {
+        "lastHeartbeatTime": "2026-10-07T14:50:42Z",
+        "lastTransitionTime": "2026-10-07T14:50:42Z",
+        "message": "Unable to connect to http data source: expected status code 200, got 404. Status: 404 Not Found",
+        "reason": "Error",
+        "status": "False",
+        "type": "Running"
+      }
+    ],
+    "phase": "ImportInProgress",
+    "progress": "N/A",
+    "restartCount": 1988
+  }
+}

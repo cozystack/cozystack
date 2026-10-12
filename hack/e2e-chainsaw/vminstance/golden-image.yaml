@@ -1,0 +1,20 @@
+# vm-default-images is opt-in and not installed on the e2e cluster, so the suite
+# provides the golden image that VMDisk source.image clones from. The e2e prefix
+# keeps it clear of any image the package itself owns in cozy-public.
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: vm-default-images-e2e-alpine-3.21
+  namespace: cozy-public
+  annotations:
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+spec:
+  contentType: kubevirt
+  source:
+    http:
+      url: https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.7-x86_64-bios-cloudinit-r0.qcow2
+  storage:
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: ($values.storageClass)

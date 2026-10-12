@@ -1,1 +1,23 @@
 image: "ghcr.io/cozystack/cozystack/flux-plunger:latest@sha256:6a6ec938973e6583c5e1573f7d25beddc1852a6699a089116b2407e29a564a72"
+
+# How long flux-plunger is given to stop, between 40 and 140. On SIGTERM it stops
+# its manager (up to 10 seconds), then gives up the uninstall fences it holds,
+# waiting for helm-controller to uninstall a release being deleted, under a
+# deadline 25 seconds shorter than this. Its leader Lease outlasts both, so the
+# next flux-plunger waits a little under two minutes at the default before it
+# acts. The pre-delete hook waits for the pod a little longer than this before it
+# releases what is left.
+shutdownGracePeriodSeconds: 90
+
+# Image for the pre-delete uninstall-fence cleanup hook Job (see
+# templates/uninstall-fence-cleanup.yaml). Only needs a kubectl binary. The tag
+# is digest-pinned so an upstream retag does not change what runs across the
+# fleet; refresh by resolving the current manifest-list digest
+# (`docker manifest inspect docker.io/clastix/kubectl:v1.32`) and updating
+# `digest` below. Same image the etcd-operator and postgres-operator hooks pin.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+kubectlImage:
+  repository: docker.io/clastix/kubectl
+  tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  pullPolicy: IfNotPresent

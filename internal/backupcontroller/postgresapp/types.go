@@ -2,7 +2,7 @@
 
 // Package postgresapp declares the typed shape of the apps.cozystack.io/v1alpha1
 // Postgres CR that the CNPG backup driver reads and patches. It carries only
-// the fields the driver touches - bootstrap, backup, databases, users -
+// the fields the driver touches - bootstrap, backup, databases, users, flavor -
 // because the live CR has many more fields (resources, quorum, postgresql
 // parameters, ...) that we never look at and that round-tripping through
 // this partial schema would otherwise silently drop.
@@ -64,22 +64,38 @@ type PostgresList struct {
 // genuinely needs them; everything else stays on the server, untouched by
 // the controller's patches.
 type PostgresSpec struct {
+	// Version is the PostgreSQL major the chart renders the Cluster with,
+	// in the chart's "v16" form.
+	Version   string              `json:"version,omitempty"`
 	Bootstrap Bootstrap           `json:"bootstrap,omitempty"`
 	Backup    Backup              `json:"backup,omitempty"`
 	Databases map[string]Database `json:"databases,omitempty"`
 	Users     map[string]User     `json:"users,omitempty"`
+	// Flavor is read, never patched: a restore must land on the image family
+	// the backup was taken from. Empty means the chart default, postgresql.
+	Flavor string `json:"flavor,omitempty"`
 }
 
 type Bootstrap struct {
-	Enabled      bool   `json:"enabled,omitempty"`
-	OldName      string `json:"oldName,omitempty"`
-	ServerName   string `json:"serverName,omitempty"`
-	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// No omitempty: the restore driver merge-patches this back to false once
+	// recovery converges, and a bool+omitempty would drop false from the patch
+	// (it deletes the key instead), leaving the server to fall back to a default
+	// rather than being explicitly cleared. Same rule as Backup.UseSystemBucket.
+	Enabled       bool   `json:"enabled"`
+	OldName       string `json:"oldName,omitempty"`
+	ServerName    string `json:"serverName,omitempty"`
+	NewServerName string `json:"newServerName,omitempty"`
+	RecoveryTime  string `json:"recoveryTime,omitempty"`
+	BackupID      string `json:"backupID,omitempty"`
 }
 
 type Backup struct {
-	DestinationPath     string              `json:"destinationPath,omitempty"`
-	EndpointURL         string              `json:"endpointURL,omitempty"`
+	DestinationPath string `json:"destinationPath,omitempty"`
+	EndpointURL     string `json:"endpointURL,omitempty"`
+	// No omitempty: the restore patch must be able to set this back to false,
+	// and a bool+omitempty would drop false from the merge patch, leaving the
+	// server value at true.
+	UseSystemBucket     bool                `json:"useSystemBucket"`
 	S3AccessKey         string              `json:"s3AccessKey,omitempty"`
 	S3SecretKey         string              `json:"s3SecretKey,omitempty"`
 	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
@@ -111,6 +127,5 @@ type DatabaseRoles struct {
 }
 
 type User struct {
-	Password    string `json:"password,omitempty"`
-	Replication bool   `json:"replication,omitempty"`
+	Replication bool `json:"replication,omitempty"`
 }

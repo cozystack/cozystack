@@ -78,3 +78,23 @@ tests:
           path: metadata.annotations["helm.sh/resource-policy"]
           value: keep
 
+  # bundles.disabledPackages is not a route out of the guard. A name in
+  # that list only stops _helpers.tpl emitting the Package document; the
+  # guard keys off a lookup for the live Package CR, which the list
+  # never touches. An operator who reaches for disabledPackages instead
+  # of `kubectl delete package` still gets the failure, and ouroboros is
+  # still installed when they get it.
+  - it: still fails when cozystack.ouroboros is in bundles.disabledPackages but the Package CR is live
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.ouroboros
+      publishing:
+        proxyProtocol: false
+        proxyProtocolAcknowledgeUnclean: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "publishing.proxyProtocol was previously enabled.*helm.sh/resource-policy: keep leaves the existing Package"

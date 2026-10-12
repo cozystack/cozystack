@@ -17,9 +17,14 @@ limitations under the License.
 package server
 
 import (
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/pflag"
+	mutatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/mutating"
 )
 
 // validHelmReleaseFlags returns a CozyServerOptions populated with the same
@@ -182,5 +187,59 @@ func TestNewCozyServerOptions_DefaultsValidate(t *testing.T) {
 	o := NewCozyServerOptions(nil, nil)
 	if _, err := o.parseAndValidateHelmReleaseFlags(); err != nil {
 		t.Fatalf("default options must validate, got: %v", err)
+	}
+}
+
+func TestNewCozyServerOptions_DisablesMutatingAdmissionPolicy(t *testing.T) {
+	o := NewCozyServerOptions(nil, nil)
+	if !slices.Contains(o.RecommendedOptions.Admission.DisablePlugins, mutatingadmissionpolicy.PluginName) {
+		t.Fatalf("%s is not disabled, disabled plugins: %v",
+			mutatingadmissionpolicy.PluginName, o.RecommendedOptions.Admission.DisablePlugins)
+	}
+}
+
+// --disable-admission-plugins replaces the default list rather than adding
+// to it; Complete must put the plugin back before anything is built.
+func TestComplete_KeepsMutatingAdmissionPolicyDisabledAfterFlagOverride(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+
+	o := NewCozyServerOptions(nil, nil)
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	o.RecommendedOptions.AddFlags(fs)
+	if err := fs.Parse([]string{"--disable-admission-plugins=NamespaceLifecycle"}); err != nil {
+		t.Fatal(err)
+	}
+	// Complete stops at the missing kubeconfig; the admission list is
+	// settled before that.
+	_ = o.Complete()
+
+	got := o.RecommendedOptions.Admission.DisablePlugins
+	if !slices.Contains(got, mutatingadmissionpolicy.PluginName) || !slices.Contains(got, "NamespaceLifecycle") {
+		t.Fatalf("disabled plugins = %v, want both NamespaceLifecycle and %s", got, mutatingadmissionpolicy.PluginName)
+	}
+}
+
+// An operator who enables the plugin by name has given it what it needs;
+// keeping it on the disable list too would fail validation as a conflict.
+func TestComplete_ExplicitEnableOfMutatingAdmissionPolicyWins(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+
+	o := NewCozyServerOptions(nil, nil)
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	o.RecommendedOptions.AddFlags(fs)
+	if err := fs.Parse([]string{"--enable-admission-plugins=" + mutatingadmissionpolicy.PluginName}); err != nil {
+		t.Fatal(err)
+	}
+	_ = o.Complete()
+
+	if got := o.RecommendedOptions.Admission.DisablePlugins; slices.Contains(got, mutatingadmissionpolicy.PluginName) {
+		t.Fatalf("disabled plugins = %v, want %s left enabled", got, mutatingadmissionpolicy.PluginName)
+	}
+	if errs := o.RecommendedOptions.Admission.Validate(); len(errs) > 0 {
+		t.Fatalf("admission options do not validate: %v", errs)
 	}
 }

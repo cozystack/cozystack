@@ -1,0 +1,96 @@
+{{- /*
+OpenSearch refuses to start when vm.max_map_count is below 262144 and the store
+may use mmap; the kernel default is 65530 and nothing in the platform's node
+configuration raises it.
+
+It cannot be raised from the OpenSearch pod itself. The kernel does not
+namespace vm.*, so kubelet rejects it both in a pod's securityContext.sysctls
+and in --allowed-unsafe-sysctls, which admits namespaced sysctls only. The
+operator's own answer, spec.general.setVMMaxMapCount, appends a privileged
+init container to every OpenSearch pod. Tenant namespaces carry no PodSecurity
+label of their own, so they take the cluster default, which Talos ships as
+baseline through the apiserver's PodSecurityConfiguration; that default rejects
+the container outright (cozystack/cozystack#4131).
+
+This DaemonSet carries the value instead, from a namespace the platform labels
+enforce=privileged, and it is the only carrier: the app chart sets
+spec.general.setVMMaxMapCount to false, so no OpenSearch pod asks the operator
+for the sysctl.
+
+system-node-critical buys scheduling priority, not start ordering: on a freshly
+joined node an OpenSearch pod can still start before this one has written the
+value, fail its own bootstrap check, and retry until the value is in.
+
+The write goes to /proc/sys and nowhere else. The pod restarts with the node
+and reapplies the value, so persisting it into the host's own configuration
+would buy nothing and would mutate a node this chart does not own.
+*/}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .Release.Name }}-sysctl
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-sysctl
+    app.kubernetes.io/component: sysctl
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-sysctl
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}-sysctl
+    spec:
+      priorityClassName: system-node-critical
+      automountServiceAccountToken: false
+      initContainers:
+      - name: init-sysctl
+        image: {{ .Values.sysctl.image | quote }}
+        # A floor, not an assignment. vm.max_map_count is node-global, so a node
+        # already tuned above 262144 for some other mmap-heavy workload must keep
+        # its value; writing it unconditionally would lower the limit for
+        # everything on that node, on every boot.
+        command:
+        - sh
+        - -c
+        - 'set -e; current=$(sysctl -n vm.max_map_count); if [ "$current" -lt 262144 ]; then sysctl -w vm.max_map_count=262144; fi'
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+          limits:
+            memory: 16Mi
+      containers:
+      # Carries no work: it exists so the pod stays scheduled, because a
+      # DaemonSet pod that ran only an init container would complete and be
+      # restarted continuously.
+      #
+      # Do not simplify this back to a bare sleep. The kernel delivers a signal
+      # to PID 1 of a namespace only when PID 1 installed a handler for it, and
+      # busybox sleep installs none, so a bare sleep ignores SIGTERM and every
+      # pod is SIGKILLed after the full grace period on each rollout and drain.
+      # The shell installs the handler, and wait returns when it fires.
+      - name: idle
+        image: {{ .Values.sysctl.image | quote }}
+        command: ["sh", "-c", "trap 'exit 0' TERM INT; sleep infinity & wait"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+          limits:
+            memory: 16Mi
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute

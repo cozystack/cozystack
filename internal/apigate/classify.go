@@ -157,6 +157,9 @@ func diffResource(base, head Resource) []string {
 		for _, c := range diffSchema("spec", base.Versions[v], headSchema) {
 			out = append(out, fmt.Sprintf("[%s] %s", v, c))
 		}
+		for _, c := range diffNameSchema(base.Versions[v], headSchema) {
+			out = append(out, fmt.Sprintf("[%s] %s", v, c))
+		}
 	}
 	return out
 }

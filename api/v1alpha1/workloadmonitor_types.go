@@ -8,6 +8,7 @@ import (
 type WorkloadMonitorSpec struct {
 	// Selector is a label selector to find workloads to monitor
 	// +required
+	// +kubebuilder:validation:MinProperties=1
 	Selector map[string]string `json:"selector"`
 
 	// Kind specifies the kind of the workload
@@ -34,6 +35,10 @@ type WorkloadMonitorSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 }
 
+// WorkloadMonitorReasonDataVolumeNotReady is the status Reason of a monitor
+// that is not operational because a DataVolume it selects is not ready.
+const WorkloadMonitorReasonDataVolumeNotReady = "DataVolumeNotReady"
+
 // WorkloadMonitorStatus defines the observed state of WorkloadMonitor
 type WorkloadMonitorStatus struct {
 	// Operational indicates if the workload meets all operational requirements
@@ -47,6 +52,16 @@ type WorkloadMonitorStatus struct {
 	// ObservedReplicas is the total number of pods observed
 	// +optional
 	ObservedReplicas int32 `json:"observedReplicas"`
+
+	// Message names what keeps the workload from being operational, when the
+	// controller can tell.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Reason is a machine-readable cause for Message, such as
+	// DataVolumeNotReady.
+	// +optional
+	Reason string `json:"reason,omitempty"`
 }
 
 // +kubebuilder:object:root=true

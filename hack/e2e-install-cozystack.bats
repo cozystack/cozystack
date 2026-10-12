@@ -43,8 +43,9 @@
   # hard curl retry loop and serves it locally; tenant CRs then point
   # spec.talos.imageFactoryURL at its Service. Deployed here (before the long
   # install) so the seed download overlaps the install churn — readiness is gated
-  # at point-of-use in hack/e2e-apps/run-kubernetes.sh, which falls back to the
-  # public factory if the mirror never becomes Available, so this can only help.
+  # at point-of-use in hack/e2e-chainsaw/_lib/talos-image-cache.sh, called from
+  # run-kubernetes.sh, which falls back to the public factory if the mirror never
+  # becomes Available, so this can only help.
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
@@ -86,6 +87,13 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
+  #
+  # `select(. != null)` drops container entries that carry no image. The pod
+  # templates embedded in a LinstorCluster CR are strategic-merge fragments,
+  # so one that overrides only `args` has no image of its own to pull.
+  # Without the filter yq emits a bare `null`, which reaches the prepull
+  # DaemonSet as a container with an empty image and fails apply with a
+  # message naming a container index rather than the chart behind it.
   # Stage each render AND the yq filter through tmp files instead of
   # piping. Two constraints stack here: `set -x` would expand any
   # `var=$(helm ...)` capture into the trace and balloon CI logs, and
@@ -103,9 +111,14 @@
   helm template packages/system/linstor > "$linstor_yaml"
   helm template packages/system/cert-manager > "$certmanager_yaml"
   yq -N '
-      (..|select(has("containers"))|.containers[]|.image),
-      (..|select(has("initContainers"))|.initContainers[]|.image)
+      (..|select(has("containers"))|.containers[]|.image|select(. != null)),
+      (..|select(has("initContainers"))|.initContainers[]|.image|select(. != null))
     ' "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" > "$images_list"
+  # The failure-only Talos diagnostics Pod can land on any node. The sandbox's
+  # upstream talosctl binary is static, so cache its pinned Alpine base on every
+  # node while the cluster is healthy instead of cold-pulling on a failure path.
+  printf '%s\n' 'docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47' \
+    >> "$images_list"
   hack/e2e-prepull-images.sh < "$images_list"
   rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" "$images_list"
 }
@@ -117,7 +130,6 @@
     --namespace cozy-system \
     --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
-    --wait \
     --timeout 2m
 
   # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
@@ -127,8 +139,39 @@
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
   kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
 
-  # Verify the operator deployment is available
-  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+  # Wait for the ROLLOUT, not for condition=Available: once maxUnavailable
+  # reaches replicas the minimum available replica count is 0, so Available
+  # reports True with no pod running and a broken operator image passes in
+  # milliseconds, surfacing minutes later as a CRD timeout that blames the wrong
+  # component. `rollout status` reads updated and available replicas directly,
+  # and stays correct whatever strategy the chart carries.
+  #
+  # It still only proves a container started, not that the operator is healthy:
+  # there is no readiness probe, so one that starts and then dies mid-install
+  # passes here and is caught by the CRD waits below instead.
+  #
+  # This is the only readiness gate for the operator, since the helm step above
+  # drops --wait, so the timeout must cover scheduling and a cold pull of an
+  # image that is not in the prepull set.
+  kubectl rollout status deployment/cozystack-operator -n cozy-system --timeout=5m || {
+    echo "=== deployment/cozystack-operator rollout did not complete ==="
+    kubectl get deployment/cozystack-operator -n cozy-system -o yaml 2>&1 || true
+    echo "=== cozy-system pods ==="
+    kubectl get pods -n cozy-system -o wide 2>&1 || true
+    # The two shapes this gate exists to catch need different evidence, and
+    # neither is in `get pods -o wide`. ImagePullBackOff produces no logs at
+    # all, and CrashLoopBackOff puts the stack trace in the container that
+    # already died, so describe carries the first and --previous the second.
+    echo "=== cozystack-operator pod detail ==="
+    kubectl describe pod -n cozy-system -l app=cozystack-operator 2>&1 || true
+    echo "=== cozystack-operator logs ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --tail=50 2>&1 || true
+    echo "=== cozystack-operator logs, previous container ==="
+    kubectl logs -n cozy-system -l app=cozystack-operator --all-containers --previous --tail=50 2>&1 || true
+    echo "=== cozy-system events ==="
+    kubectl get events -n cozy-system --sort-by=.lastTimestamp 2>&1 | tail -30 || true
+    false
+  }
 
   # Wait for operator to install CRDs (happens at startup before reconcile loop).
   # kubectl wait fails immediately if the CRD does not exist yet, so poll until it appears first.
@@ -138,72 +181,38 @@
   # Wait for operator to create the platform PackageSource
   timeout 120 sh -ec 'until kubectl get packagesource cozystack.cozystack-platform >/dev/null 2>&1; do sleep 2; done'
 
-  # Create platform Package with isp-full variant
-  kubectl apply -f - <<EOF
-apiVersion: cozystack.io/v1alpha1
-kind: Package
-metadata:
-  name: cozystack.cozystack-platform
-spec:
-  variant: isp-full
-  components:
-    platform:
-      values:
-        networking:
-          podCIDR: "10.244.0.0/16"
-          podGateway: "10.244.0.1"
-          serviceCIDR: "10.96.0.0/16"
-          joinCIDR: "100.64.0.0/16"
-        publishing:
-          host: "example.org"
-          apiServerEndpoint: "https://192.168.123.10:6443"
-        bundles:
-          enabledPackages:
-            - cozystack.external-dns-application
-EOF
+  # Stage the generated manifest instead of piping it into kubectl: cozytest
+  # runs under /bin/sh without pipefail, so a generator failure in a pipeline
+  # could be hidden by kubectl successfully applying empty input.
+  local platform_packages
+  platform_packages=$(mktemp)
+  hack/e2e-platform-packages.sh > "$platform_packages"
+  kubectl apply -f "$platform_packages"
+  rm -f "$platform_packages"
 
-  # Launch storage + LB configuration in the background. It waits for its
-  # own prerequisites (linstor-controller deploy, MetalLB CRDs) and finishes
-  # while the parallel HR wait below is still running, so the cost overlaps
-  # with the platform reconcile instead of compounding it.
+  # Launch storage + LB configuration in the background. It waits for its own
+  # prerequisites while the platform controllers reconcile HelmReleases, so
+  # the costs overlap even though the authoritative readiness gate starts only
+  # after prep has finished.
   hack/e2e-post-install-prep.sh > /tmp/post-install-prep.log 2>&1 &
   POST_PREP_PID=$!
 
-  # Wait until HelmReleases appear & reconcile them
-  timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
-  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
-  # heuristic for "enough HRs visible to start waiting"; the snapshot below
-  # uses whatever HRs have appeared by then. There is no objective k8s API
-  # signal for "all platform HRs have been emitted" without hard-coding the
-  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
-  sleep 5
-  # Pacing only: names every HR that timed out in the trace; the authoritative
-  # gate re-lists below, covering HRs created after this snapshot (#2822).
-  kubectl wait hr --all -A --timeout=15m --for=condition=ready || true
-
   echo "Waiting for post-install-prep to complete"
-  if ! wait $POST_PREP_PID; then
+  if ! wait "$POST_PREP_PID"; then
     cat /tmp/post-install-prep.log >&2
     echo "post-install-prep failed" >&2
     exit 1
   fi
   cat /tmp/post-install-prep.log
 
-  # Fail the test if any HelmRelease is not Ready. Wait again on a fresh
-  # listing so HelmReleases created after the snapshot above are gated too;
-  # the window absorbs momentary Unknown flaps from drift reconciles.
-  if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
-    kubectl get hr -A || true
-    # kubectl's STATUS column truncates long messages; dump the full Ready
-    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
-    # visible in the test output instead of only inside the cozyreport.
-    kubectl get hr -A --no-headers | awk '$4 != "True"' | while read -r ns name _; do
-      echo "--- Non-ready HelmRelease: $ns/$name" >&2
-      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2 || true
-    done
-    echo "Some HelmReleases failed to reconcile" >&2
-    exit 1
-  fi
+  # One authoritative gate, on fresh lists. A bare `kubectl wait --all` takes
+  # one snapshot and can miss releases created a moment later; it also waits
+  # the full timeout after Flux has already declared Stalled=True. The helper
+  # re-lists, requires the all-Ready name set to stay stable for 5s, and fails
+  # immediately on Stalled. The 11-release floor preserves the old >10
+  # existence backstop without the masked pacing wait.
+  . hack/e2e-wait-helmreleases.sh
+  cozy_wait_all_helmreleases_ready 900 11 5 2
 }
 
 @test "Wait for Cluster‑API provider deployments" {
@@ -220,11 +229,59 @@ EOF
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
 
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  # cozystack-api can report its APIService Available while a freshly-rolled pod
+  # has not yet loaded the requestheader client-CA — it then drops the
+  # front-proxy identity and answers as system:anonymous (403). The Available
+  # wait in the previous test does not cover that. Prove an AUTHENTICATED
+  # request against the actual resource succeeds before the patch's own GET.
+  timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  local storage_class
+  storage_class="${COZY_E2E_STORAGE_CLASS:-replicated}"
+  case "$storage_class" in
+    replicated) ;;
+    local)
+      # The Tenant patch below leaves root monitoring off, so VictoriaLogs does
+      # not render in this run; the override is here for a run that turns it
+      # on. VictoriaLogs is the only root-tenant workload that explicitly
+      # defaults to replicated instead of inheriting the cluster's default
+      # StorageClass, and the container lane has no DRBD and intentionally
+      # exposes only local. The override goes into the values Secret before the
+      # Tenant patch, so the monitoring HelmRelease's first render creates local
+      # claims. Patching that HelmRelease after creation races the operator: a
+      # replicated PVC can be created first, and storageClassName is immutable.
+      # Flux drift detection is disabled, so the owning cozystack-basics release
+      # does not rewrite this E2E-only live override on its ordinary interval.
+      local root_values_b64_file root_values_file root_values_patch_file
+      root_values_b64_file=$(mktemp)
+      root_values_file=$(mktemp)
+      root_values_patch_file=$(mktemp)
+      kubectl get secret cozystack-values -n tenant-root -o jsonpath='{.data.values\.yaml}' > "$root_values_b64_file"
+      base64 -d "$root_values_b64_file" > "$root_values_file"
+      COZY_E2E_STORAGE_CLASS="$storage_class" yq -i \
+        '.logsStorages = [{"name":"generic","retentionPeriod":"1","storage":"10Gi","storageClassName":strenv(COZY_E2E_STORAGE_CLASS)}]' \
+        "$root_values_file"
+      jq -Rs '{"stringData":{"values.yaml":.}}' < "$root_values_file" > "$root_values_patch_file"
+      kubectl patch secret cozystack-values -n tenant-root --type merge --patch-file "$root_values_patch_file"
+      rm -f "$root_values_b64_file" "$root_values_file" "$root_values_patch_file"
+      ;;
+    *)
+      echo "COZY_E2E_STORAGE_CLASS must be local or replicated, got '$storage_class'" >&2
+      return 1
+      ;;
+  esac
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  # Root monitoring stays off: no suite inspects the tenant-root instance, and
+  # its bring-up (VictoriaMetrics, VictoriaLogs, Grafana and its CNPG database)
+  # competes with the rest of the install for node capacity, so a slow start
+  # could fail a pull request that never touched monitoring. The monitoring
+  # package itself stays installed, because tenant-application declares
+  # dependsOn cozystack.monitoring-application. Turning it on also means
+  # flipping monitoring.rootEnabled in hack/e2e-platform-packages.sh.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": true}}'
+
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
-  # so listing all four top-level children plus the parent gives precise
+  # so listing the children this patch enables plus the parent gives precise
   # failure messages without redundant separate waits. seaweedfs now
   # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
   # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
@@ -233,7 +290,7 @@ EOF
   # parent's Ready can land past the HR's single 15m timeout window; the HR
   # re-reconciles every 1m until it converges, so this wait is 20m to observe
   # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
+  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
 
@@ -253,78 +310,6 @@ EOF
   kubectl -n tenant-root wait pod \
     -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
     --for=condition=ready --timeout=10m
-
-  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
-  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
-  # updateStatus=operational only once their workloads are scheduled and Ready.
-  # During platform bring-up they contend for node resources with the rest of
-  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
-  # operational in under a second, but under install-time load (concurrent e2e
-  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
-  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
-  # 10m/15m split even though all three contend for the same node capacity and a
-  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
-  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
-  # path, comfortably inside the E2E job budget) and dump live status on timeout
-  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
-  # a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
-    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
-    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
-    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
-    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
-  # complete the tenant-root monitoring bring-up and contend for the same node
-  # resources as the VictoriaMetrics stack above during install. Under
-  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
-  # and fail the install on a PR that never touched monitoring, so both move from
-  # their 10m budget to the same uniform 15m as the vm-operator waits above and
-  # dump live status on timeout to keep a genuine stuck-not-slow regression
-  # legible instead of surfacing as a bare "timed out" line.
-  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
-    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
-    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
-    echo "=== deploy/grafana-deployment did not reach condition=available ==="
-    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
-    echo "=== tenant-root pods ==="
-    kubectl get pods -n tenant-root -o wide 2>&1 || true
-    false
-  }
-
-  # Verify Grafana via ingress
-  ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  if ! curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' --max-time 30 | grep -q Found; then
-    echo "Failed to access Grafana via ingress at ${ingress_ip}" >&2
-    exit 1
-  fi
 }
 
 @test "Keycloak OIDC stack is healthy" {
@@ -338,8 +323,8 @@ EOF
 
   # Enabling OIDC swaps the dashboard's token-proxy container for oauth2-proxy,
   # so the dashboard is the consumer that proves the internal-URL default works.
-  # The install-time `kubectl wait hr --all -A` ran before this test flipped the
-  # flag and only ever saw the token-proxy shape, so nothing has re-checked the
+  # The install-time all-HelmRelease gate ran before this test flipped the flag
+  # and only ever saw the token-proxy shape, so nothing has re-checked the
   # dashboard on the OIDC path.
   #
   # Waiting on hr/dashboard directly would be vacuous: it is still Ready=True
@@ -428,8 +413,9 @@ EOF
   echo "$output" | grep -q "tenant names must"
   # And assert kubectl did NOT report creation — if validation regressed
   # into a "warn" variant, the server could still accept the object. A bare
-  # `! echo | grep` is vacuous under cozytest's `set -e` (suppressed for a `!`
-  # pipeline), so the regression would slip through; assert via `if ...; false`.
+  # `! echo | grep` is vacuous under cozytest's `set -e` (suppressed for any
+  # command whose status is inverted with `!`), so the regression would slip
+  # through; assert via `if ...; false`.
   if echo "$output" | grep -qi "created"; then echo "FAIL: kubectl reported the tenant as created — validation must reject it, not warn"; false; fi
 
   # Post-condition cleanup: even though we expect validation to reject the
@@ -546,9 +532,17 @@ EOF
     -o jsonpath='{.data.version}')
   kubectl delete configmap cozystack-version -n cozy-system
   # A bare `! kubectl get` is vacuous under cozytest's `set -e` (errexit is
-  # suppressed for a `!` pipeline), so a delete that silently failed would not
-  # fail the test; assert the absence via `if kubectl get; then ...; false`.
-  if kubectl get configmap cozystack-version -n cozy-system 2>/dev/null; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
+  # suppressed for any command whose status is inverted with `!`), so a
+  # delete that silently failed would not fail the test. Nor may the absence
+  # rest on the exit status alone: `kubectl get` exits 1 for a NotFound and 1
+  # for a connection, auth or discovery failure, so an api-server the test
+  # cannot reach would read as proof the delete worked. `--ignore-not-found`
+  # collapses the NotFound alone into success with empty output, leaving the
+  # status free to mean a failed read.
+  if ! still_there=$(kubectl get configmap cozystack-version -n cozy-system --ignore-not-found -o name); then
+    echo "FAIL: reading the cozystack-version configmap did not answer"; false
+  fi
+  if [ -n "$still_there" ]; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
   # Reconstruct: declarative apply matches the chart template at
   # packages/core/platform/templates/cozystack-version.yaml — same label set
   # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap

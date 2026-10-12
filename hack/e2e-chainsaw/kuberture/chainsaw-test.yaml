@@ -43,8 +43,11 @@ spec:
           kind: Namespace
           metadata:
             name: cozy-kuberture
+    # 11m: above the 10m install timeout cozystack-operator gives the
+    # HelmRelease of a Package; see "Sizing an HR-Ready budget" in
+    # docs/agents/e2e-testing.md.
     - assert:
-        timeout: 5m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease

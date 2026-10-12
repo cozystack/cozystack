@@ -1,7 +1,7 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
@@ -140,7 +140,7 @@ spec:
       userinfo endpoint returns, and the `allowed_groups` gate rejects
       every login with "user not a member of one of the required
       groups" — even when the token carries the correct claim. Verified
-      end-to-end on dev3 with Grafana v11.6.15: id_token AND userinfo
+      end-to-end on a test cluster with Grafana v11.6.15: id_token AND userinfo
       both contained `groups: [<ns>-super-admin, ...]`, `allowed_groups`
       listed `<ns>-super-admin`, but login failed until
       `groups_attribute_path=groups` was added. JMESPath expression
@@ -268,6 +268,17 @@ spec:
             - name: oidc-custom-ini
               secret:
                 secretName: {{ $customSecretRefName }}
+                {{- /* The tenant names the Secret; for a central tenant,
+                       mounting only the key Grafana reads keeps any other
+                       one, such as its collector's vmauth password, out of a
+                       pod that can reach the shared traces store. Other
+                       tenants keep the whole Secret, which an auth.ini
+                       reading a sibling key with $__file{} relies on. */}}
+                {{- if eq (include "monitoring.tracingCentral" $) "true" }}
+                items:
+                  - key: auth.ini
+                    path: auth.ini
+                {{- end }}
           {{- end }}
   {{- if ne $gatewayEnabled "true" }}
   ingress:

@@ -34,14 +34,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      - notContains:
-          path: rules
-          content:
-            apiGroups: ["postgresql.cnpg.io"]
-            resources: ["clusters"]
-            verbs: ["get", "delete"]
-            resourceNames:
-              - seaweedfs-db
+      # Bound the Role by shape instead of naming one spelling of the forbidden
+      # rule. A Client renders exactly two rules, both in the core group. The
+      # cnpg grant is gated between them in the template, so ungating it adds a
+      # third rule whatever its spelling — other verbs, a wildcard resource, a
+      # different resourceNames list — and rules[2] exists. The rules themselves
+      # are left unpinned because the secret list is long and churns on its own.
+      - equal:
+          path: rules[0].apiGroups
+          value: [""]
+      - equal:
+          path: rules[1].apiGroups
+          value: [""]
+      - notExists:
+          path: rules[2]
 
   - it: does not delete any database in a Client instance's cleanup command
     set: *client

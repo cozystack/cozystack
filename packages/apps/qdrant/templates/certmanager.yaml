@@ -78,6 +78,6 @@ spec:
     - {{ printf "%s-%d.%s-headless.%s.svc.%s" $.Release.Name $i $.Release.Name $.Release.Namespace $clusterDomain | quote }}
     {{- end }}
     {{- if .Values.external }}
-    - {{ .Release.Name }}.{{ .Values._namespace.host }}
+    - {{ .Release.Name }}.{{ include "cozy-lib.ns-host-required" . }}
     {{- end }}
 {{- end }}

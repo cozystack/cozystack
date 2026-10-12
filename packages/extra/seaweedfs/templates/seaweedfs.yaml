@@ -94,7 +94,7 @@
 
 {{- if not (eq .Values.topology "Client") }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
@@ -234,6 +234,9 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
+        {{- /* An explicit null is dropped before schema validation, so neither
+               bound sees it, and the master exits on the empty flag it renders. */}}
+        volumeSizeLimitMB: {{ required "master.volumeSizeLimitMB must be set" .Values.master.volumeSizeLimitMB }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}

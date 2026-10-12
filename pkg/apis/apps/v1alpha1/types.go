@@ -28,6 +28,11 @@ const (
 	ApplicationNameLabel  = "apps.cozystack.io/application.name"
 )
 
+// NameSchemaExtension is the root-level key of an ApplicationDefinition's
+// openAPISchema under which an application declares the constraints on its own
+// metadata.name. cozyvalues-gen emits it from a chart's `## @name` annotation.
+const NameSchemaExtension = "x-cozystack-name"
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // ApplicationList is a list of Application objects.

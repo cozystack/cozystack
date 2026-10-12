@@ -13,6 +13,7 @@ metadata:
     # hook-succeeded so they are reclaimed after a successful uninstall.
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
+  activeDeadlineSeconds: 270
   template:
     metadata:
       labels:
@@ -21,6 +22,7 @@ spec:
     spec:
       serviceAccountName: "{{ .Release.Name }}-cleanup"
       restartPolicy: Never
+      terminationGracePeriodSeconds: 10
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -51,7 +53,7 @@ spec:
             - |
               set -eu
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              if ! kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found; then
+              if ! kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found --wait=true --timeout=120s; then
                 echo "ERROR: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
                 exit 1
               fi
@@ -87,7 +89,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

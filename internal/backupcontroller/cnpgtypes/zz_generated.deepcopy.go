@@ -7,6 +7,8 @@
 package cnpgtypes
 
 import (
+	"maps"
+
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -88,9 +90,7 @@ func (in *PluginConfiguration) DeepCopyInto(out *PluginConfiguration) {
 	}
 	if in.Parameters != nil {
 		out.Parameters = make(map[string]string, len(in.Parameters))
-		for k, v := range in.Parameters {
-			out.Parameters[k] = v
-		}
+		maps.Copy(out.Parameters, in.Parameters)
 	}
 }
 
@@ -179,9 +179,7 @@ func (in *BackupPluginConfiguration) DeepCopyInto(out *BackupPluginConfiguration
 	*out = *in
 	if in.Parameters != nil {
 		out.Parameters = make(map[string]string, len(in.Parameters))
-		for k, v := range in.Parameters {
-			out.Parameters[k] = v
-		}
+		maps.Copy(out.Parameters, in.Parameters)
 	}
 }
 
@@ -247,6 +245,7 @@ func (in *ObjectStoreSpec) DeepCopyInto(out *ObjectStoreSpec) {
 
 func (in *InstanceSidecarConfiguration) DeepCopyInto(out *InstanceSidecarConfiguration) {
 	*out = *in
+	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Env != nil {
 		out.Env = make([]EnvVar, len(in.Env))
 		copy(out.Env, in.Env)
@@ -310,5 +309,8 @@ func (in *BackupStatus) DeepCopyInto(out *BackupStatus) {
 	*out = *in
 	if in.StartedAt != nil {
 		out.StartedAt = in.StartedAt.DeepCopy()
+	}
+	if in.StoppedAt != nil {
+		out.StoppedAt = in.StoppedAt.DeepCopy()
 	}
 }

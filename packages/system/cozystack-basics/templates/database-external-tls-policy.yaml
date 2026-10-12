@@ -1,0 +1,94 @@
+{{- /* Render only where the ValidatingAdmissionPolicy API is served. Same guard as gateway-hostname-policy.yaml. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+# Refuses a database exposed outside the cluster with TLS off. The kinds are
+# served by the aggregated cozystack-api, which runs cluster policies through
+# its own admission chain, so the policy binds to them like to any built-in.
+#
+# Only engines whose tls.enabled decides whether the server takes plaintext
+# belong here. Redis does: with TLS on it serves the TLS port only, and the
+# chart never infers TLS, so external needs an explicit true. Postgres does
+# not: CNPG pins ssl=on and its default pg_hba takes plaintext from any client
+# that asks, whatever the chart's tls.enabled, which only adds the external
+# name to the certificate.
+#
+# TLS is fixed when a Redis instance is created; the operator's RedisFailover
+# schema refuses a change, but this API accepts it. A spec's tls.enabled is
+# therefore a request, not the instance's state, and cannot prove on UPDATE
+# that an instance has TLS. So external access can be turned on only at
+# creation, where tls.enabled does decide the instance.
+#
+# The RedisFailover schema does not exist before the first reconcile, so
+# nothing else stops TLS from being dropped from a release admitted as
+# external with TLS. tls.enabled is therefore frozen while external stays on.
+# Withdrawing external access in the same edit lifts the freeze, which keeps a
+# way out for an instance whose tls.enabled was flipped before this policy;
+# the callers trusted by cozystack-tenant-host-policy are exempt, to repair
+# one without withdrawing it. An instance exposed in plaintext before this
+# policy stays editable otherwise.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-database-external-tls-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["apps.cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["redises"]
+  variables:
+  - name: newExternal
+    expression: >-
+      has(object.spec) && has(object.spec.external) && object.spec.external == true
+  - name: newTLS
+    expression: >-
+      has(object.spec) && has(object.spec.tls) && has(object.spec.tls.enabled) &&
+      object.spec.tls.enabled == true
+  - name: oldExternal
+    expression: >-
+      oldObject != null && has(oldObject.spec) && has(oldObject.spec.external) &&
+      oldObject.spec.external == true
+  - name: oldTLS
+    expression: >-
+      oldObject != null && has(oldObject.spec) && has(oldObject.spec.tls) &&
+      has(oldObject.spec.tls.enabled) && oldObject.spec.tls.enabled == true
+  - name: trustedCaller
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
+        g == "system:serviceaccounts:kube-system")
+  validations:
+  - expression: >-
+      !variables.newExternal ||
+      (oldObject == null ? variables.newTLS : variables.oldExternal)
+    messageExpression: >-
+      oldObject == null
+        ? "Redis " + object.metadata.name + ": external: true requires tls.enabled: true, because a plaintext endpoint must not be exposed outside the cluster and Redis does not turn TLS on by itself. Set tls.enabled: true or set external: false."
+        : "Redis " + object.metadata.name + ": external access can only be enabled when an instance is created, together with tls.enabled: true, because TLS cannot be added to an existing instance and its spec does not prove which one it has. Keep external: false, or create a new instance with tls.enabled: true and external: true and move the clients to it."
+    reason: Invalid
+  - expression: >-
+      oldObject == null || !(variables.oldExternal && variables.newExternal) ||
+      variables.oldTLS == variables.newTLS || variables.trustedCaller
+    messageExpression: >-
+      "Redis " + object.metadata.name + ": tls.enabled cannot change while external access is on, because TLS is fixed when an instance is created. " +
+      (variables.newTLS ? "" : "Set external: false in the same edit, or ") +
+      "create a new instance with tls.enabled: true and move the clients to it."
+    reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-database-external-tls-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-database-external-tls-policy
+  validationActions: [Deny]
+{{- end }}

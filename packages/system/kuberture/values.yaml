@@ -6,7 +6,10 @@ kuberture:
     # at oci://ghcr.io/lexfrei/kuberture/charts/kuberture separately. Bump
     # the tag+digest here together with KUBERTURE_CHART_VERSION and
     # KUBERTURE_CHART_DIGEST in the Makefile (resolve the new image digest
-    # with `crane digest ghcr.io/lexfrei/kuberture:<new-tag>`).
+    # with `crane digest ghcr.io/lexfrei/kuberture:<new-tag>`). repository
+    # repeats the chart default so the pinned ref is complete in this file,
+    # where the release tooling reads it.
+    repository: ghcr.io/lexfrei/kuberture
     tag: 0.1.1@sha256:4f265331d65f6e5afc1bf6325e7ab62f2004fc75c0587978e41321f816105fbf
 
   # Cozystack ships a Prometheus stack by default; surface kuberture's metrics.

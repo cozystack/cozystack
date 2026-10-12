@@ -1,0 +1,225 @@
+#!/usr/bin/env bats
+# Unit tests for the OCI_EXPORT_DIR export mode wired through hack/common-envs.mk
+# (#3257). A fork PR's unprivileged `pull_request` build carries no registry
+# credentials, so it must export every image to a per-image OCI archive instead
+# of pushing; a privileged workflow_run (e2e-fork.yaml) later pushes those
+# archives to OCIR by digest. A build unit that pushes anyway dies on a fork with
+# an anonymous-push `denied`, so these tests dry-run (`make -n`) a representative
+# set of the root `build:` units with OCI_EXPORT_DIR set and assert that every
+# image is exported as an archive and no (ungated) `docker://` push survives.
+#
+# Coverage includes the two units the fork split originally broke — talos (a
+# skopeo copy that bypasses the image-tags macro) and capi-providers-cpprovider
+# (a two-`--tag` buildx call that put two manifests in one OCI archive) — plus a
+# plain image-tags package (cozystack-controller) as the happy path.
+#
+# Run from the repo root through `make bats-unit-tests`; the relative
+# `make -C packages/...` calls resolve against that cwd. The file also remains
+# compatible with the legacy `hack/cozytest.sh` translator, so it avoids
+# run/$status/$output/setup() and uses plain $(...) capture plus grep and the
+# build-matrix_test.bats `if grep -q …; then echo FAIL; false; fi`
+# negation idiom (cozytest runs each @test under `set -e`, which suppresses a
+# bare `!`-negated pipeline, so a regression would silently pass a `! grep`).
+
+load test_helper
+
+@test "cozystack-controller exports one OCI archive and never pushes under OCI_EXPORT_DIR" {
+  out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
+  # Exactly one per-image OCI archive export for the single built image.
+  # `grep -o | wc -l` counts OCCURRENCES: the macro expands onto a single line,
+  # so `grep -c` would count that one line and report 1 however many flags survive.
+  n=$(echo "$out" | grep -o -- '--output type=oci,dest=' | wc -l)
+  [ "$n" -eq 1 ]
+  echo "$out" | grep -q -- '--output type=oci,dest=/tmp/ocitest/cozystack-controller.oci.tar'
+  # A plain image-tags package routes every tag through the macro, so under
+  # export there is no docker:// ref at all.
+  if echo "$out" | grep -q 'docker://'; then echo "FAIL: cozystack-controller must not push under OCI_EXPORT_DIR"; false; fi
+}
+
+@test "capi-providers-cpprovider exports one OCI archive with a single tag under OCI_EXPORT_DIR" {
+  out=$(make -n -C packages/system/capi-providers-cpprovider image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
+  # Exactly one per-image OCI archive export.
+  n=$(echo "$out" | grep -o -- '--output type=oci,dest=' | wc -l)
+  [ "$n" -eq 1 ]
+  echo "$out" | grep -q -- '--output type=oci,dest=/tmp/ocitest/cluster-api-control-plane-provider-kamaji.oci.tar'
+  # The two-tag regression: under `--output type=oci` both --tag refs land in
+  # index.json → two manifests → `skopeo copy oci-archive:…` fails with "more
+  # than one image in oci". Exactly one --tag must survive under export.
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
+  [ "$tags" -eq 1 ]
+  if echo "$out" | grep -q 'docker://'; then echo "FAIL: capi-providers-cpprovider must not push under OCI_EXPORT_DIR"; false; fi
+}
+
+@test "talos exports matchbox + talos archives and never pushes an ungated image under OCI_EXPORT_DIR" {
+  out=$(make -n -C packages/core/talos image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
+  # matchbox is a buildx call through image-tags → one --output type=oci archive.
+  echo "$out" | grep -q -- '--output type=oci,dest=/tmp/ocitest/matchbox.oci.tar'
+  # talos is a skopeo copy that bypasses image-tags; under export it must target
+  # an oci-archive whose basename is `talos` (the OCIR repo e2e-fork.yaml pushes
+  # to by basename), NOT a docker:// registry (an anonymous push on a fork dies
+  # with `denied` — #3257).
+  echo "$out" | grep -q 'oci-archive:/tmp/ocitest/talos.oci.tar'
+  # No push survives export except the PUBLISH_*=1-gated release copies, which
+  # are inert here: a fork build never sets PUBLISH_*, so the shell gate expands
+  # to `[ "0" = "1" ]`. Anything else pushing to docker:// is the regression.
+  pushes=$(echo "$out" | grep 'docker://' | grep -v '"0" = "1"' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes an ungated image under OCI_EXPORT_DIR: $pushes"; false; fi
+}
+
+@test "OCI_EXPORT_DIR suppresses release tags/pushes even with PUBLISH_*=1 (#3262 hardening)" {
+  # The B2-class trap is latent: PUBLISH_* are 0 on fork PRs (the only export
+  # case today), so force them on to prove the OCI_EXPORT_DIR gate holds anyway.
+  # image-tags package: only the pr IMAGE_TAG survives — a versioned + :latest
+  # multi-tag OCI archive holds >1 manifest and `skopeo copy oci-archive:` refuses it.
+  out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
+  [ "$tags" -eq 1 ]
+  if echo "$out" | grep -q -- ':latest'; then echo "FAIL: image-tags emits :latest under OCI_EXPORT_DIR"; false; fi
+  # talos: its versioned/floating skopeo copies are additionally gated on an
+  # empty OCI_EXPORT_DIR (`[ -z … ]`), so no ungated docker:// push survives export.
+  tout=$(make -n -C packages/core/talos image OCI_EXPORT_DIR=/tmp/ocitest PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  pushes=$(echo "$tout" | grep 'docker://' | grep -vF '[ -z ' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes an ungated image under OCI_EXPORT_DIR with PUBLISH_*=1: $pushes"; false; fi
+}
+
+@test "default path (OCI_EXPORT_DIR unset) still pushes and keeps release tags (#3262)" {
+  # Every other test here sets OCI_EXPORT_DIR, so nothing covered the OFF path —
+  # the one every same-repo PR, main and release build still takes. Without this
+  # case a refactor of the export wiring could stop pushing altogether, or strip
+  # the release tags, and the suite would stay green.
+  out=$(make -n -C packages/system/cozystack-controller image PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  # buildx pushes, and no per-image archive is written.
+  echo "$out" | grep -q -- '--push=1'
+  if echo "$out" | grep -q -- '--output type=oci'; then echo "FAIL: OCI archive export leaked into the default path"; false; fi
+  # image-tags expands all three release tags when not exporting: the
+  # build-unique IMAGE_TAG, the versioned tag and :latest.
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
+  [ "$tags" -eq 3 ]
+  echo "$out" | grep -q -- ':latest'
+  # talos bypasses image-tags. Its skopeo copies must target the registry, and
+  # the `[ -z "$(OCI_EXPORT_DIR)" ]` release gates must be INERT off-export
+  # (expanding to `[ -z "" ]`) so a release run still pushes versioned+floating.
+  tout=$(make -n -C packages/core/talos image PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$tout" | grep -q 'docker://.*/talos:pr-1-abc'
+  echo "$tout" | grep -q 'docker://.*/talos:latest'
+  if echo "$tout" | grep -q 'oci-archive:'; then echo "FAIL: talos exports an archive without OCI_EXPORT_DIR"; false; fi
+}
+
+@test "a published image is built for amd64 and arm64 unless PLATFORM says otherwise" {
+  # A push with no PLATFORM builds both, so an arm64 workstation cannot publish
+  # an arm64-only digest that amd64 nodes then fail to pull.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  platforms=$(echo "$out" | grep -o -- '--platform=[^ ]*' | tr '\n' ' ')
+  [ "$platforms" = "--platform=linux/amd64,linux/arm64 " ]
+  # An explicit PLATFORM replaces the default rather than adding to it.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b PLATFORM=linux/arm64)
+  platforms=$(echo "$out" | grep -o -- '--platform=[^ ]*' | tr '\n' ' ')
+  [ "$platforms" = "--platform=linux/arm64 " ]
+}
+
+@test "LOAD=1 builds for the host only, since the docker image store cannot load an index" {
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b LOAD=1 PUSH=0)
+  echo "$out" | grep -q -- '--load=1'
+  if echo "$out" | grep -q -- '--platform'; then echo "FAIL: LOAD=1 passes a platform, so buildx builds an index it cannot load"; false; fi
+}
+
+@test "LOAD and PUSH from the environment reach buildx, and LOAD=1 alone does not push" {
+  out=$(LOAD=1 PUSH=0 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: environment LOAD=1 PUSH=0 ignored"; false; }
+  if echo "$out" | grep -q -- '--platform'; then echo "FAIL: environment LOAD=1 still builds a multi-arch index"; false; fi
+  out=$(LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1' || { echo "FAIL: LOAD=1 alone pushes"; false; }
+  # An explicit PUSH still wins over the LOAD-derived default.
+  out=$(LOAD=1 PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=1'
+  # The fork export must keep beating an environment PUSH=1.
+  out=$(PUSH=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b OCI_EXPORT_DIR=/tmp/ocitest)
+  echo "$out" | grep -q -- '--push=0 --load=0'
+}
+
+@test "an empty PUSH or LOAD in the environment falls back to the default" {
+  out=$(PUSH= LOAD= make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=1 --load=0' || { echo "FAIL: empty PUSH/LOAD reach buildx as empty flags"; false; }
+  out=$(PUSH= LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--push=0 --load=1'
+}
+
+@test "talos publishes nothing to the registry with PUSH=0" {
+  out=$(make -n -B -C packages/core/talos image-talos PUSH=0 PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0)
+  echo "$out" | grep -q 'docker://'
+  pushes=$(echo "$out" | grep 'docker://' | grep -vF '[ "0" = "1" ]' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes with PUSH=0: $pushes"; false; fi
+}
+
+@test "CACHE_TAG moves the cache ref of every image" {
+  # The arm64 leg writes its own mode=max cache. Sharing the amd64 ref would
+  # make every write from one leg evict the other's layers.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1)
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache,'
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64 '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/cozystack-controller:buildcache-arm64,'
+  # No per-call tag may bypass CACHE_TAG, or both legs write one cache ref.
+  tmp=$(mktemp -d)
+  printf 'include %s/hack/common-envs.mk\nprobe:\n\t@echo $(call cache-args,img,percall)\n' "$(pwd)" > "$tmp/Makefile"
+  out=$(make -s -C "$tmp" probe COZYSTACK_VERSION=0 WRITE_CACHE=1 CACHE_TAG=buildcache-arm64)
+  rm -rf "$tmp"
+  echo "$out" | grep -q -- '--cache-from type=registry,ref=[^ ]*/img:buildcache-arm64 '
+  echo "$out" | grep -q -- '--cache-to type=registry,ref=[^ ]*/img:buildcache-arm64,'
+}
+
+@test "the kamaji provider image is pushed under the build's IMAGE_TAG like every other image" {
+  # An IMAGE_TAG assigned in a package Makefile beats the value CI puts in the
+  # environment, so every PR, main and line build would push the same
+  # component-version tag and overwrite each other's.
+  pkg=packages/system/capi-providers-cpprovider
+  out=$(IMAGE_TAG=pr-1-abc make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/^--tag //')
+  [ "$(echo "$tags" | sed 's/.*://')" = pr-1-abc ] || { echo "FAIL: pushes $tags"; false; }
+  # The stamped refs keep the component version, the tag a release publishes.
+  echo "$out" | grep -qE 'IMG="[^"]*/cluster-api-control-plane-provider-kamaji:v[0-9][^"@]*-cozystack\.[0-9]+@'
+  # The component tag is published only when a release asks for versioned tags.
+  out=$(IMAGE_TAG=pr-1-abc PUBLISH_VERSIONED=1 make -n -C "$pkg" image COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -o -- '--tag [^ ]*' | sed 's/.*://')
+  [ "$(echo "$tags" | head -1)" = pr-1-abc ]
+  echo "$tags" | grep -qE '^v[0-9].*-cozystack\.[0-9]+$'
+  [ "$(echo "$tags" | wc -l | tr -d ' ')" -eq 2 ]
+  if echo "$tags" | grep -q -- '-$'; then echo "FAIL: a tag ends in '-': $tags"; false; fi
+}
+
+@test "image-tags records every tag it pushes in PUSHED_TAGS_LOG, and nothing when unset, exporting or not pushing" {
+  # The stitch moves exactly these tags onto the multi-arch index. A component
+  # version pushed under PUBLISH_VERSIONED=1 is named by no ref in the tree, so
+  # a tag missing here would stay on the amd64-only image.
+  tmp=$(mktemp -d)
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=v9.9.9-rc.1 PUBLISH_VERSIONED=1 BUILDER=b \
+    REGISTRY=reg.example/c PUSHED_TAGS_LOG="$tmp/log")
+  echo "$out" | grep -o -- '--tag [^ ]*' | awk '{ print $2 }' | sort >"$tmp/pushed"
+  [ "$(wc -l <"$tmp/pushed" | tr -d ' ')" -eq 2 ]
+  sort "$tmp/log" | diff "$tmp/pushed" -
+
+  make -n -C packages/system/cozystack-controller image IMAGE_TAG=v9.9.9-rc.1 PUBLISH_VERSIONED=1 BUILDER=b >/dev/null
+  make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
+    OCI_EXPORT_DIR=/tmp/ocitest PUSHED_TAGS_LOG="$tmp/export-log" >/dev/null
+  [ ! -e "$tmp/export-log" ]
+  # A build that does not push must not hand its tags to the stitch.
+  LOAD=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc BUILDER=b \
+    PUSHED_TAGS_LOG="$tmp/load-log" >/dev/null
+  if [ -s "$tmp/load-log" ]; then echo "FAIL: LOAD=1 logs tags it never pushed: $(cat "$tmp/load-log")"; false; fi
+  rm -rf "$tmp"
+}
+
+@test "talos pushes one installer index for PLATFORM and matchbox boots both arches" {
+  # -B prints every asset build whether or not a local _out/assets has it.
+  out=$(make -n -B -C packages/core/talos image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q 'for a in amd64 arm64; do skopeo copy'
+  echo "$out" | grep -q 'hack/installer-index.sh [^ ]* amd64 arm64;'
+  echo "$out" | grep -q 'skopeo copy --all "$SRC" docker://[^ ]*/talos:pr-1-abc'
+  # The installer follows PLATFORM, but matchbox serves machines of either arch
+  # wherever it runs, so it still needs the arm64 kernel and initramfs.
+  out=$(make -n -B -C packages/core/talos image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b PLATFORM=linux/amd64)
+  if echo "$out" | grep -q 'installer-arm64'; then echo "FAIL: an amd64 build builds the arm64 installer"; false; fi
+  echo "$out" | grep -q 'profiles/kernel-arm64.yaml'
+  echo "$out" | grep -q 'profiles/initramfs-arm64.yaml'
+}

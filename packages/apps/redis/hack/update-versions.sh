@@ -116,7 +116,7 @@ for major_ver in "${MAJOR_VERSIONS[@]}"; do
 done
 NEW_VERSION_SECTION="${NEW_VERSION_SECTION}
 
-## @param {Version} version - Redis major version to deploy
+## @param {Version} version - Redis major version to deploy. The Redis and Sentinel pods run the same image.
 version: ${MAJOR_VERSIONS[0]}"
 
 # Check if version section already exists

@@ -41,6 +41,15 @@ spec:
         - name: kubernetes
           path: apps/kubernetes
           libraries: ["cozy-lib"]
+        # The worker-pool chart, likewise re-declared source-only under this
+        # package's own scope (cozystack-computeplane-application-kubevirt-kubernetes-nodes).
+        # Since Phase 2 split worker pools out of apps/kubernetes, the module
+        # renders one child HelmRelease per nodeGroup against this artifact
+        # (see extra/computeplane/templates/cluster.yaml); keeping it in-scope
+        # preserves the same self-containment as the cluster chart above.
+        - name: kubernetes-nodes
+          path: apps/kubernetes-nodes
+          libraries: ["cozy-lib"]
         - name: computeplane-rd
           path: system/computeplane-rd
           install:
