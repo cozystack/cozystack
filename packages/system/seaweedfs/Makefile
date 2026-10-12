@@ -62,6 +62,7 @@ update:
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name-consumers.patch
 	patch --no-backup-if-mismatch -p4 < patches/cluster-scoped-names-per-namespace.patch
 	patch --forward --no-backup-if-mismatch -p4 < patches/storage-class-string.patch
+	patch --forward --no-backup-if-mismatch -p4 < patches/httproute-backport.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 	$(MAKE) update-image
 
