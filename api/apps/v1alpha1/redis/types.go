@@ -54,7 +54,7 @@ type ConfigSpec struct {
 	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 	// +kubebuilder:default:={}
 	Sentinel Sentinel `json:"sentinel,omitempty"`
-	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant.
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:MaxLength=63
 	SchedulingClass string `json:"schedulingClass"`
