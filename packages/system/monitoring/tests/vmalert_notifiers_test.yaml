@@ -1,0 +1,55 @@
+suite: vmalert notifies every Alertmanager replica
+templates:
+  - templates/vm/vmalert.yaml
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+  metricsStorages:
+    - name: shortterm
+      retentionPeriod: "3d"
+      deduplicationInterval: "15s"
+
+# The Alertmanager cluster deduplicates notifications only when every replica
+# receives every alert. A notifier pointing at the headless Service reaches
+# one pod per connection, so an alert lives on whichever replica that
+# connection landed on and moves when vmalert reconnects. Each replica it
+# leaves sends a resolved notification and each one it reaches sends a new
+# firing one.
+tests:
+  - it: lists each Alertmanager pod as a notifier instead of the shared Service
+    template: templates/vm/vmalert.yaml
+    asserts:
+      - equal:
+          path: spec.notifiers
+          value:
+            - url: http://vmalertmanager-alertmanager-0.vmalertmanager-alertmanager.tenant-root.svc:9093
+            - url: http://vmalertmanager-alertmanager-1.vmalertmanager-alertmanager.tenant-root.svc:9093
+            - url: http://vmalertmanager-alertmanager-2.vmalertmanager-alertmanager.tenant-root.svc:9093
+
+  - it: runs as many Alertmanager replicas as vmalert has notifiers
+    template: templates/alerta/alerta.yaml
+    documentSelector:
+      path: kind
+      value: VMAlertmanager
+    asserts:
+      - equal:
+          path: spec.replicaCount
+          value: 3
+
+  - it: addresses the Alertmanager pods in the release namespace
+    template: templates/vm/vmalert.yaml
+    release:
+      namespace: tenant-foo
+    asserts:
+      - equal:
+          path: spec.notifiers[2].url
+          value: http://vmalertmanager-alertmanager-2.vmalertmanager-alertmanager.tenant-foo.svc:9093
