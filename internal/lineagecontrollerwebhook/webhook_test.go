@@ -460,3 +460,96 @@ func TestApplySchedulingClass_MissingClassCRSkipsInjection(t *testing.T) {
 		t.Errorf("pod spec.schedulerName should not be set when SchedulingClass CR is missing, got %q", sched)
 	}
 }
+
+// newOwnerApplication returns the unstructured Application a Pod's lineage
+// walk resolves to, with the given top-level spec.
+func newOwnerApplication(namespace, name string, spec map[string]interface{}) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps.cozystack.io", Version: "v1alpha1", Kind: "Postgres"})
+	u.SetNamespace(namespace)
+	u.SetName(name)
+	if spec != nil {
+		u.Object["spec"] = spec
+	}
+	return u
+}
+
+func addSchedulingClassCR(t *testing.T, h *LineageControllerWebhook, name string) {
+	t.Helper()
+	if _, err := h.dynClient.Resource(schedulingClassGVR).Create(context.Background(), newSchedulingClassCR(name), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("creating SchedulingClass %s: %v", name, err)
+	}
+}
+
+func TestApplySchedulingClass_OwnerApplicationClassOverridesNamespace(t *testing.T) {
+	ctx := context.Background()
+	h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+	addSchedulingClassCR(t, h, "app-class")
+	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{
+		"replicas":        int64(2),
+		"schedulingClass": "app-class",
+	})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+
+	if got := pod.GetLabels()[schedulerapi.SchedulingClassLabel]; got != "app-class" {
+		t.Errorf("expected pod label %s=app-class, got %q", schedulerapi.SchedulingClassLabel, got)
+	}
+	if got := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; got != "app-class" {
+		t.Errorf("expected pod annotation %s=app-class, got %q", schedulerapi.SchedulingClassAnnotation, got)
+	}
+}
+
+func TestApplySchedulingClass_OwnerApplicationWithoutClassFallsBackToNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec map[string]interface{}
+	}{
+		{name: "field absent", spec: map[string]interface{}{"replicas": int64(2)}},
+		{name: "field empty", spec: map[string]interface{}{"schedulingClass": ""}},
+		{name: "no spec", spec: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+			pod := newPod("tenant-acme", "db-0")
+
+			if err := h.applySchedulingClass(ctx, pod, newOwnerApplication("tenant-acme", "db", tc.spec), "tenant-acme"); err != nil {
+				t.Fatalf("applySchedulingClass returned error: %v", err)
+			}
+
+			if got := pod.GetLabels()[schedulerapi.SchedulingClassLabel]; got != testSchedulingClass {
+				t.Errorf("expected the namespace class %q, got %q", testSchedulingClass, got)
+			}
+		})
+	}
+}
+
+// A SchedulingClass name may be up to 253 characters, a label value only 63.
+// A Pod carrying the longer value would be rejected by the apiserver, so the
+// class must still apply through the annotation, without the label.
+func TestApplySchedulingClass_ClassNameTooLongForLabelSkipsOnlyLabel(t *testing.T) {
+	ctx := context.Background()
+	longClass := strings.Repeat("a", 64)
+	h := newWebhookTestEnv(t, "tenant-acme", "", false)
+	addSchedulingClassCR(t, h, longClass)
+	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": longClass})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+
+	if _, ok := pod.GetLabels()[schedulerapi.SchedulingClassLabel]; ok {
+		t.Errorf("pod label should not be set for a class name longer than 63 characters")
+	}
+	if got := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; got != longClass {
+		t.Errorf("expected pod annotation %s=%s, got %q", schedulerapi.SchedulingClassAnnotation, longClass, got)
+	}
+	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != schedulerapi.SchedulerName {
+		t.Errorf("expected pod spec.schedulerName=%s, got %q", schedulerapi.SchedulerName, sched)
+	}
+}
