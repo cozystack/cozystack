@@ -54,6 +54,9 @@ type ConfigSpec struct {
 	// OpenSearch Dashboards configuration.
 	// +kubebuilder:default:={}
 	Dashboards Dashboards `json:"dashboards"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Dashboards struct {

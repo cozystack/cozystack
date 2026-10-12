@@ -25,17 +25,18 @@
 
 ### Kafka configuration
 
-| Name                          | Description                                                                                              | Type       | Value      |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `kafka`                       | Kafka configuration.                                                                                     | `object`   | `{}`       |
-| `kafka.replicas`              | Number of Kafka replicas.                                                                                | `int`      | `3`        |
-| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `kafka.resources.cpu`         | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `kafka.size`                  | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`     |
-| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
-| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                | `quantity` | `5Gi`      |
+| Name                          | Description                                                                                                                                                                                                       | Type       | Value      |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `kafka`                       | Kafka configuration.                                                                                                                                                                                              | `object`   | `{}`       |
+| `kafka.replicas`              | Number of Kafka replicas.                                                                                                                                                                                         | `int`      | `3`        |
+| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                          | `object`   | `{}`       |
+| `kafka.resources.cpu`         | CPU available to each replica.                                                                                                                                                                                    | `quantity` | `""`       |
+| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                                                                                                                           | `quantity` | `""`       |
+| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                                                                                                                           | `string`   | `c1.small` |
+| `kafka.size`                  | Persistent Volume size for Kafka.                                                                                                                                                                                 | `quantity` | `10Gi`     |
+| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                                                                                                                                        | `string`   | `""`       |
+| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                                                                                                                         | `quantity` | `5Gi`      |
+| `schedulingClass`             | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`       |
 
 
 ## Parameter examples and reference

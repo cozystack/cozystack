@@ -47,6 +47,9 @@ type ConfigSpec struct {
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type APIServer struct {

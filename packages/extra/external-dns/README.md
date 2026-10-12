@@ -79,10 +79,11 @@
 
 ### Resources
 
-| Name               | Description                                                                                              | Type       | Value     |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | --------- |
-| `resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
-| `resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`      |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`      |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano` |
+| Name               | Description                                                                                                                                                                                                       | Type       | Value     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                          | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                                                                                                    | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                           | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                                                                                           | `string`   | `t1.nano` |
+| `schedulingClass`  | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`      |
 
