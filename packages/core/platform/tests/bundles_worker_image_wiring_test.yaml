@@ -72,6 +72,51 @@ tests:
           path: spec.components.kubernetes-worker-image.values.images[0].version
           value: v1.13.6
 
+  # installerRepository belongs to new worker pools, not to the catalog chart, and
+  # reaches cozystack-api through _cluster. It must not be forwarded, and set on its
+  # own it must not make a components block appear.
+  - it: does not forward installerRepository into the catalog component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.internal.example.com
+        installerRepository: registry.internal.example.com/installer
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-image
+    asserts:
+      - equal:
+          path: spec.components.kubernetes-worker-image.values.imageFactoryURL
+          value: https://factory.internal.example.com
+      - notExists:
+          path: spec.components.kubernetes-worker-image.values.installerRepository
+
+  - it: emits no components block when installerRepository is the only key set
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+      kubernetesWorkerImage:
+        installerRepository: registry.internal.example.com/installer
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-image
+    asserts:
+      - notExists:
+          path: spec.components
+
   # The knob is inert without the opt-in, and must not resurrect the package on
   # its own: an operator who sets the values but forgets enabledPackages gets no
   # Package, exactly as before.

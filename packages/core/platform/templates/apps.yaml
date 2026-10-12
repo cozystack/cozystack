@@ -388,6 +388,44 @@ stringData:
       kubernetes-registries:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
+      {{- /* What cozystack-api writes into the spec of a NEW KubernetesNodes: the
+             worker image catalog being on, the factory the OS image comes from, and
+             the installer prefix. The installer is never derived from the factory:
+             the factory URL says where the image is fetched from, and a file server
+             or caching mirror serves it without serving an installer, so a derived
+             prefix would break every new pool's upgrade for such a setup. It is never
+             read when a pool renders, so a pool that already exists keeps what it was
+             created with and nothing rolls. Only keys that are set are written, so a
+             platform that sets none of them and has no catalog keeps this Secret as
+             it was. */}}
+      {{- $workerImage := .Values.kubernetesWorkerImage | default dict }}
+      {{- $workerCatalog := and .Values.bundles.iaas.enabled (has "cozystack.kubernetes-worker-image" (default (list) .Values.bundles.enabledPackages)) (not (has "cozystack.kubernetes-worker-image" (default (list) .Values.bundles.disabledPackages))) }}
+      {{- $workerFactoryURL := $workerImage.imageFactoryURL | default "" | toString | trimSuffix "/" }}
+      {{- if and $workerFactoryURL (not (regexMatch "^https?://[A-Za-z0-9._~:/?#\\[\\]@!&'()*+,;=%-]+$" $workerFactoryURL)) }}
+      {{-   fail (printf "kubernetesWorkerImage.imageFactoryURL %q is not a plain http(s) URL. It becomes the default image source of every new worker pool." $workerFactoryURL) }}
+      {{- end }}
+      {{- if and $workerFactoryURL (regexMatch "^https?://[^/]*@" $workerFactoryURL) }}
+      {{-   fail "kubernetesWorkerImage.imageFactoryURL must not carry a user name or password: it is copied into the cozystack-values Secret of every tenant and into the spec of every new worker pool." }}
+      {{- end }}
+      {{- $workerInstaller := $workerImage.installerRepository | default "" | toString | trimSuffix "/" }}
+      {{- /* A registry host with an optional port, then repository path components,
+             which an image reference takes in lower case. A scheme is refused because
+             the sibling imageFactoryURL is a URL and this is not. */}}
+      {{- if and $workerInstaller (not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9.-]+)(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$" $workerInstaller)) }}
+      {{-   fail (printf "kubernetesWorkerImage.installerRepository %q is not a registry path, a host with an optional port and a lower-case repository path and no scheme. It becomes the installer prefix of every new worker pool." $workerInstaller) }}
+      {{- end }}
+      {{- if or $workerCatalog $workerFactoryURL $workerInstaller }}
+      worker-image:
+        {{- if $workerCatalog }}
+        catalog: "true"
+        {{- end }}
+        {{- with $workerFactoryURL }}
+        factory-url: {{ . | quote }}
+        {{- end }}
+        {{- with $workerInstaller }}
+        installer-repository: {{ . | quote }}
+        {{- end }}
+      {{- end }}
       {{- with $kubeRootCa.data }}
       kube-root-ca: {{ index . "ca.crt" | b64enc | quote }}
       {{- end }}

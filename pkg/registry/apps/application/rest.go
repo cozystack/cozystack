@@ -217,6 +217,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// Before the null normalization, which would otherwise warn that the chart
+	// default applies for a null this fills with the platform's, and before
+	// validation, so that the chain below judges the spec that gets stored.
+	r.applyCreateDefaults(ctx, app)
+
 	// Omission permits a chart default; explicit null suppresses it in Helm.
 	// Normalize only repairable fields before admission and persistence.
 	emptied, err := r.normalizeSpecNulls(app)
