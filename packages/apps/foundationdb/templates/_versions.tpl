@@ -12,7 +12,7 @@
 {{- end }}
 
 {{/* cluster.version is no longer read, but a release that still carries one
-     runs that version today. Migration 59 carries it over to version where
+     runs that version today. Migration 60 carries it over to version where
      the platform runs migrations; nothing does on a variant that runs none,
      and there a new render would move the cluster to another release line
      without a word: down from 7.4, or off 7.1, which the operator no longer
