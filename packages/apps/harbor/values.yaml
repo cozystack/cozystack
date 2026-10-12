@@ -72,6 +72,7 @@ storageClass: ""
 
 ## @typedef {struct} Nginx - Entry-point proxy configuration.
 ## @field {int} [replicas] - Number of replicas of the proxy every `docker login`, pull and push goes through. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+## @minimum 1
 
 ## @param {Nginx} nginx - Entry-point proxy configuration.
 nginx:
@@ -79,6 +80,7 @@ nginx:
 
 ## @typedef {struct} Portal - Web portal configuration.
 ## @field {int} [replicas] - Number of web portal replicas. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+## @minimum 1
 
 ## @param {Portal} portal - Web portal configuration.
 portal:
@@ -86,6 +88,7 @@ portal:
 
 ## @typedef {struct} Core - Core API server configuration.
 ## @field {int} [replicas] - Number of core replicas, which issue the token every pull and push needs. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+## @minimum 1
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
@@ -97,6 +100,7 @@ core:
 
 ## @typedef {struct} Registry - Container image registry configuration.
 ## @field {int} [replicas] - Number of registry replicas; they share the S3 bucket and no local state. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+## @minimum 1
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 

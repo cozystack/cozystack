@@ -240,3 +240,41 @@ tests:
     asserts:
       - notExists:
           path: spec.values.harbor.core.topologySpreadConstraints
+
+  # Zero would scale the request path away, and a negative count would fail the
+  # nested HelmRelease at the apiserver; the schema refuses both up front.
+  - it: rejects zero nginx replicas
+    template: templates/harbor.yaml
+    set:
+      nginx:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/nginx/replicas.: minimum: got 0, want 1"
+
+  - it: rejects zero portal replicas
+    template: templates/harbor.yaml
+    set:
+      portal:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/portal/replicas.: minimum: got 0, want 1"
+
+  - it: rejects zero core replicas
+    template: templates/harbor.yaml
+    set:
+      core:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/core/replicas.: minimum: got 0, want 1"
+
+  - it: rejects negative registry replicas
+    template: templates/harbor.yaml
+    set:
+      registry:
+        replicas: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "/registry/replicas.: minimum: got -1, want 1"

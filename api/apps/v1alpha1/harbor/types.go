@@ -56,6 +56,7 @@ type ConfigSpec struct {
 type Core struct {
 	// Number of core replicas, which issue the token every pull and push needs. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
 	Replicas int `json:"replicas,omitempty"`
 	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
@@ -86,12 +87,14 @@ type Jobservice struct {
 type Nginx struct {
 	// Number of replicas of the proxy every `docker login`, pull and push goes through. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
 	Replicas int `json:"replicas,omitempty"`
 }
 
 type Portal struct {
 	// Number of web portal replicas. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
 	Replicas int `json:"replicas,omitempty"`
 }
 
@@ -107,6 +110,7 @@ type Redis struct {
 type Registry struct {
 	// Number of registry replicas; they share the S3 bucket and no local state. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 	// +kubebuilder:default:=1
+	// +kubebuilder:validation:Minimum=1
 	Replicas int `json:"replicas,omitempty"`
 	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
