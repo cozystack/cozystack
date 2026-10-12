@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -240,52 +243,62 @@ func hasAllLineageLabels(o *unstructured.Unstructured) bool {
 	return true
 }
 
+// AllowedSchedulingClassesAnnotation lists, comma-separated, the
+// SchedulingClasses an application in the namespace may select through
+// spec.schedulingClass. The tenant chart writes it from the tenant's
+// allowedSchedulingClasses; an absent or empty annotation allows none.
+const AllowedSchedulingClassesAnnotation = "namespace.cozystack.io/allowed-scheduling-classes"
+
 // applySchedulingClass injects schedulerName, scheduling-class annotation, and
-// scheduling-class label into Pods whose namespace carries the
-// scheduler.cozystack.io/scheduling-class label.
+// scheduling-class label into Pods whose application or namespace selects a
+// SchedulingClass.
 //
 // The label (in addition to the annotation) lets SchedulingClass authors write
 // podAffinity rules whose labelSelector matches pods across applications that
 // share the same class.
 //
-// If the referenced SchedulingClass CR does not exist (e.g. the scheduler
+// The tenant class comes from the namespace label and is set by whoever
+// administers the tenant, so an application may replace it only with a class
+// the namespace allows and that exists. Anything else falls back to the tenant
+// class rather than dropping the injection, which would let a typo in an
+// application lift the tenant's placement constraint. Admission of the
+// application already refuses a class outside the allowed list; checking it
+// again here covers a class removed from the list after the application was
+// admitted.
+//
+// If the resolved SchedulingClass CR does not exist (e.g. the scheduler
 // package is not installed), the injection is silently skipped so that pods
 // are not left Pending.
 func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj, owner *unstructured.Unstructured, namespace string) error {
 	if obj.GetKind() != "Pod" {
 		return nil
 	}
+	logger := log.FromContext(ctx)
 
-	// Determine scheduling class: owner Application field takes priority,
-	// then fall back to namespace label.
-	var schedulingClass string
-	if owner != nil {
-		var app appsv1alpha1.Application
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(owner.Object, &app); err == nil {
-			schedulingClass = app.SchedulingClass()
-		}
+	ns := &corev1.Namespace{}
+	if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+		return fmt.Errorf("getting namespace %s: %w", namespace, err)
 	}
-	if schedulingClass == "" {
-		ns := &corev1.Namespace{}
-		if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
-			return fmt.Errorf("getting namespace %s: %w", namespace, err)
-		}
-		schedulingClass = ns.Labels[schedulerapi.SchedulingClassLabel]
-	}
+	tenantClass := ns.Labels[schedulerapi.SchedulingClassLabel]
 
-	if schedulingClass == "" {
-		return nil
-	}
-
-	// Verify that the referenced SchedulingClass CR exists.
-	// If the CRD is not installed or the CR is missing, skip injection
-	// so that pods are not stuck Pending on a non-existent scheduler.
-	_, err := h.dynClient.Resource(schedulingClassGVR).Get(ctx, schedulingClass, metav1.GetOptions{})
+	schedulingClass, err := h.resolveApplicationClass(ctx, ownerSchedulingClass(owner), tenantClass, ns)
 	if err != nil {
-		logger := log.FromContext(ctx)
-		logger.Info("SchedulingClass not found, skipping scheduler injection",
-			"schedulingClass", schedulingClass, "namespace", namespace)
-		return nil
+		return err
+	}
+	if schedulingClass == "" {
+		if tenantClass == "" {
+			return nil
+		}
+		exists, err := h.schedulingClassExists(ctx, tenantClass)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			logger.Info("SchedulingClass not found, skipping scheduler injection",
+				"schedulingClass", tenantClass, "namespace", namespace)
+			return nil
+		}
+		schedulingClass = tenantClass
 	}
 
 	if err := unstructured.SetNestedField(obj.Object, schedulerapi.SchedulerName, "spec", "schedulerName"); err != nil {
@@ -304,7 +317,7 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	// schema-capped at 63, but a pre-existing long-named class must degrade to
 	// annotation-only injection rather than have the apiserver reject the Pod.
 	if errs := validation.IsValidLabelValue(schedulingClass); len(errs) > 0 {
-		log.FromContext(ctx).Info("SchedulingClass name is not a valid label value, skipping co-affinity label",
+		logger.Info("SchedulingClass name is not a valid label value, skipping co-affinity label",
 			"schedulingClass", schedulingClass, "namespace", namespace)
 		return nil
 	}
@@ -317,6 +330,71 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	obj.SetLabels(podLabels)
 
 	return nil
+}
+
+// resolveApplicationClass returns the application's class when it may replace
+// the tenant class: it differs from it, the namespace allows it and it exists.
+// It returns "" otherwise, so that the caller falls back to the tenant class.
+// The existence check runs once and its answer is final, since a second
+// lookup that found the class gone would leave the pod with no class at all.
+func (h *LineageControllerWebhook) resolveApplicationClass(ctx context.Context, appClass, tenantClass string, ns *corev1.Namespace) (string, error) {
+	if appClass == "" || appClass == tenantClass {
+		return "", nil
+	}
+	logger := log.FromContext(ctx)
+	if !slices.Contains(allowedSchedulingClasses(ns), appClass) {
+		logger.Info("application SchedulingClass is not allowed in this namespace, keeping the tenant class",
+			"schedulingClass", appClass, "tenantSchedulingClass", tenantClass, "namespace", ns.Name)
+		return "", nil
+	}
+	exists, err := h.schedulingClassExists(ctx, appClass)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		logger.Info("application SchedulingClass not found, keeping the tenant class",
+			"schedulingClass", appClass, "tenantSchedulingClass", tenantClass, "namespace", ns.Name)
+		return "", nil
+	}
+	return appClass, nil
+}
+
+func ownerSchedulingClass(owner *unstructured.Unstructured) string {
+	if owner == nil {
+		return ""
+	}
+	var app appsv1alpha1.Application
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(owner.Object, &app); err != nil {
+		return ""
+	}
+	return app.SchedulingClass()
+}
+
+func allowedSchedulingClasses(ns *corev1.Namespace) []string {
+	var allowed []string
+	for _, name := range strings.Split(ns.Annotations[AllowedSchedulingClassesAnnotation], ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			allowed = append(allowed, name)
+		}
+	}
+	return allowed
+}
+
+// schedulingClassExists reports a missing class, or a missing SchedulingClass
+// CRD, as absence. Any other lookup error is returned: treating a timeout or a
+// 5xx as absence would admit the Pod without the tenant's placement constraint,
+// which it then keeps until it is recreated. Failing the admission lets the
+// Pod's controller retry instead.
+func (h *LineageControllerWebhook) schedulingClassExists(ctx context.Context, name string) (bool, error) {
+	_, err := h.dynClient.Resource(schedulingClassGVR).Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err) || meta.IsNoMatchError(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("getting SchedulingClass %s: %w", name, err)
+	}
 }
 
 var schedulingClassGVR = schema.GroupVersionResource{
