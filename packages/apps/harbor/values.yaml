@@ -70,21 +70,39 @@ storageClass: ""
 ## @value xlarge
 ## @value 2xlarge
 
+## @typedef {struct} Nginx - Entry-point proxy configuration.
+## @field {int} [replicas] - Number of replicas of the proxy every `docker login`, pull and push goes through. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+
+## @param {Nginx} nginx - Entry-point proxy configuration.
+nginx:
+  replicas: 1
+
+## @typedef {struct} Portal - Web portal configuration.
+## @field {int} [replicas] - Number of web portal replicas. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+
+## @param {Portal} portal - Web portal configuration.
+portal:
+  replicas: 1
+
 ## @typedef {struct} Core - Core API server configuration.
+## @field {int} [replicas] - Number of core replicas, which issue the token every pull and push needs. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
 ## @param {Core} core - Core API server configuration.
 core:
+  replicas: 1
   resources: {}
   resourcesPreset: "t1.small"
 
 ## @typedef {struct} Registry - Container image registry configuration.
+## @field {int} [replicas] - Number of registry replicas; they share the S3 bucket and no local state. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
 ## @param {Registry} registry - Container image registry configuration.
 registry:
+  replicas: 1
   resources: {}
   resourcesPreset: "t1.small"
 
@@ -112,7 +130,7 @@ trivy:
 
 ## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
 ## @field {quantity} size - Persistent Volume size for database storage.
-## @field {int} replicas - Number of database instances.
+## @field {int} replicas - Number of database instances. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset.
 
 ## @param {Database} database - PostgreSQL database configuration.
 database:
@@ -121,7 +139,7 @@ database:
 
 ## @typedef {struct} Redis - Redis cache configuration (provisioned via redis-operator).
 ## @field {quantity} size - Persistent Volume size for cache storage.
-## @field {int} replicas - Number of Redis replicas.
+## @field {int} replicas - Number of Redis replicas. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset; the three sentinels always are.
 
 ## @param {Redis} redis - Redis cache configuration.
 redis:

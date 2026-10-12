@@ -29,11 +29,40 @@
         "source": "storageclass"
       }
     },
+    "nginx": {
+      "description": "Entry-point proxy configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Number of replicas of the proxy every `docker login`, pull and push goes through. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.",
+          "type": "integer",
+          "default": 1
+        }
+      }
+    },
+    "portal": {
+      "description": "Web portal configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Number of web portal replicas. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.",
+          "type": "integer",
+          "default": 1
+        }
+      }
+    },
     "core": {
       "description": "Core API server configuration.",
       "type": "object",
       "default": {},
       "properties": {
+        "replicas": {
+          "description": "Number of core replicas, which issue the token every pull and push needs. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.",
+          "type": "integer",
+          "default": 1
+        },
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
@@ -128,6 +157,11 @@
       "type": "object",
       "default": {},
       "properties": {
+        "replicas": {
+          "description": "Number of registry replicas; they share the S3 bucket and no local state. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.",
+          "type": "integer",
+          "default": 1
+        },
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
@@ -438,7 +472,7 @@
       ],
       "properties": {
         "replicas": {
-          "description": "Number of database instances.",
+          "description": "Number of database instances. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset.",
           "type": "integer",
           "default": 2
         },
@@ -468,7 +502,7 @@
       ],
       "properties": {
         "replicas": {
-          "description": "Number of Redis replicas.",
+          "description": "Number of Redis replicas. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset; the three sentinels always are.",
           "type": "integer",
           "default": 2
         },

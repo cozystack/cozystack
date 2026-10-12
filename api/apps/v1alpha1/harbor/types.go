@@ -27,6 +27,12 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
+	// Entry-point proxy configuration.
+	// +kubebuilder:default:={}
+	Nginx Nginx `json:"nginx"`
+	// Web portal configuration.
+	// +kubebuilder:default:={}
+	Portal Portal `json:"portal"`
 	// Core API server configuration.
 	// +kubebuilder:default:={}
 	Core Core `json:"core"`
@@ -48,6 +54,9 @@ type ConfigSpec struct {
 }
 
 type Core struct {
+	// Number of core replicas, which issue the token every pull and push needs. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+	// +kubebuilder:default:=1
+	Replicas int `json:"replicas,omitempty"`
 	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
@@ -57,7 +66,7 @@ type Core struct {
 }
 
 type Database struct {
-	// Number of database instances.
+	// Number of database instances. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Persistent Volume size for database storage.
@@ -74,8 +83,20 @@ type Jobservice struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 
+type Nginx struct {
+	// Number of replicas of the proxy every `docker login`, pull and push goes through. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+	// +kubebuilder:default:=1
+	Replicas int `json:"replicas,omitempty"`
+}
+
+type Portal struct {
+	// Number of web portal replicas. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+	// +kubebuilder:default:=1
+	Replicas int `json:"replicas,omitempty"`
+}
+
 type Redis struct {
-	// Number of Redis replicas.
+	// Number of Redis replicas. Above 1, they are spread by the platform's `globalAppTopologySpreadConstraints`, or softly across zones when it is unset; the three sentinels always are.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Persistent Volume size for cache storage.
@@ -84,6 +105,9 @@ type Redis struct {
 }
 
 type Registry struct {
+	// Number of registry replicas; they share the S3 bucket and no local state. Above 1, adds a PodDisruptionBudget and spreads the replicas by the platform's `globalAppTopologySpreadConstraints`, or softly across zones and nodes when it is unset.
+	// +kubebuilder:default:=1
+	Replicas int `json:"replicas,omitempty"`
 	// Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
