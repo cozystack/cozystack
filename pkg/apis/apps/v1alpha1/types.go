@@ -60,9 +60,9 @@ type ApplicationStatus struct {
 }
 
 // SchedulingClass returns the scheduling class requested by this Application,
-// parsed from its Spec JSON under the top-level `schedulingClass` key. When set,
-// the named SchedulingClass takes precedence over any tenant-level class for
-// the workloads of this Application.
+// parsed from its Spec JSON under the top-level `schedulingClass` key. It is a
+// request: the lineage webhook applies it in place of the tenant-level class
+// only when the namespace allows it and the SchedulingClass exists.
 //
 // A missing or empty field returns "" — the caller then falls back to the
 // namespace-level scheduling class.
