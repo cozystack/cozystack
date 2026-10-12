@@ -768,37 +768,51 @@ scheduling:
 #   loginTheme: acme
 #   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
-# Container registry mirrors configuration
+# Container registry mirrors for the workers of tenant Kubernetes clusters. They
+# apply to every image a worker pulls from a listed registry: system images, the
+# in-guest Talos installer and the images of the tenant's own workloads. The worker
+# OS disk image is not one of them, it is fetched over HTTP (see
+# kubernetesWorkerImage.imageFactoryURL).
+#
+# Forwarded into _cluster.kubernetes-registries and rendered into the machine config
+# of each worker pool as RegistryMirrorConfig and RegistryTLSConfig documents, which
+# needs Talos 1.12 or newer. A pool's own talos.registryMirrors, when set, replaces
+# `mirrors` for that pool; `config` applies to every pool.
+#
+# `mirrors` is keyed by the registry the images come from. Each entry takes
+# `endpoints` (URLs tried in order), `skipFallback` (never fall back to the original
+# registry) and `overridePath` (use an endpoint's path as written instead of adding
+# /v2). `config` is keyed by the host, and port when not 443, of a mirror endpoint,
+# and carries only `tls.ca` (PEM text) and `tls.insecureSkipVerify`. Credentials and
+# client keys are refused at render: the machine config is stored in the tenant's
+# namespace and they would be readable there.
+#
+# The machine config is part of the name of a pool's TalosConfigTemplate, so a change
+# rolls pools. Setting or changing `mirrors` rolls every pool that has no
+# talos.registryMirrors of its own; setting or changing `config` rolls every pool,
+# whether it has mirrors or not, since its documents are rendered for all of them. An
+# entry that sets neither `ca` nor `insecureSkipVerify: true` renders nothing and rolls
+# nothing.
+# Empty (the default) renders nothing and rolls nothing.
 #
 # Example:
-# registries:
+# kubernetesRegistries:
 #   mirrors:
 #     docker.io:
 #       endpoints:
 #         - http://10.0.0.1:8082
 #     ghcr.io:
 #       endpoints:
-#         - http://10.0.0.1:8083
-#     gcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8084
-#     registry.k8s.io:
-#       endpoints:
-#         - http://10.0.0.1:8085
-#     quay.io:
-#       endpoints:
-#         - http://10.0.0.1:8086
-#     cr.fluentbit.io:
-#       endpoints:
-#         - http://10.0.0.1:8087
-#     docker-registry3.mariadb.com:
-#       endpoints:
-#         - http://10.0.0.1:8088
+#         - https://mirror.example.org
+#       skipFallback: true
 #   config:
-#     "10.0.0.1:8082":
+#     mirror.example.org:
 #       tls:
-#         insecureSkipVerify: true
-registries: {}
+#         ca: |-
+#           -----BEGIN CERTIFICATE-----
+#           ...
+#           -----END CERTIFICATE-----
+kubernetesRegistries: {}
 # Resource allocation ratios
 resources:
   cpuAllocationRatio: 10

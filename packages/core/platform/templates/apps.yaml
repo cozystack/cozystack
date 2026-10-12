@@ -7,6 +7,94 @@
 {{- if and $cozystackCm $cozystackCm.data -}}
 {{- $rootHost = default $rootHost (index $cozystackCm.data "root-host") -}}
 {{- end -}}
+{{- /* kubernetesRegistries lands in the machine config of every tenant worker, and
+       that config is stored in the TalosConfigTemplate and the reconcile Job in the
+       tenant's own namespace. Only what is safe to read there is accepted: the
+       mirrors, and the CA and skip-verify switch of a mirror's TLS settings.
+       Credentials (auth) and client keys (tls.clientIdentity) are refused here
+       rather than dropped further down, so the operator learns it at render. */ -}}
+{{- $kubernetesRegistries := .Values.kubernetesRegistries | default dict -}}
+{{- /* The whole map is serialized into the Secret below, so a key this template does
+       not look into would travel unchecked. */ -}}
+{{- range $key, $_ := $kubernetesRegistries -}}
+{{-   if not (has $key (list "mirrors" "config")) -}}
+{{-     fail (printf "kubernetesRegistries.%s is not supported: the whole map is copied into the cozystack-values Secret of every tenant, so only mirrors and config are carried." $key) -}}
+{{-   end -}}
+{{- end -}}
+{{- /* The mirrors are checked for the shape every pool reads them in. A malformed
+       entry passes through the Secret and fails the render of every pool that has
+       no mirrors of its own, in every tenant, so it is refused here instead. The
+       Secret is copied into every tenant namespace, so a key that could hold a
+       credential and a URL that carries one are refused too. */ -}}
+{{- $kubernetesMirrors := $kubernetesRegistries.mirrors | default dict -}}
+{{- if not (kindIs "map" $kubernetesMirrors) -}}
+{{-   fail (printf "kubernetesRegistries.mirrors must be a map of registry host to {endpoints, skipFallback, overridePath}, got %v" $kubernetesMirrors) -}}
+{{- end -}}
+{{- range $host, $mirror := $kubernetesMirrors -}}
+{{-   if not (kindIs "map" $mirror) -}}
+{{-     fail (printf "kubernetesRegistries.mirrors[%q] must be a map with an endpoints list, got %v" $host $mirror) -}}
+{{-   end -}}
+{{-   range $key, $_ := $mirror -}}
+{{-     if not (has $key (list "endpoints" "skipFallback" "overridePath")) -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].%s is not supported: the mirrors are copied into the cozystack-values Secret of every tenant, so credentials cannot travel in them. Only endpoints, skipFallback and overridePath are carried." $host $key) -}}
+{{-     end -}}
+{{-   end -}}
+{{-   range $switch := (list "skipFallback" "overridePath") -}}
+{{-     if and (hasKey $mirror $switch) (not (has (kindOf (index $mirror $switch)) (list "bool" "invalid"))) -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].%s must be true or false, got %v" $host $switch (index $mirror $switch)) -}}
+{{-     end -}}
+{{-   end -}}
+{{-   if not (and (kindIs "slice" $mirror.endpoints) $mirror.endpoints) -}}
+{{-     fail (printf "kubernetesRegistries.mirrors[%q].endpoints must be a non-empty list of URLs, got %v" $host $mirror.endpoints) -}}
+{{-   end -}}
+{{-   range $mirror.endpoints -}}
+{{-     if not (kindIs "string" .) -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints must hold URL strings, got %v" $host .) -}}
+{{-     end -}}
+{{-     if not (regexMatch "(?i)^https?://[^/@[:space:]]+(/[^[:space:]]*)?$" .) -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints entry %q must be an http(s) URL with no user name or password in it: the mirrors are copied into the cozystack-values Secret of every tenant." $host .) -}}
+{{-     end -}}
+{{-     $parsed := urlParse . -}}
+{{-   end -}}
+{{- end -}}
+{{- $kubernetesRegistriesConfig := $kubernetesRegistries.config | default dict -}}
+{{- if not (kindIs "map" $kubernetesRegistriesConfig) -}}
+{{-   fail (printf "kubernetesRegistries.config must be a map of mirror endpoint host to {tls}, got %v" $kubernetesRegistriesConfig) -}}
+{{- end -}}
+{{- range $endpoint, $entry := $kubernetesRegistriesConfig -}}
+{{-   if not (regexMatch "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9.-]+)(:[0-9]+)?$" $endpoint) -}}
+{{-     fail (printf "kubernetesRegistries.config key %q must be the host of a mirror endpoint, with its port when it is not 443, and no scheme or path." $endpoint) -}}
+{{-   end -}}
+{{-   if not (kindIs "map" $entry) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q] must be a map holding a tls block, got %v" $endpoint $entry) -}}
+{{-   end -}}
+{{-   range $key, $_ := $entry -}}
+{{-     if ne $key "tls" -}}
+{{-       fail (printf "kubernetesRegistries.config[%q].%s is not supported: the machine config is readable in the tenant namespace, so credentials cannot travel in it. Only tls.insecureSkipVerify and tls.ca are carried." $endpoint $key) -}}
+{{-     end -}}
+{{-   end -}}
+{{-   $tls := $entry.tls | default dict -}}
+{{-   if not (kindIs "map" $tls) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q].tls must be a map, got %v" $endpoint $tls) -}}
+{{-   end -}}
+{{-   if and (hasKey $tls "ca") (not (has (kindOf $tls.ca) (list "string" "invalid"))) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q].tls.ca must be PEM text, got %v" $endpoint $tls.ca) -}}
+{{-   end -}}
+{{-   if contains "PRIVATE KEY" ($tls.ca | default "" | toString) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q].tls.ca holds a private key. It takes the CA certificate that signs the mirror's certificate, and it is copied into the cozystack-values Secret of every tenant." $endpoint) -}}
+{{-   end -}}
+{{-   if and $tls.ca (not (contains "-----BEGIN CERTIFICATE-----" $tls.ca)) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q].tls.ca must hold a PEM certificate, a -----BEGIN CERTIFICATE----- block." $endpoint) -}}
+{{-   end -}}
+{{-   if and (hasKey $tls "insecureSkipVerify") (not (has (kindOf $tls.insecureSkipVerify) (list "bool" "invalid"))) -}}
+{{-     fail (printf "kubernetesRegistries.config[%q].tls.insecureSkipVerify must be true or false, got %v" $endpoint $tls.insecureSkipVerify) -}}
+{{-   end -}}
+{{-   range $key, $_ := $tls -}}
+{{-     if not (has $key (list "insecureSkipVerify" "ca")) -}}
+{{-       fail (printf "kubernetesRegistries.config[%q].tls.%s is not supported: the machine config is readable in the tenant namespace, so client keys cannot travel in it. Only tls.insecureSkipVerify and tls.ca are carried." $endpoint $key) -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -291,6 +379,13 @@ stringData:
       ephemeral-storage-allocation-ratio: {{ .Values.resources.ephemeralStorageAllocationRatio | quote }}
       {{- with .Values.scheduling }}
       scheduling:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- /* Only written when set: every release in every tenant reads this
+             Secret, and a key appearing would upgrade all of them. The kubernetes-nodes
+             chart reads it for the registry documents of each worker pool. */}}
+      {{- with .Values.kubernetesRegistries }}
+      kubernetes-registries:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
       {{- with $kubeRootCa.data }}

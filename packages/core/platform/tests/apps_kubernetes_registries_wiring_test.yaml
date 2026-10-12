@@ -1,0 +1,474 @@
+suite: apps.yaml kubernetesRegistries → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# kubernetesRegistries is the platform-wide registry mirror setting for the workers of
+# tenant Kubernetes clusters. It reaches the kubernetes-nodes chart through
+# _cluster.kubernetes-registries in the cozystack-values Secret. The key is written
+# only when set, because every release in every tenant reads that Secret and a key
+# appearing would upgrade all of them. The machine config it ends up in is stored in
+# the tenant namespace, so credentials and client keys are refused at render.
+
+tests:
+  - it: writes no kubernetes-registries key by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'kubernetes-registries'
+
+  - it: carries mirrors and the tls settings of a mirror endpoint when set
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io:
+            endpoints:
+              - https://mirror.example.org
+            skipFallback: true
+        config:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: true
+              ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^  kubernetes-registries:\n    config:\n      mirror\.example\.org:\n        tls:'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^      ghcr\.io:\n        endpoints:\n        - https://mirror\.example\.org\n        skipFallback: true'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'insecureSkipVerify: true'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '-----BEGIN CERTIFICATE-----'
+
+  - it: refuses credentials in a config entry
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            auth:
+              username: u
+              password: p
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.config\["mirror\.example\.org"\]\.auth is not supported'
+
+  - it: refuses a client identity under tls
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              clientIdentity:
+                cert: x
+                key: y
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.clientIdentity is not supported'
+
+  - it: refuses a config entry that is not a map
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org: insecure
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be a map holding a tls block'
+
+  # A mirror that the nodes chart cannot render would fail the HelmRelease of every pool
+  # without mirrors of its own, in every tenant, so the platform refuses it first.
+  - it: refuses mirrors that are not a map
+    set:
+      kubernetesRegistries:
+        mirrors:
+          - ghcr.io
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors must be a map'
+
+  - it: refuses a mirror that is not a map
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io: https://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors\["ghcr\.io"\] must be a map with an endpoints list'
+
+  - it: refuses a mirror without endpoints
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors\["ghcr\.io"\]\.endpoints must be a non-empty list'
+
+  - it: refuses a mirror whose endpoints list is empty
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io:
+            endpoints: []
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors\["ghcr\.io"\]\.endpoints must be a non-empty list'
+
+  - it: refuses an endpoint that is not a string
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io:
+            endpoints:
+              - url: https://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors\["ghcr\.io"\]\.endpoints must hold URL strings'
+
+  # The Secret is copied into every tenant namespace, so what could hold a credential
+  # is refused where the operator writes it.
+  - it: refuses a key on a mirror that is not one the nodes chart reads
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://mirror.example.org
+            auth:
+              password: p
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.mirrors\["docker\.io"\]\.auth is not supported'
+
+  - it: refuses an endpoint that carries credentials
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://user:s3cr3t@mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: refuses an endpoint without a scheme
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - 10.0.0.1:8082
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: accepts endpoints with a port, a path and an IPv6 address
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - http://10.0.0.1:8082
+              - https://harbor.example.org/v2/docker-hub/
+              - http://[fd00::1]:5000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'http://\[fd00::1\]:5000'
+
+  - it: refuses a private key where a CA certificate belongs
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca holds a private key'
+
+  # The whole kubernetesRegistries map is serialized into the Secret, so a key the
+  # template does not look into would travel unchecked.
+  - it: refuses a key next to mirrors and config
+    set:
+      kubernetesRegistries:
+        auth:
+          mirror.example.org:
+            password: p
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.auth is not supported'
+
+  - it: refuses config that is not a map
+    set:
+      kubernetesRegistries:
+        config:
+          - tls:
+              insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesRegistries\.config must be a map'
+
+  - it: refuses a config key that is not the host of a mirror endpoint
+    set:
+      kubernetesRegistries:
+        config:
+          https://mirror.example.org/:
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be the host of a mirror endpoint'
+
+  - it: accepts config keys with a port and an IPv6 address
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:5000:
+            tls:
+              insecureSkipVerify: true
+          "[fd00::1]:5000":
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'mirror\.example\.org:5000'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '\[fd00::1\]:5000'
+
+  - it: refuses a CA that is not PEM text
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca:
+                secretKeyRef:
+                  name: x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must be PEM text'
+
+  - it: refuses an endpoint that carries a scheme before the URL it claims to be
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - xhttps://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: refuses credentials hidden behind another scheme
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - ftp://u:p@h/https://m.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: refuses whitespace in an endpoint host and in its path
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://m .example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: refuses whitespace in the path of an endpoint
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://m.example.org/a b
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: accepts an endpoint whose scheme is upper case
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - HTTPS://Mirror.Example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'HTTPS://Mirror\.Example\.org'
+
+  - it: says what is wrong when endpoints is a string
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints: http://10.0.0.1:8082
+    asserts:
+      - failedTemplate:
+          errorPattern: 'endpoints must be a non-empty list of URLs'
+
+  - it: says what is wrong when tls is a string
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls: insecure
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls must be a map'
+
+  # The switches are read by the nodes chart as true or nothing. A string or a map in
+  # one of them would either be dropped without a word or carry text into the Secret.
+  - it: refuses a skipFallback that is not a boolean
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io:
+            endpoints:
+              - https://mirror.example.org
+            skipFallback: "True"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'mirrors\["ghcr\.io"\]\.skipFallback must be true or false'
+
+  - it: refuses an overridePath that is not a boolean
+    set:
+      kubernetesRegistries:
+        mirrors:
+          ghcr.io:
+            endpoints:
+              - https://mirror.example.org
+            overridePath:
+              token: x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'mirrors\["ghcr\.io"\]\.overridePath must be true or false'
+
+  - it: refuses an insecureSkipVerify that is not a boolean
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: "yes"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.insecureSkipVerify must be true or false'
+
+  - it: accepts overridePath on a mirror
+    set:
+      kubernetesRegistries:
+        mirrors:
+          registry.k8s.io:
+            endpoints:
+              - http://harbor.example.org/v2/registry-k8s-io/
+            overridePath: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'overridePath: true'
+
+  # What Talos would refuse at the node is refused here, since the Secret reaches every
+  # pool and a machine config the node cannot take rolls them all for nothing.
+  - it: refuses an endpoint URL that Go cannot parse
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://m.example.org:abc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'unable to parse url'
+
+  - it: refuses an endpoint without a host
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https:///v2
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password'
+
+  - it: refuses a CA that holds no certificate
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: hello
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must hold a PEM certificate'
+
+  - it: refuses a falsy CA that is not text
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must be PEM text'
+
+  - it: refuses a config key written as a URL without a trailing slash
+    set:
+      kubernetesRegistries:
+        config:
+          https://mirror.example.org:
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be the host of a mirror endpoint'
+
+  - it: accepts config keys that are an IPv4 address with a port or a hyphenated host
+    set:
+      kubernetesRegistries:
+        config:
+          10.0.0.1:8082:
+            tls:
+              insecureSkipVerify: true
+          my-mirror.local:5000:
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '10\.0\.0\.1:8082'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'my-mirror\.local:5000'
+
+  # The key this one replaces was rendered into a Secret nobody read. A Package that
+  # still sets it must keep rendering, with the value ignored as it always was.
+  - it: ignores the retired registries key instead of failing
+    set:
+      registries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - http://10.0.0.1:8082
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'kubernetes-registries'
