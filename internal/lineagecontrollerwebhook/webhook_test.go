@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -481,10 +482,23 @@ func addSchedulingClassCR(t *testing.T, h *LineageControllerWebhook, name string
 	}
 }
 
+func allowSchedulingClasses(t *testing.T, h *LineageControllerWebhook, namespace, allowed string) {
+	t.Helper()
+	ns := &corev1.Namespace{}
+	if err := h.Get(context.Background(), client.ObjectKey{Name: namespace}, ns); err != nil {
+		t.Fatalf("getting namespace %s: %v", namespace, err)
+	}
+	ns.Annotations = map[string]string{AllowedSchedulingClassesAnnotation: allowed}
+	if err := h.Update(context.Background(), ns); err != nil {
+		t.Fatalf("updating namespace %s: %v", namespace, err)
+	}
+}
+
 func TestApplySchedulingClass_OwnerApplicationClassOverridesNamespace(t *testing.T) {
 	ctx := context.Background()
 	h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
 	addSchedulingClassCR(t, h, "app-class")
+	allowSchedulingClasses(t, h, "tenant-acme", "other-class, app-class")
 	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{
 		"replicas":        int64(2),
 		"schedulingClass": "app-class",
@@ -536,6 +550,7 @@ func TestApplySchedulingClass_ClassNameTooLongForLabelSkipsOnlyLabel(t *testing.
 	longClass := strings.Repeat("a", 64)
 	h := newWebhookTestEnv(t, "tenant-acme", "", false)
 	addSchedulingClassCR(t, h, longClass)
+	allowSchedulingClasses(t, h, "tenant-acme", longClass)
 	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": longClass})
 	pod := newPod("tenant-acme", "db-0")
 
@@ -551,5 +566,86 @@ func TestApplySchedulingClass_ClassNameTooLongForLabelSkipsOnlyLabel(t *testing.
 	}
 	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != schedulerapi.SchedulerName {
 		t.Errorf("expected pod spec.schedulerName=%s, got %q", schedulerapi.SchedulerName, sched)
+	}
+}
+
+// The tenant class is the administrator's placement constraint. An application
+// class that the namespace does not allow, or that does not exist, must leave
+// it in force instead of dropping the injection altogether.
+func TestApplySchedulingClass_RejectedOwnerApplicationClassKeepsTenantClass(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		appClass string
+		allowed  string
+		existing []string
+	}{
+		{name: "class does not exist", appClass: "does-not-exist", allowed: "does-not-exist"},
+		{name: "class not in the allowed list", appClass: "app-class", allowed: "other-class", existing: []string{"app-class"}},
+		{name: "no allowed list", appClass: "app-class", existing: []string{"app-class"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+			for _, name := range tc.existing {
+				addSchedulingClassCR(t, h, name)
+			}
+			if tc.allowed != "" {
+				allowSchedulingClasses(t, h, "tenant-acme", tc.allowed)
+			}
+			owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": tc.appClass})
+			pod := newPod("tenant-acme", "db-0")
+
+			if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+				t.Fatalf("applySchedulingClass returned error: %v", err)
+			}
+
+			if got := pod.GetLabels()[schedulerapi.SchedulingClassLabel]; got != testSchedulingClass {
+				t.Errorf("expected pod label %s=%s, got %q", schedulerapi.SchedulingClassLabel, testSchedulingClass, got)
+			}
+			if got := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; got != testSchedulingClass {
+				t.Errorf("expected pod annotation %s=%s, got %q", schedulerapi.SchedulingClassAnnotation, testSchedulingClass, got)
+			}
+			if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != schedulerapi.SchedulerName {
+				t.Errorf("expected pod spec.schedulerName=%s, got %q", schedulerapi.SchedulerName, sched)
+			}
+		})
+	}
+}
+
+// Naming the tenant's own class is the same as leaving the field empty, so it
+// needs no entry in the allowed list.
+func TestApplySchedulingClass_OwnerApplicationNamingTenantClassNeedsNoAllowedList(t *testing.T) {
+	ctx := context.Background()
+	h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": testSchedulingClass})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+
+	if got := pod.GetLabels()[schedulerapi.SchedulingClassLabel]; got != testSchedulingClass {
+		t.Errorf("expected pod label %s=%s, got %q", schedulerapi.SchedulingClassLabel, testSchedulingClass, got)
+	}
+}
+
+// Without a tenant class there is nothing to fall back to: a rejected
+// application class leaves the pod on the default scheduler.
+func TestApplySchedulingClass_RejectedOwnerApplicationClassWithoutTenantClassIsNoOp(t *testing.T) {
+	ctx := context.Background()
+	h := newWebhookTestEnv(t, "tenant-acme", "", false)
+	addSchedulingClassCR(t, h, "app-class")
+	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": "app-class"})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+
+	if _, ok := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; ok {
+		t.Errorf("pod annotation should not be set for a class the namespace does not allow")
+	}
+	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != "" {
+		t.Errorf("pod spec.schedulerName should not be set, got %q", sched)
 	}
 }
