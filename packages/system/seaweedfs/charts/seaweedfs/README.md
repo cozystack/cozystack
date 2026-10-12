@@ -286,7 +286,7 @@ metadata:
     app.kubernetes.io/component: s3
 stringData:
   # this key must be an inline json config file
-  seaweedfs_s3_config: '{"identities":[{"name":"anvAdmin","credentials":[{"accessKey":"snu8yoP6QAlY0ne4","secretKey":"PNzBcmeLNEdR0oviwm04NQAicOrDH1Km"}],"actions":["Admin","Read","Write"]},{"name":"anvReadOnly","credentials":[{"accessKey":"SCigFee6c5lbi04A","secretKey":"kgFhbT38R8WUYVtiFQ1OiSVOrYr3NKku"}],"actions":["Read"]}]}'
+  seaweedfs_s3_config: '{"identities":[{"name":"anvAdmin","credentials":[{"accessKey":"snu8yoP6QAlY0ne4","secretKey":"PNzBcmeLNEdR0oviwm04NQAicOrDH1Km"}],"actions":["Admin","Read","Write"]},{"name":"anvReadOnly","credentials":[{"accessKey":"SCigFee6c5lbi04A","secretKey":"kgFhbT38R8WUYVtiFQ1OiSVOrYr3NKku"}],"actions":["Read","List"]}]}'
 ```
 
 #### Source S3 credentials from an existing Secret
@@ -362,6 +362,30 @@ If `adminPassword` is set, the admin interface requires authentication:
 If `adminPassword` is empty or not set, the admin interface runs without authentication (not recommended for production).
 
 As an alternative, a kubernetes Secret can be used (`admin.secret.existingSecret`).
+
+### Admin listen address
+
+Since SeaweedFS 4.46, `weed admin` defaults to listening on loopback (`127.0.0.1`).
+The chart's httpGet readiness/liveness probes dial the pod IP, so the admin
+server must bind a non-loopback address for the probes to succeed. The chart
+therefore passes `-ip={{ .Values.admin.ip }}`, defaulting `admin.ip` to `0.0.0.0`
+(the pre-4.46 behaviour of listening on all interfaces).
+
+Binding a non-loopback address requires authentication: `weed admin` refuses to
+start on a non-loopback address without `-adminPassword`, so the chart fails at
+render time if `admin.ip` is non-loopback and authentication is not configured via
+`admin.secret.adminPassword`, `admin.secret.existingSecret`, or
+`WEED_ADMIN_PASSWORD` supplied through `admin.extraEnvironmentVars` /
+`admin.secretExtraEnvironmentVars`. Setting `admin.allowInsecureBind` renders
+`-allowInsecureBind` and bypasses this guard; it leaves the admin API
+unauthenticated on the network, so use it only when access is otherwise
+restricted (e.g. network policies). The whole `127.0.0.0/8` range and `::1` are
+treated as loopback (matching `weed admin`); `localhost` is treated as
+non-loopback. Set `admin.ip` to a loopback address only if you also replace the
+httpGet probes (e.g. with an `exec` probe that checks `127.0.0.1`).
+
+The `-ip` flag requires SeaweedFS 4.46 or newer; pinning `admin.imageOverride`
+to an older image is not supported with this chart version.
 
 ### Admin Data Persistence
 

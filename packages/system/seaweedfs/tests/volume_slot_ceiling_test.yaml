@@ -28,6 +28,7 @@ suite: seaweedfs volume slot ceiling
 
 templates:
   - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/master/master-configmap.yaml
   - charts/seaweedfs/templates/volume/volume-statefulset.yaml
 
 release:

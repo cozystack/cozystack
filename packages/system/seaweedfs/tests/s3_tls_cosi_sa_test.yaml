@@ -19,6 +19,7 @@ suite: seaweedfs s3 TLS on main port + COSI provisioner SA name
 
 templates:
   - charts/seaweedfs/templates/s3/s3-deployment.yaml
+  - charts/seaweedfs/templates/s3/s3-secret.yaml
   - charts/seaweedfs/templates/cosi/cosi-deployment.yaml
 
 release:
