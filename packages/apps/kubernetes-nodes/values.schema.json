@@ -245,7 +245,7 @@
       ]
     },
     "osImage": {
-      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.",
+      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool. With the worker image catalog enabled, a pool created through the platform API, other than a proxmox one, gets `builtin: {}` written here at creation unless its spec already carries `osImage`; a pool created earlier keeps what it has.",
       "type": "object",
       "default": {},
       "properties": {
@@ -301,12 +301,12 @@
           "default": ""
         },
         "imageFactoryURL": {
-          "description": "Default base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Applies only when this pool imports over HTTP — the default and `osImage.factory`, which overrides it via `osImage.factory.imageFactoryURL`. A pool on `osImage.builtin` clones a golden image from the worker image catalog and does not use this field at all. Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash. It is interpolated into the worker DataVolume source URL, so on those HTTP paths it must be a plain `http(s)` URL and the render refuses anything else; a pool on `osImage.builtin` builds no such URL and is not held to it, so blanking this field there is legal.",
+          "description": "Default base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Applies only when this pool imports over HTTP — the default and `osImage.factory`, which overrides it via `osImage.factory.imageFactoryURL`. A pool on `osImage.builtin` clones a golden image from the worker image catalog and does not use this field at all. Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash. It is interpolated into the worker DataVolume source URL, so on those HTTP paths it must be a plain `http(s)` URL and the render refuses anything else; a pool on `osImage.builtin` builds no such URL and is not held to it, so blanking this field there is legal. A pool created while the platform's `kubernetesWorkerImage.imageFactoryURL` is set gets that value written here at creation, a proxmox pool excepted, unless its spec already carries one, and a pool created earlier keeps what it has.",
           "type": "string",
           "default": "https://factory.talos.dev"
         },
         "installerRepository": {
-          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e` against whatever this pool's `osImage` pins, falling back to `talos.schematicID` and `talos.version` — so the installer matches the OS the pool actually booted. The prefix itself has no `osImage.*` override, so an air-gapped pool needs it pointed at a reachable registry as well. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
+          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e` against whatever this pool's `osImage` pins, falling back to `talos.schematicID` and `talos.version` — so the installer matches the OS the pool actually booted. The prefix itself has no `osImage.*` override, so an air-gapped pool needs it pointed at a reachable registry as well. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash. A pool created while the platform sets `kubernetesWorkerImage.installerRepository` gets that prefix written here at creation unless its spec already carries one, and a pool created earlier keeps what it has. The prefix is never derived from `imageFactoryURL`.",
           "type": "string",
           "default": "factory.talos.dev/installer"
         },
