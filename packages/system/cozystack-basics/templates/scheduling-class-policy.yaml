@@ -1,0 +1,84 @@
+{{- /* Render only where the ValidatingAdmissionPolicy API is served. Same guard as gateway-hostname-policy.yaml. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+# Refuses an application whose spec.schedulingClass names a class its tenant
+# does not allow. The tenant class is the administrator's placement constraint;
+# an application may replace it only with a class listed in the tenant's
+# allowedSchedulingClasses, which the tenant chart writes to the namespace
+# annotation read here. Naming the tenant's own class is the same as leaving
+# the field empty, so it needs no entry.
+#
+# The lineage webhook applies the same rule when it admits a Pod, falling back
+# to the tenant class, and that is what covers a class removed from the list
+# after an application was admitted. An UPDATE that keeps the class is
+# therefore not refused here, so such an application stays editable.
+#
+# Tenants are excluded: their spec.schedulingClass is the class of the child
+# tenant, which the tenant chart's inheritance already governs.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-application-scheduling-class-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["apps.cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["*"]
+    excludeResourceRules:
+    - apiGroups: ["apps.cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["tenants"]
+  matchConditions:
+  - name: selects-scheduling-class
+    expression: >-
+      has(object.spec) && has(object.spec.schedulingClass) && object.spec.schedulingClass != ""
+  variables:
+  - name: newClass
+    expression: object.spec.schedulingClass
+  - name: oldClass
+    expression: >-
+      (oldObject != null && has(oldObject.spec) && has(oldObject.spec.schedulingClass))
+        ? oldObject.spec.schedulingClass
+        : ""
+  - name: tenantClass
+    expression: >-
+      (namespaceObject != null &&
+       has(namespaceObject.metadata.labels) &&
+       "scheduler.cozystack.io/scheduling-class" in namespaceObject.metadata.labels)
+        ? namespaceObject.metadata.labels["scheduler.cozystack.io/scheduling-class"]
+        : ""
+  - name: allowed
+    expression: >-
+      (namespaceObject != null &&
+       has(namespaceObject.metadata.annotations) &&
+       "namespace.cozystack.io/allowed-scheduling-classes" in namespaceObject.metadata.annotations)
+        ? namespaceObject.metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"].split(",").map(c, c.trim())
+        : []
+  validations:
+  - expression: >-
+      variables.newClass == variables.oldClass ||
+      variables.newClass == variables.tenantClass ||
+      variables.newClass in variables.allowed
+    messageExpression: >-
+      object.kind + " " + object.metadata.name + ": schedulingClass " + variables.newClass +
+      " is not allowed in namespace " + object.metadata.namespace + " (allowed: " +
+      (variables.allowed.size() == 0 ? "none" : variables.allowed.join(", ")) +
+      "). Leave schedulingClass empty to run under the tenant's class, or have the tenant's administrator add the class to its allowedSchedulingClasses."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-application-scheduling-class-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-application-scheduling-class-policy
+  validationActions: [Deny]
+{{- end }}
