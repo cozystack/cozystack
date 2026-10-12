@@ -31,10 +31,10 @@ Service runs Valkey on the freshworks-oss redis-operator, which manages Sentinel
 
 ### Application-specific parameters
 
-| Name              | Description                                                                                                                                                                                                       | Type     | Value  |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `authEnabled`     | Enable password generation.                                                                                                                                                                                       | `bool`   | `true` |
-| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string` | `""`   |
+| Name              | Description                                                                                                                                                                                                                                                                                   | Type     | Value  |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `authEnabled`     | Enable password generation.                                                                                                                                                                                                                                                                   | `bool`   | `true` |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant. | `string` | `""`   |
 
 
 ## Parameter examples and reference
