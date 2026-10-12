@@ -12,6 +12,7 @@ rules:
   - {{ $.Release.Name }}-{{ $name }}-credentials
   {{- end }}
   verbs: ["get", "list", "watch"]
+{{- if .Values.ui }}
 - apiGroups:
   - networking.k8s.io
   resources:
@@ -19,6 +20,7 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-ui
   verbs: ["get", "list", "watch"]
+{{- end }}
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
