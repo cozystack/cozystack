@@ -903,6 +903,24 @@ filer:
         # requires ingress-nginx to run with --enable-ssl-passthrough.
       tls: []
 
+  # Gateway API HTTPRoute, an alternative to the ingress above.
+  httpRoute:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Gateways this route attaches to, for example:
+    #   - group: gateway.networking.k8s.io
+    #     kind: Gateway
+    #     name: my-gateway
+    #     namespace: gateway-system
+    #     sectionName: https
+    parentRefs: []
+    hostnames: []
+    # Each rule may set matches, filters, timeouts and backendRefs.
+    # A rule without backendRefs routes to the filer service.
+    # An empty list routes all traffic there.
+    rules: []
+
   # extraEnvVars is a list of extra environment variables to set with the stateful set.
   extraEnvironmentVars:
     # the WEED_MYSQL_* keys and the db credential secret only render while this is "true"
@@ -1194,6 +1212,27 @@ s3:
     # additional ingress annotations for the s3 endpoint
     annotations: {}
     tls: []
+
+  # Gateway API HTTPRoute, an alternative to the ingress above.
+  # With global.seaweedfs.enableSecurity and no httpsPort, the standalone s3
+  # gateway (s3.enabled) serves TLS on s3.port, so the Gateway also needs a
+  # BackendTLSPolicy for the s3 Service, which this chart does not render.
+  httpRoute:
+    enabled: false
+    labels: {}
+    annotations: {}
+    # Gateways this route attaches to, for example:
+    #   - group: gateway.networking.k8s.io
+    #     kind: Gateway
+    #     name: my-gateway
+    #     namespace: gateway-system
+    #     sectionName: https
+    parentRefs: []
+    hostnames: []
+    # Each rule may set matches, filters, timeouts and backendRefs.
+    # A rule without backendRefs routes to the s3 service.
+    # An empty list routes all traffic there.
+    rules: []
 
   # Service settings
   service:
