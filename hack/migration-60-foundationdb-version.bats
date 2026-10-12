@@ -33,6 +33,8 @@
 # Run with: hack/cozytest.sh hack/migration-60-foundationdb-version.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-60-foundationdb"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/60"
 
