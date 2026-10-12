@@ -1,0 +1,24 @@
+suite: cozystack-basics tenant super-admin base grant
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# cozy:tenant:super-admin:base is the tenant's most privileged tier. Its base
+# grant is the apps.cozystack.io wildcard and nothing else; pinning the whole
+# rule set makes any broadening of this tier a deliberate, reviewed test change.
+tests:
+  - it: cozy:tenant:super-admin:base grants the apps.cozystack.io wildcard and nothing else
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:super-admin:base
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["apps.cozystack.io"]
+              resources: ["*"]
+              verbs: ["*"]

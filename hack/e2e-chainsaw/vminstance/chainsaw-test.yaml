@@ -386,3 +386,46 @@ spec:
             echo "FAIL: a dry-run eviction recorded an evacuation on VMI $vmi" >&2
             exit 1
           fi
+---
+# A tenant super-admin must not write raw kubevirt.io/virtualmachines: that
+# bypasses the apps.cozystack.io wrapper's size/quota enforcement. Pure can-i
+# checks, no objects created. In this suite because every suite dir must map to
+# a PackageSource (hack/select-install.sh).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-super-admin-raw-vm-rbac
+spec:
+  steps:
+  - name: raw-vm-write-denied-app-vm-allowed
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          # kubectl needs --as with --as-group; the user is unbound, the group carries the grant.
+          as="--as=e2e-tenant-rbac-probe --as-group=system:authenticated --as-group=${ns}-super-admin"
+          rc=0
+          # can-i exits 1 on "no", so read the answer from stdout, not the exit
+          # code; stderr is left to the step log so a kubectl error is visible.
+          want() {
+            verb=$1; res=$2; expect=$3
+            got=$(kubectl -n "$ns" auth can-i "$verb" "$res" $as) || true
+            echo "can-i $verb $res as ${ns}-super-admin: ${got:-<empty>} (want $expect)"
+            if [ "$got" != "$expect" ]; then
+              echo "  UNEXPECTED: $verb $res = '${got:-<empty>}', want '$expect'" >&2
+              rc=1
+            fi
+          }
+          # raw kubevirt VM writes denied (the hole); reads kept; apps.cozystack.io wrapper allowed.
+          want create virtualmachines.kubevirt.io no
+          want update virtualmachines.kubevirt.io no
+          want patch  virtualmachines.kubevirt.io no
+          want delete virtualmachines.kubevirt.io no
+          want get  virtualmachines.kubevirt.io yes
+          want list virtualmachines.kubevirt.io yes
+          want create virtualmachines.apps.cozystack.io yes
+          exit "$rc"
+        check:
+          ($error == null): true
