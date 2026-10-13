@@ -1,5 +1,27 @@
 # Managed Kafka Service
 
+## Node pools
+
+The chart runs Kafka in KRaft mode with two `KafkaNodePool` resources, one for brokers and one for controllers. The pools are not regular chart manifests: a `pre-install,pre-upgrade` Helm hook applies them on every install and upgrade, before the main release apply. Every pool that exists today was created by that hook and is absent from every release manifest. Follow a run with `kubectl logs -n <namespace> job/<release>-kafka-migration`.
+
+Each pool gets a short, release-hashed name (`b-<hash>` for brokers, `c-<hash>` for controllers). `KafkaNodePool` names are namespace-unique and each release hashes differently, so several Kafka instances can live in one namespace. The hash keeps the pool name at 10 characters, so the derived `<cluster>-<pool>-<id>` pod hostname grows only with the release name and the node ID. At the 44-character `name` limit it fits the 63-character limit only while every node ID is a single digit; controllers take node IDs from `kafka.replicas` upward.
+
+A cluster migrated from ZooKeeper by an earlier chart keeps its broker pool named `kafka`: that pool adopted the cluster's original `<cluster>-kafka-N` brokers and their data. The controller pool pins its node IDs above the broker range (`strimzi.io/next-node-ids`), so the broker pool keeps `[0..replicas-1]`.
+
+### Deletion and PVC retention
+
+Both node pools set `deleteClaim: false`, so deleting a Kafka release intentionally leaves its data PVCs (`data-0-<cluster>-<pool>-N`) behind. The trade-off is that the PVCs keep consuming tenant quota until removed by hand, and recreating a same-named Kafka rebinds the stale volumes, whose on-disk cluster id will not match the new cluster (`InconsistentClusterIdException`, CrashLoop). To truly start over, delete the leftover PVCs before recreating: `kubectl -n <namespace> delete pvc -l strimzi.io/cluster=<release>`.
+
+### Upgrading from ZooKeeper and from Kafka 3.x
+
+The operator behind this chart (Strimzi 1.x) runs neither ZooKeeper nor Kafka 3.x. A ZooKeeper-based instance must reach KRaft on the Cozystack release that ships the ZooKeeper to KRaft migration (v1.7) before the platform moves past it. On every platform variant, the platform upgrade refuses to switch package sources while Strimzi still serves `v1beta2` and any Kafka lacks confirmed KRaft state. On the variants that run platform migrations, migration 61 checks the same evidence again, including on a repeat run after API conversion. Every Kafka must report a nonempty `kafkaMetadataVersion` and either `kafkaMetadataState: KRaft` or, without a state, `Ready=True` or the `cozystack.io/kraft-verified` annotation that migration 61 records on every Kafka it accepts before it stops the Strimzi operators. A `kafkaMetadataState` other than `KRaft`, a ZooKeeper section or a missing status blocks the upgrade, and the error names the reason for each Kafka. The API conversion deletes `kafkaMetadataState` and may change the spec, and neither invalidates that evidence on a retry. The migration also moves every instance on `v3.8` or `v3.9` to `v4.3`; Strimzi then rolls the brokers onto Kafka 4.3. Elsewhere those steps are manual, and the platform upgrade refuses to start while Strimzi still stores `v1beta2`: before upgrading the platform, run `/migrations/61` from this release's `platform-migrations` image with cluster-admin credentials. Outside that image the script, `packages/core/platform/images/migrations/migrations/61`, needs the `lib/` directory next to it and `kubectl`, `jq`, `gzip` and `base64`, plus `STRIMZI_CRD_FILE` pointing at `strimzi-crds-0.51.0.yaml` from the [Strimzi 0.51.0 release](https://github.com/strimzi/strimzi-kafka-operator/releases/tag/0.51.0).
+
+Kafka 4 no longer accepts clients older than Kafka 2.1: upgrade such clients before the platform upgrade. Kafka 4 also removed the `message.format.version`, `message.downconversion.enable` and `message.timestamp.difference.max.ms` topic settings, and it requires `segment.bytes` of at least 1048576 (1 MiB) where Kafka 3.x accepted much smaller values; a broker whose log holds a topic below that does not start. The platform upgrade refuses to start while a Kafka application or a KafkaTopic sets one of them, and the chart refuses to render such a topic, so remove the removed settings and raise `segment.bytes` in the `config` of every topic before the upgrade. A topic created through the Kafka admin API without a KafkaTopic is not visible to these checks.
+
+### No downgrade
+
+Neither lowering the `version` field on a running cluster nor rolling the app back to an earlier chart is supported: Strimzi refuses an in-place downgrade of the KRaft metadata version, and an earlier chart renders resources for an operator API this platform no longer serves. Take a backup before upgrading.
+
 ## Parameters
 
 ### Common parameters
@@ -9,7 +31,7 @@
 | `external`    | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                                                                    | `bool`   | `false` |
 | `tls`         | TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.                                         | `object` | `{}`    |
 | `tls.enabled` | Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks. | `*bool`  | `null`  |
-| `version`     | Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.                                                                                     | `string` | `v3.9`  |
+| `version`     | Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v4.3 back to v4.2) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.                                                                                     | `string` | `v4.3`  |
 
 
 ### Application-specific parameters
@@ -35,7 +57,7 @@
 | `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
 | `kafka.size`                  | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`     |
 | `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
-| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                | `quantity` | `5Gi`      |
+| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata.                                                    | `quantity` | `5Gi`      |
 
 
 ## Parameter examples and reference
@@ -76,47 +98,3 @@ topics:
     partitions: 1
     replicas: 3
 ```
-
-## ZooKeeper to KRaft Migration
-
-The chart is pure KRaft — it ships a Kafka CR annotated `strimzi.io/kraft: enabled` with no `spec.zookeeper` block. The broker and controller `KafkaNodePool` resources are **not** regular chart manifests: they are created and reconciled by the migration Job (a `pre-install,pre-upgrade` Helm hook) on every install and upgrade. This is deliberate. The hook has to create the pools and walk Strimzi's migration state machine *before* the main release apply, and a resource a hook creates cannot also be a normal chart manifest without Helm failing the migrating upgrade — its 3-way merge finds the pool in the new manifest and live in the cluster but absent from the previous (ZooKeeper) revision, and aborts with `original object KafkaNodePool ... not found`, leaving the release stuck `failed` even though the cluster migrated fine. Keeping the pools hook-owned avoids that whole class of conflict.
-
-Existing ZooKeeper-based instances are migrated automatically on the next chart upgrade. The Job is idempotent and safe to re-run.
-
-### How it works
-
-1. The Job runs on install and upgrade. It first ensures both `KafkaNodePool`s exist (creating or updating them), then decides what to do from the Kafka CR.
-2. It inspects the Kafka CR: a genuine NotFound means a fresh install (the pools are ensured and the main apply creates the KRaft Kafka CR — nothing to migrate); a CR already annotated `strimzi.io/kraft=enabled` or in `status.kafkaMetadataState: KRaft` means done; any other read error aborts (fail closed) rather than risk driving a live ZooKeeper cluster. Otherwise (typically `ZooKeeper` state) it migrates.
-3. For a migrating cluster the broker pool is named exactly `kafka` — Strimzi derives broker and PVC names as `<cluster>-<pool>-<id>`, so only that name reuses the existing `<cluster>-kafka-N` brokers and their data in place — while the controller pool pins its node IDs above the broker range (`strimzi.io/next-node-ids`) so the broker pool keeps `[0..replicas-1]` and Strimzi cannot hand the existing broker IDs to the fresh controllers (which would recreate the brokers empty and orphan the data). Fresh clusters use the release-hashed `b-<hash>` broker pool instead.
-4. It annotates the Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`, then polls `status.kafkaMetadataState` and waits for the migration to reach `KRaftPostMigration | PreKRaft | KRaft`.
-5. Only once that safe state is reached does it flip the annotation to `strimzi.io/kraft=enabled` and wait until the state reaches `KRaft`; if the wait times out in an intermediate state the Job aborts (`exit 1`) so Helm fails the upgrade and the next reconcile retries from where the migration left off.
-6. When the Job succeeds, the main release apply settles the KRaft Kafka CR, which already matches the migrated state.
-
-### Observability and escape hatches
-
-- Tail the Job logs to follow migration progress: `kubectl logs -n <namespace> job/<release>-kafka-migration`
-- Monitor `status.kafkaMetadataState` on the Kafka CR directly.
-- Until the cluster reaches `PreKRaft`, Strimzi's `rollback` annotation stays available as a manual escape hatch: `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite` (back to `KRaftDualWriting`), then `strimzi.io/kraft=disabled` to return to `ZooKeeper`; then delete the failed Job and retry. Past `PreKRaft` the state machine accepts only `enabled`.
-
-### Multiple Kafka clusters per namespace
-
-Fresh KRaft clusters can coexist in one namespace: each one's node pools get short, release-hashed names (`b-<hash>` for brokers, `c-<hash>` for controllers), unique because `KafkaNodePool` object names are namespace-unique and each release hashes differently, while every pod/PVC/Service is already prefixed by the (unique) cluster name. The hash keeps the pool name a fixed length rather than embedding the release name — which Strimzi already prepends as the cluster name — so the derived `<cluster>-<pool>-<id>` pod hostname stays within Kubernetes' 63-character limit even for long release names. So you can deploy any number of new Kafka instances side by side.
-
-The ZooKeeper→KRaft migration path is more constrained, but still fully automatic. To adopt an existing cluster's `<cluster>-kafka-N` brokers and their data in place, the broker pool must be named exactly `kafka`, and that fixed name is namespace-unique — so co-namespaced ZooKeeper clusters cannot all migrate at once, they must serialize on the `kafka` name (Strimzi's own guidance is one Kafka per namespace for this reason — [strimzi/strimzi-kafka-operator discussions/11120](https://github.com/orgs/strimzi/discussions/11120)). The migration hook handles that serialization automatically: whichever cluster's upgrade wins the `kafka` name (claimed atomically via `kubectl create`) migrates in place; a cluster that loses the race fails its hook and its next reconcile retries. Once a migrated cluster sees other ZooKeeper clusters still waiting, it frees the name — it stands up its own `b-<hash>` broker pool, drains all data off the `kafka`-pool brokers with a Cruise Control `KafkaRebalance` (`mode: remove-brokers`, done online, no downtime), deletes the drained `kafka` pool, and the next waiting cluster's retry adopts the freed name. The last cluster to migrate keeps `kafka`. So N co-namespaced ZooKeeper clusters all reach KRaft with no manual steps — sequentially, and with one full data drain per cluster except the last. Cruise Control is enabled only for the drain and removed after. Fresh KRaft clusters are never involved in any of this.
-
-### Deletion and PVC retention
-
-Both node pools set `deleteClaim: false`, so deleting a Kafka release intentionally leaves its data PVCs (`data-0-<cluster>-<pool>-N`) behind — this protects data across the migration and against accidental deletion. The trade-off is that the PVCs keep consuming tenant quota until removed by hand, and recreating a same-named Kafka rebinds the stale volumes, whose on-disk cluster id will not match the new cluster (`InconsistentClusterIdException`, CrashLoop). To truly start over, delete the leftover PVCs before recreating: `kubectl -n <namespace> delete pvc -l strimzi.io/cluster=<release>`.
-
-### No downgrade across the KRaft boundary
-
-Migration to KRaft is a point of no return once the cluster passes `PreKRaft` (before that, the escape hatch above still works). After it, Strimzi has no KRaft→ZooKeeper rollback, so neither lowering the `version` field on a running cluster nor rolling the whole app back to a pre-KRaft chart is supported: rolling the chart back would re-render the `spec.zookeeper` objects over live KRaft storage and drop the `strimzi.io/kraft` / `strimzi.io/node-pools` annotations — that does not restore ZooKeeper, it **damages** the Kafka cluster. Take a backup first, and never downgrade the kafka app or the platform once a cluster has reached KRaft (`strimzi.io/kraft=enabled`).
-
-**This chart release is a mandatory stop on the upgrade path.** A cluster that skips it arrives at a future Strimzi (0.46+) still on ZooKeeper, and 0.46 removed the ZooKeeper→KRaft migration entirely — there is then no supported path off ZooKeeper. Make sure every Kafka in the platform has reached KRaft on this release before upgrading past it.
-
-Budget a maintenance window of **up to a few hours per instance**: the in-place migration is tens of minutes (broker rolling restarts), and when several Kafkas share a namespace each one but the last also drains its full dataset off the shared `kafka` pool via a Cruise Control rebalance to free the name, which scales with data size.
-
-### Important notes
-
-- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi releases only support KRaft.
-- The `kafka.controllerStorageSize` parameter controls PV size for the new KRaft controller nodes (default: `5Gi`).

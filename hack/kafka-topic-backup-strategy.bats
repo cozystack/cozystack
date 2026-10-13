@@ -116,7 +116,9 @@ topic=""; p=""; off=0; max=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --topic) topic="$2"; shift ;; --partition) p="$2"; shift ;; --offset) off="$2"; shift ;;
-    --max-messages) max="$2"; shift ;; --bootstrap-server|--timeout-ms|--property) shift ;;
+    --max-messages) max="$2"; shift ;; --bootstrap-server|--timeout-ms|--formatter-property) shift ;;
+    # Kafka 4 prints this on stdout, ahead of the records.
+    --property) echo "Option --property is deprecated and will be removed in a future version. Use --formatter-property instead."; shift ;;
   esac
   shift
 done
@@ -131,7 +133,10 @@ STUB
 set -eu
 topic=""
 while [ $# -gt 0 ]; do
-  case "$1" in --topic) topic="$2"; shift ;; --bootstrap-server|--property) shift ;; esac
+  case "$1" in
+    --topic) topic="$2"; shift ;; --bootstrap-server|--reader-property) shift ;;
+    --property) echo "Warning: --property is deprecated and will be removed in a future version. Use --reader-property instead."; shift ;;
+  esac
   shift
 done
 [ -d "$BROKER/$topic" ] || { echo "no such topic $topic" >&2; exit 1; }

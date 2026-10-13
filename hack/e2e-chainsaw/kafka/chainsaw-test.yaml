@@ -3,7 +3,7 @@
 # The chart deploys Kafka in KRaft mode (no ZooKeeper): a combined-free layout
 # of separate broker + controller KafkaNodePools. This test asserts the KRaft
 # topology renders and converges (both node pools present, the Strimzi Kafka CR
-# reaches kafkaMetadataState=KRaft) and that no ZooKeeper resources remain.
+# is Ready) and that no ZooKeeper resources remain.
 # The last step deletes the app itself and checks that no node pool or Strimzi
 # pod of this cluster survives the uninstall.
 apiVersion: chainsaw.kyverno.io/v1alpha1
@@ -46,9 +46,9 @@ spec:
 
   - name: wait-ready
     try:
-    # Deliberately under the floor: kafka-rd sets a 7h install timeout, which
-    # no budget inside the E2E job's cap can clear, so a failed install here
-    # reports as a bare assert timeout and the catch block's describe of the
+    # Deliberately under the floor, kafka-rd's default 10m install timeout: a
+    # healthy cluster is Ready in a few minutes, so a failed install ends the
+    # run early as a bare assert timeout, and the catch block's describe of the
     # HelmRelease is where its state is read.
     - assert:
         timeout: 6m
@@ -73,7 +73,7 @@ spec:
     - assert:
         timeout: 5m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaTopic
           metadata:
             name: kafka-test-test-results
@@ -91,7 +91,7 @@ spec:
     - assert:
         timeout: 2m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -102,7 +102,7 @@ spec:
     - assert:
         timeout: 2m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -113,15 +113,13 @@ spec:
     - assert:
         timeout: 5m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: Kafka
           metadata:
             name: kafka-test
-            annotations:
-              strimzi.io/kraft: enabled
-              strimzi.io/node-pools: enabled
           status:
-            kafkaMetadataState: KRaft
+            (conditions[?type == 'Ready']):
+            - status: "True"
     # KRaft mode ships no ZooKeeper: the client Service must never exist.
     - error:
         resource:
@@ -161,7 +159,7 @@ spec:
     # period, which the default error timeout covers.
     - error:
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -227,11 +225,11 @@ spec:
       kind: HelmRelease
       name: kafka-kafka-test
   - describe:
-      apiVersion: kafka.strimzi.io/v1beta2
+      apiVersion: kafka.strimzi.io/v1
       kind: Kafka
       name: kafka-kafka-test
   - describe:
-      apiVersion: kafka.strimzi.io/v1beta2
+      apiVersion: kafka.strimzi.io/v1
       kind: Kafka
       name: kafka-kafka-restore
   - describe:
@@ -341,14 +339,14 @@ spec:
     try:
     - error:
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
               strimzi.io/cluster: kafka-kafka-test
     - error:
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
