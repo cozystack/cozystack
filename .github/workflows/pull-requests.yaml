@@ -487,6 +487,9 @@ jobs:
           # --binary so vendored binary provider bundles (components*.gz),
           # which some package image targets regenerate, survive reassembly
           # in finalize (a plain "Binary files differ" stub is unappliable).
+          # intent-to-add brings in the files the build created under the
+          # package, which a plain diff against HEAD leaves out.
+          git add --intent-to-add -- "$PKG"
           git diff --binary HEAD > "_out/fragments/${safe}.patch"
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
