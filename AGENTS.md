@@ -47,6 +47,7 @@ This file provides structured guidance for AI coding assistants and agents worki
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
+
 - **Match scope, then read first.** Load a process file only when the task genuinely falls in its scope, and load it before starting work — not midway through. Tasks outside a file's scope should not pull it into context.
 - **Follow it exactly.** Do not assume you already know the process, and do not skip steps (`changelog.md` especially). Where the documentation and your instinct disagree, the documentation wins.
 - **[`overview.md`](./docs/agents/overview.md) is the standing reference** for structure and conventions, useful even when no route above points at it.
@@ -68,6 +69,7 @@ These hold for every task, whichever document the routes above point at.
 ## Quick Reference
 
 ### Code Structure
+
 - `packages/core/` - Core platform charts (installer, platform)
 - `packages/system/` - System components (CSI, CNI, operators)
 - `packages/apps/` - User-facing applications in catalog
@@ -76,6 +78,7 @@ These hold for every task, whichever document the routes above point at.
 - `api/` - Kubernetes CRDs
 
 ### Conventions
+
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
 - **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`; an agent-assisted commit adds one `Assisted-by: LLM` trailer
@@ -83,6 +86,7 @@ These hold for every task, whichever document the routes above point at.
 - **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do
+
 - ❌ Edit `/vendor/`, `zz_generated.*.go`, upstream charts directly
 - ❌ Modify `go.mod`/`go.sum` manually (use `go get`)
 - ❌ Force push to main/master
