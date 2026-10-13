@@ -32,9 +32,23 @@
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the AuroraBoot image the kubernetes-nodes Makefile runs to turn the Kairos worker OS into a bootable disk. It is a docker run argument, not a Dockerfile FROM, so the dockerfile manager cannot see it.",
+      "managerFilePatterns": ["/^packages/apps/kubernetes-nodes/Makefile$/"],
+      "matchStrings": ["AURORABOOT_IMAGE := (?<depName>quay\\.io/kairos/auroraboot):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
+    {
+      "description": "The Kairos worker OS runs on hadron and fetches its binaries in a hadron-toolchain stage of the same release, so the two move in one PR.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/apps/kubernetes-nodes/images/kairos-worker/**"],
+      "matchPackageNames": ["ghcr.io/kairos-io/hadron", "ghcr.io/kairos-io/hadron-toolchain"],
+      "groupName": "kairos hadron"
+    },
     {
       "description": "Force chore(deps) for all Go module bumps. config:recommended pulls in :semanticPrefixFixDepsChoreOthers, whose packageRule re-sets semanticCommitType=fix for direct deps (depType require), overriding the top-level chore. packageRules override top-level config, so a user rule evaluated last is required to win it back; without this, direct-dep PRs land as fix(deps) and get auto-labeled kind/bug.",
       "matchManagers": ["gomod"],
