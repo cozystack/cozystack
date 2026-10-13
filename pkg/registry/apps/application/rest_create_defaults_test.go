@@ -19,12 +19,14 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,6 +34,7 @@ import (
 	"k8s.io/apiserver/pkg/warning"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -120,6 +123,19 @@ func newCreateDefaultsREST(t *testing.T, kind string, objs ...client.Object) *RE
 	}
 }
 
+// failSecretReads makes every Get of a Secret return err and leaves the rest of the
+// REST's client as it was.
+func failSecretReads(r *REST, err error) {
+	r.c = interceptor.NewClient(r.c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				return err
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+}
+
 func newPoolApp(spec string) *appsv1alpha1.Application {
 	app := &appsv1alpha1.Application{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: kubernetesNodesKind},
@@ -142,8 +158,12 @@ func TestApplyCreateDefaults(t *testing.T) {
 		kind   string
 		secret *corev1.Secret
 		spec   string
+		// getErr, when set, is what reading the platform values Secret returns.
+		getErr error
 		// want is the spec after the call; "" means the spec must still be nil.
 		want string
+		// wantErr is a part of the error the call must return; "" means no error.
+		wantErr string
 	}{
 		{
 			name:   "fills every default into an empty spec",
@@ -242,10 +262,25 @@ func TestApplyCreateDefaults(t *testing.T) {
 			name: "leaves the spec alone when the platform values Secret is missing",
 		},
 		{
-			name:   "leaves the spec alone when the platform values are unreadable",
-			secret: platformValuesFixture("_cluster: [not, a, map"),
-			spec:   `{"diskSize":"30Gi"}`,
-			want:   `{"diskSize":"30Gi"}`,
+			name:    "fails when the platform values are unreadable",
+			secret:  platformValuesFixture("_cluster: [not, a, map"),
+			spec:    `{"diskSize":"30Gi"}`,
+			want:    `{"diskSize":"30Gi"}`,
+			wantErr: "does not hold readable values.yaml",
+		},
+		{
+			name:    "fails when the platform values Secret cannot be read",
+			secret:  platformValuesFixture(workerDefaultsAll),
+			spec:    `{"diskSize":"30Gi"}`,
+			getErr:  apierrors.NewServiceUnavailable("apiserver is restarting"),
+			want:    `{"diskSize":"30Gi"}`,
+			wantErr: "cannot read the platform worker pool defaults",
+		},
+		{
+			name:    "fails when the platform values Secret is forbidden",
+			secret:  platformValuesFixture(workerDefaultsAll),
+			getErr:  apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, platformValuesSecret, errors.New("no access")),
+			wantErr: "cannot read the platform worker pool defaults",
 		},
 		{
 			name:   "leaves a talos that is not an object to validation",
@@ -272,10 +307,20 @@ func TestApplyCreateDefaults(t *testing.T) {
 				objs = append(objs, tc.secret)
 			}
 			r := newCreateDefaultsREST(t, kind, objs...)
+			if tc.getErr != nil {
+				failSecretReads(r, tc.getErr)
+			}
 			app := newPoolApp(tc.spec)
 
-			r.applyCreateDefaults(context.Background(), app)
+			err := r.applyCreateDefaults(context.Background(), app)
 
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want one containing %q", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("applyCreateDefaults: %v", err)
+			}
 			if tc.want == "" {
 				if app.Spec != nil {
 					t.Fatalf("spec = %s, want it untouched (nil)", app.Spec.Raw)
@@ -296,7 +341,9 @@ func TestApplyCreateDefaults_KeepsNumbersAsWritten(t *testing.T) {
 	r := newCreateDefaultsREST(t, kubernetesNodesKind, platformValuesFixture(workerDefaultsAll))
 	app := newPoolApp(`{"maxReplicas":12345678901234567890,"minReplicas":1e400}`)
 
-	r.applyCreateDefaults(context.Background(), app)
+	if err := r.applyCreateDefaults(context.Background(), app); err != nil {
+		t.Fatalf("applyCreateDefaults: %v", err)
+	}
 
 	for _, want := range []string{`"maxReplicas":12345678901234567890`, `"minReplicas":1e400`, `"osImage":{"builtin":{}}`} {
 		if !strings.Contains(string(app.Spec.Raw), want) {
@@ -419,7 +466,7 @@ func TestUpdate_OfAnExistingObjectDoesNotApplyDefaults(t *testing.T) {
 	assertJSONEqual(t, `{"cluster":"myk8s","maxReplicas":5}`, []byte(storedValues(t, r, "myk8s-md0")))
 }
 
-// A failed read of the platform values must not fail the create.
+// A platform with no values Secret has set nothing, and the create goes on.
 func TestCreate_SucceedsWithoutPlatformValues(t *testing.T) {
 	r := newCreateDefaultsREST(t, kubernetesNodesKind)
 	ctx := request.WithNamespace(context.Background(), "tenant-foo")
@@ -429,4 +476,25 @@ func TestCreate_SucceedsWithoutPlatformValues(t *testing.T) {
 	}
 
 	assertJSONEqual(t, `{"cluster":"myk8s"}`, []byte(storedValues(t, r, "myk8s-md0")))
+}
+
+// A Secret that cannot be read is not the same as a platform that set nothing: storing
+// the pool without the defaults would pick its image source for good, so the create is
+// refused with a 503, which a caller can repeat once the apiserver answers, and
+// nothing is stored.
+func TestCreate_FailsWhenThePlatformValuesCannotBeRead(t *testing.T) {
+	r := newCreateDefaultsREST(t, kubernetesNodesKind, platformValuesFixture(workerDefaultsAll))
+	failSecretReads(r, errors.New("etcdserver: request timed out"))
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+
+	_, err := r.Create(ctx, newPoolApp(`{"cluster":"myk8s"}`), nil, &metav1.CreateOptions{})
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("Create error = %v, want a ServiceUnavailable", err)
+	}
+
+	hr := &helmv2.HelmRelease{}
+	getErr := r.c.Get(context.Background(), client.ObjectKey{Namespace: "tenant-foo", Name: r.releaseConfig.Prefix + "myk8s-md0"}, hr)
+	if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("HelmRelease lookup = %v, want NotFound: the refused create must store nothing", getErr)
+	}
 }

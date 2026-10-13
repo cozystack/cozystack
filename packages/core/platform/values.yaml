@@ -774,6 +774,11 @@ backupStrategyController: {}
 # exists is not touched and does not roll, and moving one onto these defaults is
 # done by hand (see the header of the kubernetes-worker-image values). Nothing is
 # filled in for a key left unset here.
+#
+# A pool that is written straight as a HelmRelease never passes through
+# cozystack-api and is not filled in. The ComputePlane module does that, and so did
+# the migration that adopted the node groups of the kubernetes app. Such a pool still
+# takes kubernetesRegistries when it renders.
 kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:

@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -64,14 +66,20 @@ type platformWorkerValues struct {
 // into the spec it is an ordinary field and nothing existing changes.
 //
 // A field the spec already carries, empty or not, is left alone, which is how a pool
-// opts out. Failing to read the platform values never fails the create.
-func (r *REST) applyCreateDefaults(ctx context.Context, app *appsv1alpha1.Application) {
+// opts out. A platform that has no values Secret has set nothing and the create goes
+// on. Any other failure to read it fails the create: the pool would be stored without
+// the defaults, with no sign to the client, and since they are hashed into names the
+// MachineDeployment points at, putting them in later re-images it.
+func (r *REST) applyCreateDefaults(ctx context.Context, app *appsv1alpha1.Application) error {
 	if r.kindName != kubernetesNodesKind {
-		return
+		return nil
 	}
-	defaults, ok := r.loadWorkerPoolDefaults(ctx)
+	defaults, ok, err := r.loadWorkerPoolDefaults(ctx)
+	if err != nil {
+		return err
+	}
 	if !ok {
-		return
+		return nil
 	}
 
 	spec := map[string]any{}
@@ -80,7 +88,7 @@ func (r *REST) applyCreateDefaults(ctx context.Context, app *appsv1alpha1.Applic
 		dec.UseNumber()
 		if err := dec.Decode(&spec); err != nil {
 			klog.Warningf("Not applying worker pool defaults to %s/%s: cannot read its spec: %v", app.Namespace, app.Name, err)
-			return
+			return nil
 		}
 		if spec == nil {
 			spec = map[string]any{}
@@ -88,30 +96,34 @@ func (r *REST) applyCreateDefaults(ctx context.Context, app *appsv1alpha1.Applic
 	}
 
 	if !defaults.fill(spec) {
-		return
+		return nil
 	}
 	raw, err := json.Marshal(spec)
 	if err != nil {
 		klog.Warningf("Not applying worker pool defaults to %s/%s: cannot encode its spec: %v", app.Namespace, app.Name, err)
-		return
+		return nil
 	}
 	app.Spec = &apiextv1.JSON{Raw: raw}
+	return nil
 }
 
-func (r *REST) loadWorkerPoolDefaults(ctx context.Context) (workerPoolDefaults, bool) {
+func (r *REST) loadWorkerPoolDefaults(ctx context.Context) (workerPoolDefaults, bool, error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: platformValuesNamespace, Name: platformValuesSecret}
 	if err := r.c.Get(ctx, key, secret); err != nil {
-		klog.Warningf("Not applying worker pool defaults: cannot read Secret %s: %v", key, err)
-		return workerPoolDefaults{}, false
+		if apierrors.IsNotFound(err) {
+			return workerPoolDefaults{}, false, nil
+		}
+		klog.Errorf("Cannot read the platform worker pool defaults from Secret %s: %v", key, err)
+		return workerPoolDefaults{}, false, apierrors.NewServiceUnavailable(fmt.Sprintf("cannot read the platform worker pool defaults from Secret %s, try again: %v", key, err))
 	}
 	var values platformWorkerValues
 	if err := yaml.Unmarshal(secret.Data[platformValuesKey], &values); err != nil {
-		klog.Warningf("Not applying worker pool defaults: Secret %s does not hold readable %s: %v", key, platformValuesKey, err)
-		return workerPoolDefaults{}, false
+		klog.Errorf("Secret %s does not hold readable %s: %v", key, platformValuesKey, err)
+		return workerPoolDefaults{}, false, apierrors.NewInternalError(fmt.Errorf("secret %s does not hold readable %s, so the platform worker pool defaults cannot be applied: %w", key, platformValuesKey, err))
 	}
 	d := values.Cluster.WorkerImage
-	return d, d.Catalog == "true" || d.FactoryURL != "" || d.InstallerRepository != ""
+	return d, d.Catalog == "true" || d.FactoryURL != "" || d.InstallerRepository != "", nil
 }
 
 // fill sets every default the spec does not already carry and reports whether it
