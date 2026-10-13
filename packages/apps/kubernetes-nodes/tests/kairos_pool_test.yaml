@@ -127,13 +127,17 @@ tests:
           path: data["spec.yaml"]
           pattern: "evictionHard:"
 
-  - it: refuses a pool without kairos.image while no platform disk is published for its minor
+  - it: boots the platform worker disk built for the pool's Kubernetes minor
     template: templates/nodegroup.yaml
     set:
       kairos.image: ""
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
     asserts:
-      - failedTemplate:
-          errorPattern: "os kairos: this platform ships no worker disk for Kubernetes v1.35; set kairos.image"
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.registry.url
+          pattern: ^docker://[^ @]+/kairos-worker-v1\.35@sha256:[0-9a-f]{64}$
 
   - it: refuses a Kairos pool on the proxmox substrate
     template: templates/nodegroup.yaml
