@@ -1,0 +1,167 @@
+suite: seaweedfs Object Lock actions hook
+
+templates:
+  - templates/object-lock-actions-hook.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-foo
+
+tests:
+  - it: renders nothing without COSI
+    set:
+      seaweedfs.cosi.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: every object is a hook on both install and upgrade
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: the Job outlives a run so its logs stay readable
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+
+  - it: everything the Job uses is created before it
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-1"
+
+  - it: the weed binary comes from the image the s3 gateway runs
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      seaweedfs.image.repository: registry.example.test/seaweedfs
+      seaweedfs.image.tag: "9.99"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: registry.example.test/seaweedfs:9.99
+
+  - it: the grant container runs the package's kubectl image
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      seaweedfs.volume.resizeHook.image: registry.example.test/k8s:9.99
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.test/k8s:9.99
+
+  - it: ships the script and points it at the cluster
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["/bin/sh", "/opt/script/object-lock-actions.sh"]
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MASTER
+            value: seaweedfs-master:9333
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FILER
+            value: seaweedfs-filer-client:8888
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RELEASE
+            value: seaweedfs-system
+
+  - it: both containers set a memory limit so a namespace default cannot pick one
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+
+  - it: the script in the ConfigMap is the file under test
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["object-lock-actions.sh"]
+          pattern: 'safe_commands\(\)'
+
+  - it: mounts the gRPC client credentials when security is on
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: client-cert
+            secret:
+              secretName: seaweedfs-client-cert
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ca-cert
+            secret:
+              secretName: seaweedfs-ca-cert
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: security-config
+            configMap:
+              name: seaweedfs-security-config
+
+  - it: mounts no credentials when security is off
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      global.seaweedfs.enableSecurity: false
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 2
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 2
+
+  - it: the Job name fits a label value for the longest release name
+    release:
+      name: a-tenant-seaweedfs-instance-with-a-long-name-xx-syste
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: ^.{1,63}$
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JOB
+            value: a-tenant-seaweedfs-instance-with-a-long-name-xx-syste-object-lo
