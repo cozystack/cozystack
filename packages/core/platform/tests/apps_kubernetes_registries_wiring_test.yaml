@@ -157,6 +157,39 @@ tests:
       - failedTemplate:
           errorPattern: 'must be an http\(s\) URL with no user name or password'
 
+  - it: refuses an endpoint that carries a token in the query
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://mirror.example.org?token=SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password, query or fragment'
+
+  - it: refuses an endpoint that carries a token in the query of a path
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://mirror.example.org/v2/?access_token=SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password, query or fragment'
+
+  - it: refuses an endpoint that carries a token in the fragment
+    set:
+      kubernetesRegistries:
+        mirrors:
+          docker.io:
+            endpoints:
+              - https://mirror.example.org/v2/#SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be an http\(s\) URL with no user name or password, query or fragment'
+
   - it: refuses an endpoint without a scheme
     set:
       kubernetesRegistries:

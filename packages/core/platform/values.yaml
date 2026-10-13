@@ -765,9 +765,9 @@ backupStrategyController: {}
 # diskSize below its storage. Such a pool sets `osImage.factory: {}` or gets the
 # catalog entry.
 #
-# imageFactoryURL is a plain http(s) URL with no user name or password in it, and
-# the platform refuses anything else even when the catalog is off: it is copied into
-# every tenant namespace and into the spec of every new pool.
+# imageFactoryURL is a plain http(s) URL with no user name, password, query or
+# fragment in it, and the platform refuses anything else even when the catalog is
+# off: it is copied into every tenant namespace and into the spec of every new pool.
 #
 # A field the spec already carries, empty or not, is never overwritten, so a pool
 # can opt out with `osImage.factory: {}`. Only creation is affected: a pool that

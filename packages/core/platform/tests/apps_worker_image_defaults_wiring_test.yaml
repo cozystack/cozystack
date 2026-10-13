@@ -212,6 +212,22 @@ tests:
       - failedTemplate:
           errorPattern: 'imageFactoryURL must not carry a user name or password'
 
+  - it: refuses a factory URL that carries a token in the query
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.example.com?token=SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name, password, query or fragment'
+
+  - it: refuses a factory URL that carries a token in the fragment
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.example.com/#SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name, password, query or fragment'
+
   - it: refuses whitespace in a factory URL
     set:
       kubernetesWorkerImage:

@@ -52,9 +52,14 @@
 {{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints must hold URL strings, got %v" $host .) -}}
 {{-     end -}}
 {{-     if not (regexMatch "(?i)^https?://[^/@[:space:]]+(/[^[:space:]]*)?$" .) -}}
-{{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints entry %q must be an http(s) URL with no user name or password in it: the mirrors are copied into the cozystack-values Secret of every tenant." $host .) -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints entry %q must be an http(s) URL with no user name or password, query or fragment in it: the mirrors are copied into the cozystack-values Secret of every tenant." $host .) -}}
 {{-     end -}}
+{{- /* The pattern keeps user:password@ out, but a token can ride in the query or the
+       fragment, and both pass it. */ -}}
 {{-     $parsed := urlParse . -}}
+{{-     if or $parsed.userinfo $parsed.query $parsed.fragment -}}
+{{-       fail (printf "kubernetesRegistries.mirrors[%q].endpoints entry %q must be an http(s) URL with no user name or password, query or fragment in it: the mirrors are copied into the cozystack-values Secret of every tenant." $host .) -}}
+{{-     end -}}
 {{-   end -}}
 {{- end -}}
 {{- $kubernetesRegistriesConfig := $kubernetesRegistries.config | default dict -}}
@@ -406,6 +411,13 @@ stringData:
       {{- end }}
       {{- if and $workerFactoryURL (regexMatch "^https?://[^/]*@" $workerFactoryURL) }}
       {{-   fail "kubernetesWorkerImage.imageFactoryURL must not carry a user name or password: it is copied into the cozystack-values Secret of every tenant and into the spec of every new worker pool." }}
+      {{- end }}
+      {{- /* A token can ride in the query or the fragment as well, and the patterns above let both through. */}}
+      {{- if $workerFactoryURL }}
+      {{-   $workerFactoryParsed := urlParse $workerFactoryURL }}
+      {{-   if or $workerFactoryParsed.userinfo $workerFactoryParsed.query $workerFactoryParsed.fragment }}
+      {{-     fail "kubernetesWorkerImage.imageFactoryURL must not carry a user name, password, query or fragment: it is copied into the cozystack-values Secret of every tenant and into the spec of every new worker pool." }}
+      {{-   end }}
       {{- end }}
       {{- $workerInstaller := $workerImage.installerRepository | default "" | toString | trimSuffix "/" }}
       {{- /* A registry host with an optional port, then repository path components,
