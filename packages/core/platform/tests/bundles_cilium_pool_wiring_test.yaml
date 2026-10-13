@@ -111,3 +111,23 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "is not an IPv4 CIDR"
+
+  # isp-hosted runs no kube-ovn, so neither the block nor the prefix
+  # requirement belongs in it, even with a pod CIDR the kube-ovn variants refuse.
+  - it: leaves the isp-hosted variant alone
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+      networking:
+        podCIDR: 10.244.0.0/24
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: noop
+      - notExists:
+          path: spec.components
