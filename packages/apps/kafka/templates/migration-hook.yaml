@@ -107,12 +107,6 @@ spec:
                 roles:
                   - broker
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
-                # JAVA_TOOL_OPTIONS: see kafka.javaToolOptions.
-                template:
-                  kafkaContainer:
-                    env:
-                      - name: JAVA_TOOL_OPTIONS
-                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
@@ -152,11 +146,6 @@ spec:
                 roles:
                   - controller
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
-                template:
-                  kafkaContainer:
-                    env:
-                      - name: JAVA_TOOL_OPTIONS
-                        value: {{ include "kafka.javaToolOptions" (include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | fromYaml).limits | quote }}
                 storage:
                   type: jbod
                   volumes:
