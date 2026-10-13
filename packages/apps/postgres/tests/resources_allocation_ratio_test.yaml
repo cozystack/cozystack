@@ -42,10 +42,10 @@ tests:
           path: spec.resources.requests.memory
           value: "2147483648"
 
-  - it: a ratio below 1 is refused
+  - it: a ratio below 1 is refused by the schema (cozy-lib also refuses it at render for callers without one)
     set:
       resourcesAllocationRatio:
         memory: 0
     asserts:
       - failedTemplate:
-          errorPattern: "resourcesAllocationRatio.memory must be 1 or more"
+          errorPattern: "resourcesAllocationRatio/memory.*minimum: got 0, want 1"
