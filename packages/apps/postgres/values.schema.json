@@ -101,11 +101,13 @@
       "properties": {
         "cpu": {
           "description": "CPU ratio for this database; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1
         },
         "memory": {
           "description": "Memory ratio for this database; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.",
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

@@ -205,8 +205,10 @@ type Resources struct {
 
 type ResourcesAllocationRatio struct {
 	// CPU ratio for this database; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.
+	// +kubebuilder:validation:Minimum=1
 	Cpu *int `json:"cpu,omitempty"`
 	// Memory ratio for this database; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.
+	// +kubebuilder:validation:Minimum=1
 	Memory *int `json:"memory,omitempty"`
 }
 
