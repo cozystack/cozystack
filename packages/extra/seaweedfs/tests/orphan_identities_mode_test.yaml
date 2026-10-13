@@ -1,0 +1,92 @@
+suite: seaweedfs orphan identities cleanup mode
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: auto removes orphaned identities when the filer serves only this cluster
+    set: &platform
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: delete
+
+  - it: auto only reports them when the filer is published for Client-topology clusters
+    set:
+      <<: *platform
+      filer:
+        grpcHost: filer.example.org
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: report
+
+  - it: report holds even when the filer is not published
+    set:
+      <<: *platform
+      cosi:
+        orphanIdentities: report
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: report
+
+  - it: delete holds even when the filer is published
+    set:
+      <<: *platform
+      filer:
+        grpcHost: filer.example.org
+      cosi:
+        orphanIdentities: delete
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: delete
+
+  - it: an empty cosi block behaves as auto
+    set:
+      <<: *platform
+      filer:
+        grpcHost: filer.example.org
+      cosi: null
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: report
+
+  - it: an empty cosi block removes when the filer is not published
+    set:
+      <<: *platform
+      cosi: null
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.cosi.orphanIdentities.mode
+          value: delete

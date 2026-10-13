@@ -310,6 +310,12 @@ seaweedfs:
     driverName: "seaweedfs.objectstorage.k8s.io"
     bucketClassName: "seaweedfs"
     region: ""
+    # What the post-install/post-upgrade hook does with identity files no BucketAccess
+    # carries (files/orphan-identities.sh): "delete" removes them, anything
+    # else only reports them. extra/seaweedfs sets it from its
+    # cosi.orphanIdentities value.
+    orphanIdentities:
+      mode: report
     sidecar:
       image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
   certificates:

@@ -192,3 +192,15 @@ s3:
   replicas: 2
   resources: {}
   resourcesPreset: "t1.small"
+
+## @enum {string} OrphanIdentities - What installs and upgrades do with S3 identities left behind by deleted BucketAccesses.
+## @value auto
+## @value report
+## @value delete
+
+## @typedef {struct} Cosi - Bucket provisioning configuration.
+## @field {OrphanIdentities} [orphanIdentities] - What installs and upgrades do with S3 identities left behind by deleted BucketAccesses: `delete` removes them, `report` only lists them in an Event, `auto` reports when `filer.grpcHost` is set (other clusters may use this filer) and removes them otherwise. Set `report` if the filer is reachable from other clusters some other way.
+
+## @param {Cosi} [cosi] - Bucket provisioning configuration.
+cosi:
+  orphanIdentities: auto
