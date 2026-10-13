@@ -1,0 +1,67 @@
+suite: NodeGroupClass resolution failures
+# Only nodegroup.yaml: every template resolves the class, and the render stops
+# at whichever fails first.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: fails the render naming a class that does not exist
+    set:
+      nodeGroupClassName: acme-missing
+    kubernetesProvider:
+      scheme: &scheme
+        "cozystack.io/v1alpha1/NodeGroupClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "nodegroupclasses"}
+          namespaced: false
+      objects: []
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroupClassName "acme-missing": no NodeGroupClass of that name exists'
+
+  - it: refuses a class whose Kubernetes minor differs from the pool's version
+    set:
+      nodeGroupClassName: acme-kairos
+      version: "v1.34"
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: NodeGroupClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-kairos
+          spec:
+            os: kairos
+            image:
+              kubernetesVersion: v1.35.2
+              reference: registry.example.com/kairos/worker:v1.35.2@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    asserts:
+      - failedTemplate:
+          errorPattern: 'NodeGroupClass "acme-kairos" carries Kubernetes v1\.35\.2, whose minor differs from the pool''s version v1\.34'
+
+
+  - it: refuses a class whose os the chart does not support
+    set:
+      nodeGroupClassName: acme-flatcar
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: NodeGroupClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-flatcar
+          spec:
+            os: flatcar
+    asserts:
+      - failedTemplate:
+          errorPattern: 'NodeGroupClass "acme-flatcar" has os "flatcar"; this chart supports talos and kairos'

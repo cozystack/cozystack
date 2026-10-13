@@ -1,0 +1,253 @@
+suite: Kairos worker pool
+templates:
+  - templates/nodegroup.yaml
+  - templates/kairos-reconcile-job.yaml
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  diskSize: 30Gi
+  storageClass: replicated
+  nodeGroupClassName: kairos
+tests:
+  - it: imports the system disk from the platform worker disk built for the pool's Kubernetes minor
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.registry.url
+          pattern: ^docker://[^ @]+/kairos-worker-v1\.35@sha256:[0-9a-f]{64}$
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 30Gi
+
+  - it: boots the Kairos worker with EFI firmware
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.firmware
+          value:
+            bootloader:
+              efi:
+                secureBoot: false
+
+  - it: points the MachineDeployment at a KairosConfigTemplate
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: KairosConfigTemplate
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.apiVersion
+          value: bootstrap.cluster.x-k8s.io/v1beta2
+      - matchRegex:
+          path: spec.template.spec.bootstrap.configRef.name
+          pattern: ^kubernetes-myk8s-md0-kairos-[0-9a-f]{6}$
+
+  - it: has the reconcile Job apply the template the MachineDeployment names
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[3].value
+          pattern: ^kubernetes-myk8s-md0-kairos-[0-9a-f]{6}$
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: KCT_NAME
+
+  - it: renders no Talos reconcile Job for a Kairos pool
+    template: templates/talos-reconcile-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the KairosConfigTemplate the way the joined worker needs it
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "distribution: kubeadm"
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'serverAddress: "https://\$\{RELEASE\}\.\$\{NS\}\.svc:6443"'
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "path: /etc/hosts"
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: '\$\{SVC_IP\} \$\{RELEASE\}\.\$\{NS\}\.svc \$\{RELEASE\}\.\$\{NS\}\.svc\.cluster\.local'
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "Domains=svc.cozy.local cozy.local svc.cluster.local cluster.local"
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "DNS=\\$\\{COREDNS_IP\\}"
+
+  - it: carries the kubelet reservations in a kubeadm kubelet patch
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "path: /etc/kubernetes/kairos-patches/kubeletconfiguration1\\+merge.yaml"
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "systemReserved:"
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "evictionHard:"
+
+  - it: refuses a Kairos pool on the proxmox substrate
+    template: templates/nodegroup.yaml
+    set:
+      substrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: 'NodeGroupClass "kairos" selects Kairos workers, which are supported on the kubevirt substrate only'
+
+  - it: refuses osImage on a Kairos pool
+    template: templates/nodegroup.yaml
+    set:
+      osImage:
+        factory: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'osImage selects a Talos image and does not apply to a pool on the Kairos NodeGroupClass "kairos"'
+
+  - it: gives the worker user a password no login can match
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'userPassword: "\*"'
+      - notMatchRegex:
+          path: data["spec.yaml"]
+          pattern: "userPasswordSecretRef"
+
+  - it: carries a hostile SSH key as data, never as part of the reconcile script
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      kairos.sshPublicKey: 'ssh-ed25519 AAAA a$HOME b`id` c\d "q"'
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'sshPublicKey: "ssh-ed25519 AAAA a\$HOME b`id` c\\\\d \\"q\\""'
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: ssh-ed25519
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: renders no SSH key line when none is set
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["spec.yaml"]
+          pattern: sshPublicKey
+
+  - it: refuses kernelModules on a Kairos pool
+    template: templates/nodegroup.yaml
+    set:
+      kernelModules:
+        - name: nvidia
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kernelModules are loaded through the Talos machine config and do not apply to a pool on the Kairos NodeGroupClass "kairos"'
+
+  - it: refuses GPUs on a Kairos pool, whose image carries no GPU driver
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus are not supported on the Kairos NodeGroupClass "kairos": its worker image carries no GPU driver'
+
+  - it: accepts the empty values of the Talos-only fields, which change nothing on Kairos
+    template: templates/nodegroup.yaml
+    set:
+      osImage: {}
+      kernelModules: []
+      gpus: []
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: KairosConfigTemplate
+
+  - it: names the kubeadm patches directory the reservations patch is written to
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'patches:\s+directory: /etc/kubernetes/kairos-patches'
+
+  - it: searches only the cluster.local domains when the management cluster uses cluster.local
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      _cluster:
+        cluster-domain: cluster.local
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: "Domains=svc.cluster.local cluster.local\n"
+
+  - it: substitutes only the runtime addresses into the template the ConfigMap carries
+    template: templates/kairos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "envsubst '\\$\\{SVC_IP\\} \\$\\{COREDNS_IP\\} \\$\\{RELEASE\\} \\$\\{NS\\}' < /kct/spec.yaml"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kind: KairosConfigTemplate"
+      - matchRegex:
+          path: spec.template.spec.volumes[0].configMap.name
+          pattern: ^kubernetes-myk8s-md0-kairos-[0-9a-f]{6}$

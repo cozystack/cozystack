@@ -1,0 +1,242 @@
+{{- define "kubernetes-nodes.kairos-reconcile-job-spec" -}}
+spec:
+  backoffLimit: 30
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        cozystack.io/kairos-reconcile: {{ $.Release.Name | quote }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $.Release.Name }}-kairos-reconcile
+      containers:
+        - name: kubectl
+          image: "{{ .kubectlImage }}"
+          env:
+            - name: RELEASE
+              value: {{ .clusterName | quote }}
+            - name: NS
+              value: {{ $.Release.Namespace | quote }}
+            - name: GROUP_NAME
+              value: {{ .groupName | quote }}
+            - name: KCT_NAME
+              value: {{ .kctName | quote }}
+          command:
+            - sh
+            - -ec
+            - |
+              echo "[$(date -u +%H:%M:%S)] kairos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP and management CoreDNS"
+              for i in $(seq 1 120); do
+                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                KCP_UID=$(kubectl -n "$NS" get kamajicontrolplane "$RELEASE" -o jsonpath='{.metadata.uid}' 2>/dev/null || true)
+                if [ -n "$SVC_IP" ] && [ -n "$COREDNS_IP" ] && [ -n "$KCP_UID" ]; then
+                  break
+                fi
+                sleep 5
+              done
+              if [ -z "$SVC_IP" ] || [ -z "$COREDNS_IP" ] || [ -z "$KCP_UID" ]; then
+                echo "kairos-reconcile/${GROUP_NAME}: inputs not ready (svc=${SVC_IP} coredns=${COREDNS_IP} kcp=${KCP_UID})" >&2
+                exit 1
+              fi
+              export SVC_IP COREDNS_IP
+              {{- /* Every tenant value reaches the template as data in the
+                     mounted ConfigMap, never as script text, so none of it is
+                     ever parsed by the shell; envsubst fills in only the
+                     runtime addresses it is told to. It runs before the pipe,
+                     whose status is kubectl's alone: a failing envsubst inside
+                     it would apply a template without its spec. Server-side
+                     apply, for the same memory reason as talos-reconcile. */}}
+              SPEC="$(envsubst '${SVC_IP} ${COREDNS_IP} ${RELEASE} ${NS}' < /kct/spec.yaml)"
+              {
+                printf 'apiVersion: bootstrap.cluster.x-k8s.io/v1beta2\nkind: KairosConfigTemplate\nmetadata:\n  name: %s\n  namespace: %s\n  ownerReferences:\n    - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1\n      kind: KamajiControlPlane\n      name: %s\n      uid: %s\n      controller: true\n      blockOwnerDeletion: true\n' "$KCT_NAME" "$NS" "$RELEASE" "$KCP_UID"
+                printf '%s\n' "$SPEC"
+              } | kubectl apply --server-side --force-conflicts -f -
+              echo "[$(date -u +%H:%M:%S)] KairosConfigTemplate ${KCT_NAME} applied"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: kct
+              mountPath: /kct
+              readOnly: true
+      volumes:
+        - name: kct
+          configMap:
+            name: {{ .kctName | quote }}
+{{- end }}
+{{- $class := include "kubernetes-nodes.nodeGroupClass" . | fromYaml }}
+{{- if eq $class.os "kairos" }}
+{{- /*
+  Main-phase Job that produces a Kairos pool's KairosConfigTemplate, the
+  counterpart of talos-reconcile for Kairos workers. The template needs two
+  values that exist only once the parent control plane is running, the
+  apiserver Service ClusterIP and the management CoreDNS ClusterIP, so a Helm
+  lookup would race a fresh install; the Job waits for both and applies the
+  template with an ownerReference to the parent KamajiControlPlane.
+
+  Unlike the Talos path it needs no Secret: the Kairos bootstrap provider
+  mints the join token and pins the cluster CA itself.
+
+  The template spec travels in a ConfigMap of the same name, which the Job
+  mounts and fills in with envsubst, so no tenant value is part of the script.
+
+  The template name carries a hash of its chart inputs and the Job a hash of
+  its own spec, so an unchanged render is a no-op on both.
+*/}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . }}
+{{- $groupName := include "kubernetes-nodes.groupName" . }}
+{{- $group := include "kubernetes-nodes.group" $ | fromYaml }}
+{{- $kctArgs := dict "root" $ "group" $group "class" $class }}
+{{- $kctSpec := include "kubernetes.kairosConfigTemplateSpec" $kctArgs }}
+{{- $kctName := printf "%s-%s-kairos-%s" $clusterName $groupName (include "kubernetes.kairosConfigTemplateHash" $kctArgs) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $kctName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+data:
+  spec.yaml: |
+    {{- $kctSpec | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-kairos-reconcile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-kairos-reconcile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["{{ $clusterName }}"]
+    verbs: ["get"]
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kamajicontrolplanes"]
+    resourceNames: ["{{ $clusterName }}"]
+    verbs: ["get"]
+  {{- /* Pinned to this pool's own template name: a Job able to patch a
+         sibling pool's template could rewrite what its next workers boot.
+         create has no name yet, so RBAC cannot narrow it. */}}
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kairosconfigtemplates"]
+    resourceNames: [{{ $kctName | quote }}]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["bootstrap.cluster.x-k8s.io"]
+    resources: ["kairosconfigtemplates"]
+    verbs: ["create"]
+---
+{{- /* The tenant default-deny egress policy blocks the apiserver otherwise;
+       see the same policy in talos-reconcile-job.yaml. */}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-kairos-reconcile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      cozystack.io/kairos-reconcile: "{{ .Release.Name }}"
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            "k8s:k8s-app": kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-kairos-reconcile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-kairos-reconcile
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-kairos-reconcile
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-kairos-reconcile-coredns
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kube-dns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-kairos-reconcile-coredns
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-kairos-reconcile-coredns
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-kairos-reconcile
+    namespace: {{ .Release.Namespace }}
+{{- $jobContext := deepCopy $ }}
+{{- $_ := set $jobContext "groupName" $groupName }}
+{{- $_ := set $jobContext "clusterName" $clusterName }}
+{{- $_ := set $jobContext "kctName" $kctName }}
+{{- /* The script runs envsubst, so the image in images/kubectl.tag has to ship
+       it next to kubectl. */}}
+{{- $_ := set $jobContext "kubectlImage" (include "cozy-lib.image" (list ($.Files.Get "images/kubectl.tag" | trim) $)) }}
+{{- $jobSpec := include "kubernetes-nodes.kairos-reconcile-job-spec" $jobContext }}
+{{- $jobHash := $jobSpec | sha256sum | trunc 6 }}
+{{- $jobName := printf "%s-kairos-reconcile-%s" $.Release.Name $groupName | trunc 56 | trimSuffix "-" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jobName }}-{{ $jobHash }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" $ | nindent 4 }}
+{{ $jobSpec }}
+{{- end }}

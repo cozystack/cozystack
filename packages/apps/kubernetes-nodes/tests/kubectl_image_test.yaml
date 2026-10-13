@@ -1,11 +1,12 @@
 suite: kubectl image of the pool Jobs
 
-# Both Jobs run in the management cluster under service accounts that read the
-# pool's Talos secrets and patch its CAPI objects, so the image they run comes
+# These Jobs run in the management cluster under service accounts that read the
+# pool's Talos secrets or patch its CAPI objects, so the image they run comes
 # from images/kubectl.tag and nothing in the values can replace it.
 
 templates:
   - templates/talos-reconcile-job.yaml
+  - templates/kairos-reconcile-job.yaml
   - templates/pre-delete-unpin.yaml
 
 release:
@@ -71,6 +72,32 @@ tests:
     set:
       _cluster:
         images-registry: registry.airgap.example.test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/alpine/k8s:'
+
+  - it: keeps the bundled kubectl image in the kairos-reconcile Job when values carry an image override
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      nodeGroupClassName: kairos
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: routes the kairos-reconcile Job's kubectl image through _cluster.images-registry
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      nodeGroupClassName: kairos
+      _cluster:
+        images-registry: registry.airgap.example.test
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].image
