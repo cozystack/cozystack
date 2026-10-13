@@ -78,11 +78,14 @@
   spec.clusterNetwork below and the Talos worker machineconfig's
   cluster.network — Talos surfaces overlaps against the host pod CIDR
   as a diagnostic at boot, and divergence between CAPI and Talos would
-  manifest as silently broken kube-proxy / Cilium routing. Keep them
-  in one place here.
+  manifest as silently broken kube-proxy / Cilium routing. The service
+  CIDR comes from kubernetes.tenantServiceCIDR, which also derives the
+  tenant DNS Service IP; the pod CIDR is the literal below. The
+  kubernetes-nodes chart holds its own copies of both literals in
+  _talosconfigtemplate.tpl, so a change here has to land there too.
 */}}
 {{- $podCIDR := "10.243.0.0/16" }}
-{{- $serviceCIDR := "10.95.0.0/16" }}
+{{- $serviceCIDR := include "kubernetes.tenantServiceCIDR" . }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- if not $etcd }}
 ---
@@ -763,6 +766,8 @@ spec:
     cgroupfs: systemd
     preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
+    dnsServiceIPs:
+      - {{ include "kubernetes.tenantDNSServiceIP" . | quote }}
     {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
           over the pod network, where a ClusterIP is meaningful. A Proxmox
           worker is a VM on the hypervisor network and cannot route to one at
