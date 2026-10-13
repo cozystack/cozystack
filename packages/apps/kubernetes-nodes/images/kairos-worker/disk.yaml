@@ -1,0 +1,12 @@
+#cloud-config
+# Baked into the raw disk by AuroraBoot. A raw disk boots into recovery with
+# no state partition, and nobody is at the console of a worker VM, so the
+# first boot installs the active system and reboots into it. Later recovery
+# boots already have COS_STATE and are left alone. Everything else, the user
+# included, comes from the bootstrap provider's cloud-config.
+stages:
+  network:
+    - name: first-boot reset into the active system
+      if: '[ "$(kairos-agent state get boot)" = "recovery_boot" ] && [ -z "$(blkid -L COS_STATE)" ]'
+      commands:
+        - kairos-agent reset --unattended --reboot
