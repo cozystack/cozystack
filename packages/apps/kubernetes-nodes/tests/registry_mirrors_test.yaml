@@ -418,6 +418,29 @@ tests:
       - failedTemplate:
           errorPattern: 'which Talos has only since 1.12'
 
+  # An entry that sets neither ca nor insecureSkipVerify renders no document, so a pool
+  # that uses no mirror keeps rendering on an older Talos.
+  - it: renders a pool below Talos 1.12 when the platform config entry produces no document
+    set:
+      talos:
+        version: v1.11.5
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls: {}
+            other.example.org:
+              tls:
+                insecureSkipVerify: false
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
   - it: renders a pool below Talos 1.12 that sets no registry configuration
     set:
       talos:

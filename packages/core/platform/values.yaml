@@ -808,8 +808,10 @@ branding: {}
 #
 # Forwarded into _cluster.kubernetes-registries and rendered into the machine config
 # of each worker pool as RegistryMirrorConfig and RegistryTLSConfig documents, which
-# needs Talos 1.12 or newer. A pool's own talos.registryMirrors, when set, replaces
-# `mirrors` for that pool; `config` applies to every pool.
+# Talos has from 1.12. Cozystack supports workers on Talos 1.13 and newer, and a pool
+# pinned below 1.12 that would get a document does not render until it is moved. A
+# pool's own talos.registryMirrors, when set, replaces `mirrors` for that pool;
+# `config` applies to every pool.
 #
 # `mirrors` is keyed by the registry the images come from. Each entry takes
 # `endpoints` (URLs tried in order), `skipFallback` (never fall back to the original

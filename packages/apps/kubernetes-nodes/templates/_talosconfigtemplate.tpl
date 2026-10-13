@@ -132,16 +132,17 @@
        Both reach Talos as separate documents appended to the machine config, which
        the deprecated machine.registries section replaced in Talos 1.12; the section
        is not rendered at all. Talos below 1.12 would reject those documents and the
-       node would never take its config, so the render refuses that pairing instead. */}}
+       node would never take its config, so the render refuses that pairing instead.
+       The refusal waits for a document to exist: a platform config entry that sets
+       neither ca nor insecureSkipVerify: true renders nothing, and must not fail a pool
+       that uses no mirror. Cozystack supports workers on Talos 1.13 and newer; 1.12 is only
+       where the documents begin, so this check is a backstop, not the support floor. */}}
 {{- $clusterRegistries := (index ($root.Values._cluster | default dict) "kubernetes-registries") | default dict }}
 {{- $registryMirrors := $root.Values.talos.registryMirrors | default $clusterRegistries.mirrors | default dict }}
 {{- $registryConfig := $clusterRegistries.config | default dict }}
-{{- $registryDocuments := "" }}
-{{- if or $registryMirrors $registryConfig }}
-{{-   if not (semverCompare ">=1.12.0-0" $talosVersion) }}
-{{-     fail (printf "nodeGroup %q: registry mirrors and registry TLS settings are rendered as RegistryMirrorConfig and RegistryTLSConfig documents, which Talos has only since 1.12, and this pool resolves to Talos %s. Move the pool to Talos 1.12 or newer, or clear talos.registryMirrors and the platform kubernetesRegistries." (include "kubernetes-nodes.groupName" $root) $talosVersion) }}
-{{-   end }}
-{{-   $registryDocuments = include "kubernetes.talosRegistryDocuments" (dict "mirrors" $registryMirrors "config" $registryConfig) }}
+{{- $registryDocuments := include "kubernetes.talosRegistryDocuments" (dict "mirrors" $registryMirrors "config" $registryConfig) }}
+{{- if and $registryDocuments (not (semverCompare ">=1.12.0-0" $talosVersion)) }}
+{{-   fail (printf "nodeGroup %q: registry mirrors and registry TLS settings are rendered as RegistryMirrorConfig and RegistryTLSConfig documents, which Talos has only since 1.12, and this pool resolves to Talos %s. Cozystack supports workers on Talos 1.13 and newer: move the pool there, or clear talos.registryMirrors and the platform kubernetesRegistries." (include "kubernetes-nodes.groupName" $root) $talosVersion) }}
 {{- end }}
 {{- /* The spec proper. Everything above only computes inputs; nothing above
        this line may emit output, or the leading newline lands in the caller's
