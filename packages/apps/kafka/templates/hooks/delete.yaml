@@ -126,6 +126,29 @@ spec:
               else
                 printf '%s\n' "${out}"
               fi
+
+              # Garbage collection should take the StrimziPodSets with their
+              # pools, but on a cluster upgraded from Strimzi 0.x it does not
+              # until kube-controller-manager restarts: its collector still
+              # tracks them under v1beta2, which is no longer served, and
+              # retries them forever (kubernetes/kubernetes#102641). Deleting
+              # them here does not depend on that. Fails like the pool call,
+              # for the same reason.
+              echo "Deleting StrimziPodSets for {{ .Release.Name }}"
+              if ! out=$(kubectl -n {{ .Release.Namespace }} delete strimzipodsets.core.strimzi.io \
+                    -l 'strimzi.io/cluster={{ .Release.Name }}' \
+                    --ignore-not-found=true \
+                    --wait=false 2>&1); then
+                printf '%s\n' "${out}"
+                case "${out}" in
+                  *"the server doesn't have a resource type"*|*"no matches for kind"*)
+                    echo "StrimziPodSet CRD absent; nothing to delete" ;;
+                  *)
+                    echo "ERROR: deleting StrimziPodSets failed: ${out}" >&2; exit 1 ;;
+                esac
+              else
+                printf '%s\n' "${out}"
+              fi
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -165,6 +188,9 @@ rules:
     verbs: ["get", "list", "watch", "delete"]
   - apiGroups: ["kafka.strimzi.io"]
     resources: ["kafkanodepools"]
+    verbs: ["list", "delete"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
     verbs: ["list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
