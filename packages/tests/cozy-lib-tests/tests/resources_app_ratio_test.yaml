@@ -1,0 +1,122 @@
+# ./tests/resources_app_ratio_test.yaml
+suite: per-application allocation ratio (resourcesAllocationRatio)
+
+# An application may override the cluster-wide allocation ratios for itself only. Unset, the
+# cluster-wide ratios (or the defaults) apply exactly as before.
+
+templates:
+  - templates/tests/resources.yaml
+
+release:
+  name: myrelease
+  namespace: default
+
+tests:
+  - it: leaves requests unchanged when the application sets no ratio (defaults cpu 10, memory 1)
+    set:
+      resources:
+        cpu: "1"
+        memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.1"
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "1073741824"
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 1Gi
+
+  - it: leaves requests unchanged with an empty resourcesAllocationRatio
+    set:
+      resourcesAllocationRatio: {}
+      resources:
+        cpu: "1"
+        memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.1"
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "1073741824"
+
+  - it: still uses the cluster-wide ratios when the application sets none
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+        memory-allocation-ratio: 2
+      resources:
+        cpu: "1"
+        memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.25"
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "536870912"
+
+  - it: divides the memory request by the application's memory ratio, limit unchanged
+    set:
+      resourcesAllocationRatio:
+        memory: 4
+      resources:
+        cpu: "1"
+        memory: 16Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "4294967296"
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 16Gi
+      # cpu keeps the default ratio
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.1"
+
+  - it: the application's ratio wins over the cluster-wide ratio, per resource
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+        memory-allocation-ratio: 2
+      resourcesAllocationRatio:
+        cpu: 20
+      resources:
+        cpu: "2"
+        memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.1"
+      # memory has no application ratio, so the cluster-wide 2 applies
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "536870912"
+
+  - it: a ratio of 1 makes the request equal to the limit
+    set:
+      _cluster:
+        memory-allocation-ratio: 2
+      resourcesAllocationRatio:
+        memory: 1
+      resources:
+        cpu: "1"
+        memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "1073741824"
+
+  - it: refuses a ratio below 1, which would make the request exceed the limit
+    set:
+      resourcesAllocationRatio:
+        memory: 0
+      resources:
+        cpu: "1"
+        memory: 1Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: "resourcesAllocationRatio.memory must be 1 or more"
