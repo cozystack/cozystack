@@ -571,6 +571,29 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 
+{{- /*
+  `os` is marked immutable, but the marker is dashboard-only. Switching a
+  running pool between Talos and Kairos would roll every worker onto the other
+  OS, so the live MachineDeployment's bootstrap template kind has to match the
+  one this render asks for. Inert offline, like the guards above.
+*/ -}}
+{{- define "kubernetes-nodes.assertOsMatches" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
+{{- $groupName := include "kubernetes-nodes.groupName" . -}}
+{{- $os := .Values.os | default "talos" -}}
+{{- $wantKind := ternary "KairosConfigTemplate" "TalosConfigTemplate" (eq $os "kairos") -}}
+{{- $md := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .Release.Namespace (printf "%s-%s" $clusterName $groupName) -}}
+{{- if $md -}}
+{{- $liveKind := dig "spec" "template" "spec" "bootstrap" "configRef" "kind" "" $md -}}
+{{- /* Only the Talos/Kairos pair is a switch: a pool still on the kubeadm
+       bootstrap moves onto whichever of the two this render asks for, which
+       is what the migration off the kubeadm bootstrap relies on. */ -}}
+{{- if and (has $liveKind (list "TalosConfigTemplate" "KairosConfigTemplate")) (ne $liveKind $wantKind) -}}
+{{- fail (printf "kubernetes-nodes: pool %q already runs workers bootstrapped by a %s and os is now %q. Switching would roll every worker onto the other OS. Create a new pool with the other os and scale this one down instead." $groupName $liveKind $os) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 This pool's node group — the SINGLE assembly of the dict that feeds every
 consumer in this chart:

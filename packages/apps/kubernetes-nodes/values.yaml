@@ -152,6 +152,23 @@ talos:
   imageFactoryCA: ""
 
 ##
+## @section Worker OS
+##
+
+## @param {string} os="talos" - Operating system of this pool's workers: `talos` or `kairos`. A `kairos` pool boots a Kairos worker disk, the platform's or the one named by `kairos.image`, joins the cluster with kubeadm through the Kairos Cluster API bootstrap provider, and is supported on the `kubevirt` substrate only; the Talos-only fields (`osImage`, `talos`, `kernelModules`) do not apply to it, and it refuses `gpus`, because the Kairos worker image carries no GPU driver. The field cannot be changed on an existing pool; create a new pool to switch.
+## @immutable
+os: talos
+
+## @typedef {struct} Kairos - Kairos worker settings. Ignored unless `os` is `kairos`.
+## @field {string} [image] - Container disk image holding the Kairos worker OS, as a registry reference without a scheme, preferably pinned by digest. CDI imports it into each worker's system disk. Empty selects the disk the platform builds for this pool's Kubernetes `version`. An image set here must ship kubelet and kubeadm at the exact patch version of that `version`, boot with EFI firmware, and reset itself into the installed system on first boot.
+## @field {string} [sshPublicKey] - Public key authorized for the `kairos` user on every worker. Empty leaves the workers without any login: the user exists with a password that matches no input.
+
+## @param {Kairos} kairos - Kairos worker settings.
+kairos:
+  image: ""
+  sshPublicKey: ""
+
+##
 ## @section Substrate
 ##
 

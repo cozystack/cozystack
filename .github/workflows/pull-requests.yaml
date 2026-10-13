@@ -357,6 +357,13 @@ jobs:
             sudo "$bats_source/install.sh" /usr/local
           fi
           bats --version | grep -qx "Bats $BATS_VERSION"
+          # hack/kairos-reconcile-script_test.bats runs the Kairos reconcile
+          # script with the envsubst its Job image ships.
+          if ! command -v envsubst >/dev/null; then
+            sudo apt-get update --quiet
+            sudo apt-get install --assume-yes --quiet gettext-base
+          fi
+          envsubst --version | head -n 1
       # setup-envtest and the kube-apiserver and etcd it fetches, so a pull
       # request downloads them only when the versions pinned in the Makefile
       # change, and an outage at their sources cannot fail unrelated changes.
