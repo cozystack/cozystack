@@ -1,0 +1,21 @@
+# clusterctl provider metadata.
+#
+# Published alongside the components manifests in every release. clusterctl reads
+# it to map a release version to the Cluster API contract the provider implements
+# so it can refuse an incompatible management cluster.
+#
+# The Metadata kind has exactly one field, releaseSeries, and each entry is
+# {major, minor, contract} for one MINOR series. It does NOT carry per-patch
+# version / url / sha256 / releaseDate entries: clusterctl discovers available
+# versions from the GitHub releases and resolves the components URL from the
+# clusterctl provider configuration, not from this file. (The previous
+# v1beta1 + patches: shape was not a valid Metadata document.)
+apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
+kind: Metadata
+releaseSeries:
+  - major: 0
+    minor: 1
+    contract: v1beta2
+  - major: 0
+    minor: 2
+    contract: v1beta2

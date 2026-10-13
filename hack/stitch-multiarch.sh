@@ -44,7 +44,7 @@
 # any sha256:A left under the tree outside charts/, gzip payloads included,
 # fails the run. A ref whose digest also sits in a file the rewrite does not
 # reach is skipped before anything is pushed, since rewriting only some of its
-# copies would split one image across two digests. The one gzip it rewrites is
+# copies would split one image across two digests. The gzips it rewrites are
 # declared in GZIP_COPIES below; see docs/agents/image-refs.md.
 #
 # Requires: skopeo, docker buildx, jq, sha256sum, gzip, yq (mikefarah), and a
@@ -131,15 +131,16 @@ skip() {
   echo "::warning::stitch: skipping $1: $2" >&2
 }
 
-# "<gzip>=<plain file>" pairs, root-relative. The kamaji provider's chart ships
-# its components only as files/components.gz, which the package's image target
-# builds from control-plane-components.yaml with `gzip -nc`. Both copies are
+# "<gzip>=<plain file>" pairs, root-relative. The charts of the providers built
+# here ship their components only as a gzip, which the package's image target
+# builds from the plain file with `gzip -n` at the default level. Both copies are
 # rewritten, the gzip by decompressing, rewriting and recompressing with -n,
 # which is byte for byte what that target writes as long as both run GNU gzip,
 # as CI does (Apple's gzip compresses differently). The list is not in
 # image-refs.sh: the mirror's host rewrite there cannot reach inside a gzip, and
 # declaring only the plain copy to it would split the two.
-GZIP_COPIES="system/capi-providers-cpprovider/files/components.gz=system/capi-providers-cpprovider/files/control-plane-components.yaml"
+GZIP_COPIES="system/capi-providers-cpprovider/files/components.gz=system/capi-providers-cpprovider/files/control-plane-components.yaml
+system/capi-providers-bootstrap/files/components-kairos.gz=system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml"
 
 ref_files="$(image_ref_files "$ROOT")"
 gz_files=""

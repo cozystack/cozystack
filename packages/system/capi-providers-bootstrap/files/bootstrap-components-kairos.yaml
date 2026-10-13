@@ -1,0 +1,2781 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+    cluster.x-k8s.io/v1beta1: v1beta2
+    cluster.x-k8s.io/v1beta2: v1beta2
+  name: kairosconfigs.bootstrap.cluster.x-k8s.io
+spec:
+  group: bootstrap.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: KairosConfig
+    listKind: KairosConfigList
+    plural: kairosconfigs
+    singular: kairosconfig
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Bootstrap ready
+      jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - description: Secret containing bootstrap data
+      jsonPath: .status.dataSecretName
+      name: DataSecretName
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta2
+    schema:
+      openAPIV3Schema:
+        description: KairosConfig is the Schema for the kairosconfigs API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KairosConfigSpec defines the desired state of KairosConfig
+            properties:
+              caCertHashes:
+                description: |-
+                  CACertHashes was meant to carry the CA certificate hashes for a secure
+                  join. It is not implemented: the value is accepted and stored, but no
+                  controller reads it and no cloud-config template renders it, so setting
+                  it does not pin the join to a CA. Setting it produces an admission
+                  warning. Neither supported distribution can consume it: a k0s worker
+                  joins with the bundle `k0s token create` produces, which already carries
+                  the cluster CA, and a k3s agent takes no CA-hash flag at all. It validates
+                  the server only when its token is the full K10<hash>::server:<password>
+                  node-token. See kairos-io/kairos#4937.
+                items:
+                  type: string
+                type: array
+              caCertSecretRef:
+                description: |-
+                  CACertSecretRef was meant to reference a Secret containing the CA
+                  certificate. It is not implemented: the reference is accepted and
+                  stored, but no controller reads the Secret and its contents reach no
+                  node. Setting it produces an admission warning. Use Files to place a CA
+                  certificate on the node. See kairos-io/kairos#4937.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              controlPlaneJoinTokenSecretRef:
+                description: |-
+                  ControlPlaneJoinTokenSecretRef references a Secret holding the k0s
+                  control-plane (controller-role) join token used by an HA "join" node
+                  (ADR 0005 Phase 3). The token is minted on the init node via
+                  `k0s token create --role=controller`, pushed back to the management cluster
+                  over the node-push channel, and stored in an owner-ref'd Secret that the
+                  KairosControlPlane controller points this ref at.
+
+                  Set by the KairosControlPlane controller; not user-set. There is NO inline
+                  counterpart (TOKEN-INV / no new inline-secret fields): the controller-join
+                  token is secret material and must live in a Secret, never in this spec.
+                  The Secret must contain a key specified by Key (defaults to "token").
+
+                  k3s HA reuses K3sTokenSecretRef for the shared server token; this field is
+                  k0s-specific.
+                properties:
+                  key:
+                    default: token
+                    description: |-
+                      Key is the key within the Secret that contains the token
+                      Defaults to "token" if not specified
+                    type: string
+                  name:
+                    description: Name is the name of the Secret
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Secret
+                      If not specified, defaults to the same namespace as the KairosConfig
+                    type: string
+                required:
+                - name
+                type: object
+              controlPlaneRole:
+                allOf:
+                - enum:
+                  - single
+                  - init
+                  - join
+                - enum:
+                  - single
+                  - init
+                  - join
+                description: |-
+                  ControlPlaneRole is the init/join/single discriminator for this
+                  control-plane machine. Set by the KairosControlPlane controller;
+                  must not be set directly by end users.
+
+                  The zero value ("") is treated as equivalent to "single" by the
+                  bootstrap controller for backward compatibility with KairosConfig
+                  objects that predate this field. Do not rely on the zero value in
+                  new code — the controller sets an explicit value on every machine it
+                  creates.
+
+                  Rendered into the cloud-config in Phase 2; ignored by the bootstrap
+                  controller until Phase 2 ships (the SingleNode field covers the
+                  single-node case in the interim).
+                type: string
+              controlPlaneVIP:
+                description: |-
+                  ControlPlaneVIP is the kube-vip configuration the KairosControlPlane
+                  controller copies down from KairosControlPlane.Spec.HA.VIP so the bootstrap
+                  renderer can emit the kube-vip static-pod manifest on HA control-plane nodes
+                  (ADR 0005 Phase 3). It is consulted by the renderer ONLY on init/join
+                  control-plane roles on non-KubeVirt infrastructure (RenderKubeVIP gate).
+
+                  Set by the KairosControlPlane controller; not user-set. Keeping a flat copy
+                  here (rather than having the bootstrap controller reach into the
+                  controlplane API group) preserves internal/bootstrap's API-server-unaware
+                  contract: the controller marshals it into TemplateData.VIP.
+                properties:
+                  address:
+                    description: |-
+                      Address is the virtual IP address or DNS hostname for the control-plane
+                      endpoint. Must be a valid IPv4 address, IPv6 address, or RFC-1123 hostname.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  interface:
+                    description: |-
+                      Interface is the Linux network interface name on which kube-vip advertises
+                      the VIP (e.g. "eth0", "ens3", "bond0").
+                    maxLength: 15
+                    minLength: 1
+                    pattern: ^[a-zA-Z][a-zA-Z0-9._-]{0,14}$
+                    type: string
+                  mode:
+                    default: ARP
+                    description: |-
+                      Mode selects the VIP advertisement mechanism: "ARP" (default, L2) or
+                      "BGP" (L3). Empty is treated as ARP.
+                    enum:
+                    - ARP
+                    - BGP
+                    type: string
+                required:
+                - address
+                - interface
+                type: object
+              distribution:
+                default: k0s
+                description: |-
+                  Distribution is the Kubernetes distribution this config provisions.
+                  One of: k0s, k3s, kubeadm. Defaults to k0s.
+
+                    - k0s, k3s: render a Kairos-native cloud-config that installs and starts the
+                      distribution directly (control-plane or worker).
+                    - kubeadm: join a Kairos WORKER to an existing kubeadm control plane (for
+                      example Kamaji or an upstream KubeadmControlPlane). The controller mints a
+                      short-lived bootstrap token in the workload cluster after verifying the
+                      cluster's kubeconfig is owned by its control plane, and renders a kubeadm
+                      JoinConfiguration. kubeadm is for worker nodes only; it is not supported on
+                      a KairosControlPlane, whose distribution remains one of k0s, k3s.
+                enum:
+                - k0s
+                - k3s
+                - kubeadm
+                type: string
+              dnsServers:
+                description: |-
+                  DNSServers configures DNS resolvers for early boot
+                  This helps pulling CNI images before cluster DNS is ready.
+                items:
+                  type: string
+                type: array
+              files:
+                description: |-
+                  Files specifies additional files to write to the node's filesystem via
+                  the cloud-config write_files: list. Files are rendered on all
+                  distributions (k0s, k3s) and all infrastructure providers. Each entry
+                  is serialized with yaml.v3, which automatically selects block-scalar
+                  representation for multi-line content.
+
+                  Constraints: at most 32 files; each file's content is limited to 32 KiB
+                  (32768 bytes); paths must be absolute and must not contain .. segments.
+
+                  This field was accepted but silently ignored before this release.
+                items:
+                  description: |-
+                    File represents a file to be written via the cloud-config write_files: list.
+                    The entry is serialized with yaml.v3; multi-line Content is emitted as a
+                    block scalar automatically.
+                  properties:
+                    content:
+                      description: |-
+                        Content is the file content. Multi-line strings are accepted and are
+                        emitted as a YAML block scalar. Maximum 32 KiB (32768 bytes).
+                      maxLength: 32768
+                      type: string
+                    owner:
+                      description: |-
+                        Owner is the file owner in user:group format (e.g., "root:root").
+                        Both user and group must follow POSIX username conventions: start with
+                        a letter or underscore, followed by letters, digits, underscores, or
+                        hyphens. The group portion (including the colon) is optional.
+                      pattern: ^[a-z_][a-z0-9_-]*(:[a-z_][a-z0-9_-]*)?$
+                      type: string
+                    path:
+                      description: |-
+                        Path is the absolute path where the file is written on the node.
+                        Must begin with '/' and must not contain '..' path segments. The
+                        webhook rejects non-absolute paths and paths that contain '..'.
+                      pattern: ^/
+                      type: string
+                    permissions:
+                      description: |-
+                        Permissions is the file mode in octal notation. Accepts 3-digit or
+                        4-digit forms; the leading digit encodes setuid (4), setgid (2), and
+                        sticky (1) bits. Examples: "0644" (world-readable regular file),
+                        "0750" (group-accessible, others excluded), "4755" (setuid executable).
+                      pattern: ^0?[0-7]{3,4}$
+                      type: string
+                  required:
+                  - content
+                  - path
+                  type: object
+                maxItems: 32
+                type: array
+              githubUser:
+                description: |-
+                  GitHubUser is the GitHub username for SSH key access (e.g., "octocat")
+                  If set, SSH keys will be fetched from GitHub
+                type: string
+              hostname:
+                description: |-
+                  Hostname is the node hostname to set inside the VM
+                  If set, it takes precedence over HostnamePrefix.
+                type: string
+              hostnamePrefix:
+                default: metal-
+                description: |-
+                  HostnamePrefix is the prefix for the hostname that will be set on the node
+                  The final hostname will be: {HostnamePrefix}{{ trunc 4 .MachineID }}
+                  For example, if HostnamePrefix is "metal-", the hostname will be "metal-{4-char-machine-id}"
+                  Defaults to "metal-" if not specified
+                type: string
+              install:
+                description: |-
+                  Install specifies the Kairos installation configuration
+                  This controls how Kairos OS is installed to disk
+                properties:
+                  auto:
+                    default: true
+                    description: |-
+                      Auto enables automatic installation to disk
+                      When true, Kairos will automatically install to the specified device
+                    type: boolean
+                  device:
+                    default: auto
+                    description: |-
+                      Device specifies the target device for installation
+                      Use "auto" to automatically detect and use the first available disk
+                      Or specify a device path like "/dev/sda" or "/dev/nvme0n1"
+                    type: string
+                  reboot:
+                    default: true
+                    description: |-
+                      Reboot specifies whether to reboot after installation
+                      When true, the system will reboot automatically after installation completes
+                    type: boolean
+                type: object
+              k0sSingleNode:
+                description: |-
+                  K0sSingleNode opts a single-control-plane k0s cluster into the k0s
+                  "--single" mode: a standalone all-in-one node that does NOT accept any
+                  joins. It only affects k0s control-plane machines; k3s and worker/join
+                  nodes ignore it.
+
+                  It is opt-in and defaults to false. When false (the default), a
+                  single-control-plane k0s node is rendered as a joinable, schedulable
+                  controller (k0s "--enable-worker"): it runs workloads itself AND accepts
+                  worker joins, so a control-plane-plus-worker (multi-node) cluster works.
+                  Setting "--single" would make k0s refuse worker joins entirely ("cannot
+                  join into a single node cluster"), so it is only appropriate for a truly
+                  standalone single node that will never gain workers.
+                type: boolean
+              k3sToken:
+                description: |-
+                  K3sToken is the join token for k3s nodes (inline specification)
+                  For production use, prefer K3sTokenSecretRef instead.
+                  If both K3sToken and K3sTokenSecretRef are set, K3sTokenSecretRef takes precedence.
+                type: string
+              k3sTokenSecretRef:
+                description: |-
+                  K3sTokenSecretRef is a reference to a Secret containing the k3s join token
+                  The Secret must contain a key specified by K3sTokenSecretRef.Key (defaults to "token").
+                properties:
+                  key:
+                    default: token
+                    description: |-
+                      Key is the key within the Secret that contains the token
+                      Defaults to "token" if not specified
+                    type: string
+                  name:
+                    description: Name is the name of the Secret
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Secret
+                      If not specified, defaults to the same namespace as the KairosConfig
+                    type: string
+                required:
+                - name
+                type: object
+              kubeadm:
+                description: |-
+                  Kubeadm holds kubeadm-specific inputs for a worker join. It applies only when
+                  Distribution is kubeadm and Role is worker; it is ignored for k0s and k3s.
+                  Every field is optional: the controller fills nodeRegistration, discovery (the
+                  minted bootstrap token and the cluster-CA pin), and the providerID patch.
+
+                  Secret material and unsafe options are rejected at admission: no inline
+                  bootstrap token, no unsafeSkipCAVerification, no file-based discovery, no
+                  control-plane join, and no "{{" placeholders.
+                properties:
+                  joinConfiguration:
+                    description: |-
+                      JoinConfiguration is the kubeadm JoinConfiguration for a worker join. The
+                      controller overlays the fields it owns on top of anything set here:
+                      nodeRegistration.name (the Machine hostname), discovery (the minted bootstrap
+                      token, the control-plane endpoint, and the cluster-CA hash), the providerID
+                      kubelet patch, and the node.cluster.x-k8s.io/uninitialized taint.
+
+                      controlPlane must be nil: a control-plane join is not supported (worker only).
+                      Values that carry secret material or weaken the join's CA pin are rejected at
+                      admission.
+                    minProperties: 1
+                    properties:
+                      caCertPath:
+                        description: |-
+                          caCertPath is the path to the SSL certificate authority used to
+                          secure communications between node and control-plane.
+                          Defaults to "/etc/kubernetes/pki/ca.crt".
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                      controlPlane:
+                        description: |-
+                          controlPlane defines the additional control plane instance to be deployed on the joining node.
+                          If nil, no additional control plane instance will be deployed.
+                        properties:
+                          localAPIEndpoint:
+                            description: localAPIEndpoint represents the endpoint
+                              of the API server instance to be deployed on this node.
+                            minProperties: 1
+                            properties:
+                              advertiseAddress:
+                                description: advertiseAddress sets the IP address
+                                  for the API server to advertise.
+                                maxLength: 39
+                                minLength: 1
+                                type: string
+                              bindPort:
+                                description: |-
+                                  bindPort sets the secure port for the API Server to bind to.
+                                  Defaults to 6443.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                        type: object
+                      discovery:
+                        description: discovery specifies the options for the kubelet
+                          to use during the TLS Bootstrap process
+                        minProperties: 1
+                        properties:
+                          bootstrapToken:
+                            description: |-
+                              bootstrapToken is used to set the options for bootstrap token based discovery
+                              BootstrapToken and File are mutually exclusive
+                            minProperties: 1
+                            properties:
+                              apiServerEndpoint:
+                                description: apiServerEndpoint is an IP or domain
+                                  name to the API server from which info will be fetched.
+                                maxLength: 512
+                                minLength: 1
+                                type: string
+                              caCertHashes:
+                                description: |-
+                                  caCertHashes specifies a set of public key pins to verify
+                                  when token-based discovery is used. The root CA found during discovery
+                                  must match one of these values. Specifying an empty set disables root CA
+                                  pinning, which can be unsafe. Each hash is specified as "<type>:<value>",
+                                  where the only currently supported type is "sha256". This is a hex-encoded
+                                  SHA-256 hash of the Subject Public Key Info (SPKI) object in DER-encoded
+                                  ASN.1. These hashes can be calculated using, for example, OpenSSL:
+                                  openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | openssl dgst -sha256 -hex
+                                items:
+                                  maxLength: 512
+                                  minLength: 1
+                                  type: string
+                                maxItems: 100
+                                minItems: 1
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              token:
+                                description: |-
+                                  token is a token used to validate cluster information
+                                  fetched from the control-plane.
+                                maxLength: 512
+                                minLength: 1
+                                type: string
+                              unsafeSkipCAVerification:
+                                description: |-
+                                  unsafeSkipCAVerification allows token-based discovery
+                                  without CA verification via CACertHashes. This can weaken
+                                  the security of kubeadm since other nodes can impersonate the control-plane.
+                                type: boolean
+                            type: object
+                          file:
+                            description: |-
+                              file is used to specify a file or URL to a kubeconfig file from which to load cluster information
+                              BootstrapToken and File are mutually exclusive
+                            properties:
+                              kubeConfig:
+                                description: |-
+                                  kubeConfig is used (optionally) to generate a KubeConfig based on the KubeadmConfig's information.
+                                  The file is generated at the path specified in KubeConfigPath.
+
+                                  Host address (server field) information is automatically populated based on the Cluster's ControlPlaneEndpoint.
+                                  Certificate Authority (certificate-authority-data field) is gathered from the cluster's CA secret.
+                                properties:
+                                  cluster:
+                                    description: |-
+                                      cluster contains information about how to communicate with the kubernetes cluster.
+
+                                      By default the following fields are automatically populated:
+                                      - Server with the Cluster's ControlPlaneEndpoint.
+                                      - CertificateAuthorityData with the Cluster's CA certificate.
+                                    minProperties: 1
+                                    properties:
+                                      certificateAuthorityData:
+                                        description: |-
+                                          certificateAuthorityData contains PEM-encoded certificate authority certificates.
+
+                                          Defaults to the Cluster's CA certificate if empty.
+                                        format: byte
+                                        maxLength: 51200
+                                        minLength: 1
+                                        type: string
+                                      insecureSkipTLSVerify:
+                                        description: insecureSkipTLSVerify skips the
+                                          validity check for the server's certificate.
+                                          This will make your HTTPS connections insecure.
+                                        type: boolean
+                                      proxyURL:
+                                        description: |-
+                                          proxyURL is the URL to the proxy to be used for all requests made by this
+                                          client. URLs with "http", "https", and "socks5" schemes are supported.  If
+                                          this configuration is not provided or the empty string, the client
+                                          attempts to construct a proxy configuration from http_proxy and
+                                          https_proxy environment variables. If these environment variables are not
+                                          set, the client does not attempt to proxy requests.
+
+                                          socks5 proxying does not currently support spdy streaming endpoints (exec,
+                                          attach, port forward).
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                      server:
+                                        description: |-
+                                          server is the address of the kubernetes cluster (https://hostname:port).
+
+                                          Defaults to https:// + Cluster.Spec.ControlPlaneEndpoint.
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                      tlsServerName:
+                                        description: tlsServerName is used to check
+                                          server certificate. If TLSServerName is
+                                          empty, the hostname used to contact the
+                                          server is used.
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                    type: object
+                                  user:
+                                    description: |-
+                                      user contains information that describes identity information.
+                                      This is used to tell the kubernetes cluster who you are.
+                                    minProperties: 1
+                                    properties:
+                                      authProvider:
+                                        description: authProvider specifies a custom
+                                          authentication plugin for the kubernetes
+                                          cluster.
+                                        properties:
+                                          config:
+                                            additionalProperties:
+                                              type: string
+                                            description: config holds the parameters
+                                              for the authentication plugin.
+                                            type: object
+                                          name:
+                                            description: name is the name of the authentication
+                                              plugin.
+                                            maxLength: 256
+                                            minLength: 1
+                                            type: string
+                                        required:
+                                        - name
+                                        type: object
+                                      exec:
+                                        description: exec specifies a custom exec-based
+                                          authentication plugin for the kubernetes
+                                          cluster.
+                                        properties:
+                                          apiVersion:
+                                            description: |-
+                                              apiVersion is preferred input version of the ExecInfo. The returned ExecCredentials MUST use
+                                              the same encoding version as the input.
+                                              Defaults to client.authentication.k8s.io/v1 if not set.
+                                            maxLength: 512
+                                            minLength: 1
+                                            type: string
+                                          args:
+                                            description: args is the arguments to
+                                              pass to the command when executing it.
+                                            items:
+                                              maxLength: 512
+                                              minLength: 1
+                                              type: string
+                                            maxItems: 100
+                                            minItems: 1
+                                            type: array
+                                            x-kubernetes-list-type: atomic
+                                          command:
+                                            description: command to execute.
+                                            maxLength: 1024
+                                            minLength: 1
+                                            type: string
+                                          env:
+                                            description: |-
+                                              env defines additional environment variables to expose to the process. These
+                                              are unioned with the host's environment, as well as variables client-go uses
+                                              to pass argument to the plugin.
+                                            items:
+                                              description: |-
+                                                KubeConfigAuthExecEnv is used for setting environment variables when executing an exec-based
+                                                credential plugin.
+                                              properties:
+                                                name:
+                                                  description: name of the environment
+                                                    variable
+                                                  maxLength: 512
+                                                  minLength: 1
+                                                  type: string
+                                                value:
+                                                  description: value of the environment
+                                                    variable
+                                                  maxLength: 512
+                                                  minLength: 1
+                                                  type: string
+                                              required:
+                                              - name
+                                              - value
+                                              type: object
+                                            maxItems: 100
+                                            minItems: 1
+                                            type: array
+                                            x-kubernetes-list-type: atomic
+                                          provideClusterInfo:
+                                            description: |-
+                                              provideClusterInfo determines whether or not to provide cluster information,
+                                              which could potentially contain very large CA data, to this exec plugin as a
+                                              part of the KUBERNETES_EXEC_INFO environment variable. By default, it is set
+                                              to false. Package k8s.io/client-go/tools/auth/exec provides helper methods for
+                                              reading this environment variable.
+                                            type: boolean
+                                        required:
+                                        - command
+                                        type: object
+                                    type: object
+                                required:
+                                - user
+                                type: object
+                              kubeConfigPath:
+                                description: kubeConfigPath is used to specify the
+                                  actual file path or URL to the kubeconfig file from
+                                  which to load cluster information
+                                maxLength: 512
+                                minLength: 1
+                                type: string
+                            required:
+                            - kubeConfigPath
+                            type: object
+                          tlsBootstrapToken:
+                            description: |-
+                              tlsBootstrapToken is a token used for TLS bootstrapping.
+                              If .BootstrapToken is set, this field is defaulted to .BootstrapToken.Token, but can be overridden.
+                              If .File is set, this field **must be set** in case the KubeConfigFile does not contain any other authentication information
+                            maxLength: 512
+                            minLength: 1
+                            type: string
+                        type: object
+                      nodeRegistration:
+                        description: |-
+                          nodeRegistration holds fields that relate to registering the new control-plane node to the cluster.
+                          When used in the context of control plane nodes, NodeRegistration should remain consistent
+                          across both InitConfiguration and JoinConfiguration
+                        minProperties: 1
+                        properties:
+                          criSocket:
+                            description: criSocket is used to retrieve container runtime
+                              info. This information will be annotated to the Node
+                              API object, for later re-use
+                            maxLength: 512
+                            minLength: 1
+                            type: string
+                          ignorePreflightErrors:
+                            description: |-
+                              ignorePreflightErrors provides a slice of pre-flight errors to be ignored when the current node is registered, e.g. 'IsPrivilegedUser,Swap'.
+                              Value 'all' ignores errors from all checks.
+                            items:
+                              maxLength: 512
+                              minLength: 1
+                              type: string
+                            maxItems: 50
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          imagePullPolicy:
+                            description: |-
+                              imagePullPolicy specifies the policy for image pulling
+                              during kubeadm "init" and "join" operations. The value of
+                              this field must be one of "Always", "IfNotPresent" or
+                              "Never". Defaults to "IfNotPresent" if not set.
+                            enum:
+                            - Always
+                            - IfNotPresent
+                            - Never
+                            type: string
+                          imagePullSerial:
+                            description: |-
+                              imagePullSerial specifies if image pulling performed by kubeadm must be done serially or in parallel.
+                              This option takes effect only on Kubernetes >=1.31.0.
+                              Default: true (defaulted in kubeadm)
+                            type: boolean
+                          kubeletExtraArgs:
+                            description: |-
+                              kubeletExtraArgs is a list of args to pass to kubelet.
+                              The arg name must match the command line flag name except without leading dash(es).
+                              Extra arguments will override existing default arguments set by kubeadm.
+                            items:
+                              description: Arg represents an argument with a name
+                                and a value.
+                              properties:
+                                name:
+                                  description: name is the Name of the extraArg.
+                                  maxLength: 256
+                                  minLength: 1
+                                  type: string
+                                value:
+                                  description: value is the Value of the extraArg.
+                                  maxLength: 1024
+                                  minLength: 0
+                                  type: string
+                              required:
+                              - name
+                              - value
+                              type: object
+                            maxItems: 100
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            - value
+                            x-kubernetes-list-type: map
+                            x-kubernetes-validations:
+                            - message: kubeletExtraArgs name must be unique
+                              rule: self.all(x, self.exists_one(y, x.name == y.name))
+                          name:
+                            description: |-
+                              name is the `.Metadata.Name` field of the Node API object that will be created in this `kubeadm init` or `kubeadm join` operation.
+                              This field is also used in the CommonName field of the kubelet's client certificate to the API server.
+                              Defaults to the hostname of the node if not provided.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          taints:
+                            description: |-
+                              taints specifies the taints the Node API object should be registered with. If this field is unset, i.e. nil, in the `kubeadm init` process
+                              it will be defaulted to []v1.Taint{'node-role.kubernetes.io/master=""'}. If you don't want to taint your control-plane node, set this field to an
+                              empty slice, i.e. `taints: []` in the YAML file. This field is solely used for Node registration.
+                            items:
+                              description: |-
+                                The node this Taint is attached to has the "effect" on
+                                any pod that does not tolerate the Taint.
+                              properties:
+                                effect:
+                                  description: |-
+                                    Required. The effect of the taint on pods
+                                    that do not tolerate the taint.
+                                    Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+                                  type: string
+                                key:
+                                  description: Required. The taint key to be applied
+                                    to a node.
+                                  type: string
+                                timeAdded:
+                                  description: TimeAdded represents the time at which
+                                    the taint was added.
+                                  format: date-time
+                                  type: string
+                                value:
+                                  description: The taint value corresponding to the
+                                    taint key.
+                                  type: string
+                              required:
+                              - effect
+                              - key
+                              type: object
+                            maxItems: 100
+                            minItems: 0
+                            type: array
+                        type: object
+                      patches:
+                        description: |-
+                          patches contains options related to applying patches to components deployed by kubeadm during
+                          "kubeadm join". The minimum kubernetes version needed to support Patches is v1.22
+                        minProperties: 1
+                        properties:
+                          directory:
+                            description: |-
+                              directory is a path to a directory that contains files named "target[suffix][+patchtype].extension".
+                              For example, "kube-apiserver0+merge.yaml" or just "etcd.json". "target" can be one of
+                              "kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd". "patchtype" can be one
+                              of "strategic" "merge" or "json" and they match the patch formats supported by kubectl.
+                              The default "patchtype" is "strategic". "extension" must be either "json" or "yaml".
+                              "suffix" is an optional string that can be used to determine which patches are applied
+                              first alpha-numerically.
+                              These files can be written into the target directory via KubeadmConfig.Files which
+                              specifies additional files to be created on the machine, either with content inline or
+                              by referencing a secret.
+                            maxLength: 512
+                            minLength: 1
+                            type: string
+                        type: object
+                      skipPhases:
+                        description: |-
+                          skipPhases is a list of phases to skip during command execution.
+                          The list of phases can be obtained with the "kubeadm init --help" command.
+                          This option takes effect only on Kubernetes >=1.22.0.
+                        items:
+                          maxLength: 256
+                          minLength: 1
+                          type: string
+                        maxItems: 50
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      timeouts:
+                        description: timeouts holds various timeouts that apply to
+                          kubeadm commands.
+                        minProperties: 1
+                        properties:
+                          controlPlaneComponentHealthCheckSeconds:
+                            description: |-
+                              controlPlaneComponentHealthCheckSeconds is the amount of time to wait for a control plane
+                              component, such as the API server, to be healthy during "kubeadm init" and "kubeadm join".
+                              If not set, it defaults to 4m (240s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          discoverySeconds:
+                            description: |-
+                              discoverySeconds is the amount of time to wait for kubeadm to validate the API server identity
+                              for a joining node.
+                              If not set, it defaults to 5m (300s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          etcdAPICallSeconds:
+                            description: |-
+                              etcdAPICallSeconds is the amount of time to wait for the kubeadm etcd client to complete a request to
+                              the etcd cluster.
+                              If not set, it defaults to 2m (120s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          kubeletHealthCheckSeconds:
+                            description: |-
+                              kubeletHealthCheckSeconds is the amount of time to wait for the kubelet to be healthy
+                              during "kubeadm init" and "kubeadm join".
+                              If not set, it defaults to 4m (240s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          kubernetesAPICallSeconds:
+                            description: |-
+                              kubernetesAPICallSeconds is the amount of time to wait for the kubeadm client to complete a request to
+                              the API server. This applies to all types of methods (GET, POST, etc).
+                              If not set, it defaults to 1m (60s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          tlsBootstrapSeconds:
+                            description: |-
+                              tlsBootstrapSeconds is the amount of time to wait for the kubelet to complete TLS bootstrap
+                              for a joining node.
+                              If not set, it defaults to 5m (300s).
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                    type: object
+                type: object
+              kubernetesVersion:
+                description: |-
+                  KubernetesVersion records the intended Kubernetes version. It is informational:
+                  the running version is whatever the Kairos image ships. For kubeadm workers the
+                  authoritative version is the owning Machine's spec.version, which the rendered
+                  join checks against the image's kubeadm before joining.
+                type: string
+              manifests:
+                description: |-
+                  Manifests are Kubernetes manifests to be placed in the distribution manifests directory.
+                  These will be automatically applied by the distribution at cluster startup.
+                  k0s: /var/lib/k0s/manifests/{Name}/{File}
+                  k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                items:
+                  description: |-
+                    Manifest represents a Kubernetes manifest file to be deployed by the
+                    workload distribution. The manifest is placed at:
+                      - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                      - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+
+                    and is auto-applied by the distribution at server start. Manifests are
+                    applied on control-plane nodes only.
+                  properties:
+                    content:
+                      description: Content is the manifest YAML content
+                      type: string
+                    file:
+                      description: |-
+                        File is the filename within the Name directory. The distribution's
+                        manifest loader auto-applies it from:
+                          - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                          - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                      type: string
+                    name:
+                      description: |-
+                        Name is the directory name under the distribution's manifests directory.
+                        This creates a directory structure:
+                          - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                          - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                      type: string
+                  required:
+                  - content
+                  - file
+                  - name
+                  type: object
+                type: array
+              pause:
+                description: Pause indicates that reconciliation should be paused
+                type: boolean
+              podCIDR:
+                description: |-
+                  PodCIDR configures the pod network CIDR for k0s
+                  Defaults to k0s defaults if not specified.
+                type: string
+              postCommands:
+                description: PostCommands is reserved and not yet rendered into the
+                  cloud-config.
+                items:
+                  type: string
+                type: array
+              preCommands:
+                description: PreCommands is reserved and not yet rendered into the
+                  cloud-config.
+                items:
+                  type: string
+                type: array
+              primaryIP:
+                description: |-
+                  PrimaryIP overrides the detected node IP for KubeVirt control-plane
+                  certificates and endpoint configuration. This sets KAIROS_PRIMARY_IP.
+                type: string
+              role:
+                default: worker
+                description: Role indicates whether this is a control-plane or worker
+                  node
+                enum:
+                - control-plane
+                - worker
+                type: string
+              serverAddress:
+                description: ServerAddress is the address of the Kubernetes API server
+                  (for worker nodes)
+                type: string
+              serviceCIDR:
+                description: |-
+                  ServiceCIDR configures the service network CIDR for k0s
+                  Defaults to k0s defaults if not specified.
+                type: string
+              singleNode:
+                description: |-
+                  SingleNode indicates this is a single-node control plane cluster
+                  (spec.replicas==1). For k0s, the rendered flag depends on K0sSingleNode:
+                  by default a single k0s control plane is a joinable, schedulable controller
+                  (--enable-worker) so workers can still join; set K0sSingleNode to true to
+                  render the standalone --single mode instead.
+
+                  Deprecated: SingleNode is derived by the KairosControlPlane controller
+                  from spec.replicas (true when replicas==1) and will be removed in a
+                  future v1beta3 revision (KD-39). New code should read ControlPlaneRole
+                  instead. Both fields coexist during the transition period; the controller
+                  sets both for backward compatibility with templates that branch on
+                  SingleNode.
+                type: boolean
+              sshPublicKey:
+                description: SSHPublicKey is a raw SSH public key (alternative to
+                  GitHubUser)
+                type: string
+              token:
+                description: Token is the join token for worker nodes (if required
+                  by distribution)
+                type: string
+              tokenSecretRef:
+                description: TokenSecretRef is a reference to a Secret containing
+                  the join token
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              userGroups:
+                default:
+                - admin
+                description: UserGroups are the groups for the default user
+                items:
+                  type: string
+                type: array
+              userName:
+                default: kairos
+                description: UserName is the username for the default user
+                type: string
+              userPassword:
+                description: |-
+                  UserPassword is the password for the default user (inline; discouraged).
+
+                  Inline values are stored in the cluster as part of this resource's spec
+                  and are visible to anyone with read access to KairosConfigs. Prefer
+                  UserPasswordSecretRef for any non-lab use — the password then lives in
+                  a Kubernetes Secret which can be encrypted at rest and is subject to
+                  separate RBAC.
+
+                  No default is applied. A KairosConfig MUST set at least one of
+                  userPassword, userPasswordSecretRef, sshPublicKey, or gitHubUser; the
+                  validating webhook enforces this. If both UserPassword and
+                  UserPasswordSecretRef are set, UserPasswordSecretRef takes precedence.
+                type: string
+              userPasswordSecretRef:
+                description: |-
+                  UserPasswordSecretRef is a reference to a Secret containing the user
+                  password. The Secret must live in the same namespace as the KairosConfig
+                  unless Namespace is set explicitly. The Secret's data key defaults to
+                  "password". Recommended over inline UserPassword.
+                properties:
+                  key:
+                    default: password
+                    description: |-
+                      Key is the key within the Secret that contains the password.
+                      Defaults to "password" if not specified.
+                    type: string
+                  name:
+                    description: Name is the name of the Secret
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Secret.
+                      If not specified, defaults to the same namespace as the KairosConfig.
+                    type: string
+                required:
+                - name
+                type: object
+              workerToken:
+                description: |-
+                  WorkerToken is the join token for worker nodes (inline specification)
+                  For production use, prefer WorkerTokenSecretRef instead.
+                  If both WorkerToken and WorkerTokenSecretRef are set, WorkerTokenSecretRef takes precedence.
+                type: string
+              workerTokenSecretRef:
+                description: |-
+                  WorkerTokenSecretRef is a reference to a Secret containing the worker join token
+                  This is the recommended way to provide worker tokens for security.
+                  The Secret must contain a key specified by WorkerTokenSecretRef.Key (defaults to "token").
+                properties:
+                  key:
+                    default: token
+                    description: |-
+                      Key is the key within the Secret that contains the token
+                      Defaults to "token" if not specified
+                    type: string
+                  name:
+                    description: Name is the name of the Secret
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace is the namespace of the Secret
+                      If not specified, defaults to the same namespace as the KairosConfig
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - kubernetesVersion
+            type: object
+          status:
+            description: |-
+              KairosConfigStatus defines the observed state of KairosConfig
+              Contract: BootstrapConfig v1beta2 MUST expose a dataSecretName and ready status
+            properties:
+              bootstrapTokenID:
+                description: |-
+                  BootstrapTokenID is the non-secret ID half (the "[a-z0-9]{6}" prefix) of the
+                  kubeadm bootstrap token this KairosConfig uses in the workload cluster. Every
+                  render of the KairosConfig reuses this token, and the controller extends its
+                  expiry while the Machine has no nodeRef. It is revoked and cleared once the
+                  Machine has a nodeRef, or when the KairosConfig is deleted. It lets operators
+                  correlate the token Secret in the workload cluster's kube-system namespace with
+                  this KairosConfig without exposing the secret half, which lives only in the
+                  bootstrap-data Secret and is never placed in spec or status. Empty for k0s and
+                  k3s, for a kubeadm worker that has not yet minted a token, and after revocation.
+                type: string
+              conditions:
+                description: |-
+                  Conditions defines current service state of the KairosConfig
+                  Contract: BootstrapConfig SHOULD expose Conditions
+                  Standard CAPI conditions: Ready, BootstrapReady, DataSecretAvailable
+                items:
+                  description: |-
+                    Condition defines an observation of a Cluster API resource operational state.
+
+                    Deprecated: This type is deprecated and is going to be removed when support for v1beta1 will be dropped. Please see https://github.com/kubernetes-sigs/cluster-api/blob/main/docs/proposals/20240916-improve-status-in-CAPI-resources.md for more details.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed. If that is not known, then using the time when
+                        the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This field may be empty.
+                      maxLength: 10240
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: |-
+                        reason is the reason for the condition's last transition in CamelCase.
+                        The specific API may choose whether or not this field is considered a guaranteed API.
+                        This field may be empty.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    severity:
+                      description: |-
+                        severity provides an explicit classification of Reason code, so the users or machines can immediately
+                        understand the current situation and act accordingly.
+                        The Severity field MUST be set only when Status=False.
+                      maxLength: 32
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions
+                        can be useful (see .node.status.conditions), the ability to deconflict is important.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              dataSecretName:
+                description: |-
+                  DataSecretName is the name of the Secret containing the bootstrap data
+                  Contract: BootstrapConfig MUST expose a dataSecretName
+                  The Secret must be in the same namespace as the KairosConfig.
+                type: string
+              failureMessage:
+                description: |-
+                  FailureMessage is a human-readable description of the last bootstrap
+                  failure. Cleared automatically when a subsequent reconcile succeeds.
+                  If non-empty, check the owning Machine's events for context.
+                type: string
+              failureReason:
+                description: |-
+                  FailureReason is a short machine-readable string indicating why the
+                  bootstrap controller failed on its last reconcile attempt. Cleared
+                  automatically when a subsequent reconcile succeeds, so a non-empty
+                  value indicates an ongoing failure, not a terminal one.
+                type: string
+              initialization:
+                description: |-
+                  Initialization provides observations of the KairosConfig initialization process.
+                  NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Machine provisioning.
+                properties:
+                  dataSecretCreated:
+                    description: |-
+                      DataSecretCreated is true when the Machine's bootstrap secret is created.
+                      NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
+                    type: boolean
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  by the controller
+                format: int64
+                type: integer
+              ready:
+                description: |-
+                  Ready indicates the bootstrap data has been generated and is ready
+                  Contract: BootstrapConfig MUST indicate bootstrap completion
+                  This field MUST be set to true when bootstrap data is available and ready to use.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+    cluster.x-k8s.io/v1beta1: v1beta2
+    cluster.x-k8s.io/v1beta2: v1beta2
+  name: kairosconfigtemplates.bootstrap.cluster.x-k8s.io
+spec:
+  group: bootstrap.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: KairosConfigTemplate
+    listKind: KairosConfigTemplateList
+    plural: kairosconfigtemplates
+    singular: kairosconfigtemplate
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1beta2
+    schema:
+      openAPIV3Schema:
+        description: KairosConfigTemplate is the Schema for the kairosconfigtemplates
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KairosConfigTemplateSpec defines the desired state of KairosConfigTemplate
+            properties:
+              template:
+                description: Template is the KairosConfig template to be used for
+                  each Machine
+                properties:
+                  metadata:
+                    description: Standard object's metadata.
+                    type: object
+                  spec:
+                    description: Spec is the specification of the KairosConfig
+                    properties:
+                      caCertHashes:
+                        description: |-
+                          CACertHashes was meant to carry the CA certificate hashes for a secure
+                          join. It is not implemented: the value is accepted and stored, but no
+                          controller reads it and no cloud-config template renders it, so setting
+                          it does not pin the join to a CA. Setting it produces an admission
+                          warning. Neither supported distribution can consume it: a k0s worker
+                          joins with the bundle `k0s token create` produces, which already carries
+                          the cluster CA, and a k3s agent takes no CA-hash flag at all. It validates
+                          the server only when its token is the full K10<hash>::server:<password>
+                          node-token. See kairos-io/kairos#4937.
+                        items:
+                          type: string
+                        type: array
+                      caCertSecretRef:
+                        description: |-
+                          CACertSecretRef was meant to reference a Secret containing the CA
+                          certificate. It is not implemented: the reference is accepted and
+                          stored, but no controller reads the Secret and its contents reach no
+                          node. Setting it produces an admission warning. Use Files to place a CA
+                          certificate on the node. See kairos-io/kairos#4937.
+                        properties:
+                          apiVersion:
+                            description: API version of the referent.
+                            type: string
+                          fieldPath:
+                            description: |-
+                              If referring to a piece of an object instead of an entire object, this string
+                              should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                              For example, if the object reference is to a container within a pod, this would take on a value like:
+                              "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                              the event) or if no container name is specified "spec.containers[2]" (container with
+                              index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                              referencing a part of an object.
+                            type: string
+                          kind:
+                            description: |-
+                              Kind of the referent.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                            type: string
+                          name:
+                            description: |-
+                              Name of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                            type: string
+                          resourceVersion:
+                            description: |-
+                              Specific resourceVersion to which this reference is made, if any.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                            type: string
+                          uid:
+                            description: |-
+                              UID of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      controlPlaneJoinTokenSecretRef:
+                        description: |-
+                          ControlPlaneJoinTokenSecretRef references a Secret holding the k0s
+                          control-plane (controller-role) join token used by an HA "join" node
+                          (ADR 0005 Phase 3). The token is minted on the init node via
+                          `k0s token create --role=controller`, pushed back to the management cluster
+                          over the node-push channel, and stored in an owner-ref'd Secret that the
+                          KairosControlPlane controller points this ref at.
+
+                          Set by the KairosControlPlane controller; not user-set. There is NO inline
+                          counterpart (TOKEN-INV / no new inline-secret fields): the controller-join
+                          token is secret material and must live in a Secret, never in this spec.
+                          The Secret must contain a key specified by Key (defaults to "token").
+
+                          k3s HA reuses K3sTokenSecretRef for the shared server token; this field is
+                          k0s-specific.
+                        properties:
+                          key:
+                            default: token
+                            description: |-
+                              Key is the key within the Secret that contains the token
+                              Defaults to "token" if not specified
+                            type: string
+                          name:
+                            description: Name is the name of the Secret
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the namespace of the Secret
+                              If not specified, defaults to the same namespace as the KairosConfig
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      controlPlaneRole:
+                        allOf:
+                        - enum:
+                          - single
+                          - init
+                          - join
+                        - enum:
+                          - single
+                          - init
+                          - join
+                        description: |-
+                          ControlPlaneRole is the init/join/single discriminator for this
+                          control-plane machine. Set by the KairosControlPlane controller;
+                          must not be set directly by end users.
+
+                          The zero value ("") is treated as equivalent to "single" by the
+                          bootstrap controller for backward compatibility with KairosConfig
+                          objects that predate this field. Do not rely on the zero value in
+                          new code — the controller sets an explicit value on every machine it
+                          creates.
+
+                          Rendered into the cloud-config in Phase 2; ignored by the bootstrap
+                          controller until Phase 2 ships (the SingleNode field covers the
+                          single-node case in the interim).
+                        type: string
+                      controlPlaneVIP:
+                        description: |-
+                          ControlPlaneVIP is the kube-vip configuration the KairosControlPlane
+                          controller copies down from KairosControlPlane.Spec.HA.VIP so the bootstrap
+                          renderer can emit the kube-vip static-pod manifest on HA control-plane nodes
+                          (ADR 0005 Phase 3). It is consulted by the renderer ONLY on init/join
+                          control-plane roles on non-KubeVirt infrastructure (RenderKubeVIP gate).
+
+                          Set by the KairosControlPlane controller; not user-set. Keeping a flat copy
+                          here (rather than having the bootstrap controller reach into the
+                          controlplane API group) preserves internal/bootstrap's API-server-unaware
+                          contract: the controller marshals it into TemplateData.VIP.
+                        properties:
+                          address:
+                            description: |-
+                              Address is the virtual IP address or DNS hostname for the control-plane
+                              endpoint. Must be a valid IPv4 address, IPv6 address, or RFC-1123 hostname.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          interface:
+                            description: |-
+                              Interface is the Linux network interface name on which kube-vip advertises
+                              the VIP (e.g. "eth0", "ens3", "bond0").
+                            maxLength: 15
+                            minLength: 1
+                            pattern: ^[a-zA-Z][a-zA-Z0-9._-]{0,14}$
+                            type: string
+                          mode:
+                            default: ARP
+                            description: |-
+                              Mode selects the VIP advertisement mechanism: "ARP" (default, L2) or
+                              "BGP" (L3). Empty is treated as ARP.
+                            enum:
+                            - ARP
+                            - BGP
+                            type: string
+                        required:
+                        - address
+                        - interface
+                        type: object
+                      distribution:
+                        default: k0s
+                        description: |-
+                          Distribution is the Kubernetes distribution this config provisions.
+                          One of: k0s, k3s, kubeadm. Defaults to k0s.
+
+                            - k0s, k3s: render a Kairos-native cloud-config that installs and starts the
+                              distribution directly (control-plane or worker).
+                            - kubeadm: join a Kairos WORKER to an existing kubeadm control plane (for
+                              example Kamaji or an upstream KubeadmControlPlane). The controller mints a
+                              short-lived bootstrap token in the workload cluster after verifying the
+                              cluster's kubeconfig is owned by its control plane, and renders a kubeadm
+                              JoinConfiguration. kubeadm is for worker nodes only; it is not supported on
+                              a KairosControlPlane, whose distribution remains one of k0s, k3s.
+                        enum:
+                        - k0s
+                        - k3s
+                        - kubeadm
+                        type: string
+                      dnsServers:
+                        description: |-
+                          DNSServers configures DNS resolvers for early boot
+                          This helps pulling CNI images before cluster DNS is ready.
+                        items:
+                          type: string
+                        type: array
+                      files:
+                        description: |-
+                          Files specifies additional files to write to the node's filesystem via
+                          the cloud-config write_files: list. Files are rendered on all
+                          distributions (k0s, k3s) and all infrastructure providers. Each entry
+                          is serialized with yaml.v3, which automatically selects block-scalar
+                          representation for multi-line content.
+
+                          Constraints: at most 32 files; each file's content is limited to 32 KiB
+                          (32768 bytes); paths must be absolute and must not contain .. segments.
+
+                          This field was accepted but silently ignored before this release.
+                        items:
+                          description: |-
+                            File represents a file to be written via the cloud-config write_files: list.
+                            The entry is serialized with yaml.v3; multi-line Content is emitted as a
+                            block scalar automatically.
+                          properties:
+                            content:
+                              description: |-
+                                Content is the file content. Multi-line strings are accepted and are
+                                emitted as a YAML block scalar. Maximum 32 KiB (32768 bytes).
+                              maxLength: 32768
+                              type: string
+                            owner:
+                              description: |-
+                                Owner is the file owner in user:group format (e.g., "root:root").
+                                Both user and group must follow POSIX username conventions: start with
+                                a letter or underscore, followed by letters, digits, underscores, or
+                                hyphens. The group portion (including the colon) is optional.
+                              pattern: ^[a-z_][a-z0-9_-]*(:[a-z_][a-z0-9_-]*)?$
+                              type: string
+                            path:
+                              description: |-
+                                Path is the absolute path where the file is written on the node.
+                                Must begin with '/' and must not contain '..' path segments. The
+                                webhook rejects non-absolute paths and paths that contain '..'.
+                              pattern: ^/
+                              type: string
+                            permissions:
+                              description: |-
+                                Permissions is the file mode in octal notation. Accepts 3-digit or
+                                4-digit forms; the leading digit encodes setuid (4), setgid (2), and
+                                sticky (1) bits. Examples: "0644" (world-readable regular file),
+                                "0750" (group-accessible, others excluded), "4755" (setuid executable).
+                              pattern: ^0?[0-7]{3,4}$
+                              type: string
+                          required:
+                          - content
+                          - path
+                          type: object
+                        maxItems: 32
+                        type: array
+                      githubUser:
+                        description: |-
+                          GitHubUser is the GitHub username for SSH key access (e.g., "octocat")
+                          If set, SSH keys will be fetched from GitHub
+                        type: string
+                      hostname:
+                        description: |-
+                          Hostname is the node hostname to set inside the VM
+                          If set, it takes precedence over HostnamePrefix.
+                        type: string
+                      hostnamePrefix:
+                        default: metal-
+                        description: |-
+                          HostnamePrefix is the prefix for the hostname that will be set on the node
+                          The final hostname will be: {HostnamePrefix}{{ trunc 4 .MachineID }}
+                          For example, if HostnamePrefix is "metal-", the hostname will be "metal-{4-char-machine-id}"
+                          Defaults to "metal-" if not specified
+                        type: string
+                      install:
+                        description: |-
+                          Install specifies the Kairos installation configuration
+                          This controls how Kairos OS is installed to disk
+                        properties:
+                          auto:
+                            default: true
+                            description: |-
+                              Auto enables automatic installation to disk
+                              When true, Kairos will automatically install to the specified device
+                            type: boolean
+                          device:
+                            default: auto
+                            description: |-
+                              Device specifies the target device for installation
+                              Use "auto" to automatically detect and use the first available disk
+                              Or specify a device path like "/dev/sda" or "/dev/nvme0n1"
+                            type: string
+                          reboot:
+                            default: true
+                            description: |-
+                              Reboot specifies whether to reboot after installation
+                              When true, the system will reboot automatically after installation completes
+                            type: boolean
+                        type: object
+                      k0sSingleNode:
+                        description: |-
+                          K0sSingleNode opts a single-control-plane k0s cluster into the k0s
+                          "--single" mode: a standalone all-in-one node that does NOT accept any
+                          joins. It only affects k0s control-plane machines; k3s and worker/join
+                          nodes ignore it.
+
+                          It is opt-in and defaults to false. When false (the default), a
+                          single-control-plane k0s node is rendered as a joinable, schedulable
+                          controller (k0s "--enable-worker"): it runs workloads itself AND accepts
+                          worker joins, so a control-plane-plus-worker (multi-node) cluster works.
+                          Setting "--single" would make k0s refuse worker joins entirely ("cannot
+                          join into a single node cluster"), so it is only appropriate for a truly
+                          standalone single node that will never gain workers.
+                        type: boolean
+                      k3sToken:
+                        description: |-
+                          K3sToken is the join token for k3s nodes (inline specification)
+                          For production use, prefer K3sTokenSecretRef instead.
+                          If both K3sToken and K3sTokenSecretRef are set, K3sTokenSecretRef takes precedence.
+                        type: string
+                      k3sTokenSecretRef:
+                        description: |-
+                          K3sTokenSecretRef is a reference to a Secret containing the k3s join token
+                          The Secret must contain a key specified by K3sTokenSecretRef.Key (defaults to "token").
+                        properties:
+                          key:
+                            default: token
+                            description: |-
+                              Key is the key within the Secret that contains the token
+                              Defaults to "token" if not specified
+                            type: string
+                          name:
+                            description: Name is the name of the Secret
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the namespace of the Secret
+                              If not specified, defaults to the same namespace as the KairosConfig
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      kubeadm:
+                        description: |-
+                          Kubeadm holds kubeadm-specific inputs for a worker join. It applies only when
+                          Distribution is kubeadm and Role is worker; it is ignored for k0s and k3s.
+                          Every field is optional: the controller fills nodeRegistration, discovery (the
+                          minted bootstrap token and the cluster-CA pin), and the providerID patch.
+
+                          Secret material and unsafe options are rejected at admission: no inline
+                          bootstrap token, no unsafeSkipCAVerification, no file-based discovery, no
+                          control-plane join, and no "{{" placeholders.
+                        properties:
+                          joinConfiguration:
+                            description: |-
+                              JoinConfiguration is the kubeadm JoinConfiguration for a worker join. The
+                              controller overlays the fields it owns on top of anything set here:
+                              nodeRegistration.name (the Machine hostname), discovery (the minted bootstrap
+                              token, the control-plane endpoint, and the cluster-CA hash), the providerID
+                              kubelet patch, and the node.cluster.x-k8s.io/uninitialized taint.
+
+                              controlPlane must be nil: a control-plane join is not supported (worker only).
+                              Values that carry secret material or weaken the join's CA pin are rejected at
+                              admission.
+                            minProperties: 1
+                            properties:
+                              caCertPath:
+                                description: |-
+                                  caCertPath is the path to the SSL certificate authority used to
+                                  secure communications between node and control-plane.
+                                  Defaults to "/etc/kubernetes/pki/ca.crt".
+                                maxLength: 512
+                                minLength: 1
+                                type: string
+                              controlPlane:
+                                description: |-
+                                  controlPlane defines the additional control plane instance to be deployed on the joining node.
+                                  If nil, no additional control plane instance will be deployed.
+                                properties:
+                                  localAPIEndpoint:
+                                    description: localAPIEndpoint represents the endpoint
+                                      of the API server instance to be deployed on
+                                      this node.
+                                    minProperties: 1
+                                    properties:
+                                      advertiseAddress:
+                                        description: advertiseAddress sets the IP
+                                          address for the API server to advertise.
+                                        maxLength: 39
+                                        minLength: 1
+                                        type: string
+                                      bindPort:
+                                        description: |-
+                                          bindPort sets the secure port for the API Server to bind to.
+                                          Defaults to 6443.
+                                        format: int32
+                                        minimum: 1
+                                        type: integer
+                                    type: object
+                                type: object
+                              discovery:
+                                description: discovery specifies the options for the
+                                  kubelet to use during the TLS Bootstrap process
+                                minProperties: 1
+                                properties:
+                                  bootstrapToken:
+                                    description: |-
+                                      bootstrapToken is used to set the options for bootstrap token based discovery
+                                      BootstrapToken and File are mutually exclusive
+                                    minProperties: 1
+                                    properties:
+                                      apiServerEndpoint:
+                                        description: apiServerEndpoint is an IP or
+                                          domain name to the API server from which
+                                          info will be fetched.
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                      caCertHashes:
+                                        description: |-
+                                          caCertHashes specifies a set of public key pins to verify
+                                          when token-based discovery is used. The root CA found during discovery
+                                          must match one of these values. Specifying an empty set disables root CA
+                                          pinning, which can be unsafe. Each hash is specified as "<type>:<value>",
+                                          where the only currently supported type is "sha256". This is a hex-encoded
+                                          SHA-256 hash of the Subject Public Key Info (SPKI) object in DER-encoded
+                                          ASN.1. These hashes can be calculated using, for example, OpenSSL:
+                                          openssl x509 -pubkey -in ca.crt openssl rsa -pubin -outform der 2>&/dev/null | openssl dgst -sha256 -hex
+                                        items:
+                                          maxLength: 512
+                                          minLength: 1
+                                          type: string
+                                        maxItems: 100
+                                        minItems: 1
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                      token:
+                                        description: |-
+                                          token is a token used to validate cluster information
+                                          fetched from the control-plane.
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                      unsafeSkipCAVerification:
+                                        description: |-
+                                          unsafeSkipCAVerification allows token-based discovery
+                                          without CA verification via CACertHashes. This can weaken
+                                          the security of kubeadm since other nodes can impersonate the control-plane.
+                                        type: boolean
+                                    type: object
+                                  file:
+                                    description: |-
+                                      file is used to specify a file or URL to a kubeconfig file from which to load cluster information
+                                      BootstrapToken and File are mutually exclusive
+                                    properties:
+                                      kubeConfig:
+                                        description: |-
+                                          kubeConfig is used (optionally) to generate a KubeConfig based on the KubeadmConfig's information.
+                                          The file is generated at the path specified in KubeConfigPath.
+
+                                          Host address (server field) information is automatically populated based on the Cluster's ControlPlaneEndpoint.
+                                          Certificate Authority (certificate-authority-data field) is gathered from the cluster's CA secret.
+                                        properties:
+                                          cluster:
+                                            description: |-
+                                              cluster contains information about how to communicate with the kubernetes cluster.
+
+                                              By default the following fields are automatically populated:
+                                              - Server with the Cluster's ControlPlaneEndpoint.
+                                              - CertificateAuthorityData with the Cluster's CA certificate.
+                                            minProperties: 1
+                                            properties:
+                                              certificateAuthorityData:
+                                                description: |-
+                                                  certificateAuthorityData contains PEM-encoded certificate authority certificates.
+
+                                                  Defaults to the Cluster's CA certificate if empty.
+                                                format: byte
+                                                maxLength: 51200
+                                                minLength: 1
+                                                type: string
+                                              insecureSkipTLSVerify:
+                                                description: insecureSkipTLSVerify
+                                                  skips the validity check for the
+                                                  server's certificate. This will
+                                                  make your HTTPS connections insecure.
+                                                type: boolean
+                                              proxyURL:
+                                                description: |-
+                                                  proxyURL is the URL to the proxy to be used for all requests made by this
+                                                  client. URLs with "http", "https", and "socks5" schemes are supported.  If
+                                                  this configuration is not provided or the empty string, the client
+                                                  attempts to construct a proxy configuration from http_proxy and
+                                                  https_proxy environment variables. If these environment variables are not
+                                                  set, the client does not attempt to proxy requests.
+
+                                                  socks5 proxying does not currently support spdy streaming endpoints (exec,
+                                                  attach, port forward).
+                                                maxLength: 512
+                                                minLength: 1
+                                                type: string
+                                              server:
+                                                description: |-
+                                                  server is the address of the kubernetes cluster (https://hostname:port).
+
+                                                  Defaults to https:// + Cluster.Spec.ControlPlaneEndpoint.
+                                                maxLength: 512
+                                                minLength: 1
+                                                type: string
+                                              tlsServerName:
+                                                description: tlsServerName is used
+                                                  to check server certificate. If
+                                                  TLSServerName is empty, the hostname
+                                                  used to contact the server is used.
+                                                maxLength: 512
+                                                minLength: 1
+                                                type: string
+                                            type: object
+                                          user:
+                                            description: |-
+                                              user contains information that describes identity information.
+                                              This is used to tell the kubernetes cluster who you are.
+                                            minProperties: 1
+                                            properties:
+                                              authProvider:
+                                                description: authProvider specifies
+                                                  a custom authentication plugin for
+                                                  the kubernetes cluster.
+                                                properties:
+                                                  config:
+                                                    additionalProperties:
+                                                      type: string
+                                                    description: config holds the
+                                                      parameters for the authentication
+                                                      plugin.
+                                                    type: object
+                                                  name:
+                                                    description: name is the name
+                                                      of the authentication plugin.
+                                                    maxLength: 256
+                                                    minLength: 1
+                                                    type: string
+                                                required:
+                                                - name
+                                                type: object
+                                              exec:
+                                                description: exec specifies a custom
+                                                  exec-based authentication plugin
+                                                  for the kubernetes cluster.
+                                                properties:
+                                                  apiVersion:
+                                                    description: |-
+                                                      apiVersion is preferred input version of the ExecInfo. The returned ExecCredentials MUST use
+                                                      the same encoding version as the input.
+                                                      Defaults to client.authentication.k8s.io/v1 if not set.
+                                                    maxLength: 512
+                                                    minLength: 1
+                                                    type: string
+                                                  args:
+                                                    description: args is the arguments
+                                                      to pass to the command when
+                                                      executing it.
+                                                    items:
+                                                      maxLength: 512
+                                                      minLength: 1
+                                                      type: string
+                                                    maxItems: 100
+                                                    minItems: 1
+                                                    type: array
+                                                    x-kubernetes-list-type: atomic
+                                                  command:
+                                                    description: command to execute.
+                                                    maxLength: 1024
+                                                    minLength: 1
+                                                    type: string
+                                                  env:
+                                                    description: |-
+                                                      env defines additional environment variables to expose to the process. These
+                                                      are unioned with the host's environment, as well as variables client-go uses
+                                                      to pass argument to the plugin.
+                                                    items:
+                                                      description: |-
+                                                        KubeConfigAuthExecEnv is used for setting environment variables when executing an exec-based
+                                                        credential plugin.
+                                                      properties:
+                                                        name:
+                                                          description: name of the
+                                                            environment variable
+                                                          maxLength: 512
+                                                          minLength: 1
+                                                          type: string
+                                                        value:
+                                                          description: value of the
+                                                            environment variable
+                                                          maxLength: 512
+                                                          minLength: 1
+                                                          type: string
+                                                      required:
+                                                      - name
+                                                      - value
+                                                      type: object
+                                                    maxItems: 100
+                                                    minItems: 1
+                                                    type: array
+                                                    x-kubernetes-list-type: atomic
+                                                  provideClusterInfo:
+                                                    description: |-
+                                                      provideClusterInfo determines whether or not to provide cluster information,
+                                                      which could potentially contain very large CA data, to this exec plugin as a
+                                                      part of the KUBERNETES_EXEC_INFO environment variable. By default, it is set
+                                                      to false. Package k8s.io/client-go/tools/auth/exec provides helper methods for
+                                                      reading this environment variable.
+                                                    type: boolean
+                                                required:
+                                                - command
+                                                type: object
+                                            type: object
+                                        required:
+                                        - user
+                                        type: object
+                                      kubeConfigPath:
+                                        description: kubeConfigPath is used to specify
+                                          the actual file path or URL to the kubeconfig
+                                          file from which to load cluster information
+                                        maxLength: 512
+                                        minLength: 1
+                                        type: string
+                                    required:
+                                    - kubeConfigPath
+                                    type: object
+                                  tlsBootstrapToken:
+                                    description: |-
+                                      tlsBootstrapToken is a token used for TLS bootstrapping.
+                                      If .BootstrapToken is set, this field is defaulted to .BootstrapToken.Token, but can be overridden.
+                                      If .File is set, this field **must be set** in case the KubeConfigFile does not contain any other authentication information
+                                    maxLength: 512
+                                    minLength: 1
+                                    type: string
+                                type: object
+                              nodeRegistration:
+                                description: |-
+                                  nodeRegistration holds fields that relate to registering the new control-plane node to the cluster.
+                                  When used in the context of control plane nodes, NodeRegistration should remain consistent
+                                  across both InitConfiguration and JoinConfiguration
+                                minProperties: 1
+                                properties:
+                                  criSocket:
+                                    description: criSocket is used to retrieve container
+                                      runtime info. This information will be annotated
+                                      to the Node API object, for later re-use
+                                    maxLength: 512
+                                    minLength: 1
+                                    type: string
+                                  ignorePreflightErrors:
+                                    description: |-
+                                      ignorePreflightErrors provides a slice of pre-flight errors to be ignored when the current node is registered, e.g. 'IsPrivilegedUser,Swap'.
+                                      Value 'all' ignores errors from all checks.
+                                    items:
+                                      maxLength: 512
+                                      minLength: 1
+                                      type: string
+                                    maxItems: 50
+                                    minItems: 1
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                  imagePullPolicy:
+                                    description: |-
+                                      imagePullPolicy specifies the policy for image pulling
+                                      during kubeadm "init" and "join" operations. The value of
+                                      this field must be one of "Always", "IfNotPresent" or
+                                      "Never". Defaults to "IfNotPresent" if not set.
+                                    enum:
+                                    - Always
+                                    - IfNotPresent
+                                    - Never
+                                    type: string
+                                  imagePullSerial:
+                                    description: |-
+                                      imagePullSerial specifies if image pulling performed by kubeadm must be done serially or in parallel.
+                                      This option takes effect only on Kubernetes >=1.31.0.
+                                      Default: true (defaulted in kubeadm)
+                                    type: boolean
+                                  kubeletExtraArgs:
+                                    description: |-
+                                      kubeletExtraArgs is a list of args to pass to kubelet.
+                                      The arg name must match the command line flag name except without leading dash(es).
+                                      Extra arguments will override existing default arguments set by kubeadm.
+                                    items:
+                                      description: Arg represents an argument with
+                                        a name and a value.
+                                      properties:
+                                        name:
+                                          description: name is the Name of the extraArg.
+                                          maxLength: 256
+                                          minLength: 1
+                                          type: string
+                                        value:
+                                          description: value is the Value of the extraArg.
+                                          maxLength: 1024
+                                          minLength: 0
+                                          type: string
+                                      required:
+                                      - name
+                                      - value
+                                      type: object
+                                    maxItems: 100
+                                    minItems: 1
+                                    type: array
+                                    x-kubernetes-list-map-keys:
+                                    - name
+                                    - value
+                                    x-kubernetes-list-type: map
+                                    x-kubernetes-validations:
+                                    - message: kubeletExtraArgs name must be unique
+                                      rule: self.all(x, self.exists_one(y, x.name
+                                        == y.name))
+                                  name:
+                                    description: |-
+                                      name is the `.Metadata.Name` field of the Node API object that will be created in this `kubeadm init` or `kubeadm join` operation.
+                                      This field is also used in the CommonName field of the kubelet's client certificate to the API server.
+                                      Defaults to the hostname of the node if not provided.
+                                    maxLength: 253
+                                    minLength: 1
+                                    type: string
+                                  taints:
+                                    description: |-
+                                      taints specifies the taints the Node API object should be registered with. If this field is unset, i.e. nil, in the `kubeadm init` process
+                                      it will be defaulted to []v1.Taint{'node-role.kubernetes.io/master=""'}. If you don't want to taint your control-plane node, set this field to an
+                                      empty slice, i.e. `taints: []` in the YAML file. This field is solely used for Node registration.
+                                    items:
+                                      description: |-
+                                        The node this Taint is attached to has the "effect" on
+                                        any pod that does not tolerate the Taint.
+                                      properties:
+                                        effect:
+                                          description: |-
+                                            Required. The effect of the taint on pods
+                                            that do not tolerate the taint.
+                                            Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+                                          type: string
+                                        key:
+                                          description: Required. The taint key to
+                                            be applied to a node.
+                                          type: string
+                                        timeAdded:
+                                          description: TimeAdded represents the time
+                                            at which the taint was added.
+                                          format: date-time
+                                          type: string
+                                        value:
+                                          description: The taint value corresponding
+                                            to the taint key.
+                                          type: string
+                                      required:
+                                      - effect
+                                      - key
+                                      type: object
+                                    maxItems: 100
+                                    minItems: 0
+                                    type: array
+                                type: object
+                              patches:
+                                description: |-
+                                  patches contains options related to applying patches to components deployed by kubeadm during
+                                  "kubeadm join". The minimum kubernetes version needed to support Patches is v1.22
+                                minProperties: 1
+                                properties:
+                                  directory:
+                                    description: |-
+                                      directory is a path to a directory that contains files named "target[suffix][+patchtype].extension".
+                                      For example, "kube-apiserver0+merge.yaml" or just "etcd.json". "target" can be one of
+                                      "kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd". "patchtype" can be one
+                                      of "strategic" "merge" or "json" and they match the patch formats supported by kubectl.
+                                      The default "patchtype" is "strategic". "extension" must be either "json" or "yaml".
+                                      "suffix" is an optional string that can be used to determine which patches are applied
+                                      first alpha-numerically.
+                                      These files can be written into the target directory via KubeadmConfig.Files which
+                                      specifies additional files to be created on the machine, either with content inline or
+                                      by referencing a secret.
+                                    maxLength: 512
+                                    minLength: 1
+                                    type: string
+                                type: object
+                              skipPhases:
+                                description: |-
+                                  skipPhases is a list of phases to skip during command execution.
+                                  The list of phases can be obtained with the "kubeadm init --help" command.
+                                  This option takes effect only on Kubernetes >=1.22.0.
+                                items:
+                                  maxLength: 256
+                                  minLength: 1
+                                  type: string
+                                maxItems: 50
+                                minItems: 1
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              timeouts:
+                                description: timeouts holds various timeouts that
+                                  apply to kubeadm commands.
+                                minProperties: 1
+                                properties:
+                                  controlPlaneComponentHealthCheckSeconds:
+                                    description: |-
+                                      controlPlaneComponentHealthCheckSeconds is the amount of time to wait for a control plane
+                                      component, such as the API server, to be healthy during "kubeadm init" and "kubeadm join".
+                                      If not set, it defaults to 4m (240s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                  discoverySeconds:
+                                    description: |-
+                                      discoverySeconds is the amount of time to wait for kubeadm to validate the API server identity
+                                      for a joining node.
+                                      If not set, it defaults to 5m (300s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                  etcdAPICallSeconds:
+                                    description: |-
+                                      etcdAPICallSeconds is the amount of time to wait for the kubeadm etcd client to complete a request to
+                                      the etcd cluster.
+                                      If not set, it defaults to 2m (120s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                  kubeletHealthCheckSeconds:
+                                    description: |-
+                                      kubeletHealthCheckSeconds is the amount of time to wait for the kubelet to be healthy
+                                      during "kubeadm init" and "kubeadm join".
+                                      If not set, it defaults to 4m (240s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                  kubernetesAPICallSeconds:
+                                    description: |-
+                                      kubernetesAPICallSeconds is the amount of time to wait for the kubeadm client to complete a request to
+                                      the API server. This applies to all types of methods (GET, POST, etc).
+                                      If not set, it defaults to 1m (60s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                  tlsBootstrapSeconds:
+                                    description: |-
+                                      tlsBootstrapSeconds is the amount of time to wait for the kubelet to complete TLS bootstrap
+                                      for a joining node.
+                                      If not set, it defaults to 5m (300s).
+                                    format: int32
+                                    minimum: 0
+                                    type: integer
+                                type: object
+                            type: object
+                        type: object
+                      kubernetesVersion:
+                        description: |-
+                          KubernetesVersion records the intended Kubernetes version. It is informational:
+                          the running version is whatever the Kairos image ships. For kubeadm workers the
+                          authoritative version is the owning Machine's spec.version, which the rendered
+                          join checks against the image's kubeadm before joining.
+                        type: string
+                      manifests:
+                        description: |-
+                          Manifests are Kubernetes manifests to be placed in the distribution manifests directory.
+                          These will be automatically applied by the distribution at cluster startup.
+                          k0s: /var/lib/k0s/manifests/{Name}/{File}
+                          k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                        items:
+                          description: |-
+                            Manifest represents a Kubernetes manifest file to be deployed by the
+                            workload distribution. The manifest is placed at:
+                              - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                              - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+
+                            and is auto-applied by the distribution at server start. Manifests are
+                            applied on control-plane nodes only.
+                          properties:
+                            content:
+                              description: Content is the manifest YAML content
+                              type: string
+                            file:
+                              description: |-
+                                File is the filename within the Name directory. The distribution's
+                                manifest loader auto-applies it from:
+                                  - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                                  - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                              type: string
+                            name:
+                              description: |-
+                                Name is the directory name under the distribution's manifests directory.
+                                This creates a directory structure:
+                                  - k0s: /var/lib/k0s/manifests/{Name}/{File}
+                                  - k3s: /var/lib/rancher/k3s/server/manifests/{Name}/{File}
+                              type: string
+                          required:
+                          - content
+                          - file
+                          - name
+                          type: object
+                        type: array
+                      pause:
+                        description: Pause indicates that reconciliation should be
+                          paused
+                        type: boolean
+                      podCIDR:
+                        description: |-
+                          PodCIDR configures the pod network CIDR for k0s
+                          Defaults to k0s defaults if not specified.
+                        type: string
+                      postCommands:
+                        description: PostCommands is reserved and not yet rendered
+                          into the cloud-config.
+                        items:
+                          type: string
+                        type: array
+                      preCommands:
+                        description: PreCommands is reserved and not yet rendered
+                          into the cloud-config.
+                        items:
+                          type: string
+                        type: array
+                      primaryIP:
+                        description: |-
+                          PrimaryIP overrides the detected node IP for KubeVirt control-plane
+                          certificates and endpoint configuration. This sets KAIROS_PRIMARY_IP.
+                        type: string
+                      role:
+                        default: worker
+                        description: Role indicates whether this is a control-plane
+                          or worker node
+                        enum:
+                        - control-plane
+                        - worker
+                        type: string
+                      serverAddress:
+                        description: ServerAddress is the address of the Kubernetes
+                          API server (for worker nodes)
+                        type: string
+                      serviceCIDR:
+                        description: |-
+                          ServiceCIDR configures the service network CIDR for k0s
+                          Defaults to k0s defaults if not specified.
+                        type: string
+                      singleNode:
+                        description: |-
+                          SingleNode indicates this is a single-node control plane cluster
+                          (spec.replicas==1). For k0s, the rendered flag depends on K0sSingleNode:
+                          by default a single k0s control plane is a joinable, schedulable controller
+                          (--enable-worker) so workers can still join; set K0sSingleNode to true to
+                          render the standalone --single mode instead.
+
+                          Deprecated: SingleNode is derived by the KairosControlPlane controller
+                          from spec.replicas (true when replicas==1) and will be removed in a
+                          future v1beta3 revision (KD-39). New code should read ControlPlaneRole
+                          instead. Both fields coexist during the transition period; the controller
+                          sets both for backward compatibility with templates that branch on
+                          SingleNode.
+                        type: boolean
+                      sshPublicKey:
+                        description: SSHPublicKey is a raw SSH public key (alternative
+                          to GitHubUser)
+                        type: string
+                      token:
+                        description: Token is the join token for worker nodes (if
+                          required by distribution)
+                        type: string
+                      tokenSecretRef:
+                        description: TokenSecretRef is a reference to a Secret containing
+                          the join token
+                        properties:
+                          apiVersion:
+                            description: API version of the referent.
+                            type: string
+                          fieldPath:
+                            description: |-
+                              If referring to a piece of an object instead of an entire object, this string
+                              should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                              For example, if the object reference is to a container within a pod, this would take on a value like:
+                              "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                              the event) or if no container name is specified "spec.containers[2]" (container with
+                              index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                              referencing a part of an object.
+                            type: string
+                          kind:
+                            description: |-
+                              Kind of the referent.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                            type: string
+                          name:
+                            description: |-
+                              Name of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                            type: string
+                          resourceVersion:
+                            description: |-
+                              Specific resourceVersion to which this reference is made, if any.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                            type: string
+                          uid:
+                            description: |-
+                              UID of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      userGroups:
+                        default:
+                        - admin
+                        description: UserGroups are the groups for the default user
+                        items:
+                          type: string
+                        type: array
+                      userName:
+                        default: kairos
+                        description: UserName is the username for the default user
+                        type: string
+                      userPassword:
+                        description: |-
+                          UserPassword is the password for the default user (inline; discouraged).
+
+                          Inline values are stored in the cluster as part of this resource's spec
+                          and are visible to anyone with read access to KairosConfigs. Prefer
+                          UserPasswordSecretRef for any non-lab use — the password then lives in
+                          a Kubernetes Secret which can be encrypted at rest and is subject to
+                          separate RBAC.
+
+                          No default is applied. A KairosConfig MUST set at least one of
+                          userPassword, userPasswordSecretRef, sshPublicKey, or gitHubUser; the
+                          validating webhook enforces this. If both UserPassword and
+                          UserPasswordSecretRef are set, UserPasswordSecretRef takes precedence.
+                        type: string
+                      userPasswordSecretRef:
+                        description: |-
+                          UserPasswordSecretRef is a reference to a Secret containing the user
+                          password. The Secret must live in the same namespace as the KairosConfig
+                          unless Namespace is set explicitly. The Secret's data key defaults to
+                          "password". Recommended over inline UserPassword.
+                        properties:
+                          key:
+                            default: password
+                            description: |-
+                              Key is the key within the Secret that contains the password.
+                              Defaults to "password" if not specified.
+                            type: string
+                          name:
+                            description: Name is the name of the Secret
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the namespace of the Secret.
+                              If not specified, defaults to the same namespace as the KairosConfig.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      workerToken:
+                        description: |-
+                          WorkerToken is the join token for worker nodes (inline specification)
+                          For production use, prefer WorkerTokenSecretRef instead.
+                          If both WorkerToken and WorkerTokenSecretRef are set, WorkerTokenSecretRef takes precedence.
+                        type: string
+                      workerTokenSecretRef:
+                        description: |-
+                          WorkerTokenSecretRef is a reference to a Secret containing the worker join token
+                          This is the recommended way to provide worker tokens for security.
+                          The Secret must contain a key specified by WorkerTokenSecretRef.Key (defaults to "token").
+                        properties:
+                          key:
+                            default: token
+                            description: |-
+                              Key is the key within the Secret that contains the token
+                              Defaults to "token" if not specified
+                            type: string
+                          name:
+                            description: Name is the name of the Secret
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace is the namespace of the Secret
+                              If not specified, defaults to the same namespace as the KairosConfig
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - kubernetesVersion
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-manager
+  namespace: capi-kairos-bootstrap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-bootstrap-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  - serviceaccounts/token
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - kairosconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - kairosconfigs/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - kairosconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  - machines
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters/status
+  - machines/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - controlplane.cluster.x-k8s.io
+  resources:
+  - kairoscontrolplanes
+  - kamajicontrolplanes
+  - kubeadmcontrolplanes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - '*'
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
+  - get
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-manager-rolebinding
+  namespace: capi-kairos-bootstrap-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-kairos-bootstrap-bootstrap-manager-role
+subjects:
+- kind: ServiceAccount
+  name: capi-kairos-bootstrap-manager
+  namespace: capi-kairos-bootstrap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: capi-kairos-bootstrap-bootstrap-manager-role
+subjects:
+- kind: ServiceAccount
+  name: capi-kairos-bootstrap-manager
+  namespace: capi-kairos-bootstrap-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-webhook-service
+  namespace: capi-kairos-bootstrap-system
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-controller-manager
+  namespace: capi-kairos-bootstrap-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/provider: bootstrap-kairos-io
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/provider: bootstrap-kairos-io
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --leader-elect
+        - --controllers=bootstrap
+        command:
+        - /manager
+        image: ghcr.io/cozystack/cozystack/cluster-api-provider-kairos:v0.2.1-cozystack.0@sha256:f46e4d94647aa7545a4009be40ce46f79945c3d13d98791de06d1e236d747415
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true
+      securityContext:
+        runAsNonRoot: true
+      serviceAccountName: capi-kairos-bootstrap-manager
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: capi-kairos-bootstrap-webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-webhook-server-cert
+  namespace: capi-kairos-bootstrap-system
+spec:
+  dnsNames:
+  - capi-kairos-bootstrap-webhook-service.capi-kairos-bootstrap-system.svc
+  - capi-kairos-bootstrap-webhook-service.capi-kairos-bootstrap-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: capi-kairos-bootstrap-selfsigned-issuer
+  secretName: capi-kairos-bootstrap-webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-selfsigned-issuer
+  namespace: capi-kairos-bootstrap-system
+spec:
+  selfSigned: {}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-kairos-bootstrap-system/capi-kairos-bootstrap-webhook-server-cert
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capi-kairos-bootstrap-webhook-service
+      namespace: capi-kairos-bootstrap-system
+      path: /mutate-bootstrap-cluster-x-k8s-io-v1beta2-kairosconfig
+  failurePolicy: Fail
+  name: mkairosconfig.kb.io
+  rules:
+  - apiGroups:
+    - bootstrap.cluster.x-k8s.io
+    apiVersions:
+    - v1beta2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kairosconfigs
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capi-kairos-bootstrap-system/capi-kairos-bootstrap-webhook-server-cert
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: capi-kairos-bootstrap
+    cluster.x-k8s.io/provider: bootstrap-kairos-io
+  name: capi-kairos-bootstrap-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capi-kairos-bootstrap-webhook-service
+      namespace: capi-kairos-bootstrap-system
+      path: /validate-bootstrap-cluster-x-k8s-io-v1beta2-kairosconfig
+  failurePolicy: Fail
+  name: vkairosconfig.kb.io
+  rules:
+  - apiGroups:
+    - bootstrap.cluster.x-k8s.io
+    apiVersions:
+    - v1beta2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kairosconfigs
+  sideEffects: None
