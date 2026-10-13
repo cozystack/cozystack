@@ -1,0 +1,238 @@
+suite: os switch guard (assertOsMatches)
+
+# `os` is marked immutable, but the marker is dashboard-only: the aggregated
+# apiserver does not evaluate it. Switching a running pool between Talos and
+# Kairos would roll every worker onto the other OS, so the chart refuses it
+# against the live MachineDeployment. Offline the check is inert.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  kairos:
+    image: registry.example.com/kairos/worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+tests:
+  - it: refuses to turn a running Talos pool into a Kairos one
+    set:
+      os: kairos
+    kubernetesProvider:
+      scheme: &scheme
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinedeployments"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/Cluster":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "clusters"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinesets"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "kubevirtmachinetemplates"}
+          namespaced: true
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: TalosConfigTemplate
+    asserts:
+      - failedTemplate:
+          errorPattern: 'pool "md0" already runs workers bootstrapped by a TalosConfigTemplate and os is now "kairos"'
+
+  - it: refuses to turn a running Kairos pool into a Talos one
+    set:
+      os: talos
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: KairosConfigTemplate
+    asserts:
+      - failedTemplate:
+          errorPattern: 'pool "md0" already runs workers bootstrapped by a KairosConfigTemplate and os is now "talos"'
+
+  - it: renders a running Kairos pool that stays on Kairos
+    set:
+      os: kairos
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: KairosConfigTemplate
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec:
+            template:
+              spec:
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: none}
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: KairosConfigTemplate
+
+  - it: moves a pool still on the kubeadm bootstrap onto Talos, as the Talos worker migration expects
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: KubeadmConfigTemplate
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec:
+            template:
+              spec:
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: none}
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: TalosConfigTemplate
+
+  - it: renders a running Talos pool that stays on Talos
+    set:
+      os: talos
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: TalosConfigTemplate
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec:
+            template:
+              spec:
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: none}
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: TalosConfigTemplate
+
+  - it: moves a pool still on the kubeadm bootstrap onto Kairos when it asks for Kairos
+    set:
+      os: kairos
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+          spec:
+            template:
+              spec:
+                bootstrap:
+                  configRef:
+                    kind: KubeadmConfigTemplate
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec:
+            template:
+              spec:
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: none}
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.kind
+          value: KairosConfigTemplate

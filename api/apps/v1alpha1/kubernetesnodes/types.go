@@ -83,6 +83,13 @@ type ConfigSpec struct {
 	// Talos worker image configuration. Keep in sync with the parent cluster's `talos`.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
+	// Operating system of this pool's workers: `talos` or `kairos`. A `kairos` pool boots a Kairos worker disk, the platform's or the one named by `kairos.image`, joins the cluster with kubeadm through the Kairos Cluster API bootstrap provider, and is supported on the `kubevirt` substrate only; the Talos-only fields (`osImage`, `talos`, `kernelModules`) do not apply to it, and it refuses `gpus`, because the Kairos worker image carries no GPU driver. The field cannot be changed on an existing pool; create a new pool to switch.
+	// +kubebuilder:default:="talos"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="os is immutable"
+	Os string `json:"os"`
+	// Kairos worker settings.
+	// +kubebuilder:default:={}
+	Kairos Kairos `json:"kairos"`
 	// Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a Talos disk image CDI streams from the image factory. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is refused: the chart reads the live MachineDeployment's template kind and fails the render rather than rolling every worker to the other hypervisor and deleting the template the draining MachineSet still references. Create a new pool on the other substrate and scale this one down.
 	// +kubebuilder:default:="kubevirt"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="substrate is immutable"
@@ -104,6 +111,15 @@ type Images struct {
 	// Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
+}
+
+type Kairos struct {
+	// Container disk image holding the Kairos worker OS, as a registry reference without a scheme, preferably pinned by digest. CDI imports it into each worker's system disk. Empty selects the disk the platform builds for this pool's Kubernetes `version`. An image set here must ship kubelet and kubeadm at the exact patch version of that `version`, boot with EFI firmware, and reset itself into the installed system on first boot.
+	// +kubebuilder:default:=""
+	Image string `json:"image,omitempty"`
+	// Public key authorized for the `kairos` user on every worker. Empty leaves the workers without any login: the user exists with a password that matches no input.
+	// +kubebuilder:default:=""
+	SshPublicKey string `json:"sshPublicKey,omitempty"`
 }
 
 type KernelModule struct {
