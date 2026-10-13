@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -70,7 +70,7 @@ spec:
                       description: The storage class to use for dynamic volume allocation.
                     deleteClaim:
                       type: boolean
-                      description: Specifies if the persistent volume claim has to be deleted when the cluster is un-deployed.
+                      description: Specifies whether the persistent volume claim is deleted when a Kafka node is deleted. Optional. Defaults to `false`.
                     id:
                       type: integer
                       minimum: 0
@@ -80,18 +80,6 @@ spec:
                       enum:
                         - shared
                       description: "Specifies whether this volume should be used for storing KRaft metadata. This property is optional. When set, the only currently supported value is `shared`. At most one volume can have this property set."
-                    overrides:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          class:
-                            type: string
-                            description: The storage class to use for dynamic volume allocation for this broker.
-                          broker:
-                            type: integer
-                            description: Id of the kafka broker (broker identifier).
-                      description: Overrides for individual brokers. The `overrides` field allows you to specify a different configuration for different brokers.
                     selector:
                       additionalProperties:
                         type: string
@@ -111,6 +99,9 @@ spec:
                         - persistent-claim
                         - jbod
                       description: "Storage type, must be either 'ephemeral', 'persistent-claim', or 'jbod'."
+                    volumeAttributesClass:
+                      type: string
+                      description: Specifies `VolumeAttributeClass` name for dynamically configuring storage attributes.
                     volumes:
                       type: array
                       items:
@@ -121,7 +112,7 @@ spec:
                             description: The storage class to use for dynamic volume allocation.
                           deleteClaim:
                             type: boolean
-                            description: Specifies if the persistent volume claim has to be deleted when the cluster is un-deployed.
+                            description: Specifies whether the persistent volume claim is deleted when a Kafka node is deleted. Optional. Defaults to `false`.
                           id:
                             type: integer
                             minimum: 0
@@ -131,18 +122,6 @@ spec:
                             enum:
                               - shared
                             description: "Specifies whether this volume should be used for storing KRaft metadata. This property is optional. When set, the only currently supported value is `shared`. At most one volume can have this property set."
-                          overrides:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                class:
-                                  type: string
-                                  description: The storage class to use for dynamic volume allocation for this broker.
-                                broker:
-                                  type: integer
-                                  description: Id of the kafka broker (broker identifier).
-                            description: Overrides for individual brokers. The `overrides` field allows you to specify a different configuration for different brokers.
                           selector:
                             additionalProperties:
                               type: string
@@ -161,6 +140,9 @@ spec:
                               - ephemeral
                               - persistent-claim
                             description: "Storage type, must be either 'ephemeral' or 'persistent-claim'."
+                          volumeAttributesClass:
+                            type: string
+                            description: Specifies `VolumeAttributeClass` name for dynamically configuring storage attributes.
                         required:
                           - type
                       description: List of volumes as Storage objects representing the JBOD disks array.
@@ -174,7 +156,7 @@ spec:
                     enum:
                       - controller
                       - broker
-                  description: "The roles that the nodes in this pool will have when KRaft mode is enabled. Supported values are 'broker' and 'controller'. This field is required. When KRaft mode is disabled, the only allowed value if `broker`."
+                  description: The roles assigned to the node pool. Supported values are `broker` and `controller`. This property is required.
                 resources:
                   type: object
                   properties:
@@ -758,6 +740,35 @@ spec:
                               ip:
                                 type: string
                           description: The pod's HostAliases. HostAliases is an optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
+                        dnsPolicy:
+                          type: string
+                          enum:
+                            - ClusterFirst
+                            - ClusterFirstWithHostNet
+                            - Default
+                            - None
+                          description: "The pod's DNSPolicy. Defaults to `ClusterFirst`. Valid values are `ClusterFirstWithHostNet`, `ClusterFirst`, `Default` or `None`."
+                        dnsConfig:
+                          type: object
+                          properties:
+                            nameservers:
+                              type: array
+                              items:
+                                type: string
+                            options:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  value:
+                                    type: string
+                            searches:
+                              type: array
+                              items:
+                                type: string
+                          description: "The pod's DNSConfig. If specified, it will be merged to the generated DNS configuration based on the DNSPolicy."
                         enableServiceLinks:
                           type: boolean
                           description: Indicates whether information about services should be injected into Pod's environment variables.
@@ -793,7 +804,7 @@ spec:
                                     type: boolean
                                   secretName:
                                     type: string
-                                description: Secret to use populate the volume.
+                                description: '`Secret` to use to populate the volume.'
                               configMap:
                                 type: object
                                 properties:
@@ -814,20 +825,20 @@ spec:
                                     type: string
                                   optional:
                                     type: boolean
-                                description: ConfigMap to use to populate the volume.
+                                description: '`ConfigMap` to use to populate the volume.'
                               emptyDir:
                                 type: object
                                 properties:
                                   medium:
                                     type: string
+                                    enum:
+                                      - Memory
+                                    description: "Medium represents the type of storage medium should back this volume. Valid values are unset or `Memory`. When not set, it will use the node's default medium."
                                   sizeLimit:
-                                    type: object
-                                    properties:
-                                      amount:
-                                        type: string
-                                      format:
-                                        type: string
-                                description: EmptyDir to use to populate the volume.
+                                    type: string
+                                    pattern: "^([0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+                                    description: The total amount of local storage required for this EmptyDir volume (for example 1Gi).
+                                description: '`EmptyDir` to use to populate the volume.'
                               persistentVolumeClaim:
                                 type: object
                                 properties:
@@ -835,7 +846,7 @@ spec:
                                     type: string
                                   readOnly:
                                     type: boolean
-                                description: PersistentVolumeClaim object to use to populate the volume.
+                                description: '`PersistentVolumeClaim` object to use to populate the volume.'
                               csi:
                                 type: object
                                 properties:
@@ -854,7 +865,15 @@ spec:
                                     additionalProperties:
                                       type: string
                                     type: object
-                                description: CSIVolumeSource object to use to populate the volume.
+                                description: '`CSIVolumeSource` object to use to populate the volume.'
+                              image:
+                                type: object
+                                properties:
+                                  pullPolicy:
+                                    type: string
+                                  reference:
+                                    type: string
+                                description: '`ImageVolumeSource` object to use to populate the volume.'
                             oneOf:
                               - properties:
                                   secret: {}
@@ -862,7 +881,75 @@ spec:
                                   emptyDir: {}
                                   persistentVolumeClaim: {}
                                   csi: {}
+                                  image: {}
                           description: Additional volumes that can be mounted to the pod.
+                        templatedVolumes:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                                description: Name to use for the volume. Required.
+                              secret:
+                                type: object
+                                properties:
+                                  defaultMode:
+                                    type: integer
+                                  items:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        key:
+                                          type: string
+                                        mode:
+                                          type: integer
+                                        path:
+                                          type: string
+                                  optional:
+                                    type: boolean
+                                  secretName:
+                                    type: string
+                                description: "`Secret` to use to populate the volume. The name of the Secret and the items key and path fields can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                              configMap:
+                                type: object
+                                properties:
+                                  defaultMode:
+                                    type: integer
+                                  items:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        key:
+                                          type: string
+                                        mode:
+                                          type: integer
+                                        path:
+                                          type: string
+                                  name:
+                                    type: string
+                                  optional:
+                                    type: boolean
+                                description: "`ConfigMap` to use to populate the volume. The name of the ConfigMap and the items key and path fields can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                              persistentVolumeClaim:
+                                type: object
+                                properties:
+                                  claimName:
+                                    type: string
+                                  readOnly:
+                                    type: boolean
+                                description: "`PersistentVolumeClaim` object to use to populate the volume. The name of the Persistent Volume Claim can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                            oneOf:
+                              - properties:
+                                  secret: {}
+                                  configMap: {}
+                                  persistentVolumeClaim: {}
+                          description: Additional volumes that can be mounted to the pod. These volumes can use templates to mount different volumes into individual Pods.
+                        hostUsers:
+                          type: boolean
+                          description: "Use the host user namespace. Optional. Defaults to `true`. When `true` or not set, the pod runs in the host user namespace. This is required when the pod needs features available only in the host namespace, such as loading kernel modules with `CAP_SYS_MODULE`.When set to `false`, the pod runs in a new user namespace. Setting `false` helps mitigate container breakout vulnerabilities and allows containers to run as `root` without granting `root` privileges on the host. This property is alpha-level in Kubernetes and is supported only by Kubernetes clusters that enable the `UserNamespacesSupport` feature."
                       description: Template for Kafka `Pods`.
                     perPodService:
                       type: object
@@ -1278,3 +1365,5 @@ spec:
                   type: string
                   description: Label selector for pods providing this resource.
               description: The status of the KafkaNodePool.
+          required:
+            - spec
