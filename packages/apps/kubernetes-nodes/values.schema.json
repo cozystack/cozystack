@@ -46,7 +46,7 @@
       }
     },
     "diskSize": {
-      "description": "System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs. How the OS image reaches the disk follows this pool's `osImage`: the default and `osImage.factory` stream the Image Factory raw artifact in over HTTP, while `osImage.builtin` makes the disk a storage-layer CDI clone of a shared golden image, with no HTTP fetch. A `builtin` pool must keep diskSize at or above the golden's storage size (6Gi in the shipped worker image catalog), because a CDI clone target cannot be smaller than its source -- the chart rejects a smaller value at render time rather than letting the clone stall. Sizing a `builtin` pool also has to allow for transient headroom the finished disk does not show: CDI populates a larger target by cloning the golden at the source size and then growing it, so a worker being provisioned occupies a temporary clone PVC at the golden's size on top of this diskSize, and both are multiplied by the replica count of a replicated StorageClass. The golden itself is a separate one-time cost for the whole cluster, not a per-worker one. So the peak is the golden, plus `diskSize + golden storage` for each worker cloning at that moment. A pool whose storage backend cannot spare that peak does not fail: the clone waits for space, the VM never boots, and the reason is visible only in the storage layer's own events.",
+      "description": "System disk size for the worker VM. Carries the worker OS image, kubelet state, containerd image cache, and any local-path PVCs. A pool on a Kairos NodeGroupClass imports its OS image into the disk from the registry, the class's image or the platform's. On a Talos pool, how the OS image reaches the disk follows the pool's `osImage`: the default and `osImage.factory` stream the Image Factory raw artifact in over HTTP, while `osImage.builtin` makes the disk a storage-layer CDI clone of a shared golden image, with no HTTP fetch. A `builtin` pool must keep diskSize at or above the golden's storage size (6Gi in the shipped worker image catalog), because a CDI clone target cannot be smaller than its source -- the chart rejects a smaller value at render time rather than letting the clone stall. Sizing a `builtin` pool also has to allow for transient headroom the finished disk does not show: CDI populates a larger target by cloning the golden at the source size and then growing it, so a worker being provisioned occupies a temporary clone PVC at the golden's size on top of this diskSize, and both are multiplied by the replica count of a replicated StorageClass. The golden itself is a separate one-time cost for the whole cluster, not a per-worker one. So the peak is the golden, plus `diskSize + golden storage` for each worker cloning at that moment. A pool whose storage backend cannot spare that peak does not fail: the clone waits for space, the VM never boots, and the reason is visible only in the storage layer's own events.",
       "default": "20Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
@@ -233,7 +233,7 @@
       "default": "30m"
     },
     "version": {
-      "description": "Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool -- and must satisfy the Talos\u003c-\u003eKubernetes support matrix against `talos.version`.",
+      "description": "Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool -- and on a Talos pool must satisfy the Talos\u003c-\u003eKubernetes support matrix against `talos.version`. On a Kairos NodeGroupClass that names an image, the class's Kubernetes release must be of this minor.",
       "type": "string",
       "default": "v1.35",
       "enum": [
@@ -328,8 +328,25 @@
         }
       }
     },
+    "nodeGroupClassName": {
+      "description": "NodeGroupClass that selects this pool's worker OS, and for Kairos the worker image. The platform ships `talos` and `kairos`; the platform operator can add classes. `kairos` (experimental) boots the platform's Kairos worker disk for this pool's Kubernetes `version` and joins the cluster with kubeadm through the Kairos Cluster API bootstrap provider, on the `kubevirt` substrate only. A pool on a Kairos class ignores `talos.*` and refuses a non-empty `osImage`, `kernelModules` or `gpus`. A class that names its own image carries the exact Kubernetes release the pool's workers run, whose minor must equal `version`. Moving a pool between two classes of the same OS is allowed; moving a running pool between Talos and Kairos is refused, so create a new pool instead.",
+      "type": "string",
+      "default": "talos"
+    },
+    "kairos": {
+      "description": "Kairos worker settings.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "sshPublicKey": {
+          "description": "Public key authorized for the `kairos` user on every worker. Empty leaves the workers without any login: the user exists with a password that matches no input.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
     "substrate": {
-      "description": "Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a Talos disk image CDI streams from the image factory. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is refused: the chart reads the live MachineDeployment's template kind and fails the render rather than rolling every worker to the other hypervisor and deleting the template the draining MachineSet still references. Create a new pool on the other substrate and scale this one down.",
+      "description": "Which infrastructure provider backs this pool's worker VMs. `kubevirt` runs them inside this cluster on KubeVirt, sized by `instanceType` and booted from a disk image CDI imports: a Talos image from the image factory, or on a Kairos NodeGroupClass the Kairos worker disk from a registry. `proxmox` runs them on an external Proxmox VE cluster through capmox, sized by `resources`, and cloned from a Talos VM template that already exists on the hypervisor. The two substrates take different Talos platform images and different sizing inputs, so switching an existing pool is refused: the chart reads the live MachineDeployment's template kind and fails the render rather than rolling every worker to the other hypervisor and deleting the template the draining MachineSet still references. Create a new pool on the other substrate and scale this one down.",
       "type": "string",
       "default": "kubevirt",
       "x-kubernetes-validations": [
@@ -409,7 +426,7 @@
       "default": {},
       "properties": {
         "kubectl": {
-          "description": "Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.",
+          "description": "Image used by the talos-reconcile, kairos-reconcile and pre-delete unpin Jobs (kubectl). It must also ship `envsubst`, which the kairos-reconcile Job runs. Empty falls back to images/kubectl.tag.",
           "type": "string",
           "default": ""
         }
