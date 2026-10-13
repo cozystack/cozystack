@@ -571,20 +571,84 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 
+{{- /*
+  The pool's NodeGroupClass, as YAML: name, os and, for an operator Kairos
+  class, image. talos and kairos are resolved without a lookup, so a pool on
+  either renders offline and does not depend on the object existing; any other
+  name is read from the cluster, and offline it fails like a missing class.
+*/ -}}
+{{- define "kubernetes-nodes.nodeGroupClass" -}}
+{{- $name := .Values.nodeGroupClassName | default "talos" | toString -}}
+{{- $class := dict "name" $name "os" $name -}}
+{{- if not (has $name (list "talos" "kairos")) -}}
+{{-   $obj := lookup "cozystack.io/v1alpha1" "NodeGroupClass" "" $name -}}
+{{-   if not $obj -}}
+{{-     fail (printf "nodeGroupClassName %q: no NodeGroupClass of that name exists" $name) -}}
+{{-   end -}}
+{{-   $spec := $obj.spec | default dict -}}
+{{-   $_ := set $class "os" ($spec.os | default "" | toString) -}}
+{{-   if not (has $class.os (list "talos" "kairos")) -}}
+{{-     fail (printf "NodeGroupClass %q has os %q; this chart supports talos and kairos" $name $class.os) -}}
+{{-   end -}}
+{{-   with $spec.image -}}
+{{-     $classMinor := regexFind "^v[0-9]+\\.[0-9]+" (.kubernetesVersion | default "" | toString) -}}
+{{-     if ne $classMinor ($.Values.version | toString) -}}
+{{-       fail (printf "NodeGroupClass %q carries Kubernetes %s, whose minor differs from the pool's version %s; point nodeGroupClassName at a class for %s, or change version and the class together" $name (.kubernetesVersion | toString) ($.Values.version | toString) ($.Values.version | toString)) -}}
+{{-     end -}}
+{{-     $_ := set $class "image" (dict "kubernetesVersion" .kubernetesVersion "reference" .reference) -}}
+{{-   end -}}
+{{- end -}}
+{{- $class | toYaml -}}
+{{- end -}}
+
+{{- /* The exact Kubernetes release of this pool's Machines: the class's when it
+       names an image, otherwise the patch files/versions.yaml pins for the
+       pool's version. Input: a dict with `root` and `class`. */ -}}
+{{- define "kubernetes-nodes.kubernetesVersion" -}}
+{{- with .class.image -}}
+{{- .kubernetesVersion -}}
+{{- else -}}
+{{- include "kubernetes.versionMap" .root | trim -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Switching a running pool between a Talos and a Kairos class would roll every
+  worker onto the other OS, so the live MachineDeployment's bootstrap template
+  kind has to match the one this render asks for. Inert offline, like the
+  guards above.
+*/ -}}
+{{- define "kubernetes-nodes.assertOsMatches" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" .root -}}
+{{- $groupName := include "kubernetes-nodes.groupName" .root -}}
+{{- $wantKind := ternary "KairosConfigTemplate" "TalosConfigTemplate" (eq .class.os "kairos") -}}
+{{- $md := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .root.Release.Namespace (printf "%s-%s" $clusterName $groupName) -}}
+{{- if $md -}}
+{{- $liveKind := dig "spec" "template" "spec" "bootstrap" "configRef" "kind" "" $md -}}
+{{- /* Only the Talos/Kairos pair is a switch: a pool still on the kubeadm
+       bootstrap moves onto whichever of the two this render asks for, which
+       is what the migration off the kubeadm bootstrap relies on. */ -}}
+{{- if and (has $liveKind (list "TalosConfigTemplate" "KairosConfigTemplate")) (ne $liveKind $wantKind) -}}
+{{- fail (printf "kubernetes-nodes: pool %q already runs workers bootstrapped by a %s, and NodeGroupClass %q selects %s workers. Switching would roll every worker onto the other OS. Create a new pool on that class and scale this one down instead." $groupName $liveKind .class.name .class.os) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 This pool's node group — the SINGLE assembly of the dict that feeds every
 consumer in this chart:
 
   * nodegroup.yaml, which renders the KubevirtMachineTemplate and the
     MachineDeployment (and hashes the former into its name);
-  * talos-reconcile-job.yaml, which renders the TalosConfigTemplate spec and
-    hashes it into the name the Job applies it under.
+  * talos-reconcile-job.yaml and kairos-reconcile-job.yaml, which render the
+    pool's bootstrap template spec and hash it into the name the Job applies
+    it under.
 
 Emitted as YAML and read back with `fromYaml` at each call site. A Helm
 template cannot return a dict and a Helm variable cannot cross a file
-boundary, so this round-trip is what lets one assembly serve two files.
+boundary, so this round-trip is what lets one assembly serve every file.
 
-Why it has to be one assembly. The TalosConfigTemplate name is a hash of the
+Why it has to be one assembly. The bootstrap template name is a hash of the
 spec this dict renders, and two templates have to agree on that name: the Job
 creates the object, the MachineDeployment's bootstrap.configRef points at it.
 Assembling the dict twice makes them agree only by coincidence of the keys the

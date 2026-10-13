@@ -11,7 +11,7 @@ its system store, refuses it with "x509: certificate signed by unknown
 authority". The DataVolume API has carried source.http.certConfigMap for
 exactly this since the beginning; this chart just had no way to fill it in.
 
-Rendered only on the HTTP import path with the value set. A pool on
+Rendered only for a Talos pool on the HTTP import path with the value set. A pool on
 osImage.builtin clones a golden image and builds no source.http, so it gets no
 ConfigMap even with the field set, and an unset value renders nothing at all.
 
@@ -22,6 +22,7 @@ The key name is arbitrary — CDI mounts the whole ConfigMap into the importer's
 cert directory and reads every file in it — so ca.pem follows the upstream
 example in kubevirt/containerized-data-importer manifests/example/cert-configmap.yaml.
 */}}
+{{- if eq (include "kubernetes-nodes.nodeGroupClass" . | fromYaml).os "talos" }}
 {{- $resolved := dict -}}
 {{- include "kubernetes-nodes.resolveOsImage" (dict
       "osImage" .Values.osImage
@@ -39,5 +40,6 @@ metadata:
 data:
   ca.pem: |
     {{- . | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

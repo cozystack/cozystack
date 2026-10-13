@@ -1,3 +1,191 @@
+{{- /* Job spec rendered through a named template so the Job name can carry
+       a content hash of the whole spec. $.Release is the pool release (used for
+       the SA it runs as and its network-policy label); .clusterName targets the
+       parent control-plane objects (Service/Secrets/KCP/TCT). */}}
+{{- define "kubernetes-nodes.talos-reconcile-job-spec" -}}
+spec:
+  backoffLimit: 30
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        cozystack.io/talos-reconcile: {{ $.Release.Name | quote }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $.Release.Name }}-talos-reconcile
+      containers:
+        - name: kubectl
+          image: "{{ .kubectlImage }}"
+          env:
+            - name: RELEASE
+              value: {{ .clusterName | quote }}
+            - name: NS
+              value: {{ $.Release.Namespace | quote }}
+            - name: GROUP_NAME
+              value: {{ .groupName | quote }}
+            {{- /* Content-hash name of the TalosConfigTemplate this Job
+                   applies. Computed by the chart (not by the Job) so the
+                   MachineDeployment's bootstrap.configRef in nodegroup.yaml
+                   resolves to the exact same name. */}}
+            - name: TCT_NAME
+              value: {{ .tctName | quote }}
+            - name: TALOS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .clusterName }}-talos-secrets
+                  key: token
+            - name: CLUSTER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .clusterName }}-talos-secrets
+                  key: clusterId
+            - name: CLUSTER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .clusterName }}-talos-secrets
+                  key: clusterSecret
+            - name: BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .clusterName }}-talos-secrets
+                  key: bootstrapToken
+          command:
+            - sh
+            - -ec
+            - |
+              {{- /* The wording differs per substrate because the address does:
+                     a ClusterIP on kubevirt, the Service's LoadBalancer address
+                     on proxmox. */}}
+              {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for apiserver Service LoadBalancer address, Talos CA, K8s CA, management CoreDNS"
+              {{- else }}
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
+              {{- end }}
+              for i in $(seq 1 120); do
+                {{- /* Which address the workers must resolve the apiserver to.
+                      On kubevirt they are Pods in this cluster and the ClusterIP
+                      works. On proxmox they are VMs off-cluster, for which a
+                      ClusterIP is unroutable — the control-plane release
+                      publishes the Service instead, and its LoadBalancer address
+                      is the one that has to reach the guests. */}}
+                {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
+                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+                {{- else }}
+                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                {{- end }}
+                TALOS_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-talos-ca" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
+                K8S_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-ca" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
+                COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ] && [ -n "$COREDNS_IP" ]; then
+                  break
+                fi
+                sleep 5
+              done
+              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ] || [ -z "$COREDNS_IP" ]; then
+                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok) coredns='$COREDNS_IP')"
+                exit 1
+              fi
+              echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
+
+              # Patch KamajiControlPlane.spec.network.certSANs so the apiserver
+              # TLS cert covers the live Service ClusterIP that Talos workers
+              # dial. JSON-merge-patch is array-replace semantics, which is what
+              # we want here — Kamaji owns the full SAN list.
+              kubectl -n "$NS" patch kamajicontrolplane "$RELEASE" --type=merge --patch "$(
+                cat <<JSON
+              {"spec":{"network":{"certSANs":["${RELEASE}.${NS}.svc","${RELEASE}.${NS}.svc.{{ .dnsDomain }}","${SVC_IP}"]}}}
+              JSON
+              )"
+
+              KCP_UID=$(kubectl -n "$NS" get kamajicontrolplane "$RELEASE" -o jsonpath='{.metadata.uid}')
+
+              # Apply the TalosConfigTemplate. ownerReference back to the parent
+              # KamajiControlPlane makes the standard Kubernetes garbage collector
+              # clean it up when the parent cluster is deleted.
+              #
+              # The name carries a hash of the chart inputs to the spec below, so
+              # a machine-config change made through values lands on a NEW
+              # template instead of being rejected by the immutability webhook.
+              #
+              # Both applies below are server-side, which keeps the merge in the
+              # apiserver. A client-side apply pulls the full OpenAPI schema down
+              # to build the merge patch, ~290Mi RSS against a management cluster
+              # carrying a few hundred CRDs, over this container's 256Mi limit.
+              # Only the merge path pays that, so a create survives where an
+              # update is OOMKilled.
+              # --force-conflicts keeps this Job authoritative over an object an
+              # earlier client-side apply created.
+              {{- /* Held in a variable, not a file: the container runs with
+                     readOnlyRootFilesystem, so there is nowhere to write one.
+                     One variable also means the replace below applies exactly
+                     what the first attempt did. */}}
+              TCT_MANIFEST="$(cat <<EOF
+              apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+              kind: TalosConfigTemplate
+              metadata:
+                name: ${TCT_NAME}
+                namespace: ${NS}
+                ownerReferences:
+                  - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+                    kind: KamajiControlPlane
+                    name: ${RELEASE}
+                    uid: ${KCP_UID}
+                    controller: true
+                    blockOwnerDeletion: true
+              {{- .tctSpec | nindent 14 }}
+              EOF
+              )"
+
+              # CABPT's validating webhook rejects any change to spec
+              # (TalosConfigTemplate.Spec is immutable). A values change moves the
+              # name, but the ${...} runtime inputs are kept out of the hash, so
+              # one of them changing -- the apiserver address is the one that
+              # moves in practice -- renders a different spec under the same
+              # name, and apply fails. The object then has to be replaced rather
+              # than patched. Existing Machines are unaffected:
+              # their bootstrap data was rendered when they joined. Only Machines
+              # created afterwards read the new template, which is the intent.
+              #
+              # Every other apply failure still stops the Job. Matching on the
+              # message is narrow on purpose: an apply rejected for its content (a
+              # schema error, say) would be rejected again on the re-create, and a
+              # delete before it would leave the pool with no template at all,
+              # unable to scale until the render is fixed. A replace itself does
+              # not roll the pool: Machines reference the template by name, and
+              # a runtime input is not part of the name.
+              if ! APPLY_OUT="$(printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f - 2>&1)"; then
+                case "$APPLY_OUT" in
+                  *"is immutable"*)
+                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} spec changed; replacing the immutable object"
+                    kubectl delete talosconfigtemplate "${TCT_NAME}" -n "$NS"
+                    printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f -
+                    ;;
+                  *)
+                    echo "$APPLY_OUT" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+              echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} applied"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}
+{{- if eq (include "kubernetes-nodes.nodeGroupClass" . | fromYaml).os "talos" }}
 {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
 {{- include "kubernetes-nodes.assertDnsServersAreAddresses" . }}
 {{- end }}
@@ -193,193 +381,6 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-talos-reconcile
     namespace: {{ .Release.Namespace }}
-{{- /* Job spec rendered through a named template so the Job name can carry
-       a content hash of the whole spec. $.Release is the pool release (used for
-       the SA it runs as and its network-policy label); .clusterName targets the
-       parent control-plane objects (Service/Secrets/KCP/TCT). */}}
-{{- define "kubernetes-nodes.talos-reconcile-job-spec" -}}
-spec:
-  backoffLimit: 30
-  ttlSecondsAfterFinished: 600
-  template:
-    metadata:
-      labels:
-        cozystack.io/talos-reconcile: {{ $.Release.Name | quote }}
-    spec:
-      restartPolicy: OnFailure
-      serviceAccountName: {{ $.Release.Name }}-talos-reconcile
-      containers:
-        - name: kubectl
-          image: "{{ .kubectlImage }}"
-          env:
-            - name: RELEASE
-              value: {{ .clusterName | quote }}
-            - name: NS
-              value: {{ $.Release.Namespace | quote }}
-            - name: GROUP_NAME
-              value: {{ .groupName | quote }}
-            {{- /* Content-hash name of the TalosConfigTemplate this Job
-                   applies. Computed by the chart (not by the Job) so the
-                   MachineDeployment's bootstrap.configRef in nodegroup.yaml
-                   resolves to the exact same name. */}}
-            - name: TCT_NAME
-              value: {{ .tctName | quote }}
-            - name: TALOS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .clusterName }}-talos-secrets
-                  key: token
-            - name: CLUSTER_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .clusterName }}-talos-secrets
-                  key: clusterId
-            - name: CLUSTER_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .clusterName }}-talos-secrets
-                  key: clusterSecret
-            - name: BOOTSTRAP_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .clusterName }}-talos-secrets
-                  key: bootstrapToken
-          command:
-            - sh
-            - -ec
-            - |
-              {{- /* The wording differs per substrate because the address does:
-                     a ClusterIP on kubevirt, the Service's LoadBalancer address
-                     on proxmox. */}}
-              {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for apiserver Service LoadBalancer address, Talos CA, K8s CA, management CoreDNS"
-              {{- else }}
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
-              {{- end }}
-              for i in $(seq 1 120); do
-                {{- /* Which address the workers must resolve the apiserver to.
-                      On kubevirt they are Pods in this cluster and the ClusterIP
-                      works. On proxmox they are VMs off-cluster, for which a
-                      ClusterIP is unroutable — the control-plane release
-                      publishes the Service instead, and its LoadBalancer address
-                      is the one that has to reach the guests. */}}
-                {{- if eq ($.Values.substrate | default "kubevirt") "proxmox" }}
-                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
-                {{- else }}
-                SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-                {{- end }}
-                TALOS_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-talos-ca" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
-                K8S_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-ca" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-                COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ] && [ -n "$COREDNS_IP" ]; then
-                  break
-                fi
-                sleep 5
-              done
-              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ] || [ -z "$COREDNS_IP" ]; then
-                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok) coredns='$COREDNS_IP')"
-                exit 1
-              fi
-              echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
-
-              # Patch KamajiControlPlane.spec.network.certSANs so the apiserver
-              # TLS cert covers the live Service ClusterIP that Talos workers
-              # dial. JSON-merge-patch is array-replace semantics, which is what
-              # we want here — Kamaji owns the full SAN list.
-              kubectl -n "$NS" patch kamajicontrolplane "$RELEASE" --type=merge --patch "$(
-                cat <<JSON
-              {"spec":{"network":{"certSANs":["${RELEASE}.${NS}.svc","${RELEASE}.${NS}.svc.{{ .dnsDomain }}","${SVC_IP}"]}}}
-              JSON
-              )"
-
-              KCP_UID=$(kubectl -n "$NS" get kamajicontrolplane "$RELEASE" -o jsonpath='{.metadata.uid}')
-
-              # Apply the TalosConfigTemplate. ownerReference back to the parent
-              # KamajiControlPlane makes the standard Kubernetes garbage collector
-              # clean it up when the parent cluster is deleted.
-              #
-              # The name carries a hash of the chart inputs to the spec below, so
-              # a machine-config change made through values lands on a NEW
-              # template instead of being rejected by the immutability webhook.
-              #
-              # Both applies below are server-side, which keeps the merge in the
-              # apiserver. A client-side apply pulls the full OpenAPI schema down
-              # to build the merge patch, ~290Mi RSS against a management cluster
-              # carrying a few hundred CRDs, over this container's 256Mi limit.
-              # Only the merge path pays that, so a create survives where an
-              # update is OOMKilled.
-              # --force-conflicts keeps this Job authoritative over an object an
-              # earlier client-side apply created.
-              {{- /* Held in a variable, not a file: the container runs with
-                     readOnlyRootFilesystem, so there is nowhere to write one.
-                     One variable also means the replace below applies exactly
-                     what the first attempt did. */}}
-              TCT_MANIFEST="$(cat <<EOF
-              apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
-              kind: TalosConfigTemplate
-              metadata:
-                name: ${TCT_NAME}
-                namespace: ${NS}
-                ownerReferences:
-                  - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
-                    kind: KamajiControlPlane
-                    name: ${RELEASE}
-                    uid: ${KCP_UID}
-                    controller: true
-                    blockOwnerDeletion: true
-              {{- .tctSpec | nindent 14 }}
-              EOF
-              )"
-
-              # CABPT's validating webhook rejects any change to spec
-              # (TalosConfigTemplate.Spec is immutable). A values change moves the
-              # name, but the ${...} runtime inputs are kept out of the hash, so
-              # one of them changing -- the apiserver address is the one that
-              # moves in practice -- renders a different spec under the same
-              # name, and apply fails. The object then has to be replaced rather
-              # than patched. Existing Machines are unaffected:
-              # their bootstrap data was rendered when they joined. Only Machines
-              # created afterwards read the new template, which is the intent.
-              #
-              # Every other apply failure still stops the Job. Matching on the
-              # message is narrow on purpose: an apply rejected for its content (a
-              # schema error, say) would be rejected again on the re-create, and a
-              # delete before it would leave the pool with no template at all,
-              # unable to scale until the render is fixed. A replace itself does
-              # not roll the pool: Machines reference the template by name, and
-              # a runtime input is not part of the name.
-              if ! APPLY_OUT="$(printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f - 2>&1)"; then
-                case "$APPLY_OUT" in
-                  *"is immutable"*)
-                    echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} spec changed; replacing the immutable object"
-                    kubectl delete talosconfigtemplate "${TCT_NAME}" -n "$NS"
-                    printf '%s\n' "$TCT_MANIFEST" | kubectl apply --server-side --force-conflicts -f -
-                    ;;
-                  *)
-                    echo "$APPLY_OUT" >&2
-                    exit 1
-                    ;;
-                esac
-              fi
-              echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${TCT_NAME} applied"
-          resources:
-            requests:
-              cpu: 10m
-              memory: 64Mi
-            limits:
-              cpu: 100m
-              memory: 256Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
-            seccompProfile:
-              type: RuntimeDefault
-{{- end }}
 {{- $jobContext := deepCopy $ }}
 {{- $_ := set $jobContext "groupName" $groupName }}
 {{- $_ := set $jobContext "clusterName" $clusterName }}
@@ -399,3 +400,4 @@ metadata:
   labels:
     {{- include "kubernetes.labels" $ | nindent 4 }}
 {{ $jobSpec }}
+{{- end }}
