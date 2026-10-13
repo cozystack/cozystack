@@ -220,7 +220,10 @@ jobs:
   e2e:
     name: E2E (full suite)
     needs: [mirror, build-disk]
-    runs-on: oracle-vm-24cpu-96gb-x86-64
+    # Same sandbox as the other e2e lanes: three nodes at 8 vCPU each commit
+    # 24 vCPU for the whole run, so the runner class has to be strictly larger
+    # to leave the host its own cycles. pull-requests.yaml has the full note.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
     timeout-minutes: 180
     permissions:
       contents: read
