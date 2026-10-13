@@ -307,3 +307,10 @@ string this admits parses to a positive duration.
 {{- define "kubernetes.proxmoxControllerVmID" -}}
 {{- add 100000 (mod (atoi (adler32sum (printf "%s/%s" .Release.Namespace .Release.Name))) 800000) -}}
 {{- end -}}
+
+{{- /* ClusterIP of the tenant CoreDNS Service: the 10th address of the tenant
+       service CIDR (10.95.0.0/16 in templates/cluster.yaml), the address kubeadm
+       and Talos both assume for cluster DNS. */}}
+{{- define "kubernetes.tenantDNSServiceIP" -}}
+10.95.0.10
+{{- end }}
