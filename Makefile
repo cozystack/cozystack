@@ -34,6 +34,7 @@ build: build-deps
 	make -C packages/system/talos-log-collector image
 	make -C packages/system/kamaji image
 	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-bootstrap image
 	make -C packages/system/capi-providers-infraprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image

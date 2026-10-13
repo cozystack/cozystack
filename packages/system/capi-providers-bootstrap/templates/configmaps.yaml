@@ -25,3 +25,17 @@ binaryData:
   components: {{ .Files.Get "files/components-talos.gz" | b64enc | quote }}
 data:
   metadata: {{ .Files.Get "files/metadata-talos.yaml" | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: v0.1.4-0.b19dd35.cozystack.0-bootstrap-kairos
+  labels:
+    bootstrap-components: cozy
+    bootstrap-provider: kairos
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+binaryData:
+  components: {{ .Files.Get "files/components-kairos.gz" | b64enc | quote }}
+data:
+  metadata: {{ .Files.Get "files/metadata-kairos.yaml" | quote }}
