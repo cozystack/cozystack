@@ -65,14 +65,15 @@
   the Tenant chart catches up.
 */}}
 {{- /* Worker node pools (KubevirtMachineTemplate, MachineDeployment,
-       MachineHealthCheck, worker WorkloadMonitor) and the Talos
-       reconcile Job that produces each pool's TalosConfigTemplate now
-       live in the separate `kubernetes-nodes` chart (one HelmRelease
-       per pool). This chart renders the control plane only. The
-       reconcile Job in the kubernetes-nodes release still re-patches
-       this KamajiControlPlane's apiserver-Service ClusterIP-SAN and
-       owns each TalosConfigTemplate via an ownerReference to this KCP,
-       so garbage collection on control-plane uninstall is unchanged. */}}
+       MachineHealthCheck, worker WorkloadMonitor) and the reconcile Job that
+       produces each pool's bootstrap template (a TalosConfigTemplate or a
+       KairosConfigTemplate) now live in the separate `kubernetes-nodes` chart
+       (one HelmRelease per pool). This chart renders the control plane only.
+       The reconcile Job of a Talos pool still re-patches this
+       KamajiControlPlane's apiserver-Service ClusterIP-SAN, and each pool's
+       reconcile Job owns its bootstrap template through an ownerReference to
+       this KCP, so garbage collection on control-plane uninstall is
+       unchanged. */}}
 {{- /*
   Cluster pod/service CIDRs MUST match between the CAPI Cluster
   spec.clusterNetwork below and the Talos worker machineconfig's
@@ -790,12 +791,13 @@ spec:
            Service ClusterIP is not yet allocated when Helm executes the
            template. Since the worker split, the talos-reconcile Job that
            re-patches certSANs with the live ClusterIP (after which Kamaji
-           re-issues the apiserver TLS cert) runs in each kubernetes-nodes
-           pool release, not in this chart: a cluster with at least one pool
-           gains the ClusterIP SAN once Kamaji emits the Service, while a
-           pool-less cluster keeps DNS SANs only. That is a best-effort
-           extra, not a dependency -- workers dial the apiserver by DNS name
-           via extraHostEntries, so nothing requires the IP SAN. */}}
+           re-issues the apiserver TLS cert) runs in each Talos pool's
+           kubernetes-nodes release, not in this chart: a cluster with at
+           least one Talos pool gains the ClusterIP SAN once Kamaji emits the
+           Service, while a cluster without one keeps DNS SANs only. That is
+           a best-effort extra, not a dependency -- workers dial the apiserver
+           by DNS name, which Talos maps through extraHostEntries and Kairos
+           through /etc/hosts, so nothing requires the IP SAN. */}}
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}

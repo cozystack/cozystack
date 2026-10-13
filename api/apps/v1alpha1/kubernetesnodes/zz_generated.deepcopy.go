@@ -77,6 +77,11 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 	out.Kubelet = in.Kubelet
 	in.OsImage.DeepCopyInto(&out.OsImage)
 	in.Talos.DeepCopyInto(&out.Talos)
+	if in.SshKeys != nil {
+		in, out := &in.SshKeys, &out.SshKeys
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.Proxmox.DeepCopyInto(&out.Proxmox)
 }
 
