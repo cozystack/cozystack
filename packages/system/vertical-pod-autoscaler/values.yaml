@@ -37,6 +37,15 @@ vertical-pod-autoscaler:
       prometheus-cadvisor-job-name: cadvisor
 
   admissionController:
+    extraArgs:
+      # The admission controller registers its mutating webhook for Pod CREATE in every
+      # namespace with failurePolicy Ignore and, by default, a 30s timeout. When its pod is
+      # down and the Service IP blackholes (e.g. a cold start after a full cluster shutdown,
+      # before the CNI is back), every Pod creation waits the full 30s here on top of the
+      # other webhooks and fails with "context deadline exceeded" - including the CNI's own
+      # DaemonSet pods, so the cluster cannot recover by itself (#3125). A mutation takes
+      # milliseconds; 5s keeps a slow response working and lets Ignore actually ignore.
+      webhook-timeout-seconds: 5
     resources:
       limits:
         memory: 256Mi
