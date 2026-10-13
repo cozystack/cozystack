@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -149,8 +149,17 @@ spec:
                 sessionId:
                   type: string
                   description: The session identifier for requests to Cruise Control pertaining to this KafkaRebalance resource. This is used by the Kafka Rebalance operator to track the status of ongoing rebalancing operations.
+                progress:
+                  type: object
+                  properties:
+                    rebalanceProgressConfigMap:
+                      type: string
+                      description: The name of the `ConfigMap` containing information related to the progress of a partition rebalance.
+                  description: A reference to Config Map with the progress information.
                 optimizationResult:
                   x-kubernetes-preserve-unknown-fields: true
                   type: object
                   description: A JSON object describing the optimization result.
               description: The status of the Kafka rebalance.
+          required:
+            - spec

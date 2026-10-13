@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -59,81 +59,38 @@ spec:
                   description: The Kafka Connect version. Defaults to the latest version. Consult the user documentation to understand the process required to upgrade or downgrade the version.
                 replicas:
                   type: integer
-                  description: The number of pods in the Kafka Connect group. Defaults to `3`.
+                  description: The number of pods in the Kafka Connect group. Required in the `v1` version of the Strimzi API.
                 image:
                   type: string
                   description: "The container image used for Kafka Connect pods. If no image name is explicitly specified, it is determined based on the `spec.version` configuration. The image names are specifically mapped to corresponding versions in the Cluster Operator configuration."
-                connectCluster:
-                  type: string
-                  description: The cluster alias used for Kafka Connect. The value must match the alias of the *target* Kafka cluster as specified in the `spec.clusters` configuration. The target Kafka cluster is used by the underlying Kafka Connect framework for its internal topics.
-                clusters:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      alias:
-                        type: string
-                        pattern: "^[a-zA-Z0-9\\._\\-]{1,100}$"
-                        description: Alias used to reference the Kafka cluster.
-                      bootstrapServers:
-                        type: string
-                        description: A comma-separated list of `host:port` pairs for establishing the connection to the Kafka cluster.
-                      tls:
-                        type: object
-                        properties:
-                          trustedCertificates:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                secretName:
-                                  type: string
-                                  description: The name of the Secret containing the certificate.
-                                certificate:
-                                  type: string
-                                  description: The name of the file certificate in the secret.
-                                pattern:
-                                  type: string
-                                  description: "Pattern for the certificate files in the secret. Use the link:https://en.wikipedia.org/wiki/Glob_(programming)[_glob syntax_] for the pattern. All files in the secret that match the pattern are used."
-                              oneOf:
-                                - properties:
-                                    certificate: {}
-                                  required:
-                                    - certificate
-                                - properties:
-                                    pattern: {}
-                                  required:
-                                    - pattern
-                              required:
-                                - secretName
-                            description: Trusted certificates for TLS connection.
-                        description: TLS configuration for connecting MirrorMaker 2 connectors to a cluster.
-                      authentication:
-                        type: object
-                        properties:
-                          accessToken:
-                            type: object
-                            properties:
-                              key:
-                                type: string
-                                description: The key under which the secret value is stored in the Kubernetes Secret.
-                              secretName:
-                                type: string
-                                description: The name of the Kubernetes Secret containing the secret value.
-                            required:
-                              - key
-                              - secretName
-                            description: Link to Kubernetes Secret containing the access token which was obtained from the authorization server.
-                          accessTokenIsJwt:
-                            type: boolean
-                            description: Configure whether access token should be treated as JWT. This should be set to `false` if the authorization server returns opaque tokens. Defaults to `true`.
-                          accessTokenLocation:
-                            type: string
-                            description: Path to the token file containing an access token to be used for authentication.
-                          audience:
-                            type: string
-                            description: "OAuth audience to use when authenticating against the authorization server. Some authorization servers require the audience to be explicitly set. The possible values depend on how the authorization server is configured. By default, `audience` is not specified when performing the token endpoint request."
-                          certificateAndKey:
+                target:
+                  type: object
+                  properties:
+                    alias:
+                      type: string
+                      pattern: "^[a-zA-Z0-9\\._\\-]{1,100}$"
+                      description: Alias used to reference the Kafka cluster.
+                    bootstrapServers:
+                      type: string
+                      description: A comma-separated list of `host:port` pairs for establishing the connection to the Kafka cluster.
+                    groupId:
+                      type: string
+                      description: A unique ID that identifies the Connect cluster group. Required.
+                    configStorageTopic:
+                      type: string
+                      description: The name of the Kafka topic where connector configurations are stored. Required.
+                    statusStorageTopic:
+                      type: string
+                      description: The name of the Kafka topic where connector and task statuses are stored. Required.
+                    offsetStorageTopic:
+                      type: string
+                      description: The name of the Kafka topic where source connector offsets are stored. Required.
+                    tls:
+                      type: object
+                      properties:
+                        trustedCertificates:
+                          type: array
+                          items:
                             type: object
                             properties:
                               secretName:
@@ -141,171 +98,198 @@ spec:
                                 description: The name of the Secret containing the certificate.
                               certificate:
                                 type: string
-                                description: The name of the file certificate in the Secret.
-                              key:
+                                description: The name of the file certificate in the secret.
+                              pattern:
                                 type: string
-                                description: The name of the private key in the Secret.
+                                description: "Pattern for the certificate files in the secret. Use the link:https://en.wikipedia.org/wiki/Glob_(programming)[_glob syntax_] for the pattern. All files in the secret that match the pattern are used."
+                            oneOf:
+                              - properties:
+                                  certificate: {}
+                                required:
+                                  - certificate
+                              - properties:
+                                  pattern: {}
+                                required:
+                                  - pattern
                             required:
                               - secretName
-                              - certificate
-                              - key
-                            description: Reference to the `Secret` which holds the certificate and private key pair.
-                          clientAssertion:
-                            type: object
-                            properties:
-                              key:
-                                type: string
-                                description: The key under which the secret value is stored in the Kubernetes Secret.
-                              secretName:
-                                type: string
-                                description: The name of the Kubernetes Secret containing the secret value.
-                            required:
-                              - key
-                              - secretName
-                            description: Link to Kubernetes secret containing the client assertion which was manually configured for the client.
-                          clientAssertionLocation:
-                            type: string
-                            description: Path to the file containing the client assertion to be used for authentication.
-                          clientAssertionType:
-                            type: string
-                            description: "The client assertion type. If not set, and either `clientAssertion` or `clientAssertionLocation` is configured, this value defaults to `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`."
-                          clientId:
-                            type: string
-                            description: OAuth Client ID which the Kafka client can use to authenticate against the OAuth server and use the token endpoint URI.
-                          clientSecret:
-                            type: object
-                            properties:
-                              key:
-                                type: string
-                                description: The key under which the secret value is stored in the Kubernetes Secret.
-                              secretName:
-                                type: string
-                                description: The name of the Kubernetes Secret containing the secret value.
-                            required:
-                              - key
-                              - secretName
-                            description: Link to Kubernetes Secret containing the OAuth client secret which the Kafka client can use to authenticate against the OAuth server and use the token endpoint URI.
-                          connectTimeoutSeconds:
-                            type: integer
-                            description: "The connect timeout in seconds when connecting to authorization server. If not set, the effective connect timeout is 60 seconds."
-                          disableTlsHostnameVerification:
-                            type: boolean
-                            description: Enable or disable TLS hostname verification. Default value is `false`.
-                          enableMetrics:
-                            type: boolean
-                            description: Enable or disable OAuth metrics. Default value is `false`.
-                          httpRetries:
-                            type: integer
-                            description: "The maximum number of retries to attempt if an initial HTTP request fails. If not set, the default is to not attempt any retries."
-                          httpRetryPauseMs:
-                            type: integer
-                            description: "The pause to take before retrying a failed HTTP request. If not set, the default is to not pause at all but to immediately repeat a request."
-                          includeAcceptHeader:
-                            type: boolean
-                            description: Whether the Accept header should be set in requests to the authorization servers. The default value is `true`.
-                          maxTokenExpirySeconds:
-                            type: integer
-                            description: Set or limit time-to-live of the access tokens to the specified number of seconds. This should be set if the authorization server returns opaque tokens.
-                          passwordSecret:
-                            type: object
-                            properties:
-                              secretName:
-                                type: string
-                                description: The name of the Secret containing the password.
-                              password:
-                                type: string
-                                description: The name of the key in the Secret under which the password is stored.
-                            required:
-                              - secretName
-                              - password
-                            description: Reference to the `Secret` which holds the password.
-                          readTimeoutSeconds:
-                            type: integer
-                            description: "The read timeout in seconds when connecting to authorization server. If not set, the effective read timeout is 60 seconds."
-                          refreshToken:
-                            type: object
-                            properties:
-                              key:
-                                type: string
-                                description: The key under which the secret value is stored in the Kubernetes Secret.
-                              secretName:
-                                type: string
-                                description: The name of the Kubernetes Secret containing the secret value.
-                            required:
-                              - key
-                              - secretName
-                            description: Link to Kubernetes Secret containing the refresh token which can be used to obtain access token from the authorization server.
-                          saslExtensions:
-                            additionalProperties:
+                          description: Trusted certificates for TLS connection.
+                      description: TLS configuration for connecting MirrorMaker 2 connectors to a cluster.
+                    authentication:
+                      type: object
+                      properties:
+                        certificateAndKey:
+                          type: object
+                          properties:
+                            secretName:
                               type: string
-                            type: object
-                            description: SASL extensions parameters.
-                          scope:
-                            type: string
-                            description: OAuth scope to use when authenticating against the authorization server. Some authorization servers require this to be set. The possible values depend on how authorization server is configured. By default `scope` is not specified when doing the token endpoint request.
-                          tlsTrustedCertificates:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                secretName:
-                                  type: string
-                                  description: The name of the Secret containing the certificate.
-                                certificate:
-                                  type: string
-                                  description: The name of the file certificate in the secret.
-                                pattern:
-                                  type: string
-                                  description: "Pattern for the certificate files in the secret. Use the link:https://en.wikipedia.org/wiki/Glob_(programming)[_glob syntax_] for the pattern. All files in the secret that match the pattern are used."
-                              oneOf:
-                                - properties:
-                                    certificate: {}
-                                  required:
-                                    - certificate
-                                - properties:
-                                    pattern: {}
-                                  required:
-                                    - pattern
-                              required:
-                                - secretName
-                            description: Trusted certificates for TLS connection to the OAuth server.
-                          tokenEndpointUri:
-                            type: string
-                            description: Authorization server token endpoint URI.
-                          type:
-                            type: string
-                            enum:
-                              - tls
-                              - scram-sha-256
-                              - scram-sha-512
-                              - plain
-                              - oauth
-                            description: "Authentication type. Currently the supported types are `tls`, `scram-sha-256`, `scram-sha-512`, `plain`, and 'oauth'. `scram-sha-256` and `scram-sha-512` types use SASL SCRAM-SHA-256 and SASL SCRAM-SHA-512 Authentication, respectively. `plain` type uses SASL PLAIN Authentication. `oauth` type uses SASL OAUTHBEARER Authentication. The `tls` type uses TLS Client Authentication. The `tls` type is supported only over TLS connections."
-                          username:
-                            type: string
-                            description: Username used for the authentication.
-                        required:
-                          - type
-                        description: Authentication configuration for connecting to the cluster.
-                      config:
-                        x-kubernetes-preserve-unknown-fields: true
-                        type: object
-                        description: "The MirrorMaker 2 cluster config. Properties with the following prefixes cannot be set: ssl., sasl., security., listeners, plugin.path, rest., bootstrap.servers, consumer.interceptor.classes, producer.interceptor.classes (with the exception of: ssl.endpoint.identification.algorithm, ssl.cipher.suites, ssl.protocol, ssl.enabled.protocols)."
-                    required:
-                      - alias
-                      - bootstrapServers
-                  description: Kafka clusters for mirroring.
+                              description: The name of the Secret containing the certificate.
+                            certificate:
+                              type: string
+                              description: The name of the file certificate in the Secret.
+                            key:
+                              type: string
+                              description: "The name of the private key in the secret. The private key must be in unencrypted PKCS #8 format. For more information, see RFC 5208: https://datatracker.ietf.org/doc/html/rfc5208."
+                          required:
+                            - secretName
+                            - certificate
+                            - key
+                          description: Reference to the `Secret` which holds the certificate and private key pair.
+                        config:
+                          x-kubernetes-preserve-unknown-fields: true
+                          type: object
+                          description: Configuration for the custom authentication mechanism. Only properties with the `sasl.` and `ssl.keystore.` prefixes are allowed. Specify other options in the regular configuration section of the custom resource.
+                        passwordSecret:
+                          type: object
+                          properties:
+                            secretName:
+                              type: string
+                              description: The name of the Secret containing the password.
+                            password:
+                              type: string
+                              description: The name of the key in the Secret under which the password is stored.
+                          required:
+                            - secretName
+                            - password
+                          description: Reference to the `Secret` which holds the password.
+                        sasl:
+                          type: boolean
+                          description: Enable or disable SASL on this authentication mechanism.
+                        type:
+                          type: string
+                          enum:
+                            - tls
+                            - scram-sha-256
+                            - scram-sha-512
+                            - plain
+                            - custom
+                          description: "Specifies the authentication type. Supported types are `tls`, `scram-sha-256`, `scram-sha-512`, `plain`, and `custom`. `tls` uses TLS client authentication and is supported only over TLS connections. `scram-sha-256` and `scram-sha-512` use SASL SCRAM-SHA-256 and SASL SCRAM-SHA-512 authentication, respectively. `plain` uses SASL PLAIN authentication. `custom` allows you to configure a custom authentication mechanism."
+                        username:
+                          type: string
+                          description: Username used for the authentication.
+                      required:
+                        - type
+                      description: Authentication configuration for connecting to the cluster.
+                    config:
+                      x-kubernetes-preserve-unknown-fields: true
+                      type: object
+                      description: "The MirrorMaker 2 cluster config. Properties with the following prefixes cannot be set: group.id, config.storage.topic, offset.storage.topic, status.storage.topic, ssl., sasl., security., listeners, plugin.path, rest., bootstrap.servers, consumer.interceptor.classes, producer.interceptor.classes (with the exception of: ssl.endpoint.identification.algorithm, ssl.cipher.suites, ssl.protocol, ssl.enabled.protocols)."
+                  required:
+                    - alias
+                    - bootstrapServers
+                    - groupId
+                    - configStorageTopic
+                    - statusStorageTopic
+                    - offsetStorageTopic
+                  description: The target Apache Kafka cluster. The target Kafka cluster is used by the underlying Kafka Connect framework for its internal topics.
                 mirrors:
                   type: array
                   items:
                     type: object
                     properties:
-                      sourceCluster:
-                        type: string
-                        description: The alias of the source cluster used by the Kafka MirrorMaker 2 connectors. The alias must match a cluster in the list at `spec.clusters`.
-                      targetCluster:
-                        type: string
-                        description: The alias of the target cluster used by the Kafka MirrorMaker 2 connectors. The alias must match a cluster in the list at `spec.clusters`.
+                      source:
+                        type: object
+                        properties:
+                          alias:
+                            type: string
+                            pattern: "^[a-zA-Z0-9\\._\\-]{1,100}$"
+                            description: Alias used to reference the Kafka cluster.
+                          bootstrapServers:
+                            type: string
+                            description: A comma-separated list of `host:port` pairs for establishing the connection to the Kafka cluster.
+                          tls:
+                            type: object
+                            properties:
+                              trustedCertificates:
+                                type: array
+                                items:
+                                  type: object
+                                  properties:
+                                    secretName:
+                                      type: string
+                                      description: The name of the Secret containing the certificate.
+                                    certificate:
+                                      type: string
+                                      description: The name of the file certificate in the secret.
+                                    pattern:
+                                      type: string
+                                      description: "Pattern for the certificate files in the secret. Use the link:https://en.wikipedia.org/wiki/Glob_(programming)[_glob syntax_] for the pattern. All files in the secret that match the pattern are used."
+                                  oneOf:
+                                    - properties:
+                                        certificate: {}
+                                      required:
+                                        - certificate
+                                    - properties:
+                                        pattern: {}
+                                      required:
+                                        - pattern
+                                  required:
+                                    - secretName
+                                description: Trusted certificates for TLS connection.
+                            description: TLS configuration for connecting MirrorMaker 2 connectors to a cluster.
+                          authentication:
+                            type: object
+                            properties:
+                              certificateAndKey:
+                                type: object
+                                properties:
+                                  secretName:
+                                    type: string
+                                    description: The name of the Secret containing the certificate.
+                                  certificate:
+                                    type: string
+                                    description: The name of the file certificate in the Secret.
+                                  key:
+                                    type: string
+                                    description: "The name of the private key in the secret. The private key must be in unencrypted PKCS #8 format. For more information, see RFC 5208: https://datatracker.ietf.org/doc/html/rfc5208."
+                                required:
+                                  - secretName
+                                  - certificate
+                                  - key
+                                description: Reference to the `Secret` which holds the certificate and private key pair.
+                              config:
+                                x-kubernetes-preserve-unknown-fields: true
+                                type: object
+                                description: Configuration for the custom authentication mechanism. Only properties with the `sasl.` and `ssl.keystore.` prefixes are allowed. Specify other options in the regular configuration section of the custom resource.
+                              passwordSecret:
+                                type: object
+                                properties:
+                                  secretName:
+                                    type: string
+                                    description: The name of the Secret containing the password.
+                                  password:
+                                    type: string
+                                    description: The name of the key in the Secret under which the password is stored.
+                                required:
+                                  - secretName
+                                  - password
+                                description: Reference to the `Secret` which holds the password.
+                              sasl:
+                                type: boolean
+                                description: Enable or disable SASL on this authentication mechanism.
+                              type:
+                                type: string
+                                enum:
+                                  - tls
+                                  - scram-sha-256
+                                  - scram-sha-512
+                                  - plain
+                                  - custom
+                                description: "Specifies the authentication type. Supported types are `tls`, `scram-sha-256`, `scram-sha-512`, `plain`, and `custom`. `tls` uses TLS client authentication and is supported only over TLS connections. `scram-sha-256` and `scram-sha-512` use SASL SCRAM-SHA-256 and SASL SCRAM-SHA-512 authentication, respectively. `plain` uses SASL PLAIN authentication. `custom` allows you to configure a custom authentication mechanism."
+                              username:
+                                type: string
+                                description: Username used for the authentication.
+                            required:
+                              - type
+                            description: Authentication configuration for connecting to the cluster.
+                          config:
+                            x-kubernetes-preserve-unknown-fields: true
+                            type: object
+                            description: "The MirrorMaker 2 cluster config. Properties with the following prefixes cannot be set: group.id, config.storage.topic, offset.storage.topic, status.storage.topic, ssl., sasl., security., listeners, plugin.path, rest., bootstrap.servers, consumer.interceptor.classes, producer.interceptor.classes (with the exception of: ssl.endpoint.identification.algorithm, ssl.cipher.suites, ssl.protocol, ssl.enabled.protocols)."
+                        required:
+                          - alias
+                          - bootstrapServers
+                        description: The source Apache Kafka cluster. The source Kafka cluster is used by the Kafka MirrorMaker 2 connectors.
                       sourceConnector:
                         type: object
                         properties:
@@ -313,13 +297,13 @@ spec:
                             type: integer
                             minimum: 1
                             description: The maximum number of tasks for the Kafka Connector.
-                          pause:
-                            type: boolean
-                            description: Whether the connector should be paused. Defaults to false.
+                          version:
+                            type: string
+                            description: Desired version or version range to respect when starting the Kafka Connector. This is only supported when using Kafka Connect version 4.1.0 and higher.
                           config:
                             x-kubernetes-preserve-unknown-fields: true
                             type: object
-                            description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max."
+                            description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max, connector.plugin.version."
                           state:
                             type: string
                             enum:
@@ -362,62 +346,6 @@ spec:
                               - fromConfigMap
                             description: Configuration for altering offsets.
                         description: The specification of the Kafka MirrorMaker 2 source connector.
-                      heartbeatConnector:
-                        type: object
-                        properties:
-                          tasksMax:
-                            type: integer
-                            minimum: 1
-                            description: The maximum number of tasks for the Kafka Connector.
-                          pause:
-                            type: boolean
-                            description: Whether the connector should be paused. Defaults to false.
-                          config:
-                            x-kubernetes-preserve-unknown-fields: true
-                            type: object
-                            description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max."
-                          state:
-                            type: string
-                            enum:
-                              - paused
-                              - stopped
-                              - running
-                            description: The state the connector should be in. Defaults to running.
-                          autoRestart:
-                            type: object
-                            properties:
-                              enabled:
-                                type: boolean
-                                description: Whether automatic restart for failed connectors and tasks should be enabled or disabled.
-                              maxRestarts:
-                                type: integer
-                                description: "The maximum number of connector restarts that the operator will try. If the connector remains in a failed state after reaching this limit, it must be restarted manually by the user. Defaults to an unlimited number of restarts."
-                            description: Automatic restart of connector and tasks configuration.
-                          listOffsets:
-                            type: object
-                            properties:
-                              toConfigMap:
-                                type: object
-                                properties:
-                                  name:
-                                    type: string
-                                description: Reference to the ConfigMap where the list of offsets will be written to.
-                            required:
-                              - toConfigMap
-                            description: Configuration for listing offsets.
-                          alterOffsets:
-                            type: object
-                            properties:
-                              fromConfigMap:
-                                type: object
-                                properties:
-                                  name:
-                                    type: string
-                                description: Reference to the ConfigMap where the new offsets are stored.
-                            required:
-                              - fromConfigMap
-                            description: Configuration for altering offsets.
-                        description: The specification of the Kafka MirrorMaker 2 heartbeat connector.
                       checkpointConnector:
                         type: object
                         properties:
@@ -425,13 +353,13 @@ spec:
                             type: integer
                             minimum: 1
                             description: The maximum number of tasks for the Kafka Connector.
-                          pause:
-                            type: boolean
-                            description: Whether the connector should be paused. Defaults to false.
+                          version:
+                            type: string
+                            description: Desired version or version range to respect when starting the Kafka Connector. This is only supported when using Kafka Connect version 4.1.0 and higher.
                           config:
                             x-kubernetes-preserve-unknown-fields: true
                             type: object
-                            description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max."
+                            description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max, connector.plugin.version."
                           state:
                             type: string
                             enum:
@@ -477,24 +405,17 @@ spec:
                       topicsPattern:
                         type: string
                         description: "A regular expression matching the topics to be mirrored, for example, \"topic1\\|topic2\\|topic3\". Comma-separated lists are also supported."
-                      topicsBlacklistPattern:
-                        type: string
-                        description: A regular expression matching the topics to exclude from mirroring. Comma-separated lists are also supported.
                       topicsExcludePattern:
                         type: string
                         description: A regular expression matching the topics to exclude from mirroring. Comma-separated lists are also supported.
                       groupsPattern:
                         type: string
                         description: A regular expression matching the consumer groups to be mirrored. Comma-separated lists are also supported.
-                      groupsBlacklistPattern:
-                        type: string
-                        description: A regular expression matching the consumer groups to exclude from mirroring. Comma-separated lists are also supported.
                       groupsExcludePattern:
                         type: string
                         description: A regular expression matching the consumer groups to exclude from mirroring. Comma-separated lists are also supported.
                     required:
-                      - sourceCluster
-                      - targetCluster
+                      - source
                   description: Configuration of the MirrorMaker 2 connectors.
                 resources:
                   type: object
@@ -657,13 +578,25 @@ spec:
                 rack:
                   type: object
                   properties:
+                    envVarName:
+                      type: string
+                      description: The name of the environment variable that defines the rack ID. Its value sets the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect or MirrorMaker 2.
                     topologyKey:
                       type: string
                       example: topology.kubernetes.io/zone
                       description: "A key that matches labels assigned to the Kubernetes cluster nodes. The value of the label is used to set a broker's `broker.rack` config, and the `client.rack` config for Kafka Connect or MirrorMaker 2."
-                  required:
-                    - topologyKey
+                    type:
+                      type: string
+                      enum:
+                        - topology-label
+                        - environment-variable
+                      description: "Specifies the rack awareness type. Supported types are `topology-label` and `environment-variable`. `topology-label` uses a Kubernetes worker node label to set the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect and MirrorMaker 2. `environment-variable` uses an environment variable to set the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect and MirrorMaker 2. When not specified, `topology-label` type is used by default."
                   description: Configuration of the node label which will be used as the `client.rack` consumer configuration.
+                  x-kubernetes-validations:
+                    - rule: (has(self.type) && self.type != "topology-label") || self.topologyKey != ""
+                      message: topologyKey property is required
+                    - rule: has(self.type) == false || self.type != "environment-variable" || self.envVarName != ""
+                      message: envVarName property is required
                 metricsConfig:
                   type: object
                   properties:
@@ -671,7 +604,8 @@ spec:
                       type: string
                       enum:
                         - jmxPrometheusExporter
-                      description: Metrics type. Only 'jmxPrometheusExporter' supported currently.
+                        - strimziMetricsReporter
+                      description: Metrics type. The supported types are `jmxPrometheusExporter` and `strimziMetricsReporter`. Type `jmxPrometheusExporter` uses the Prometheus JMX Exporter to expose Kafka JMX metrics in Prometheus format through an HTTP endpoint. Type `strimziMetricsReporter` uses the Strimzi Metrics Reporter to directly expose Kafka metrics in Prometheus format through an HTTP endpoint.
                     valueFrom:
                       type: object
                       properties:
@@ -685,50 +619,36 @@ spec:
                             optional:
                               type: boolean
                           description: Reference to the key in the ConfigMap containing the configuration.
-                      description: 'ConfigMap entry where the Prometheus JMX Exporter configuration is stored. '
+                      description: ConfigMap entry where the Prometheus JMX Exporter configuration is stored.
+                    values:
+                      type: object
+                      properties:
+                        allowList:
+                          type: array
+                          items:
+                            type: string
+                          description: A list of regex patterns to filter the metrics to collect. Should contain at least one element.
+                      description: Configuration values for the Strimzi Metrics Reporter.
                   required:
                     - type
-                    - valueFrom
                   description: Metrics configuration.
+                  x-kubernetes-validations:
+                    - rule: self.type != 'jmxPrometheusExporter' || has(self.valueFrom)
+                      message: valueFrom property is required
                 tracing:
                   type: object
                   properties:
                     type:
                       type: string
                       enum:
-                        - jaeger
                         - opentelemetry
-                      description: "Type of the tracing used. Currently the only supported type is `opentelemetry` for OpenTelemetry tracing. As of Strimzi 0.37.0, `jaeger` type is not supported anymore and this option is ignored."
+                      description: Type of the tracing used. Currently the only supported type is `opentelemetry` for OpenTelemetry tracing.
                   required:
                     - type
                   description: The configuration of tracing in Kafka Connect.
                 template:
                   type: object
                   properties:
-                    deployment:
-                      type: object
-                      properties:
-                        metadata:
-                          type: object
-                          properties:
-                            labels:
-                              additionalProperties:
-                                type: string
-                              type: object
-                              description: Labels added to the Kubernetes resource.
-                            annotations:
-                              additionalProperties:
-                                type: string
-                              type: object
-                              description: Annotations added to the Kubernetes resource.
-                          description: Metadata applied to the resource.
-                        deploymentStrategy:
-                          type: string
-                          enum:
-                            - RollingUpdate
-                            - Recreate
-                          description: Pod replacement strategy for deployment configuration changes. Valid values are `RollingUpdate` and `Recreate`. Defaults to `RollingUpdate`.
-                      description: Template for Kafka Connect `Deployment`.
                     podSet:
                       type: object
                       properties:
@@ -1248,6 +1168,35 @@ spec:
                               ip:
                                 type: string
                           description: The pod's HostAliases. HostAliases is an optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
+                        dnsPolicy:
+                          type: string
+                          enum:
+                            - ClusterFirst
+                            - ClusterFirstWithHostNet
+                            - Default
+                            - None
+                          description: "The pod's DNSPolicy. Defaults to `ClusterFirst`. Valid values are `ClusterFirstWithHostNet`, `ClusterFirst`, `Default` or `None`."
+                        dnsConfig:
+                          type: object
+                          properties:
+                            nameservers:
+                              type: array
+                              items:
+                                type: string
+                            options:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  value:
+                                    type: string
+                            searches:
+                              type: array
+                              items:
+                                type: string
+                          description: "The pod's DNSConfig. If specified, it will be merged to the generated DNS configuration based on the DNSPolicy."
                         enableServiceLinks:
                           type: boolean
                           description: Indicates whether information about services should be injected into Pod's environment variables.
@@ -1283,7 +1232,7 @@ spec:
                                     type: boolean
                                   secretName:
                                     type: string
-                                description: Secret to use populate the volume.
+                                description: '`Secret` to use to populate the volume.'
                               configMap:
                                 type: object
                                 properties:
@@ -1304,20 +1253,20 @@ spec:
                                     type: string
                                   optional:
                                     type: boolean
-                                description: ConfigMap to use to populate the volume.
+                                description: '`ConfigMap` to use to populate the volume.'
                               emptyDir:
                                 type: object
                                 properties:
                                   medium:
                                     type: string
+                                    enum:
+                                      - Memory
+                                    description: "Medium represents the type of storage medium should back this volume. Valid values are unset or `Memory`. When not set, it will use the node's default medium."
                                   sizeLimit:
-                                    type: object
-                                    properties:
-                                      amount:
-                                        type: string
-                                      format:
-                                        type: string
-                                description: EmptyDir to use to populate the volume.
+                                    type: string
+                                    pattern: "^([0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+                                    description: The total amount of local storage required for this EmptyDir volume (for example 1Gi).
+                                description: '`EmptyDir` to use to populate the volume.'
                               persistentVolumeClaim:
                                 type: object
                                 properties:
@@ -1325,7 +1274,7 @@ spec:
                                     type: string
                                   readOnly:
                                     type: boolean
-                                description: PersistentVolumeClaim object to use to populate the volume.
+                                description: '`PersistentVolumeClaim` object to use to populate the volume.'
                               csi:
                                 type: object
                                 properties:
@@ -1344,7 +1293,15 @@ spec:
                                     additionalProperties:
                                       type: string
                                     type: object
-                                description: CSIVolumeSource object to use to populate the volume.
+                                description: '`CSIVolumeSource` object to use to populate the volume.'
+                              image:
+                                type: object
+                                properties:
+                                  pullPolicy:
+                                    type: string
+                                  reference:
+                                    type: string
+                                description: '`ImageVolumeSource` object to use to populate the volume.'
                             oneOf:
                               - properties:
                                   secret: {}
@@ -1352,7 +1309,75 @@ spec:
                                   emptyDir: {}
                                   persistentVolumeClaim: {}
                                   csi: {}
+                                  image: {}
                           description: Additional volumes that can be mounted to the pod.
+                        templatedVolumes:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                                description: Name to use for the volume. Required.
+                              secret:
+                                type: object
+                                properties:
+                                  defaultMode:
+                                    type: integer
+                                  items:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        key:
+                                          type: string
+                                        mode:
+                                          type: integer
+                                        path:
+                                          type: string
+                                  optional:
+                                    type: boolean
+                                  secretName:
+                                    type: string
+                                description: "`Secret` to use to populate the volume. The name of the Secret and the items key and path fields can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                              configMap:
+                                type: object
+                                properties:
+                                  defaultMode:
+                                    type: integer
+                                  items:
+                                    type: array
+                                    items:
+                                      type: object
+                                      properties:
+                                        key:
+                                          type: string
+                                        mode:
+                                          type: integer
+                                        path:
+                                          type: string
+                                  name:
+                                    type: string
+                                  optional:
+                                    type: boolean
+                                description: "`ConfigMap` to use to populate the volume. The name of the ConfigMap and the items key and path fields can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                              persistentVolumeClaim:
+                                type: object
+                                properties:
+                                  claimName:
+                                    type: string
+                                  readOnly:
+                                    type: boolean
+                                description: "`PersistentVolumeClaim` object to use to populate the volume. The name of the Persistent Volume Claim can use placeholders that would be replaced for every individual node. Valid placeholders that you can use in the template are `{nodeId}` and `{nodePodName}`."
+                            oneOf:
+                              - properties:
+                                  secret: {}
+                                  configMap: {}
+                                  persistentVolumeClaim: {}
+                          description: Additional volumes that can be mounted to the pod. These volumes can use templates to mount different volumes into individual Pods.
+                        hostUsers:
+                          type: boolean
+                          description: "Use the host user namespace. Optional. Defaults to `true`. When `true` or not set, the pod runs in the host user namespace. This is required when the pod needs features available only in the host namespace, such as loading kernel modules with `CAP_SYS_MODULE`.When set to `false`, the pod runs in a new user namespace. Setting `false` helps mitigate container breakout vulnerabilities and allows containers to run as `root` without granting `root` privileges on the host. This property is alpha-level in Kubernetes and is supported only by Kubernetes clusters that enable the `UserNamespacesSupport` feature."
                       description: Template for Kafka Connect `Pods`.
                     apiService:
                       type: object
@@ -2265,6 +2290,35 @@ spec:
                               ip:
                                 type: string
                           description: The pod's HostAliases. HostAliases is an optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
+                        dnsPolicy:
+                          type: string
+                          enum:
+                            - ClusterFirst
+                            - ClusterFirstWithHostNet
+                            - Default
+                            - None
+                          description: "The pod's DNSPolicy. Defaults to `ClusterFirst`. Valid values are `ClusterFirstWithHostNet`, `ClusterFirst`, `Default` or `None`."
+                        dnsConfig:
+                          type: object
+                          properties:
+                            nameservers:
+                              type: array
+                              items:
+                                type: string
+                            options:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  value:
+                                    type: string
+                            searches:
+                              type: array
+                              items:
+                                type: string
+                          description: "The pod's DNSConfig. If specified, it will be merged to the generated DNS configuration based on the DNSPolicy."
                         enableServiceLinks:
                           type: boolean
                           description: Indicates whether information about services should be injected into Pod's environment variables.
@@ -2300,7 +2354,7 @@ spec:
                                     type: boolean
                                   secretName:
                                     type: string
-                                description: Secret to use populate the volume.
+                                description: '`Secret` to use to populate the volume.'
                               configMap:
                                 type: object
                                 properties:
@@ -2321,20 +2375,20 @@ spec:
                                     type: string
                                   optional:
                                     type: boolean
-                                description: ConfigMap to use to populate the volume.
+                                description: '`ConfigMap` to use to populate the volume.'
                               emptyDir:
                                 type: object
                                 properties:
                                   medium:
                                     type: string
+                                    enum:
+                                      - Memory
+                                    description: "Medium represents the type of storage medium should back this volume. Valid values are unset or `Memory`. When not set, it will use the node's default medium."
                                   sizeLimit:
-                                    type: object
-                                    properties:
-                                      amount:
-                                        type: string
-                                      format:
-                                        type: string
-                                description: EmptyDir to use to populate the volume.
+                                    type: string
+                                    pattern: "^([0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+                                    description: The total amount of local storage required for this EmptyDir volume (for example 1Gi).
+                                description: '`EmptyDir` to use to populate the volume.'
                               persistentVolumeClaim:
                                 type: object
                                 properties:
@@ -2342,7 +2396,7 @@ spec:
                                     type: string
                                   readOnly:
                                     type: boolean
-                                description: PersistentVolumeClaim object to use to populate the volume.
+                                description: '`PersistentVolumeClaim` object to use to populate the volume.'
                               csi:
                                 type: object
                                 properties:
@@ -2361,7 +2415,15 @@ spec:
                                     additionalProperties:
                                       type: string
                                     type: object
-                                description: CSIVolumeSource object to use to populate the volume.
+                                description: '`CSIVolumeSource` object to use to populate the volume.'
+                              image:
+                                type: object
+                                properties:
+                                  pullPolicy:
+                                    type: string
+                                  reference:
+                                    type: string
+                                description: '`ImageVolumeSource` object to use to populate the volume.'
                             oneOf:
                               - properties:
                                   secret: {}
@@ -2369,7 +2431,11 @@ spec:
                                   emptyDir: {}
                                   persistentVolumeClaim: {}
                                   csi: {}
+                                  image: {}
                           description: Additional volumes that can be mounted to the pod.
+                        hostUsers:
+                          type: boolean
+                          description: "Use the host user namespace. Optional. Defaults to `true`. When `true` or not set, the pod runs in the host user namespace. This is required when the pod needs features available only in the host namespace, such as loading kernel modules with `CAP_SYS_MODULE`.When set to `false`, the pod runs in a new user namespace. Setting `false` helps mitigate container breakout vulnerabilities and allows containers to run as `root` without granting `root` privileges on the host. This property is alpha-level in Kubernetes and is supported only by Kubernetes clusters that enable the `UserNamespacesSupport` feature."
                       description: Template for Kafka Connect Build `Pods`. The build pod is used only on Kubernetes.
                     buildContainer:
                       type: object
@@ -2572,119 +2638,10 @@ spec:
                           description: Metadata applied to the resource.
                       description: Template for Secret of the Kafka Connect Cluster JMX authentication.
                   description: "Template for Kafka Connect and Kafka MirrorMaker 2 resources. The template allows users to specify how the `Pods`, `Service`, and other services are generated."
-                externalConfiguration:
-                  type: object
-                  properties:
-                    env:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          name:
-                            type: string
-                            description: Name of the environment variable which will be passed to the Kafka Connect pods. The name of the environment variable cannot start with `KAFKA_` or `STRIMZI_`.
-                          valueFrom:
-                            type: object
-                            properties:
-                              secretKeyRef:
-                                type: object
-                                properties:
-                                  key:
-                                    type: string
-                                  name:
-                                    type: string
-                                  optional:
-                                    type: boolean
-                                description: Reference to a key in a Secret.
-                              configMapKeyRef:
-                                type: object
-                                properties:
-                                  key:
-                                    type: string
-                                  name:
-                                    type: string
-                                  optional:
-                                    type: boolean
-                                description: Reference to a key in a ConfigMap.
-                            oneOf:
-                              - properties:
-                                  secretKeyRef: {}
-                                required:
-                                  - secretKeyRef
-                              - properties:
-                                  configMapKeyRef: {}
-                                required:
-                                  - configMapKeyRef
-                            description: Value of the environment variable which will be passed to the Kafka Connect pods. It can be passed either as a reference to Secret or ConfigMap field. The field has to specify exactly one Secret or ConfigMap.
-                        required:
-                          - name
-                          - valueFrom
-                      description: Makes data from a Secret or ConfigMap available in the Kafka Connect pods as environment variables.
-                    volumes:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          name:
-                            type: string
-                            description: Name of the volume which will be added to the Kafka Connect pods.
-                          secret:
-                            type: object
-                            properties:
-                              defaultMode:
-                                type: integer
-                              items:
-                                type: array
-                                items:
-                                  type: object
-                                  properties:
-                                    key:
-                                      type: string
-                                    mode:
-                                      type: integer
-                                    path:
-                                      type: string
-                              optional:
-                                type: boolean
-                              secretName:
-                                type: string
-                            description: Reference to a key in a Secret. Exactly one Secret or ConfigMap has to be specified.
-                          configMap:
-                            type: object
-                            properties:
-                              defaultMode:
-                                type: integer
-                              items:
-                                type: array
-                                items:
-                                  type: object
-                                  properties:
-                                    key:
-                                      type: string
-                                    mode:
-                                      type: integer
-                                    path:
-                                      type: string
-                              name:
-                                type: string
-                              optional:
-                                type: boolean
-                            description: Reference to a key in a ConfigMap. Exactly one Secret or ConfigMap has to be specified.
-                        oneOf:
-                          - properties:
-                              secret: {}
-                            required:
-                              - secret
-                          - properties:
-                              configMap: {}
-                            required:
-                              - configMap
-                        required:
-                          - name
-                      description: Makes data from a Secret or ConfigMap available in the Kafka Connect pods as volumes.
-                  description: Pass data from Secrets or ConfigMaps to the Kafka Connect pods and use them to configure connectors.
               required:
-                - connectCluster
+                - replicas
+                - target
+                - mirrors
               description: The specification of the Kafka MirrorMaker 2 cluster.
             status:
               type: object
@@ -2759,3 +2716,5 @@ spec:
                   type: integer
                   description: The current number of pods being used to provide this resource.
               description: The status of the Kafka MirrorMaker 2 cluster.
+          required:
+            - spec
