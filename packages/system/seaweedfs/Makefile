@@ -20,6 +20,25 @@ test-guard-fail-closed:
 	  || { echo "FAIL: a blind upgrade rendered instead of refusing (naming-guard canary is not firing)"; echo "$$out" | head -5; exit 1; }
 	@echo "ok: naming guard refuses a blind upgrade"
 
+.PHONY: image
+# `git describe` of the upstream commit pinned by ARG VERSION in the Dockerfile;
+# keep the two in lockstep.
+COSI_DRIVER_VERSION = v0.3.1-10-g0df543f
+# Bump when patches/ or the build changes on the same upstream commit.
+COSI_DRIVER_REV = 0
+COSI_DRIVER_COMPONENT_VERSION = $(COSI_DRIVER_VERSION)-cozystack.$(COSI_DRIVER_REV)
+
+image:
+	docker buildx build images/seaweedfs-cosi-driver \
+		$(call image-tags,seaweedfs-cosi-driver,$(COSI_DRIVER_COMPONENT_VERSION)) \
+		$(call cache-args,seaweedfs-cosi-driver) \
+		--metadata-file images/seaweedfs-cosi-driver.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/seaweedfs-cosi-driver:$(COSI_DRIVER_COMPONENT_VERSION)@$$(yq e '."containerimage.digest"' images/seaweedfs-cosi-driver.json -r)" \
+		yq -i '.seaweedfs.cosi.image = strenv(IMAGE)' values.yaml
+	rm -f images/seaweedfs-cosi-driver.json
+	yq .seaweedfs.cosi.image values.yaml > ../../extra/seaweedfs/images/seaweedfs-cosi-driver.tag
+
 update:
 	rm -rf charts
 	mkdir -p charts

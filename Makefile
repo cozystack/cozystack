@@ -38,6 +38,7 @@ build: build-deps
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
+	make -C packages/system/seaweedfs image
 	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/system/monitoring image
