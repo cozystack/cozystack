@@ -29,6 +29,14 @@ RUN set -eux; \
     echo "${sha256}  /usr/bin/etcd-migrate" | sha256sum -c -; \
     chmod +x /usr/bin/etcd-migrate
 
+# CRDs of Strimzi 0.51.0, the last release serving both v1beta2 and v1.
+# Migration 60 applies them so Strimzi's conversion tool can move every stored
+# object to v1 before the kafka-operator release installs the v1-only CRDs.
+RUN mkdir /strimzi-crds && \
+    curl -fsSL -o /strimzi-crds/strimzi-crds-0.51.0.yaml \
+      https://github.com/strimzi/strimzi-kafka-operator/releases/download/0.51.0/strimzi-crds-0.51.0.yaml && \
+    echo "a11257e67985a946a6facfb17d729aac5670b89675d410d13162fe455a5ac7a8  /strimzi-crds/strimzi-crds-0.51.0.yaml" | sha256sum -c -
+
 COPY migrations /migrations
 # v1alpha2 etcd CRDs, vendored into the build context by `make image-migrations`.
 # migration 50 applies these before adoption so it does not deadlock waiting for

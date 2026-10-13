@@ -1,0 +1,4 @@
+{"items":[
+ {"metadata":{"namespace":"tenant-a","name":"kafka-one","annotations":{"strimzi.io/kraft":"enabled"}},"spec":{"kafka":{"version":"3.9.0"}},"status":{"kafkaMetadataState":"KRaft"}},
+ {"metadata":{"namespace":"tenant-b","name":"kafka-two"},"spec":{"kafka":{"version":"3.8.1"}}}
+]}

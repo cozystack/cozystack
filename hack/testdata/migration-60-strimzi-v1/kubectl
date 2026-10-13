@@ -1,0 +1,249 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-60-strimzi-v1-conversion.bats. It serves only
+# the calls migration 60 and lib/cozystack-version.sh make, and logs each one
+# to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG        file to append a one-line record of each call to
+#   FAKE_STATE         directory; its "stored" file holds the storedVersions
+#                      every Strimzi CRD reports, and the conversion Job
+#                      rewrites it to ["v1"] when it succeeds
+#   FAKE_NO_STRIMZI    non-empty => the Kafka CRD is absent
+#   FAKE_KAFKAS        fixture served for the Strimzi Kafka list
+#   FAKE_JOB           succeed (default) | fail | noop (succeeds, converts nothing)
+#                      | hang (neither succeeds nor fails)
+#                      | nopod (Failed condition, no failed pod: the pod was
+#                      never created)
+#   FAKE_PULL          non-empty => the conversion pod cannot pull its image
+#   FAKE_PATCH_FAIL    non-empty => every application patch exits 1
+#   FAKE_CRD_READ_FAIL, FAKE_APIRES_FAIL, FAKE_SECRET_LIST_FAIL: that read
+#                      exits 1
+#   FAKE_RELEASE_REWRITTEN_BACK: release patches do not stick
+#   FAKE_REBALANCES    comma-separated ns/name served for the KafkaRebalance list
+#   The deployed Helm release of kafka-one is release-kafka-one.json, encoded
+#   the way Helm stores it; a patch of its Secret is written to
+#   $FAKE_STATE/release, so a second run reads what the first one wrote.
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+case "$args" in
+  *"apply --filename -"*)
+    manifest=$(cat)
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+  *"apply -f -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: Job"*)
+        order=$(printf '%s\n' "$manifest" | sed -n 's/.*v1-api-conversion.sh", "\([a-z-]*\)".*/\1/p' | tr '\n' ' ')
+        log "APPLY-CONVERSION ${order% }"
+        log "CONVERSION-DEADLINE $(printf '%s\n' "$manifest" | sed -n 's/^  activeDeadlineSeconds: \([0-9]*\)$/\1/p')"
+        exit 0
+        ;;
+    esac
+    log "APPLY-UNKNOWN"
+    exit 1
+    ;;
+  *"apply --server-side"*)
+    log "APPLY-CRDS $(arg_after -f "$@")"
+    exit 0
+    ;;
+  *"get crd kafkas.kafka.strimzi.io --ignore-not-found -o name"*)
+    [ -n "${FAKE_NO_STRIMZI:-}" ] || echo "customresourcedefinition.apiextensions.k8s.io/kafkas.kafka.strimzi.io"
+    exit 0
+    ;;
+  *"get crd kafkas.kafka.strimzi.io -o jsonpath={.spec.versions[*].name}"*)
+    printf '%s' "${FAKE_SERVED:-v1 v1beta2}"
+    exit 0
+    ;;
+  *"get crd "*"storedVersions"*)
+    if [ -n "${FAKE_CRD_READ_FAIL:-}" ]; then echo "Error from server: etcdserver: request timed out" >&2; exit 1; fi
+    cat "$FAKE_STATE/stored"
+    exit 0
+    ;;
+  *"get kafkarebalances.v1beta2.kafka.strimzi.io"*)
+    if [ -n "${FAKE_REBALANCE_FAIL:-}" ]; then echo "Error from server: etcdserver: request timed out" >&2; exit 1; fi
+    [ -z "${FAKE_REBALANCES:-}" ] || printf '%s\n' "$FAKE_REBALANCES" | tr ',' '\n'
+    exit 0
+    ;;
+  *"get kafkas.v1beta2.kafka.strimzi.io"*)
+    cat "$FAKE_KAFKAS"
+    exit 0
+    ;;
+  *"get kafkas.v1.kafka.strimzi.io"*)
+    cat "$FAKE_RELEASES"
+    exit 0
+    ;;
+  *"get secret -l owner=helm,name=kafka-one -o"*)
+    if [ -n "${FAKE_SECRET_LIST_FAIL:-}" ]; then echo "Error from server (Forbidden): secrets is forbidden" >&2; exit 1; fi
+    # v4 stands for a failed upgrade: still the latest revision, so uninstall
+    # builds it.
+    echo "sh.helm.release.v1.kafka-one.v3 sh.helm.release.v1.kafka-one.v4"
+    exit 0
+    ;;
+  *"get secret -l owner=helm,name=kafka-failed-install -o"*)
+    echo "sh.helm.release.v1.kafka-failed-install.v1"
+    exit 0
+    ;;
+  *"get secret sh.helm.release.v1.kafka-failed-install.v1 -o jsonpath={.data.release}"*)
+    if [ ! -f "$FAKE_STATE/release-failed" ]; then
+      gzip -c "$(dirname "$0")/release-kafka-one.json" | base64 | tr -d '\n' | base64 | tr -d '\n' > "$FAKE_STATE/release-failed"
+    fi
+    cat "$FAKE_STATE/release-failed"
+    exit 0
+    ;;
+  *"patch secret sh.helm.release.v1.kafka-failed-install.v1 --type merge --patch-file "*)
+    jq -r '.data.release' "$(arg_after --patch-file "$@")" > "$FAKE_STATE/release-failed"
+    log "PATCH-RELEASE tenant-f/sh.helm.release.v1.kafka-failed-install.v1"
+    exit 0
+    ;;
+  *"get deployment --all-namespaces -l app.kubernetes.io/name=entity-operator"*)
+    [ -n "${FAKE_NO_OPERATOR:-}" ] || echo "tenant-a kafka-one-entity-operator"
+    exit 0
+    ;;
+  *"scale deployment kafka-one-entity-operator --replicas=0"*)
+    log "SCALE-ENTITY tenant-a/kafka-one-entity-operator"
+    exit 0
+    ;;
+  *"get secret -l owner=helm,name="*)
+    exit 0
+    ;;
+  *"get secret sh.helm.release.v1.kafka-one.v"*" -o jsonpath={.data.release}"*)
+    rev=$(arg_after secret "$@"); rev=${rev##*.}
+    if [ ! -f "$FAKE_STATE/release-$rev" ]; then
+      gzip -c "$(dirname "$0")/release-kafka-one.json" | base64 | tr -d '\n' | base64 | tr -d '\n' > "$FAKE_STATE/release-$rev"
+    fi
+    cat "$FAKE_STATE/release-$rev"
+    exit 0
+    ;;
+  *"patch secret sh.helm.release.v1.kafka-one.v"*" --type merge --patch-file "*)
+    rev=$(arg_after secret "$@"); rev=${rev##*.}
+    # FAKE_RELEASE_REWRITTEN_BACK: a Helm upgrade that was already running
+    # stores its v1beta2 revision over the rewrite.
+    [ -n "${FAKE_RELEASE_REWRITTEN_BACK:-}" ] || jq -r '.data.release' "$(arg_after --patch-file "$@")" > "$FAKE_STATE/release-$rev"
+    log "PATCH-RELEASE tenant-a/sh.helm.release.v1.kafka-one.$rev"
+    exit 0
+    ;;
+  *"get deployment strimzi-cluster-operator --ignore-not-found -o name"*)
+    if [ -n "${FAKE_OPERATOR_READ_FAIL:-}" ]; then echo "Error from server: etcdserver: request timed out" >&2; exit 1; fi
+    [ -n "${FAKE_NO_OPERATOR:-}" ] || echo "deployment.apps/strimzi-cluster-operator"
+    exit 0
+    ;;
+  *"scale deployment strimzi-cluster-operator --replicas=0"*)
+    log "SCALE-OPERATOR 0"
+    exit 0
+    ;;
+  *"wait --for=delete pod -l name=strimzi-cluster-operator"*)
+    exit 0
+    ;;
+  *"get kafkas.kafka.strimzi.io --all-namespaces --show-managed-fields -o json"*)
+    if [ -f "$FAKE_STATE/managed" ]; then cat "$FAKE_STATE/managed"; else cat "$(dirname "$0")/managed-kafkas.json"; fi
+    exit 0
+    ;;
+  *"--all-namespaces --show-managed-fields -o json"*)
+    echo '{"items":[]}'
+    exit 0
+    ;;
+  *"get kafkas.kafka.strimzi.io "*" --show-managed-fields -o json"*)
+    ns=$(arg_after -n "$@"); name=$(arg_after kafkas.kafka.strimzi.io "$@")
+    src="$FAKE_STATE/managed"; [ -f "$src" ] || src="$(dirname "$0")/managed-kafkas.json"
+    jq --arg ns "$ns" --arg n "$name" '.items[] | select(.metadata.namespace == $ns and .metadata.name == $n)' "$src"
+    exit 0
+    ;;
+  *"patch kafkas.kafka.strimzi.io "*"--patch-file "*)
+    ns=$(arg_after -n "$@"); name=$(arg_after kafkas.kafka.strimzi.io "$@")
+    patch=$(arg_after --patch-file "$@")
+    src="$FAKE_STATE/managed"; [ -f "$src" ] || src="$(dirname "$0")/managed-kafkas.json"
+    rv=$(jq -r '.metadata.resourceVersion' "$patch")
+    log "PATCH-MANAGED $ns/$name rv=$rv $(jq -r '[.metadata.managedFields[] | "\(.manager)=\(.apiVersion)"] | join(",")' "$patch")"
+    # FAKE_MANAGED_CONFLICT: a concurrent write bumps the object before the
+    # first patch lands, so that patch carries a stale resourceVersion.
+    if [ -n "${FAKE_MANAGED_CONFLICT:-}" ] && [ ! -f "$FAKE_STATE/bumped" ]; then
+      : > "$FAKE_STATE/bumped"
+      jq --arg ns "$ns" --arg n "$name" '(.items[] | select(.metadata.namespace == $ns and .metadata.name == $n) | .metadata.resourceVersion) |= (tonumber + 1 | tostring)' "$src" > "$FAKE_STATE/managed.new" && mv "$FAKE_STATE/managed.new" "$FAKE_STATE/managed"
+    fi
+    if [ -n "${FAKE_MANAGED_PATCH_FAIL:-}" ]; then echo "Error from server (Forbidden): forbidden" >&2; exit 1; fi
+    src="$FAKE_STATE/managed"; [ -f "$src" ] || src="$(dirname "$0")/managed-kafkas.json"
+    cur=$(jq -r --arg ns "$ns" --arg n "$name" '.items[] | select(.metadata.namespace == $ns and .metadata.name == $n) | .metadata.resourceVersion' "$src")
+    if [ "$cur" != "$rv" ]; then
+      echo "Error from server (Conflict): Operation cannot be fulfilled on kafkas.kafka.strimzi.io \"$name\": the object has been modified; please apply your changes to the latest version and try again" >&2
+      exit 1
+    fi
+    jq --arg ns "$ns" --arg n "$name" --slurpfile p "$patch" \
+      '(.items[] | select(.metadata.namespace == $ns and .metadata.name == $n) | .metadata) |= (.managedFields = $p[0].metadata.managedFields | .resourceVersion = (.resourceVersion | tonumber + 1 | tostring))' \
+      "$src" > "$FAKE_STATE/managed.new" && mv "$FAKE_STATE/managed.new" "$FAKE_STATE/managed"
+    exit 0
+    ;;
+  *"wait --for=condition=Established"*)
+    exit 0
+    ;;
+  *"get job strimzi-v1-api-conversion --ignore-not-found -o jsonpath={.metadata.name} {.status.succeeded}{.status.failed}"*)
+    # FAKE_OLD_JOB: a Job an earlier attempt left behind, running, succeeded
+    # or failed.
+    case "${FAKE_OLD_JOB:-}" in
+      running) printf 'strimzi-v1-api-conversion ' ;;
+      succeeded|failed) printf 'strimzi-v1-api-conversion 1' ;;
+    esac
+    exit 0
+    ;;
+  *"get job strimzi-v1-api-conversion -o jsonpath={.status.succeeded}"*)
+    case "${FAKE_JOB:-succeed}" in
+      succeed) printf '["v1"]' > "$FAKE_STATE/stored"; echo 1 ;;
+      noop) echo 1 ;;
+    esac
+    exit 0
+    ;;
+  *"get job strimzi-v1-api-conversion -o jsonpath={.status.failed}"*)
+    case "${FAKE_JOB:-succeed}" in
+      fail) printf '1' ;;
+    esac
+    case "$args" in
+      *'conditions[?(@.type=="Failed")]'*)
+        case "${FAKE_JOB:-succeed}" in fail|nopod) printf ' True' ;; esac
+        ;;
+    esac
+    exit 0
+    ;;
+  *"get pod -l batch.kubernetes.io/job-name=strimzi-v1-api-conversion -o jsonpath="*)
+    [ -z "${FAKE_PULL:-}" ] || printf ' ImagePullBackOff'
+    exit 0
+    ;;
+  *" logs "*)
+    echo "fake conversion log"
+    exit 0
+    ;;
+  "delete "*|*" delete "*)
+    cascade=""
+    case "$args" in *"--cascade=foreground"*) cascade=" foreground" ;; esac
+    log "DELETE $(arg_after delete "$@") $(arg_after "$(arg_after delete "$@")" "$@")$cascade"
+    exit 0
+    ;;
+  *"api-resources --api-group=apps.cozystack.io"*)
+    if [ -n "${FAKE_APIRES_FAIL:-}" ]; then echo "error: unable to retrieve the complete list of server APIs" >&2; exit 1; fi
+    echo "kafkas.apps.cozystack.io"
+    exit 0
+    ;;
+  *"get kafkas.apps.cozystack.io"*" kafka-"*)
+    # Release names of the applications; failed-install has no Kafka CR.
+    printf '%s\n' 'tenant-a kafka-one' 'tenant-f kafka-failed-install'
+    exit 0
+    ;;
+  *"get kafkas.apps.cozystack.io"*)
+    cat "$FAKE_APPS"
+    exit 0
+    ;;
+  *"patch kafkas.apps.cozystack.io"*)
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then echo "Error from server (Conflict)" >&2; exit 1; fi
+    log "PATCH $(arg_after -n "$@")/$(arg_after kafkas.apps.cozystack.io "$@") $(arg_after -p "$@")"
+    exit 0
+    ;;
+esac
+log "UNMODELLED"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

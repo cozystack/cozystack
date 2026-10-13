@@ -1,0 +1,5 @@
+{"items":[
+ {"metadata":{"namespace":"tenant-a","name":"kafka-one"},"spec":{"kafka":{"version":"3.9.0"}},"status":{"kafkaMetadataState":"KRaft"}},
+ {"metadata":{"namespace":"tenant-c","name":"kafka-zk"},"spec":{"kafka":{"version":"3.9.0"},"zookeeper":{"replicas":3}},"status":{"kafkaMetadataState":"ZooKeeper"}},
+ {"metadata":{"namespace":"tenant-d","name":"kafka-mid"},"spec":{"kafka":{"version":"3.9.0"}},"status":{"kafkaMetadataState":"KRaftPostMigration"}}
+]}
