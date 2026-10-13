@@ -33,3 +33,16 @@ spec:
       matchLabels:
         bootstrap-components: cozy
         bootstrap-provider: talos
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: BootstrapProvider
+metadata:
+  name: kairos
+spec:
+  # https://github.com/kairos-io/cluster-api-provider-kairos
+  version: v0.1.4-0.b19dd35.cozystack.0-bootstrap-kairos
+  fetchConfig:
+    selector:
+      matchLabels:
+        bootstrap-components: cozy
+        bootstrap-provider: kairos

@@ -9,9 +9,10 @@ CAPI_URL=https://github.com/kubernetes-sigs/cluster-api/releases/download/$(CAPI
 CAPI_SHA256_COMPONENTS=7ee336e138208949f9b772895ec35adb9f5694012d2a4d82c04f0106f0eb1f94
 CAPI_SHA256_METADATA=20ffd682bfc50ab5193aa14ba55222ba390f9204ccf6a0dd2d52c4a3c4fb004f
 
+include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-.PHONY: update components
+.PHONY: update components image update-kairos
 
 # Upstream Talos bootstrap provider (CABPT) release pinned by tag. Keep
 # in lockstep with templates/providers.yaml (BootstrapProvider spec.version)
@@ -62,3 +63,51 @@ components:
 	mv .components-tmp/metadata.yaml files/metadata.yaml
 	gzip -9 -n -c files/bootstrap-components.yaml > files/components.gz
 	rm -rf .components-tmp
+
+# Kairos bootstrap provider, built here from an upstream commit with
+# images/cluster-api-provider-kairos/patches/ applied: no upstream release
+# carries the kubeadm worker distribution yet. The version is a pre-release of
+# the next upstream minor-patch, so it sorts above the last upstream tag and
+# below the release that will contain the commit; it names the commit pinned
+# in the Dockerfile, and the cozystack.N counter moves on any other change
+# (patches/, toolchain). The ConfigMap and BootstrapProvider carry it with a
+# -bootstrap-kairos suffix.
+KAIROS_COMMIT = $(shell awk -F= '/^ARG COMMIT=/{print $$2}' images/cluster-api-provider-kairos/Dockerfile)
+KAIROS_COMPONENT_VERSION = v0.1.4-0.b19dd35.cozystack.0
+KAIROS_IMAGE_BASE = $(REGISTRY)/cluster-api-provider-kairos
+
+image:
+	docker buildx build images/cluster-api-provider-kairos \
+		$(call image-tags,cluster-api-provider-kairos,$(KAIROS_COMPONENT_VERSION)) \
+		$(call cache-args,cluster-api-provider-kairos) \
+		--metadata-file images/cluster-api-provider-kairos.json \
+		$(BUILDX_ARGS)
+	digest=$$(yq e '."containerimage.digest"' images/cluster-api-provider-kairos.json -o json -r); \
+	IMG="$(KAIROS_IMAGE_BASE):$(KAIROS_COMPONENT_VERSION)@$$digest"; \
+	echo "$$IMG" > images/cluster-api-provider-kairos.tag; \
+	sed -i.bak -E "s|^( *image: ).*/cluster-api-provider-kairos[:@].*$$|\1$$IMG|" files/bootstrap-components-kairos.yaml; \
+	rm files/bootstrap-components-kairos.yaml.bak; \
+	gzip -n -c files/bootstrap-components-kairos.yaml > files/components-kairos.gz
+	rm -f images/cluster-api-provider-kairos.json
+
+# Re-renders files/bootstrap-components-kairos.yaml, files/metadata-kairos.yaml
+# and files/components-kairos.gz from the upstream commit with patches/
+# applied, pointing the manager at the image in images/cluster-api-provider-kairos.tag.
+# Run after bumping the commit or editing patches/, then `make image`.
+# Requires kustomize on PATH.
+update-kairos:
+	@command -v kustomize >/dev/null || { echo "kustomize required (https://kustomize.io)"; exit 1; }
+	rm -rf .update-kairos-tmp
+	mkdir .update-kairos-tmp
+	curl -fsSL "https://github.com/kairos-io/cluster-api-provider-kairos/archive/$(KAIROS_COMMIT).tar.gz" \
+		| tar -xzf - --strip=1 -C .update-kairos-tmp
+	cd .update-kairos-tmp && git init -q && for p in ../images/cluster-api-provider-kairos/patches/*.diff; do \
+		[ -e "$$p" ] || continue; \
+		git apply --recount "$$p" || exit 1; \
+	done
+	cd .update-kairos-tmp/config/manager && \
+		kustomize edit set image controller=$$(cat ../../../images/cluster-api-provider-kairos.tag)
+	kustomize build .update-kairos-tmp/config/bootstrap > files/bootstrap-components-kairos.yaml
+	cp .update-kairos-tmp/config/clusterctl/metadata.yaml files/metadata-kairos.yaml
+	gzip -n -c files/bootstrap-components-kairos.yaml > files/components-kairos.gz
+	rm -rf .update-kairos-tmp

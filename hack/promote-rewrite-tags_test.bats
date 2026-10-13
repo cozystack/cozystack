@@ -326,8 +326,12 @@ load test_helper
   #     documented gzip gap. The chart ships files/components.gz built from it,
   #     so rewriting only this copy would diverge the two. kamaji is
   #     component-versioned, so no tag rewrite is owed.
+  #   - capi-providers-bootstrap/files/bootstrap-components-kairos.yaml: the
+  #     same gzip gap for the Kairos provider, whose chart ships
+  #     files/components-kairos.gz. Also component-versioned.
   cat > "$tmp/allow" <<'ALLOW'
 packages/apps/kubernetes/images/talos-csr-signer/Dockerfile
+packages/system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml
 packages/system/capi-providers-cpprovider/files/control-plane-components.yaml
 ALLOW
   sort -o "$tmp/allow" "$tmp/allow"
