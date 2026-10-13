@@ -135,7 +135,7 @@ KEOF
   # gone. Failing here would wedge the uninstall over nothing to clean up. Both
   # RESTMapper wordings are covered because kubectl picks between them.
   for msg in 'error: the server doesn'"'"'t have a resource type "kafkatopics"' \
-             'error: no matches for kind "KafkaTopic" in version "kafka.strimzi.io/v1beta2"'; do
+             'error: no matches for kind "KafkaTopic" in version "kafka.strimzi.io/v1"'; do
     tmp=$(mktemp -d)
     write_fake_kubectl "$tmp"
     render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"
@@ -289,7 +289,7 @@ KEOF
 
 @test "kafka pre-delete hook exits 0 when the KafkaNodePool CRD is absent" {
   for msg in 'error: the server doesn'"'"'t have a resource type "kafkanodepools"' \
-             'error: no matches for kind "KafkaNodePool" in version "kafka.strimzi.io/v1beta2"'; do
+             'error: no matches for kind "KafkaNodePool" in version "kafka.strimzi.io/v1"'; do
     tmp=$(mktemp -d)
     write_fake_kubectl "$tmp"
     render_hook "$KAFKA_CHART" kafka-test tenant-test kafka-test-pre-delete "$tmp/hook.sh"

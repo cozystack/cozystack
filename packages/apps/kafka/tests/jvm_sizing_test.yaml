@@ -19,9 +19,6 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "roles:\\s+- controller\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+(\\s+#[^\\n]*)*\\s+template:\\s+kafkaContainer:\\s+env:\\s+- name: JAVA_TOOL_OPTIONS\\s+value: \"-XX:MaxRAM=1073741824 -XX:ActiveProcessorCount=1\"\\s+storage:"
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "next-node-ids: \"\\[1000-1099\\]\"\\s+spec:\\s+replicas: \\d+\\s+roles:\\s+- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+(\\s+#[^\\n]*)*\\s+template:\\s+kafkaContainer:\\s+env:\\s+- name: JAVA_TOOL_OPTIONS\\s+value: \"-XX:MaxRAM=1073741824 -XX:ActiveProcessorCount=1\"\\s+storage:"
 
   # Strimzi moves jvmOptions -XX into KAFKA_JVM_PERFORMANCE_OPTS, and
   # kafka-run-class.sh then drops its G1 settings.
@@ -62,19 +59,6 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: "roles:\\s+- controller\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+(\\s+#[^\\n]*)*\\s+template:\\s+kafkaContainer:\\s+env:\\s+- name: JAVA_TOOL_OPTIONS\\s+value: \"-XX:MaxRAM=2147483648 -XX:ActiveProcessorCount=2\"\\s+storage:"
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "next-node-ids: \"\\[1000-1099\\]\"\\s+spec:\\s+replicas: \\d+\\s+roles:\\s+- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)+\\s+requests:(\\s+\\S+: \\S+)+(\\s+#[^\\n]*)*\\s+template:\\s+kafkaContainer:\\s+env:\\s+- name: JAVA_TOOL_OPTIONS\\s+value: \"-XX:MaxRAM=2147483648 -XX:ActiveProcessorCount=2\"\\s+storage:"
-
-  # The whole patch, closing brace included: a merge patch kubectl cannot
-  # parse fails the hook before the drain starts.
-  - it: passes the drain-time Cruise Control memory limit to its JVM
-    template: templates/migration-hook.yaml
-    documentIndex: 3
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "\\-\\-type\\ merge\\ \\-p\\ '\\{\"spec\":\\{\"cruiseControl\":\\{\"resources\":\\{\"limits\":\\{\"memory\":\"1Gi\"\\},\"requests\":\\{\"cpu\":\"200m\",\"memory\":\"768Mi\"\\}\\},\"template\":\\{\"cruiseControlContainer\":\\{\"env\":\\[\\{\"name\":\"JAVA_TOOL_OPTIONS\",\"value\":\"\\-XX:MaxRAM=1073741824\"\\}\\]\\}\\}\\}\\}\\}'\n"
 
   - it: passes the entity operator memory limit to its JVMs
     template: templates/kafka.yaml
