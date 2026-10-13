@@ -96,6 +96,7 @@ jobs:
           for unit in $units; do
             make -C "$unit" image
           done
+          make -C packages/apps/kubernetes-nodes image
           make -C packages/core/installer image-operator
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker

@@ -41,11 +41,16 @@ full_rebuild_pattern='^(packages/library/|api/|cmd/|internal/|pkg/|hack/common-e
 #                digest-patched packages tree into the OCI artifact the operator
 #                pulls, so it must run in the finalize step AFTER every other
 #                unit's digest edits are merged — never concurrently with them.
+#   - kubernetes-nodes: its images are the Kairos worker disks and the OS
+#                images they are made from, with an AuroraBoot run in a
+#                privileged container per Kubernetes minor and architecture,
+#                which outgrows a matrix job; its leg runs when a disk input
+#                changed. The arm64 release legs build it after the matrix.
 all_units() {
   sed -n '/^build:/,/^[^[:space:]]/p' "$MAKEFILE" \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxE 'packages/core/(talos|installer)' \
+    | grep -vxE 'packages/core/(talos|installer)|packages/apps/kubernetes-nodes' \
     | if [ "${MATRIX_ARCH:-}" = arm64 ]; then grep -vxF packages/core/testing; else cat; fi
 }
 

@@ -180,11 +180,12 @@ load test_helper
     [ -f "$d/Makefile" ]
   done
   # Count matches the `make -C packages/... image` lines in Makefile, minus the
-  # two units handled outside the parallel matrix (talos, installer).
+  # units handled outside the parallel matrix (talos, installer, the Kairos
+  # worker disks of kubernetes-nodes).
   expected=$(sed -n '/^build:/,/^[^[:space:]]/p' Makefile \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxcE 'packages/core/(talos|installer)')
+    | grep -vxcE 'packages/core/(talos|installer)|packages/apps/kubernetes-nodes')
   actual=$(echo "$out" | jq 'length')
   [ "$expected" -eq "$actual" ]
 }
