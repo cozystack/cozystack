@@ -1,0 +1,204 @@
+Backport of the s3 and filer HTTPRoutes from upstream seaweedfs commit
+68af030e381f, which no release carried when this patch was written.
+
+Drop this patch and its Makefile line when bumping to the first
+seaweedfs release that contains 68af030e381f (expected 4.49 or later):
+it creates both templates, so `make update` fails on it once upstream
+ships them. Before dropping it, carry over the two deliberate
+differences: the s3 route's default backendRef here targets the renamed
+`<name>-s3` Service from s3-service-name.patch, where upstream uses
+componentName, so that line moves into s3-service-name-consumers.patch;
+and the BackendTLSPolicy note on s3.httpRoute, which belongs with
+s3-tls-main-port.patch.
+Upstream's master, volume and admin routes were not backported.
+
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-httproute.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-httproute.yaml
+new file mode 100644
+index 000000000..e655c1c19
+--- /dev/null
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-httproute.yaml
+@@ -0,0 +1,57 @@
++{{- $filerEnabled := or .Values.filer.enabled .Values.allInOne.enabled }}
++{{- if and $filerEnabled .Values.filer.httpRoute.enabled }}
++{{- $serviceName := ternary (include "seaweedfs.componentName" (list . "all-in-one")) (include "seaweedfs.componentName" (list . "filer")) .Values.allInOne.enabled }}
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: {{ include "seaweedfs.componentName" (list . "filer") }}
++  namespace: {{ .Release.Namespace }}
++  {{- with .Values.filer.httpRoute.annotations }}
++  annotations:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  labels:
++    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
++    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
++    app.kubernetes.io/managed-by: {{ .Release.Service }}
++    app.kubernetes.io/instance: {{ .Release.Name }}
++    app.kubernetes.io/component: filer
++    {{- with .Values.filer.httpRoute.labels }}
++    {{- toYaml . | nindent 4 }}
++    {{- end }}
++spec:
++  {{- with .Values.filer.httpRoute.parentRefs }}
++  parentRefs:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  {{- with .Values.filer.httpRoute.hostnames }}
++  hostnames:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  rules:
++    {{- range .Values.filer.httpRoute.rules | default (list dict) }}
++    - backendRefs:
++        {{- with .backendRefs }}
++        {{- toYaml . | nindent 8 }}
++        {{- else }}
++        - group: ""
++          kind: Service
++          name: {{ $serviceName }}
++          namespace: {{ $.Release.Namespace }}
++          port: {{ $.Values.filer.port }}
++          weight: 1
++        {{- end }}
++      {{- with .matches }}
++      matches:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++      {{- with .filters }}
++      filters:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++      {{- with .timeouts }}
++      timeouts:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++    {{- end }}
++{{- end }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-httproute.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-httproute.yaml
+new file mode 100644
+index 000000000..4d8afee3c
+--- /dev/null
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-httproute.yaml
+@@ -0,0 +1,64 @@
++{{- $s3Enabled := or .Values.s3.enabled (and .Values.filer.s3.enabled (not .Values.allInOne.enabled)) (and .Values.allInOne.enabled .Values.allInOne.s3.enabled) }}
++{{- if and $s3Enabled .Values.s3.httpRoute.enabled }}
++{{- $serviceName := printf "%s-s3" (include "seaweedfs.name" .) }}
++{{- $s3Port := .Values.filer.s3.port }}
++{{- if and .Values.allInOne.enabled .Values.allInOne.s3.enabled }}
++{{- $serviceName = include "seaweedfs.componentName" (list . "all-in-one") }}
++{{- $s3Port = .Values.allInOne.s3.port | default .Values.s3.port }}
++{{- else if .Values.s3.enabled }}
++{{- $s3Port = .Values.s3.port }}
++{{- end }}
++apiVersion: gateway.networking.k8s.io/v1
++kind: HTTPRoute
++metadata:
++  name: {{ include "seaweedfs.componentName" (list . "s3") }}
++  namespace: {{ .Release.Namespace }}
++  {{- with .Values.s3.httpRoute.annotations }}
++  annotations:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  labels:
++    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
++    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
++    app.kubernetes.io/managed-by: {{ .Release.Service }}
++    app.kubernetes.io/instance: {{ .Release.Name }}
++    app.kubernetes.io/component: s3
++    {{- with .Values.s3.httpRoute.labels }}
++    {{- toYaml . | nindent 4 }}
++    {{- end }}
++spec:
++  {{- with .Values.s3.httpRoute.parentRefs }}
++  parentRefs:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  {{- with .Values.s3.httpRoute.hostnames }}
++  hostnames:
++    {{- toYaml . | nindent 4 }}
++  {{- end }}
++  rules:
++    {{- range .Values.s3.httpRoute.rules | default (list dict) }}
++    - backendRefs:
++        {{- with .backendRefs }}
++        {{- toYaml . | nindent 8 }}
++        {{- else }}
++        - group: ""
++          kind: Service
++          name: {{ $serviceName }}
++          namespace: {{ $.Release.Namespace }}
++          port: {{ $s3Port }}
++          weight: 1
++        {{- end }}
++      {{- with .matches }}
++      matches:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++      {{- with .filters }}
++      filters:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++      {{- with .timeouts }}
++      timeouts:
++        {{- toYaml . | nindent 8 }}
++      {{- end }}
++    {{- end }}
++{{- end }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/values.yaml b/packages/system/seaweedfs/charts/seaweedfs/values.yaml
+index 5b8a8c2e5..3a188323b 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/values.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/values.yaml
+@@ -903,6 +903,24 @@ filer:
+         # requires ingress-nginx to run with --enable-ssl-passthrough.
+       tls: []
+ 
++  # Gateway API HTTPRoute, an alternative to the ingress above.
++  httpRoute:
++    enabled: false
++    labels: {}
++    annotations: {}
++    # Gateways this route attaches to, for example:
++    #   - group: gateway.networking.k8s.io
++    #     kind: Gateway
++    #     name: my-gateway
++    #     namespace: gateway-system
++    #     sectionName: https
++    parentRefs: []
++    hostnames: []
++    # Each rule may set matches, filters, timeouts and backendRefs.
++    # A rule without backendRefs routes to the filer service.
++    # An empty list routes all traffic there.
++    rules: []
++
+   # extraEnvVars is a list of extra environment variables to set with the stateful set.
+   extraEnvironmentVars:
+     # the WEED_MYSQL_* keys and the db credential secret only render while this is "true"
+@@ -1195,6 +1213,27 @@ s3:
+     annotations: {}
+     tls: []
+ 
++  # Gateway API HTTPRoute, an alternative to the ingress above.
++  # With global.seaweedfs.enableSecurity and no httpsPort, the standalone s3
++  # gateway (s3.enabled) serves TLS on s3.port, so the Gateway also needs a
++  # BackendTLSPolicy for the s3 Service, which this chart does not render.
++  httpRoute:
++    enabled: false
++    labels: {}
++    annotations: {}
++    # Gateways this route attaches to, for example:
++    #   - group: gateway.networking.k8s.io
++    #     kind: Gateway
++    #     name: my-gateway
++    #     namespace: gateway-system
++    #     sectionName: https
++    parentRefs: []
++    hostnames: []
++    # Each rule may set matches, filters, timeouts and backendRefs.
++    # A rule without backendRefs routes to the s3 service.
++    # An empty list routes all traffic there.
++    rules: []
++
+   # Service settings
+   service:
+     type: ClusterIP

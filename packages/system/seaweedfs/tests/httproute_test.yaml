@@ -1,0 +1,144 @@
+suite: seaweedfs Gateway API HTTPRoutes
+
+# The routes come from patches/httproute-backport.patch. Its s3 route names
+# the backend <name>-s3, as s3-service-name.patch names the Service. Upstream
+# uses componentName (<fullname>-s3) there, which renders the same name while
+# fullnameOverride equals the chart name, so the routing cases override it to
+# make upstream's form render a different name and fail.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-httproute.yaml
+  - charts/seaweedfs/templates/s3/s3-service.yaml
+  - charts/seaweedfs/templates/filer/filer-httproute.yaml
+  - charts/seaweedfs/templates/filer/filer-service.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: renders no s3 route by default
+    template: charts/seaweedfs/templates/s3/s3-httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no filer route by default
+    template: charts/seaweedfs/templates/filer/filer-httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: s3 route targets the renamed s3 service on the s3 port
+    template: charts/seaweedfs/templates/s3/s3-httproute.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.httpRoute.enabled: true
+      seaweedfs.s3.httpRoute.parentRefs:
+        - name: gw
+          namespace: gateway-system
+      seaweedfs.s3.httpRoute.hostnames:
+        - s3.example.com
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: seaweedfs-s3
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8333
+      - equal:
+          path: spec.parentRefs[0].name
+          value: gw
+      - equal:
+          path: spec.hostnames[0]
+          value: s3.example.com
+
+  - it: the s3 service it targets is the one the chart renders
+    template: charts/seaweedfs/templates/s3/s3-service.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-s3
+
+  - it: s3 route on a filer-embedded gateway also targets the renamed service
+    template: charts/seaweedfs/templates/s3/s3-httproute.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.enabled: false
+      seaweedfs.filer.s3.enabled: true
+      seaweedfs.s3.httpRoute.enabled: true
+    asserts:
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: seaweedfs-s3
+
+  - it: filer route targets the filer service on the filer port
+    template: charts/seaweedfs/templates/filer/filer-httproute.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.filer.httpRoute.enabled: true
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: seaweedfs-system-filer
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8888
+
+  - it: the filer service it targets is the one the chart renders
+    template: charts/seaweedfs/templates/filer/filer-service.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system-filer
+
+  - it: an s3 rule without backendRefs keeps its matches and routes to the s3 service
+    template: charts/seaweedfs/templates/s3/s3-httproute.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.httpRoute.enabled: true
+      seaweedfs.s3.httpRoute.rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /bucket
+    asserts:
+      - lengthEqual:
+          path: spec.rules
+          count: 1
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /bucket
+      - equal:
+          path: spec.rules[0].backendRefs
+          value:
+            - group: ""
+              kind: Service
+              name: seaweedfs-s3
+              namespace: cozy-seaweedfs
+              port: 8333
+              weight: 1
+
+  - it: an empty s3 rule list renders one catch-all rule to the s3 service
+    template: charts/seaweedfs/templates/s3/s3-httproute.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.httpRoute.enabled: true
+      seaweedfs.s3.httpRoute.rules: []
+    asserts:
+      - lengthEqual:
+          path: spec.rules
+          count: 1
+      - notExists:
+          path: spec.rules[0].matches
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: seaweedfs-s3
