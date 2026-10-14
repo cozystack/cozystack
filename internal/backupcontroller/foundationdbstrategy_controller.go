@@ -632,6 +632,18 @@ func (r *BackupJobReconciler) pruneStoppedFoundationDBBackups(ctx context.Contex
 		if b.Spec.BackupState != foundationdbtypes.BackupStateStopped || b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
 			continue
 		}
+		// A BackupJob that is still running would recreate its missing CR and
+		// stop this one in turn; its CR goes once that job has finished.
+		if owner := b.Labels[backupsv1alpha1.OwningJobNameLabel]; owner != "" {
+			ownerJob := &backupsv1alpha1.BackupJob{}
+			err := r.Get(ctx, types.NamespacedName{Namespace: b.Labels[backupsv1alpha1.OwningJobNamespaceLabel], Name: owner}, ownerJob)
+			if err != nil && !apierrors.IsNotFound(err) {
+				continue
+			}
+			if err == nil && ownerJob.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded && ownerJob.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+				continue
+			}
+		}
 		if err := r.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
 			getLogger(ctx).Debug("failed to prune a stopped FoundationDBBackup", "fdbBackup", b.Name, "error", err.Error())
 		}
@@ -1332,7 +1344,15 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	if err := controllerutil.SetControllerReference(rj, obj, r.Scheme); err != nil {
 		return err
 	}
-	return r.Create(ctx, obj)
+	if err := r.Create(ctx, obj); err != nil {
+		// Invalid (a RestoreJob name too long for the label) or Forbidden
+		// cannot be fixed by retrying.
+		if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
+			return &foundationdbRestoreAgentsError{err}
+		}
+		return err
+	}
+	return nil
 }
 
 // failFoundationDBRestore marks the RestoreJob Failed after removing the
