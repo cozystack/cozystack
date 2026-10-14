@@ -232,3 +232,216 @@ spec:
           kind: FoundationDBCluster
           metadata:
             name: foundationdb-test
+---
+# Backup contracts of the platform path, run in CI. A BackupJob on the
+# cozy-default BackupClass drives the backupstrategy-controller to create the
+# operator-side FoundationDBBackup and the operator to start its backup_agent;
+# this checks what each side hands the next on a live cluster: the CR names the
+# job's own directory and an "@host" account, runs the agent at an SNI-capable
+# version, carries the credentials and CA in spec.podTemplateSpec (the field
+# the operator reads), the agent pod gets them, and the operator pod has the
+# platform credentials projected into its namespace. Whether the bytes reach
+# S3 is left to foundationdb-3-backup-roundtrip: the kind sandbox has no
+# endpoint the backup can reach (see there), so the backup itself never turns
+# restorable here and is torn down by hand at the end.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: foundationdb-2-backup-contracts
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: foundationdb-backup-contract
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+      name: fdb-contract
+  - describe:
+      apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBBackup
+  - podLogs:
+      namespace: cozy-backup-controller
+      selector: app=backupstrategy-controller
+      tail: 100
+  steps:
+  - name: create-foundationdb
+    try:
+    - apply:
+        file: backup-contract.yaml
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: foundationdb-backup-contract
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # The driver creates no FoundationDBBackup until the cluster is available.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: apps.foundationdb.org/v1beta2
+          kind: FoundationDBCluster
+          metadata:
+            name: foundationdb-backup-contract
+          status:
+            health:
+              available: true
+
+  - name: backup-wiring
+    try:
+    - apply:
+        file: backup-contract-job.yaml
+    - script:
+        # Three sequential inner deadlines of 180s each (the operator CR, the
+        # agent Deployment, its pod) sum to 540s; the op sits above them.
+        timeout: 10m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          label="backups.cozystack.io/owned-by.BackupJobName=fdb-contract"
+          fdbb() { kubectl -n "$ns" get foundationdbbackups.apps.foundationdb.org -l "$label" -o json; }
+          deadline=$(( $(date +%s) + 180 ))
+          until [ "$(fdbb | jq '.items | length')" -ge 1 ]; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "no FoundationDBBackup for BackupJob fdb-contract" >&2; kubectl -n "$ns" get backupjob fdb-contract -o yaml >&2; exit 1; }
+            sleep 5
+          done
+          cr=$(fdbb | jq -c '.items[0]')
+          name=$(echo "$cr" | jq -r .metadata.name)
+          echo "$cr" | jq -e --arg dir "$ns/fdb-contract" '.spec.blobStoreConfiguration.backupName == $dir' >/dev/null \
+            || { echo "backupName is not the job's own <namespace>/<job> directory" >&2; echo "$cr" | jq .spec.blobStoreConfiguration >&2; exit 1; }
+          echo "$cr" | jq -e '.spec.blobStoreConfiguration.accountName | startswith("@")' >/dev/null \
+            || { echo "accountName lacks the @ the operator requires" >&2; exit 1; }
+          echo "$cr" | jq -e '.spec.version == "7.3.79"' >/dev/null \
+            || { echo "agent version not raised to the SNI-capable patch" >&2; echo "$cr" | jq .spec.version >&2; exit 1; }
+          echo "$cr" | jq -e '[.spec.customParameters[]? | startswith("--")] | any | not' >/dev/null \
+            || { echo "a customParameters entry carries a -- prefix the operator would double" >&2; exit 1; }
+          echo "$cr" | jq -e '[.spec.podTemplateSpec.spec.containers[] | select(.name == "foundationdb") | .env[]?.name] | index("FDB_BLOB_CREDENTIALS") != null' >/dev/null \
+            || { echo "spec.podTemplateSpec does not carry the credentials env" >&2; echo "$cr" | jq .spec.podTemplateSpec >&2; exit 1; }
+
+          deploy="$name-backup-agents"
+          deadline=$(( $(date +%s) + 180 ))
+          until kubectl -n "$ns" get deploy "$deploy" >/dev/null 2>&1; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "operator created no agent Deployment $deploy" >&2; exit 1; }
+            sleep 5
+          done
+          pod_spec=$(kubectl -n "$ns" get deploy "$deploy" -o json | jq -c .spec.template.spec)
+          echo "$pod_spec" | jq -e '[.containers[] | select(.name == "foundationdb") | .env[]?.name] | (index("FDB_BLOB_CREDENTIALS") != null)' >/dev/null \
+            || { echo "agent container lacks FDB_BLOB_CREDENTIALS" >&2; exit 1; }
+          echo "$pod_spec" | jq -e '[.volumes[]?.secret.secretName] | index("cozy-backups-creds") != null' >/dev/null \
+            || { echo "agent pod does not mount cozy-backups-creds" >&2; exit 1; }
+          echo "$pod_spec" | jq -e '.containers[] | select(.name == "foundationdb") | .image | endswith(":7.3.79")' >/dev/null \
+            || { echo "agent image is not the 7.3.79 patch" >&2; exit 1; }
+          deadline=$(( $(date +%s) + 180 ))
+          until kubectl -n "$ns" get secret cozy-backups-creds >/dev/null 2>&1; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "cozy-backups-creds not projected into $ns" >&2; exit 1; }
+            sleep 5
+          done
+
+          op=cozy-foundationdb-operator
+          kubectl -n "$op" get secret cozy-backups-creds -o jsonpath='{.data.blob_credentials\.json}' | base64 -d \
+            | jq -e '.accounts | keys | length > 0 and all(startswith("@"))' >/dev/null \
+            || { echo "operator namespace lacks the @host-keyed credentials file" >&2; exit 1; }
+          kubectl -n "$op" get deploy -l app.kubernetes.io/name=fdb-operator -o json \
+            | jq -e '[.items[0].spec.template.spec.containers[] | select(.name == "manager") | .env[]?.name] | (index("FDB_BLOB_CREDENTIALS") != null and index("FDB_TLS_CA_FILE") != null)' >/dev/null \
+            || { echo "operator manager lacks FDB_BLOB_CREDENTIALS / FDB_TLS_CA_FILE" >&2; exit 1; }
+        check:
+          ($error == null): true
+    finally:
+    # The BackupJob never succeeds here, so it goes first: a running job
+    # would recreate the operator CR deleted after it. The CR is the
+    # controller's, not Chainsaw's, and is pruned explicitly.
+    - description: backup-wiring teardown
+      script:
+        timeout: 6m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          kubectl -n "$ns" delete backupjob fdb-contract --ignore-not-found --wait=true --timeout=2m
+          kubectl -n "$ns" delete foundationdbbackups.apps.foundationdb.org \
+            -l backups.cozystack.io/owned-by.BackupJobName=fdb-contract --ignore-not-found --wait=true --timeout=3m
+---
+# Full backup -> restore -> delete round-trip through cozy-default, driven by
+# backup-roundtrip.sh in this directory: two consecutive BackupJobs each land
+# in their own directory, the second restores into an empty copy with the
+# sentinel intact, and deleting the first Backup removes only its directory.
+#
+# GATED OUT OF CI (opt in with FDB_E2E_S3_ROUNDTRIP=1), for the same reason
+# as etcd-2-backup-roundtrip. cozy-default points at the bucket's EXTERNAL
+# ingress endpoint, which in kind is the unroutable s3.example.org
+# placeholder. The in-cluster seaweedfs-s3.<ns>.svc:8333 endpoint serves TLS
+# behind a self-signed CA, and two of the S3 clients here cannot be pointed
+# at it: fdbbackup and fdbrestore run inside the cluster-wide FoundationDB
+# operator pod, whose credentials file and CA bundle come from the operator
+# package values, so a test cannot swap them for the in-cluster endpoint's
+# without reconfiguring the platform. The round-trip therefore runs only
+# against a publicly-trusted endpoint (a real cluster). Chainsaw v0.2.15 has
+# no conditional Test-level skip, so the gate is an in-script exit 0 with the
+# reason in the log.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: foundationdb-3-backup-roundtrip
+spec:
+  # tenant-root: on a real cluster the isolated e2e tenant cannot reach the
+  # S3 ingress, as for the other backup round-trips.
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBBackup
+  - describe:
+      apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBRestore
+  - podLogs:
+      namespace: cozy-foundationdb-operator
+      selector: app.kubernetes.io/name=fdb-operator
+      tail: 200
+  - podLogs:
+      namespace: cozy-backup-controller
+      selector: app=backupstrategy-controller
+      tail: 200
+  steps:
+  - name: run
+    try:
+    - script:
+        # Inner budgets in backup-roundtrip.sh: two 660s HR waits, two 600s
+        # availability waits, three 900s job waits, a 600s Backup deletion and
+        # two 120s describes sum to 6060s; the op sits above them.
+        timeout: 105m
+        content: |
+          set -eu
+          if [ "${FDB_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
+            echo "# FoundationDB S3 backup/restore round-trip gated out of CI: no"
+            echo "# publicly-trusted S3 endpoint in kind (see comment in this file)."
+            echo "# Set FDB_E2E_S3_ROUNDTRIP=1 on a real cluster to run it."
+            exit 0
+          fi
+          NAMESPACE="$NAMESPACE" ./backup-roundtrip.sh run
+        check:
+          ($error == null): true
+    finally:
+    # Idempotent, and a quick no-op when the round-trip was gated out. Backup
+    # deletion runs the driver's delete Jobs, so the bucket is left as found.
+    - description: round-trip teardown
+      script:
+        # Four 600s deletion waits.
+        timeout: 41m
+        content: |
+          set -eu
+          NAMESPACE="$NAMESPACE" ./backup-roundtrip.sh cleanup
