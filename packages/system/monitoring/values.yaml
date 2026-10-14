@@ -65,6 +65,14 @@ alerta:
       disabledSeverity: []
       dashboardUrl: ""
       summaryFmt: ""
+    email:
+      to: ""
+      from: ""
+      smarthost: ""
+      authUsername: ""
+      repeatInterval: ""
+      alertnames: []
+      severities: []
 grafana:
   db:
     size: 10Gi
