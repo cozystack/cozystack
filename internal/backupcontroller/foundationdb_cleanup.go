@@ -67,6 +67,10 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 		if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: jobName}, existing); err == nil {
 			_ = r.deleteFoundationDBCleanupJob(ctx, existing)
 		}
+		// The data stays, but the agents must not keep writing into a
+		// directory nothing owns any more. Best-effort and without waiting
+		// on the operator: the annotation is the way out of a stuck delete.
+		r.dropFoundationDBOperatorBackup(ctx, backup)
 		getLogger(ctx).Debug("skipping FoundationDB artifact cleanup per annotation; directory left in bucket", "backup", backup.Name, "url", url)
 		return ctrl.Result{}, nil
 	}
@@ -156,6 +160,34 @@ func (r *BackupReconciler) removeFoundationDBOperatorBackup(ctx context.Context,
 	return false, client.IgnoreNotFound(r.Delete(ctx, fdbBackup))
 }
 
+// dropFoundationDBOperatorBackup stops and deletes the Backup's operator-side
+// FoundationDBBackup without waiting for the operator. Errors are logged.
+func (r *BackupReconciler) dropFoundationDBOperatorBackup(ctx context.Context, backup *backupsv1alpha1.Backup) {
+	md := backup.Spec.DriverMetadata
+	name := md[foundationdbBackupNameKey]
+	if name == "" {
+		return
+	}
+	namespace := md[foundationdbBackupNamespaceKey]
+	if namespace == "" {
+		namespace = backup.Namespace
+	}
+	fdbBackup := &foundationdbtypes.FoundationDBBackup{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, fdbBackup); err != nil {
+		return
+	}
+	if fdbBackup.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		base := fdbBackup.DeepCopy()
+		fdbBackup.Spec.BackupState = foundationdbtypes.BackupStateStopped
+		if err := r.Patch(ctx, fdbBackup, client.MergeFrom(base)); err != nil {
+			getLogger(ctx).Debug("failed to stop FoundationDBBackup on skipped cleanup", "fdbBackup", name, "error", err.Error())
+		}
+	}
+	if err := r.Delete(ctx, fdbBackup); err != nil && !apierrors.IsNotFound(err) {
+		getLogger(ctx).Debug("failed to delete FoundationDBBackup on skipped cleanup", "fdbBackup", name, "error", err.Error())
+	}
+}
+
 // foundationdbBackupBeingRestored reports whether a RestoreJob that reads this
 // Backup has not finished yet.
 func (r *BackupReconciler) foundationdbBackupBeingRestored(ctx context.Context, backup *backupsv1alpha1.Backup) (bool, error) {
@@ -220,11 +252,20 @@ func (r *BackupReconciler) startFoundationDBCleanupJob(ctx context.Context, back
 		}
 		app = &foundationdbapp.FoundationDB{ObjectMeta: metav1.ObjectMeta{Namespace: backup.Namespace, Name: backup.Spec.ApplicationRef.Name}}
 	}
-	rendered, err := renderFoundationDBTemplate(strategy.Spec.Template, app, nil)
+	// Render with the parameters the backup ran with, so a BackupClass
+	// parameter that feeds the pod template yields the same credentials.
+	var parameters map[string]string
+	if snap, err := decodeFoundationDBBackupSnapshot(backup.Status.UnderlyingResources); err == nil && snap != nil {
+		parameters = snap.Parameters
+	}
+	rendered, err := renderFoundationDBTemplate(strategy.Spec.Template, app, parameters)
 	if err != nil {
 		return r.releaseFoundationDBCleanup(ctx, backup, url, fmt.Sprintf("strategy render failed: %v", err)), nil
 	}
 	if perr := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, backup.Namespace); perr != nil {
+		if IsTransient(perr) {
+			return ctrl.Result{}, perr
+		}
 		return r.releaseFoundationDBCleanup(ctx, backup, url, fmt.Sprintf("cannot project credentials: %v", perr)), nil
 	}
 
