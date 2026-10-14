@@ -1986,6 +1986,11 @@ func TestRefreshFoundationDBBackupStatus(t *testing.T) {
 		{"stale nudge is renewed", running(false, now.Add(-2*time.Minute).Format(time.RFC3339)), now.Format(time.RFC3339)},
 		{"recent nudge is kept", running(false, now.Add(-10*time.Second).Format(time.RFC3339)), now.Add(-10 * time.Second).Format(time.RFC3339)},
 		{"restorable is left alone", running(true, ""), ""},
+		{"stopped CR is left alone", func() *foundationdbtypes.FoundationDBBackup {
+			b := running(false, "")
+			b.Spec.BackupState = foundationdbtypes.BackupStateStopped
+			return b
+		}(), ""},
 		{"another backup's directory is nudged", func() *foundationdbtypes.FoundationDBBackup {
 			b := running(true, "")
 			b.Status.BackupDetails.URL = "blobstore://@s3.example:443/tenant/bj-0?bucket=bkt"
