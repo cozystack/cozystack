@@ -1824,3 +1824,47 @@ func TestRequeueWithReason_RetriesOnStatusConflict(t *testing.T) {
 		t.Errorf("Ready reason: got %q want %q", cond.Reason, "TestReason")
 	}
 }
+
+func TestFoundationDBAgentVersion(t *testing.T) {
+	minimums := []string{"7.3.79", "7.4.8"}
+	for _, tc := range []struct {
+		name, cluster string
+		minimums      []string
+		want          string
+	}{
+		{"older patch is raised", "7.3.63", minimums, "7.3.79"},
+		{"other minor picks its own minimum", "7.4.1", minimums, "7.4.8"},
+		{"newer patch is kept", "7.3.80", minimums, "7.3.80"},
+		{"equal patch is kept", "7.3.79", minimums, "7.3.79"},
+		{"no minimum for the minor", "7.1.57", minimums, "7.1.57"},
+		{"no minimums", "7.3.63", nil, "7.3.63"},
+		{"highest matching minimum wins", "7.3.63", []string{"7.3.70", "7.3.79", "7.3.75"}, "7.3.79"},
+		{"malformed minimum is ignored", "7.3.63", []string{"7.3", "7.3.x"}, "7.3.63"},
+		{"unparseable cluster version is kept", "7.3.63-rc1", minimums, "7.3.63-rc1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := foundationdbAgentVersion(tc.cluster, tc.minimums); got != tc.want {
+				t.Errorf("foundationdbAgentVersion(%q, %v) = %q, want %q", tc.cluster, tc.minimums, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureFoundationDBBackup_RaisesAgentVersion(t *testing.T) {
+	c := newFoundationDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newFoundationDBBackupJob("bj-agent-version", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	rendered := newRenderedFoundationDBTemplate()
+	rendered.MinimumAgentVersions = []string{"7.3.79"}
+
+	got, err := r.ensureFoundationDBBackup(context.Background(), job, foundationdbClusterNameForApp("fdb-src"), "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	if got.Spec.Version != "7.3.79" {
+		t.Errorf("FoundationDBBackup.spec.version = %q, want 7.3.79", got.Spec.Version)
+	}
+}
