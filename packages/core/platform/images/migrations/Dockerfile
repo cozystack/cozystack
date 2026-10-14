@@ -5,6 +5,23 @@
 # target arch and verify it against the release's cli-SHA256SUMS.txt. Bump
 # ETCD_OPERATOR_VERSION (and the pinned checksums below) together, keeping it in
 # sync with packages/system/etcd-operator (Chart appVersion).
+# credentials-migrate is built from this repository, because it shares the
+# password format functions with the API: a migrated release and a mint must
+# store the same verifier. The build context is the repository root for that
+# reason, and every other path below is relative to it.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+ARG GOPROXY
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN for attempt in 1 2 3; do GOOS=$TARGETOS GOARCH=$TARGETARCH go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
+COPY api api/
+COPY pkg pkg/
+COPY cmd cmd/
+COPY internal internal/
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -ldflags="-extldflags=-static" -o /credentials-migrate ./cmd/credentials-migrate
+
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 ARG TARGETOS
@@ -29,13 +46,14 @@ RUN set -eux; \
     echo "${sha256}  /usr/bin/etcd-migrate" | sha256sum -c -; \
     chmod +x /usr/bin/etcd-migrate
 
-COPY migrations /migrations
+COPY --from=builder /credentials-migrate /usr/bin/credentials-migrate
+COPY packages/core/platform/images/migrations/migrations /migrations
 # v1alpha2 etcd CRDs, vendored into the build context by `make image-migrations`.
 # migration 50 applies these before adoption so it does not deadlock waiting for
 # the etcd-operator-crds HelmRelease (which only reconciles after the migration
 # pre-upgrade hook completes).
-COPY etcd-operator-crds /etcd-operator-crds
-COPY run-migrations.sh /usr/bin/run-migrations.sh
+COPY packages/core/platform/images/migrations/etcd-operator-crds /etcd-operator-crds
+COPY packages/core/platform/images/migrations/run-migrations.sh /usr/bin/run-migrations.sh
 
 WORKDIR /migrations
 
