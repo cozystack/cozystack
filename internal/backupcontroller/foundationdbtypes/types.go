@@ -169,9 +169,9 @@ type FoundationDBBackupSpec struct {
 // apps.foundationdb.org/v1beta2 FoundationDBBackup.status the driver reads
 // to decide when an artefact is ready.
 type FoundationDBBackupStatus struct {
-	AgentCount           int32                  `json:"agentCount,omitempty"`
-	DeploymentConfigured bool                   `json:"deploymentConfigured,omitempty"`
-	BackupDetails        *BackupDetails         `json:"backupDetails,omitempty"`
+	AgentCount           int32                   `json:"agentCount,omitempty"`
+	DeploymentConfigured bool                    `json:"deploymentConfigured,omitempty"`
+	BackupDetails        *BackupDetails          `json:"backupDetails,omitempty"`
 	Generations          *BackupGenerationStatus `json:"generations,omitempty"`
 }
 
@@ -190,12 +190,12 @@ type BackupDetails struct {
 // driver reads Reconciled to confirm the operator has observed the latest
 // spec generation before declaring a backup ready.
 type BackupGenerationStatus struct {
-	Reconciled                int64 `json:"reconciled,omitempty"`
-	NeedsBackupStart          int64 `json:"needsBackupStart,omitempty"`
-	NeedsBackupStop           int64 `json:"needsBackupStop,omitempty"`
-	NeedsBackupPauseToggle    int64 `json:"needsBackupPauseToggle,omitempty"`
-	NeedsBackupAgentUpdate    int64 `json:"needsBackupAgentUpdate,omitempty"`
-	NeedsBackupModification   int64 `json:"needsBackupModification,omitempty"`
+	Reconciled              int64 `json:"reconciled,omitempty"`
+	NeedsBackupStart        int64 `json:"needsBackupStart,omitempty"`
+	NeedsBackupStop         int64 `json:"needsBackupStop,omitempty"`
+	NeedsBackupPauseToggle  int64 `json:"needsBackupPauseToggle,omitempty"`
+	NeedsBackupAgentUpdate  int64 `json:"needsBackupAgentUpdate,omitempty"`
+	NeedsBackupModification int64 `json:"needsBackupModification,omitempty"`
 }
 
 // BlobStoreConfiguration mirrors apps.foundationdb.org/v1beta2
