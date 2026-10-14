@@ -3,6 +3,10 @@ package backupcontroller
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -116,9 +120,13 @@ func TestCleanupFoundationDBBackup_PinnedDirectoryIsLeftAlone(t *testing.T) {
 	}
 }
 
+func newFoundationDBCleanupCluster() *foundationdbtypes.FoundationDBCluster {
+	return &foundationdbtypes.FoundationDBCluster{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "foundationdb-fdb-src"}}
+}
+
 func TestCleanupFoundationDBBackup_StopsThenDeletesOperatorBackup(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
-	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy(), newFoundationDBOperatorBackup(foundationdbtypes.BackupStateRunning, 1, 1))
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy(), newFoundationDBCleanupCluster(), newFoundationDBOperatorBackup(foundationdbtypes.BackupStateRunning, 1, 1))
 	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 	ctx := context.Background()
 	key := client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}
@@ -280,5 +288,142 @@ func TestBackupReconcile_HoldsFinalizerWhileFoundationDBCleanupRuns(t *testing.T
 	}
 	if err := c.Get(ctx, key, got); !apierrors.IsNotFound(err) {
 		t.Errorf("expected the Backup removed after the directory was deleted, got err=%v", err)
+	}
+}
+
+func TestCleanupFoundationDBBackup_ClusterGoneSkipsTheWait(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	// Stopped but never reconciled: the operator cannot act on it without
+	// the cluster, which the application's deletion already removed.
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy(), newFoundationDBOperatorBackup(foundationdbtypes.BackupStateStopped, 2, 1))
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+	backup := newFoundationDBCleanupBackup(true)
+
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, &foundationdbtypes.FoundationDBBackup{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected the CR deleted without waiting for a cluster that is gone, got err=%v", err)
+	}
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if jobs := listCleanupJobs(t, c); len(jobs) != 1 {
+		t.Errorf("expected the delete Job once the CR is gone, got %d", len(jobs))
+	}
+}
+
+func TestCleanupFoundationDBBackup_WaitsForRunningRestore(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	restoring := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bj-1"}},
+		Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy(), newFoundationDBCleanupCluster(), restoring,
+		newFoundationDBOperatorBackup(foundationdbtypes.BackupStateRunning, 1, 1))
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	res, err := r.cleanupFoundationDBBackup(ctx, newFoundationDBCleanupBackup(true))
+	if err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("expected a requeue while the restore runs, got %+v, %v", res, err)
+	}
+	got := &foundationdbtypes.FoundationDBBackup{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, got); err != nil || got.Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("nothing may be stopped or deleted while a restore reads the backup: %+v, %v", got.Spec, err)
+	}
+
+	restoring.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+	if err := c.Update(ctx, restoring); err != nil {
+		t.Fatalf("finish restore: %v", err)
+	}
+	if _, err := r.cleanupFoundationDBBackup(ctx, newFoundationDBCleanupBackup(true)); err != nil {
+		t.Fatalf("after restore: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, got); err != nil || got.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("cleanup must proceed once the restore finished: %+v, %v", got.Spec, err)
+	}
+}
+
+func TestCleanupFoundationDBBackup_FailedJobWarns(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy())
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Recorder: rec}
+	ctx := context.Background()
+	backup := newFoundationDBCleanupBackup(true)
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	job := listCleanupJobs(t, c)[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("update job status: %v", err)
+	}
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	select {
+	case e := <-rec.Events:
+		if !strings.Contains(e, "Warning") || !strings.Contains(e, foundationdbSkipArtifactCleanupAnnotation) {
+			t.Errorf("event %q must be a Warning that names the skip annotation", e)
+		}
+	default:
+		t.Errorf("a failed delete must record a Warning event")
+	}
+}
+
+func TestFoundationDBCleanupJobName(t *testing.T) {
+	if got := foundationdbCleanupJobName("bj-1"); got != "bj-1-cleanup" {
+		t.Errorf("short name: got %q", got)
+	}
+	long := strings.Repeat("a", 60)
+	a, b := foundationdbCleanupJobName(long+"-x"), foundationdbCleanupJobName(long+"-y")
+	if len(a) > 63 || len(b) > 63 {
+		t.Errorf("job names exceed 63 characters: %d, %d", len(a), len(b))
+	}
+	if a == b {
+		t.Errorf("long names that differ only past the cut must not collide: %q", a)
+	}
+}
+
+// The script runs with a stub fdbbackup, so its exit-code handling is
+// exercised as bash executes it.
+func TestFoundationDBCleanupScript_ExitCodes(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	for _, tc := range []struct {
+		name   string
+		output string
+		code   string
+		want   int
+	}{
+		{"deleted", "The entire container has been deleted.", "0", 0},
+		{"already gone counts as deleted", "ERROR: Backup does not exist", "1", 0},
+		{"other failure fails the Job", "ERROR: HTTP response code not received or indicated failure", "1", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			stub := "#!/bin/sh\necho '" + tc.output + "'\nexit " + tc.code + "\n"
+			if err := os.WriteFile(filepath.Join(dir, "fdbbackup"), []byte(stub), 0o755); err != nil {
+				t.Fatalf("write stub: %v", err)
+			}
+			cmd := exec.Command(bash, "-c", foundationdbCleanupScript)
+			cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "FDB_BACKUP_URL=" + fdbCleanupURL}
+			err := cmd.Run()
+			got := 0
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				got = exitErr.ExitCode()
+			} else if err != nil {
+				t.Fatalf("run script: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("exit code = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
