@@ -29,6 +29,7 @@
 {{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- include "kubernetes-nodes.assertSubstrateMatches" . }}
 {{- include "kubernetes-nodes.assertOsMatches" . }}
+{{- $labelsAndTaints := include "kubernetes-nodes.labelsAndTaints" . | fromYaml }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- /* Substrate selects which infrastructure provider renders this pool's
        machine template. Everything downstream of the template — autoscaler
@@ -1001,6 +1002,22 @@ metadata:
     {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
     {{- end }}
+    {{- /* The autoscaler reads a pool scaled to zero's labels and taints only
+           from these, in its own "k=v,k=v" and "k=v:Effect,k:Effect" forms. */}}
+    {{- $autoscalerLabels := list }}
+    {{- range $k, $v := merge (dict) $labelsAndTaints.capi $labelsAndTaints.kubelet }}
+    {{-   $autoscalerLabels = append $autoscalerLabels (printf "%s=%s" $k $v) }}
+    {{- end }}
+    {{- if $autoscalerLabels }}
+    capacity.cluster-autoscaler.kubernetes.io/labels: {{ join "," $autoscalerLabels | quote }}
+    {{- end }}
+    {{- $autoscalerTaints := list }}
+    {{- range $labelsAndTaints.taints }}
+    {{-   $autoscalerTaints = append $autoscalerTaints (printf "%s%s:%s" .key (ternary "" (printf "=%s" .value) (eq .value "")) .effect) }}
+    {{- end }}
+    {{- if $autoscalerTaints }}
+    capacity.cluster-autoscaler.kubernetes.io/taints: {{ join "," $autoscalerTaints | quote }}
+    {{- end }}
 spec:
   clusterName: {{ $clusterName }}
   # `spec.replicas` is intentionally omitted so the field is owned by
@@ -1042,6 +1059,9 @@ spec:
         cluster.x-k8s.io/deployment-name: {{ $clusterName }}-{{ $groupName }}
         {{- range $group.roles }}
         node-role.kubernetes.io/{{ . }}: ""
+        {{- end }}
+        {{- range $k, $v := $labelsAndTaints.capi }}
+        {{ $k }}: {{ $v | quote }}
         {{- end }}
     spec:
       bootstrap:

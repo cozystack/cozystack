@@ -41,6 +41,12 @@ type ConfigSpec struct {
 	// List of node roles. Each role `r` labels nodes with `node-role.kubernetes.io/<r>`. Use `[ingress-nginx]` for a pool that hosts the tenant ingress-nginx controller.
 	// +kubebuilder:default:={}
 	Roles []string `json:"roles,omitempty"`
+	// Labels on every node of this pool. Keys under `node-role.kubernetes.io`, `node-restriction.kubernetes.io` and `node.cluster.x-k8s.io` are synced to the Nodes by Cluster API and change in place. Every other label goes through the pool's bootstrap config, so changing it rolls the pool. Other `kubernetes.io` and `k8s.io` namespaces are refused, except `kubelet.kubernetes.io` and `node.kubernetes.io`, and so are hostname, os and arch, which describe the node itself, and the deprecated beta zone, region and instance-type labels. `topology.kubernetes.io/zone`, `topology.kubernetes.io/region` and `node.kubernetes.io/instance-type` are accepted on `kubevirt` and refused on `proxmox`, where the cloud controller manager sets them. A label that repeats one of `roles` is refused. On a Kairos pool the bootstrap labels join into one kubelet argument of at most 1024 characters. On a GPU pool the chart sets `gpu: "on"` itself.
+	// +kubebuilder:default:={}
+	Labels map[string]string `json:"labels,omitempty"`
+	// Taints on every node of this pool, registered by the kubelet when the node joins. Changing them rolls the pool.
+	// +kubebuilder:default:={}
+	Taints []Taint `json:"taints,omitempty"`
 	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
@@ -182,6 +188,15 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type Taint struct {
+	// `NoSchedule`, `PreferNoSchedule` or `NoExecute`.
+	Effect string `json:"effect"`
+	// Taint key. Must not be in a kubernetes.io, k8s.io or x-k8s.io namespace.
+	Key string `json:"key"`
+	// Taint value.
+	Value string `json:"value,omitempty"`
 }
 
 type Talos struct {
