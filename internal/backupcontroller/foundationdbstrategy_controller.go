@@ -254,7 +254,7 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 
 	// Ready when the operator has reconciled the spec, the deployment is
 	// configured, and the backup_agent has written at least one full
-	// snapshot (SnapshotTime > 0).
+	// snapshot (restorable).
 	if !foundationdbBackupReady(fdbBackup) {
 		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt) {
 			detail := foundationdbBackupNotReadyDetail(fdbBackup)
@@ -313,7 +313,7 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 	if !b.Status.BackupDetails.Running {
 		return false
 	}
-	if b.Status.BackupDetails.SnapshotTime <= 0 {
+	if !b.Status.BackupDetails.Restorable {
 		return false
 	}
 	if b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
@@ -338,8 +338,8 @@ func foundationdbBackupNotReadyDetail(b *foundationdbtypes.FoundationDBBackup) s
 	if !b.Status.BackupDetails.Running {
 		return "backup_agent has not reported running=true"
 	}
-	if b.Status.BackupDetails.SnapshotTime <= 0 {
-		return "waiting for first full snapshot (snapshotTime is 0)"
+	if !b.Status.BackupDetails.Restorable {
+		return "waiting for first full snapshot (restorable=false)"
 	}
 	return "waiting"
 }
@@ -481,9 +481,7 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		},
 	}
 	if rendered.BackupDeploymentPodTemplateSpec != nil {
-		obj.Spec.BackupDeploymentSpec = &foundationdbtypes.BackupDeploymentSpec{
-			PodTemplateSpec: rendered.BackupDeploymentPodTemplateSpec.DeepCopy(),
-		}
+		obj.Spec.PodTemplateSpec = rendered.BackupDeploymentPodTemplateSpec.DeepCopy()
 	}
 
 	if err := r.Create(ctx, obj); err != nil {
@@ -766,12 +764,10 @@ func (r *BackupJobReconciler) createFoundationDBBackupArtifact(
 	rendered *strategyv1alpha1.FoundationDBTemplate,
 	sourceApp *foundationdbapp.FoundationDB,
 ) (*backupsv1alpha1.Backup, error) {
-	// NOTE: FoundationDBBackup.status.backupDetails.snapshotTime is the FDB
-	// read-version at snapshot time (an FDB-internal integer counter, not a
-	// wall-clock timestamp), so it cannot be plugged into Backup.spec.takenAt
-	// directly. We observed the snapshot ready in the BackupJob reconcile
-	// that called this function, so wall-clock "now" is close enough for
-	// human consumption.
+	// The operator reports no snapshot timestamp (backupDetails.snapshotTime
+	// is the snapshot period in seconds). We observed the backup become
+	// restorable in the BackupJob reconcile that called this function, so
+	// wall-clock "now" is close enough for human consumption.
 	takenAt := metav1.Now()
 
 	driverMD := map[string]string{
