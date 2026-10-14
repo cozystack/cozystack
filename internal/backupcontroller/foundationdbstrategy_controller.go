@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -53,6 +54,13 @@ const (
 
 	// Polling cadence for the operator FoundationDBBackup/Restore lifecycle.
 	foundationdbPollInterval = 10 * time.Second
+
+	// The operator reconciles a FoundationDBBackup only on generation or
+	// annotation changes, so a backup that becomes restorable after its last
+	// reconcile keeps restorable=false in status. The driver bumps this
+	// annotation, at most once per interval, to make it re-read the backup.
+	foundationdbStatusRefreshAnnotation = "backups.cozystack.io/status-refresh"
+	foundationdbStatusRefreshInterval   = time.Minute
 
 	// Wall-clock cap on a BackupJob waiting for the operator
 	// FoundationDBBackup to land its first restorable snapshot. The
@@ -274,6 +282,7 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 				"apps.foundationdb.org/FoundationDBBackup did not reach a restorable snapshot within %s (%s)",
 				foundationdbDefaultBackupDeadline, detail))
 		}
+		r.refreshFoundationDBBackupStatus(ctx, fdbBackup, time.Now())
 		return r.requeueWithReason(ctx, j, "FoundationDBBackupRunning",
 			foundationdbBackupNotReadyDetail(fdbBackup))
 	}
@@ -320,6 +329,30 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 		return false
 	}
 	return true
+}
+
+// refreshFoundationDBBackupStatus asks the operator to re-read a running
+// backup that it has reconciled but not yet reported restorable. Failures
+// only delay readiness, so they are logged and not returned.
+func (r *BackupJobReconciler) refreshFoundationDBBackupStatus(ctx context.Context, b *foundationdbtypes.FoundationDBBackup, now time.Time) {
+	if b == nil || b.Status.BackupDetails == nil || !b.Status.BackupDetails.Running || b.Status.BackupDetails.Restorable {
+		return
+	}
+	if b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
+		return
+	}
+	if last, err := time.Parse(time.RFC3339, b.Annotations[foundationdbStatusRefreshAnnotation]); err == nil && now.Sub(last) < foundationdbStatusRefreshInterval {
+		return
+	}
+	base := b.DeepCopy()
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[foundationdbStatusRefreshAnnotation] = now.UTC().Format(time.RFC3339)
+	if err := r.Patch(ctx, b, client.MergeFrom(base)); err != nil {
+		getLogger(ctx).Debug("failed to request a FoundationDBBackup status refresh",
+			"fdbBackup", b.Name, "error", err.Error())
+	}
 }
 
 // foundationdbBackupNotReadyDetail returns a human-readable reason string
@@ -950,8 +983,9 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 	// handling and let restoreTimeoutSeconds guard against a target
 	// that never shows up.
 	targetClusterName := foundationdbClusterNameForApp(target.AppName)
+	targetCluster := &foundationdbtypes.FoundationDBCluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: targetClusterName},
-		&foundationdbtypes.FoundationDBCluster{}); err != nil {
+		targetCluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			deadline := options.effectiveRestoreDeadline()
 			if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
@@ -978,6 +1012,9 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 	if snap != nil {
 		customParams = append(customParams, snap.CustomParameters...)
 	}
+	if err := r.ensureFoundationDBRestoreAgents(ctx, restoreJob, backup, target, targetCluster, blobCfg, snap); err != nil {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to start backup agents for the restore: %v", err))
+	}
 	fdbRestore, err := r.ensureFoundationDBRestore(ctx, restoreJob, targetClusterName, blobCfg, customParams, snap)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBRestore: %v", err))
@@ -985,6 +1022,9 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 
 	switch {
 	case strings.EqualFold(fdbRestore.Status.State, foundationdbtypes.RestoreStateCompleted):
+		if err := r.deleteFoundationDBRestoreAgents(ctx, restoreJob); err != nil {
+			return ctrl.Result{}, err
+		}
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -1003,6 +1043,10 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 		deadline := options.effectiveRestoreDeadline()
 		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
 			detail := fmt.Sprintf("state=%q running=%t", fdbRestore.Status.State, fdbRestore.Status.Running)
+			if err := r.deleteFoundationDBRestoreAgents(ctx, restoreJob); err != nil {
+				getLogger(ctx).Debug("failed to delete restore backup agents on deadline expiry; continuing with RestoreJob failure",
+					"restorejob", restoreJob.Name, "error", err.Error())
+			}
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 				"apps.foundationdb.org/FoundationDBRestore did not complete within %s (%s; override via spec.options.restoreTimeoutSeconds)",
 				deadline, detail))
@@ -1096,6 +1140,97 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestore(
 		return nil, err
 	}
 	return obj, nil
+}
+
+// foundationdbRestoreAgentsLabel marks the FoundationDBBackup that runs the
+// backup agents for a RestoreJob. It deliberately differs from the OwningJob
+// labels so the BackupJob path never mistakes it for a backup of its own.
+const foundationdbRestoreAgentsLabel = "backups.cozystack.io/foundationdb-restore-agents-for"
+
+// ensureFoundationDBRestoreAgents starts backup agents against the restore's
+// destination cluster. fdbrestore only queues a restore; backup_agent
+// processes connected to the destination carry it out, and a cluster restored
+// into fresh has none. A FoundationDBBackup in the Stopped state makes the
+// operator run the agents without starting a backup. The agents get the
+// backup's strategy rendered against the target application, so they pick up
+// the current credentials, CA and agent version.
+func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
+	ctx context.Context,
+	rj *backupsv1alpha1.RestoreJob,
+	backup *backupsv1alpha1.Backup,
+	target foundationdbRestoreTarget,
+	cluster *foundationdbtypes.FoundationDBCluster,
+	blob foundationdbtypes.BlobStoreConfiguration,
+	snap *foundationdbBackupSnapshot,
+) error {
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := r.List(ctx, list, client.InNamespace(rj.Namespace),
+		client.MatchingLabels{foundationdbRestoreAgentsLabel: rj.Name}); err != nil {
+		return err
+	}
+	if len(list.Items) > 0 {
+		return nil
+	}
+
+	strategy := &strategyv1alpha1.FoundationDB{}
+	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
+		return fmt.Errorf("get FoundationDB strategy %q: %w", backup.Spec.StrategyRef.Name, err)
+	}
+	app := &foundationdbapp.FoundationDB{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
+		return fmt.Errorf("get target FoundationDB application: %w", err)
+	}
+	var parameters map[string]string
+	if snap != nil {
+		parameters = snap.Parameters
+	}
+	rendered, err := renderFoundationDBTemplate(strategy.Spec.Template, app, parameters)
+	if err != nil {
+		return fmt.Errorf("render FoundationDB strategy: %w", err)
+	}
+
+	obj := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:    rj.Namespace,
+			GenerateName: fmt.Sprintf("%s-agents-", rj.Name),
+			Labels: map[string]string{
+				foundationdbRestoreAgentsLabel: rj.Name,
+				foundationdbClusterLabel:       cluster.Name,
+			},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			ClusterName:            cluster.Name,
+			Version:                foundationdbAgentVersion(cluster.Spec.Version, rendered.MinimumAgentVersions),
+			BackupState:            foundationdbtypes.BackupStateStopped,
+			BlobStoreConfiguration: blob,
+			AgentCount:             int32PtrCopy(rendered.AgentCount),
+		},
+	}
+	if rendered.BackupDeploymentPodTemplateSpec != nil {
+		obj.Spec.PodTemplateSpec = rendered.BackupDeploymentPodTemplateSpec.DeepCopy()
+	}
+	// The RestoreJob owns the agents so they cannot outlive it, even if the
+	// explicit cleanup after the restore never runs.
+	if err := controllerutil.SetControllerReference(rj, obj, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, obj)
+}
+
+// deleteFoundationDBRestoreAgents removes the agents started for a RestoreJob
+// once its restore is over.
+func (r *RestoreJobReconciler) deleteFoundationDBRestoreAgents(ctx context.Context, rj *backupsv1alpha1.RestoreJob) error {
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := r.List(ctx, list, client.InNamespace(rj.Namespace),
+		client.MatchingLabels{foundationdbRestoreAgentsLabel: rj.Name}); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		if err := r.Delete(ctx, &list.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // foundationdbRestoreTarget captures the resolved target for a FoundationDB
