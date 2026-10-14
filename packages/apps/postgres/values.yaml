@@ -126,6 +126,11 @@ postgresql:
 ## NOTE: Some parameters require pod restart (not just reload):
 ##   shared_buffers, max_connections, max_prepared_transactions,
 ##   wal_buffers, max_wal_senders
+##
+## When shared_buffers is not set and the memory limit is below 512Mi, the
+## chart sets it to a quarter of the limit with a 16MB floor, capped at the
+## memory request rounded down to whole MiB. Larger limits keep the
+## PostgreSQL default of 128MB.
 
 ##
 ## @section Quorum-based synchronous replication
