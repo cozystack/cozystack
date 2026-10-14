@@ -117,8 +117,15 @@ func (r *REST) loadWorkerPoolDefaults(ctx context.Context) (workerPoolDefaults, 
 		klog.Errorf("Cannot read the platform worker pool defaults from Secret %s: %v", key, err)
 		return workerPoolDefaults{}, false, apierrors.NewServiceUnavailable(fmt.Sprintf("cannot read the platform worker pool defaults from Secret %s, try again: %v", key, err))
 	}
+	// An empty document decodes to an empty struct without an error, which would read
+	// as "no defaults" instead of as a Secret that holds none.
+	raw := secret.Data[platformValuesKey]
+	if len(bytes.TrimSpace(raw)) == 0 {
+		klog.Errorf("Secret %s holds no %s", key, platformValuesKey)
+		return workerPoolDefaults{}, false, apierrors.NewInternalError(fmt.Errorf("secret %s does not hold readable %s, so the platform worker pool defaults cannot be applied: it is missing or empty", key, platformValuesKey))
+	}
 	var values platformWorkerValues
-	if err := yaml.Unmarshal(secret.Data[platformValuesKey], &values); err != nil {
+	if err := yaml.Unmarshal(raw, &values); err != nil {
 		klog.Errorf("Secret %s does not hold readable %s: %v", key, platformValuesKey, err)
 		return workerPoolDefaults{}, false, apierrors.NewInternalError(fmt.Errorf("secret %s does not hold readable %s, so the platform worker pool defaults cannot be applied: %w", key, platformValuesKey, err))
 	}

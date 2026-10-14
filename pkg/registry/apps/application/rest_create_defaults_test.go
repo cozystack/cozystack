@@ -269,6 +269,20 @@ func TestApplyCreateDefaults(t *testing.T) {
 			wantErr: "does not hold readable values.yaml",
 		},
 		{
+			name:    "fails when the platform values Secret has no values.yaml key",
+			secret:  &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: platformValuesSecret, Namespace: platformValuesNamespace}},
+			spec:    `{"diskSize":"30Gi"}`,
+			want:    `{"diskSize":"30Gi"}`,
+			wantErr: "does not hold readable values.yaml",
+		},
+		{
+			name:    "fails when the platform values are empty",
+			secret:  platformValuesFixture("\n"),
+			spec:    `{"diskSize":"30Gi"}`,
+			want:    `{"diskSize":"30Gi"}`,
+			wantErr: "does not hold readable values.yaml",
+		},
+		{
 			name:    "fails when the platform values Secret cannot be read",
 			secret:  platformValuesFixture(workerDefaultsAll),
 			spec:    `{"diskSize":"30Gi"}`,
