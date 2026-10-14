@@ -60,6 +60,10 @@ bundles:
 # Network configuration
 networking:
   clusterDomain: "cozy.local"
+  # On the kube-ovn variants the last /21 of podCIDR is reserved for Cilium's
+  # own router and Gateway API Ingress addresses and excluded from kube-ovn
+  # allocation, so podCIDR needs a prefix of /20 or shorter. Each node takes a
+  # /29 of that block, which caps these variants at 256 nodes.
   podCIDR: "10.244.0.0/16"
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
