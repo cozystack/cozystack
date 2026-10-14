@@ -343,7 +343,10 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 // later reconcile. Failures only delay readiness, so they are logged and not
 // returned.
 func (r *BackupJobReconciler) refreshFoundationDBBackupStatus(ctx context.Context, b *foundationdbtypes.FoundationDBBackup, now time.Time) {
-	if b == nil || foundationdbBackupReady(b) {
+	// A stopped CR is never refreshed: the operator reads backup state for the
+	// whole cluster, so reconciling it while another backup runs would
+	// discontinue that backup.
+	if b == nil || b.Spec.BackupState == foundationdbtypes.BackupStateStopped || foundationdbBackupReady(b) {
 		return
 	}
 	if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
