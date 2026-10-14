@@ -1,0 +1,33 @@
+suite: fluent-bit appends extra outputs after the VictoriaLogs outputs
+
+# config.outputs is one string, so an operator who needs a second destination
+# for the audit log, such as a SIEM, could only replace the whole string and
+# lose the VictoriaLogs outputs. extraOutputs is appended to them instead.
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: renders the VictoriaLogs outputs alone by default
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match audit\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc'
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'siem\.example\.org'
+
+  - it: appends extraOutputs after the VictoriaLogs outputs
+    set:
+      fluent-bit:
+        extraOutputs: |
+          [OUTPUT]
+              Name forward
+              Match audit.*
+              Host siem.example.org
+              Port 24224
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match audit\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc[\s\S]*\[OUTPUT\]\n\s+Name forward\n\s+Match audit\.\*\n\s+Host siem\.example\.org\n\s+Port 24224'

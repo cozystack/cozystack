@@ -50,6 +50,19 @@ rules:
   - options
   - taps
   verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - credentials
+  verbs: ["get", "list"]
+# The tenant ServiceAccount is what the dashboard signs in with when OIDC is
+# off, so it issues and revokes passwords as a tenant admin does.
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - credentials/mint
+  - credentials/revoke
+  verbs: ["create"]
 ---
 # == view cluster role ==
 # Aggregates all roles labeled for view access
@@ -138,6 +151,13 @@ rules:
   - options
   - taps
   verbs: ["get", "list", "watch"]
+{{/* A Credential is the record of one account: who set its password and when,
+     never the value. Mint and revoke are separate subresources granted at admin. */}}
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - credentials
+  verbs: ["get", "list"]
 {{/* Read-only visibility into the objects that govern read-replica autoscaling of a
      tenant's own databases: the KEDA ScaledObject the chart renders into the tenant
      namespace and the keda-hpa-<release> HorizontalPodAutoscaler KEDA creates beside
@@ -290,6 +310,14 @@ rules:
   - update
   - patch
   - delete
+# A mint replaces an account's password and shows the new one once, so it is
+# an admin's write, not a reader's; a custom role can grant revoke alone.
+- apiGroups: ["core.cozystack.io"]
+  resources:
+  - credentials/mint
+  - credentials/revoke
+  verbs:
+  - create
 ---
 # == super admin cluster role ==
 # Aggregates admin + all roles labeled for super-admin access
