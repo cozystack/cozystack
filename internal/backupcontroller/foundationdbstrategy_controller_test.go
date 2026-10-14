@@ -413,25 +413,25 @@ func TestFoundationDBBackupReady(t *testing.T) {
 	})
 	t.Run("not running is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, SnapshotTime: 100},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, Restorable: true},
 		}}
 		if foundationdbBackupReady(b) {
 			t.Fatalf("running=false must not be ready")
 		}
 	})
-	t.Run("snapshotTime=0 is not ready", func(t *testing.T) {
+	t.Run("not restorable is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 0},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: false},
 		}}
 		if foundationdbBackupReady(b) {
-			t.Fatalf("snapshotTime=0 must not be ready")
+			t.Fatalf("restorable=false must not be ready")
 		}
 	})
 	t.Run("generations not reconciled is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Generation: 2},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 100},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -439,11 +439,11 @@ func TestFoundationDBBackupReady(t *testing.T) {
 			t.Fatalf("generations.reconciled < generation must not be ready")
 		}
 	})
-	t.Run("ready when running + snapshotTime > 0 + reconciled", func(t *testing.T) {
+	t.Run("ready when running + restorable + reconciled", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Generation: 1},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 100},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -937,17 +937,9 @@ func TestReconcileFoundationDB_HealthUnavailableIsTransient(t *testing.T) {
 // Backup-artifact takenAt semantics
 // ---------------------------------------------------------------------------
 
-// TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock pins the
-// semantics noted in the artifact builder's comment block: the FDB
-// operator surfaces backupDetails.snapshotTime as an FDB-internal
-// read-version (an integer counter, not a Unix timestamp), so the
-// Cozystack Backup.spec.takenAt must come from wall-clock "now" instead.
-// Before this regression test a no-op conditional reassigned takenAt with
-// the same wall-clock value, hiding the intent and inviting a future
-// refactor to mis-convert SnapshotTime (e.g. into time.Unix(... , 0)) and
-// produce a year-1970 takenAt. The check below would catch that
-// regression: a SnapshotTime of 43017506 interpreted as a Unix timestamp
-// lands in 1971.
+// TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock pins that
+// Backup.spec.takenAt is wall-clock "now": the operator reports no snapshot
+// timestamp, so nothing else could feed it.
 func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 	apps := foundationdbapp.GroupName
 	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
@@ -969,14 +961,11 @@ func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 		},
 		Parameters: map[string]string{},
 	}
-	// SnapshotTime is FDB read-version - a large integer that is NOT a
-	// Unix timestamp. If a future refactor lifts SnapshotTime into
-	// takenAt directly, the resulting time lands far away from "now".
 	fdbBackup := &foundationdbtypes.FoundationDBBackup{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk"},
 		Status: foundationdbtypes.FoundationDBBackupStatus{
 			BackupDetails: &foundationdbtypes.BackupDetails{
-				Running: true, SnapshotTime: 43017506,
+				Running: true, Restorable: true,
 			},
 		},
 	}
@@ -991,11 +980,10 @@ func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 	after := time.Now()
 	// takenAt must fall in the wall-clock window the test observed, with a
 	// small slack on either side for clock jitter and the helper's own
-	// metav1.Now() calls. If SnapshotTime ever bled into takenAt the value
-	// would land decades away from this window.
+	// metav1.Now() calls.
 	got := artifact.Spec.TakenAt.Time
 	if got.Before(before.Add(-2 * time.Second)) {
-		t.Errorf("takenAt %s is before the call window start %s; SnapshotTime must not bleed into the wall-clock value", got, before)
+		t.Errorf("takenAt %s is before the call window start %s; takenAt must be wall-clock", got, before)
 	}
 	if got.After(after.Add(2 * time.Second)) {
 		t.Errorf("takenAt %s is after the call window end %s", got, after)
@@ -1847,6 +1835,44 @@ func TestFoundationDBAgentVersion(t *testing.T) {
 				t.Errorf("foundationdbAgentVersion(%q, %v) = %q, want %q", tc.cluster, tc.minimums, got, tc.want)
 			}
 		})
+	}
+}
+
+// The operator reads the agent pod template from spec.podTemplateSpec; the
+// apiserver prunes any other location, so the agents would silently run
+// without the strategy's credentials and CA.
+func TestEnsureFoundationDBBackup_PodTemplateAtSpecRoot(t *testing.T) {
+	c := newFoundationDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newFoundationDBBackupJob("bj-pod-template", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	rendered := newRenderedFoundationDBTemplate()
+	rendered.BackupDeploymentPodTemplateSpec = &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "foundationdb",
+			Env:  []corev1.EnvVar{{Name: "FDB_BLOB_CREDENTIALS", Value: "/creds.json"}},
+		}}},
+	}
+
+	got, err := r.ensureFoundationDBBackup(context.Background(), job, foundationdbClusterNameForApp("fdb-src"), "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	raw, err := json.Marshal(got.Spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	var spec map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("unmarshal spec: %v", err)
+	}
+	if _, ok := spec["podTemplateSpec"]; !ok {
+		t.Fatalf("pod template not under spec.podTemplateSpec: %s", raw)
+	}
+	if env := got.Spec.PodTemplateSpec.Spec.Containers[0].Env; len(env) != 1 || env[0].Value != "/creds.json" {
+		t.Errorf("pod template env not carried over: %+v", env)
 	}
 }
 
