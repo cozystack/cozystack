@@ -114,7 +114,7 @@ type FoundationDBTemplate struct {
 	MinimumAgentVersions []string `json:"minimumAgentVersions,omitempty"`
 
 	// BackupDeploymentPodTemplateSpec is the PodTemplateSpec the driver
-	// stamps onto FoundationDBBackup.spec.backupDeploymentSpec.podTemplateSpec.
+	// stamps onto FoundationDBBackup.spec.podTemplateSpec.
 	// Admins use it to mount credentials, CA bundles, or any other
 	// per-tenant secrets the backup_agent needs. Templating is supported
 	// on every string field.
