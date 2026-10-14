@@ -57,7 +57,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
-	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	"github.com/cozystack/cozystack/pkg/specschema"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 
@@ -101,35 +101,15 @@ type REST struct {
 	specSchema    *structuralschema.Structural
 	nameSchema    *validation.NameSchema
 	nameSchemaErr error
+	// credentials is the kind's credentials block, nil for a kind whose
+	// passwords the chart still generates.
+	credentials *cozyv1alpha1.ApplicationDefinitionCredentials
 }
 
-// buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
-// structural-schema form used for defaulting. Returns (nil, nil) when raw
-// is empty after trimming. Returns (nil, error) for malformed JSON,
-// v1→internal conversion failures, or structural-schema construction
-// errors — callers can decide whether to log-and-continue (NewREST does)
-// or fail hard (tests do).
+// buildSpecSchema parses an OpenAPI-v3 JSON schema string into the
+// structural schema the registry defaults and null-strips against.
 func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var v1js apiextv1.JSONSchemaProps
-	if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
-		return nil, fmt.Errorf("unmarshal v1 OpenAPI schema: %w", err)
-	}
-	scheme := runtime.NewScheme()
-	_ = internalapiext.AddToScheme(scheme)
-	_ = apiextv1.AddToScheme(scheme)
-	var ijs internalapiext.JSONSchemaProps
-	if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
-		return nil, fmt.Errorf("convert v1->internal JSONSchemaProps: %w", err)
-	}
-	s, err := structuralschema.NewStructural(&ijs)
-	if err != nil {
-		return nil, fmt.Errorf("build structural schema: %w", err)
-	}
-	return s, nil
+	return specschema.Build(raw)
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
@@ -163,6 +143,7 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		specSchema:    specSchema,
 		nameSchema:    nameSchema,
 		nameSchemaErr: nameSchemaErr,
+		credentials:   config.Credentials,
 	}
 }
 
@@ -245,6 +226,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
+	accounts, err := r.accountsOf(app.Spec)
+	if err != nil {
+		return nil, r.invalidAccounts(app, err)
+	}
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -265,14 +251,23 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
+	// The account Secrets exist before the release that reads them, and the
+	// release owns them as soon as it exists.
+	seeded, err := r.seedBeforeCreate(ctx, app, helmRelease, accounts)
+	if err != nil {
+		return nil, err
+	}
+
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
 	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
+		r.unseed(ctx, app.Namespace, seeded)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
+	r.ownSeeded(ctx, helmRelease, seeded)
 
 	// Convert the created HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
@@ -594,6 +589,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	r.warnRemovedUserPasswords(ctx, app)
 	r.warnUpgradeIntroducedCollisions(ctx, oldObj, app)
 
+	accounts, err := r.accountsOf(app.Spec)
+	if err != nil {
+		return nil, false, r.invalidAccounts(app, err)
+	}
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -601,15 +601,20 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Keep the conversion output pristine: the metadata assembly below reads the
-	// live object, so a conflict retry has to redo it from this copy rather than
-	// re-apply it on top of its own previous result.
-	converted := helmRelease.DeepCopy()
-
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
 	}
+
+	// Accounts the write adds get their Secrets before the release reads them.
+	if err := r.seedBeforeUpdate(ctx, app, helmRelease, cur, accounts); err != nil {
+		return nil, false, err
+	}
+
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
@@ -665,6 +670,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
+	// Accounts the write removed are gone from the chart now, so their
+	// Secrets can go.
+	r.pruneAfterUpdate(ctx, app, accounts)
+
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
 	if err != nil {
@@ -711,6 +720,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	if err := r.refuseDeleteSuspended(name, helmRelease); err != nil {
+		return nil, false, err
 	}
 
 	// Run the genericapiserver-supplied admission chain (validating webhooks
@@ -2207,7 +2220,13 @@ const (
 
 // warnRemovedUserPasswords emits a client-facing admission warning for every
 // spec.users[<name>].password still present on a Postgres or MariaDB resource.
+// A kind with a credentials block gets the warning that points at the mint
+// instead, whatever the kind.
 func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
+	if r.credentials != nil {
+		r.warnMintedPasswords(ctx, app)
+		return
+	}
 	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
 		return
 	}

@@ -34,6 +34,7 @@ import (
 	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/account"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -288,6 +289,14 @@ func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmRelea
 	}
 	resourceConfig := &config.ResourceConfig{}
 	for _, crd := range owned {
+		// A credentials block the API cannot honour, declaring a format or a
+		// source kind that is not built or a format it does not know, leaves
+		// the kind unserved rather than served with passwords it cannot
+		// issue, as a kind with an invalid name schema refuses writes.
+		if err := account.Validate(crd.Spec.Credentials); err != nil {
+			fmt.Printf("Skipping ApplicationDefinition %q: credentials block cannot be served: %v\n", crd.Name, err)
+			continue
+		}
 		resource, err := buildResourceFromCRD(crd, hrFlags)
 		if err != nil {
 			return nil, err
@@ -408,7 +417,8 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 			ShortNames:    []string{}, // TODO: implement shortnames
 			OpenAPISchema: crd.Spec.Application.OpenAPISchema,
 		},
-		Release: release,
+		Release:     release,
+		Credentials: crd.Spec.Credentials,
 	}, nil
 }
 

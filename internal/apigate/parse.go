@@ -172,10 +172,12 @@ var storageVarGroups = map[string]string{
 //	coreV1alpha1Storage["tenantsecrets"] = ...
 //
 // The plural class allows hyphens so a future hyphenated resource name is not
-// silently dropped. The apps storage map is indexed by a variable
+// silently dropped, and a slash so a subresource registration such as
+// `credentials/mint` is gated as a resource of its own rather than dropped.
+// The apps storage map is indexed by a variable
 // (appsV1alpha1Storage[resConfig.Application.Plural]), not a string literal, so
 // it never matches here — the apps API is covered by the cozyrds instead.
-var apiserverStorageRe = regexp.MustCompile(`(\w+Storage)\["([a-z0-9-]+)"\]`)
+var apiserverStorageRe = regexp.MustCompile(`(\w+Storage)\["([a-z0-9/-]+)"\]`)
 
 // unmappedStoragePrefix labels resources whose storage variable prefix is not
 // in storageVarGroups. Rather than silently dropping them — which would let a
