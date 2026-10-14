@@ -628,6 +628,11 @@ func (in *FoundationDBTemplate) DeepCopyInto(out *FoundationDBTemplate) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.MinimumAgentVersions != nil {
+		in, out := &in.MinimumAgentVersions, &out.MinimumAgentVersions
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.BackupDeploymentPodTemplateSpec != nil {
 		in, out := &in.BackupDeploymentPodTemplateSpec, &out.BackupDeploymentPodTemplateSpec
 		*out = new(corev1.PodTemplateSpec)
