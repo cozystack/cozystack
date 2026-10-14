@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -463,7 +464,7 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		},
 		Spec: foundationdbtypes.FoundationDBBackupSpec{
 			ClusterName: clusterName,
-			Version:     clusterVersion,
+			Version:     foundationdbAgentVersion(clusterVersion, rendered.MinimumAgentVersions),
 			BackupState: foundationdbtypes.BackupStateRunning,
 			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
 				AccountName:   rendered.BlobStoreConfiguration.AccountName,
@@ -487,6 +488,41 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return nil, err
 	}
 	return obj, nil
+}
+
+// foundationdbAgentVersion returns the version the backup_agent runs: the
+// cluster's own, unless a minimum on the same major.minor is newer. Versions
+// that do not parse as major.minor.patch are left alone.
+func foundationdbAgentVersion(clusterVersion string, minimums []string) string {
+	cluster, ok := parseFoundationDBVersion(clusterVersion)
+	if !ok {
+		return clusterVersion
+	}
+	agent, agentVersion := cluster, clusterVersion
+	for _, m := range minimums {
+		v, ok := parseFoundationDBVersion(m)
+		if !ok || v[0] != cluster[0] || v[1] != cluster[1] || v[2] <= agent[2] {
+			continue
+		}
+		agent, agentVersion = v, m
+	}
+	return agentVersion
+}
+
+func parseFoundationDBVersion(s string) ([3]int, bool) {
+	var v [3]int
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return v, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return v, false
+		}
+		v[i] = n
+	}
+	return v, true
 }
 
 // stopOtherFoundationDBBackups flips any FoundationDBBackup CRs in the

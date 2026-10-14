@@ -23,10 +23,10 @@ tests:
           count: 2
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: foundationdb/fdb-kubernetes-monitor:7.3.63
+          value: foundationdb/fdb-kubernetes-monitor:7.3.79
       - equal:
           path: spec.template.spec.initContainers[1].image
-          value: foundationdb/fdb-kubernetes-monitor:7.4.1
+          value: foundationdb/fdb-kubernetes-monitor:7.4.8
 
   - it: renders the operator image in the cozystack globalMode (the shipping config)
     template: charts/fdb-operator/templates/manager/deployment.yaml
