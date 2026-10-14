@@ -67,6 +67,40 @@
         "type": "string"
       }
     },
+    "labels": {
+      "description": "Labels on every node of this pool. Keys under `node-role.kubernetes.io`, `node-restriction.kubernetes.io` and `node.cluster.x-k8s.io` are synced to the Nodes by Cluster API and change in place. Every other label goes through the pool's bootstrap config, so changing it rolls the pool. Other `kubernetes.io` and `k8s.io` namespaces are refused, except `kubelet.kubernetes.io` and `node.kubernetes.io`, and so are hostname, os and arch, which describe the node itself, and the deprecated beta zone, region and instance-type labels. `topology.kubernetes.io/zone`, `topology.kubernetes.io/region` and `node.kubernetes.io/instance-type` are accepted on `kubevirt` and refused on `proxmox`, where the cloud controller manager sets them. A label that repeats one of `roles` is refused. On a Kairos pool the bootstrap labels join into one kubelet argument of at most 1024 characters. On a GPU pool the chart sets `gpu: \"on\"` itself.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "taints": {
+      "description": "Taints on every node of this pool, registered by the kubelet when the node joins. Changing them rolls the pool. On a GPU pool the GPU addons have to tolerate the taint, or the device plugin never starts and the pool advertises no GPUs. By default the GPU operator's daemonsets and its node-feature-discovery worker tolerate `nvidia.com/gpu` with `NoSchedule` and no other taint a pool can set, and HAMi's device plugin tolerates no taint. Any other taint needs matching tolerations in the parent cluster's `addons.gpuOperator.valuesOverride` or `addons.hami.valuesOverride`.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "effect",
+          "key"
+        ],
+        "properties": {
+          "effect": {
+            "description": "`NoSchedule`, `PreferNoSchedule` or `NoExecute`.",
+            "type": "string"
+          },
+          "key": {
+            "description": "Taint key. Must not be in a kubernetes.io, k8s.io or x-k8s.io namespace.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Taint value.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "resources": {
       "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
       "type": "object",

@@ -634,6 +634,112 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 
+{{- /*
+  The pool's labels and taints, validated and split by who can put them on the
+  Node. Cluster API syncs labels from a Machine to its Node only for
+  node-role.kubernetes.io and the node-restriction.kubernetes.io and
+  node.cluster.x-k8s.io domains, so those go on the MachineDeployment template.
+  Every other label and every taint goes through the bootstrap config: kubelet
+  --node-labels on Kairos, machine.nodeLabels on Talos (applied by machined
+  with the kubelet's credentials). The kubelet admits no other kubernetes.io or
+  k8s.io label than kubelet.kubernetes.io and node.kubernetes.io keys and a few
+  well-known ones. Of those, hostname, os and arch are refused because they
+  describe the node itself, and the deprecated beta forms of zone, region and
+  instance type because the cloud-node controller copies them over the GA keys.
+  The GA zone, region and instance-type keys are accepted on KubeVirt and
+  refused on Proxmox, whose cloud controller manager sets them. The Talos path writes
+  these into a shell heredoc, so keys and values are held to the label
+  character set rather than escaped.
+
+  Returns YAML: {capi: map, kubelet: map, taints: list}.
+*/ -}}
+{{- define "kubernetes-nodes.labelsAndTaints" -}}
+{{- $keyRe := `^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$` -}}
+{{- $valueRe := `^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$` -}}
+{{- $capi := dict -}}
+{{- $kubelet := dict -}}
+{{- $gpus := .Values.gpus -}}
+{{- $substrate := .Values.substrate | default "kubevirt" -}}
+{{- $roleLabels := list -}}
+{{- range (.Values.roles | default list) -}}{{- $roleLabels = append $roleLabels (printf "node-role.kubernetes.io/%s" .) -}}{{- end -}}
+{{- range $k, $v := (.Values.labels | default dict) -}}
+{{-   if kindIs "invalid" $v -}}
+{{-     fail (printf "label %q has no value; use \"\" for an empty one" $k) -}}
+{{-   end -}}
+{{-   $val := printf "%v" $v -}}
+{{-   if or (not (regexMatch $keyRe $k)) (and (contains "/" $k) (gt (len (index (splitList "/" $k) 0)) 253)) -}}
+{{-     fail (printf "label %q is not a valid label key" $k) -}}
+{{-   end -}}
+{{-   if not (regexMatch $valueRe $val) -}}
+{{-     fail (printf "label %q has value %q, which is not a valid label value" $k $val) -}}
+{{-   end -}}
+{{-   if has $k $roleLabels -}}
+{{-     fail (printf "label %q is already set by roles; drop it from labels" $k) -}}
+{{-   end -}}
+{{-   $domain := "" -}}
+{{-   if contains "/" $k -}}{{- $domain = index (splitList "/" $k) 0 -}}{{- end -}}
+{{-   if or (eq $domain "node-role.kubernetes.io") (eq $domain "node-restriction.kubernetes.io") (hasSuffix ".node-restriction.kubernetes.io" $domain) (eq $domain "node.cluster.x-k8s.io") (hasSuffix ".node.cluster.x-k8s.io" $domain) -}}
+{{-     $_ := set $capi $k $val -}}
+{{-   else -}}
+{{-     $kubeletAllowed := or (eq $domain "kubelet.kubernetes.io") (hasSuffix ".kubelet.kubernetes.io" $domain) (eq $domain "node.kubernetes.io") (hasSuffix ".node.kubernetes.io" $domain) -}}
+{{-     $reserved := or (eq $domain "kubernetes.io") (hasSuffix ".kubernetes.io" $domain) (eq $domain "k8s.io") (hasSuffix ".k8s.io" $domain) -}}
+{{-     if has $k (list "kubernetes.io/hostname" "kubernetes.io/os" "kubernetes.io/arch" "beta.kubernetes.io/os" "beta.kubernetes.io/arch") -}}
+{{-       fail (printf "label %q describes the node itself and is set by the kubelet; a pool cannot override it" $k) -}}
+{{-     end -}}
+{{-     if has $k (list "failure-domain.beta.kubernetes.io/zone" "failure-domain.beta.kubernetes.io/region" "beta.kubernetes.io/instance-type") -}}
+{{-       fail (printf "label %q is deprecated, and the cloud-node controller copies it over the current key; use topology.kubernetes.io or node.kubernetes.io/instance-type" $k) -}}
+{{-     end -}}
+{{-     $cloudOwned := has $k (list "topology.kubernetes.io/zone" "topology.kubernetes.io/region" "node.kubernetes.io/instance-type") -}}
+{{-     if and $cloudOwned (eq $substrate "proxmox") -}}
+{{-       fail (printf "label %q is set by the Proxmox cloud controller manager on this substrate; a pool cannot override it" $k) -}}
+{{-     end -}}
+{{-     if and $reserved (not $kubeletAllowed) (not $cloudOwned) -}}
+{{-       fail (printf "label %q is in a kubernetes.io namespace that neither the kubelet nor Cluster API may set on a Node" $k) -}}
+{{-     end -}}
+{{-     if and (eq $k "gpu") $gpus -}}
+{{-       fail "label \"gpu\" is set by the chart on a GPU pool; leave it out of labels" -}}
+{{-     end -}}
+{{-     $_ := set $kubelet $k $val -}}
+{{-   end -}}
+{{- end -}}
+{{- $taints := list -}}
+{{- $seen := dict -}}
+{{- range $t := (.Values.taints | default list) -}}
+{{-   $key := printf "%v" (default "" $t.key) -}}
+{{-   $effect := printf "%v" (default "" $t.effect) -}}
+{{-   $val := "" -}}
+{{-   if not (kindIs "invalid" $t.value) -}}{{- $val = printf "%v" $t.value -}}{{- end -}}
+{{-   if or (not (regexMatch $keyRe $key)) (and (contains "/" $key) (gt (len (index (splitList "/" $key) 0)) 253)) -}}
+{{-     fail (printf "taint %q is not a valid taint key" $key) -}}
+{{-   end -}}
+{{-   $domain := "" -}}
+{{-   if contains "/" $key -}}{{- $domain = index (splitList "/" $key) 0 -}}{{- end -}}
+{{-   if or (eq $domain "kubernetes.io") (hasSuffix ".kubernetes.io" $domain) (eq $domain "k8s.io") (hasSuffix ".k8s.io" $domain) (eq $domain "x-k8s.io") (hasSuffix ".x-k8s.io" $domain) -}}
+{{-     fail (printf "taint %q is in a namespace reserved for Kubernetes and Cluster API" $key) -}}
+{{-   end -}}
+{{-   if not (regexMatch $valueRe $val) -}}
+{{-     fail (printf "taint %q has value %q, which is not a valid taint value" $key $val) -}}
+{{-   end -}}
+{{-   if not (has $effect (list "NoSchedule" "PreferNoSchedule" "NoExecute")) -}}
+{{-     fail (printf "taint %q has effect %q; use NoSchedule, PreferNoSchedule or NoExecute" $key $effect) -}}
+{{-   end -}}
+{{-   $id := printf "%s:%s" $key $effect -}}
+{{-   if hasKey $seen $id -}}
+{{-     fail (printf "taint %q with effect %q is listed twice" $key $effect) -}}
+{{-   end -}}
+{{-   $_ := set $seen $id true -}}
+{{-   $taints = append $taints (dict "key" $key "value" $val "effect" $effect) -}}
+{{- end -}}
+{{- if eq (include "kubernetes-nodes.nodeGroupClass" . | fromYaml).os "kairos" -}}
+{{-   $pairs := list -}}
+{{-   range $k, $v := $kubelet -}}{{- $pairs = append $pairs (printf "%s=%s" $k $v) -}}{{- end -}}
+{{-   if gt (len (join "," $pairs)) 1024 -}}
+{{-     fail "labels: on a Kairos pool the kubelet labels join into one node-labels argument of at most 1024 characters" -}}
+{{-   end -}}
+{{- end -}}
+{{- dict "capi" $capi "kubelet" $kubelet "taints" $taints | toYaml -}}
+{{- end -}}
+
 {{/*
 This pool's node group — the SINGLE assembly of the dict that feeds every
 consumer in this chart:
