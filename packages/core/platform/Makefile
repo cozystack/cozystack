@@ -36,7 +36,7 @@ image-migrations:
 	rm -rf images/migrations/etcd-operator-crds
 	mkdir -p images/migrations/etcd-operator-crds
 	cp ../../system/etcd-operator-crds/templates/*.yaml images/migrations/etcd-operator-crds/
-	docker buildx build images/migrations \
+	docker buildx build -f images/migrations/Dockerfile ../../.. \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,platform-migrations) \
 		--metadata-file images/migrations.json \
