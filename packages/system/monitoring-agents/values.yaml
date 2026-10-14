@@ -361,6 +361,12 @@ fluent-bit:
     - name: varlibdockercontainers
       mountPath: /var/lib/docker/containers
       readOnly: true
+  # Additional fluent-bit [OUTPUT] sections, appended after the VictoriaLogs
+  # outputs above and before the tenant routes. Overriding config.outputs
+  # replaces those outputs, so a security team shipping the audit log
+  # (tagged audit.*) to its own SIEM adds its output here instead. Rendered
+  # through tpl with the fluent-bit subchart's context.
+  extraOutputs: ""
   config:
     inputs: |
       [INPUT]
@@ -432,6 +438,9 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+      {{- with .Values.extraOutputs }}
+      {{ . | nindent 6 }}
+      {{- end }}
       {{- range $target, $_ := include "monitoring-agents.tenantLogRoutes" . | fromJson }}
       [OUTPUT]
           Name http
