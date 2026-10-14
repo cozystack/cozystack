@@ -25,7 +25,7 @@ import (
 var templateInputs = []string{
 	"diskSize", "gpus", "instanceType", "kubelet", "logSerialConsole", "osImage",
 	"podCpuLimit", "podCpuRequest", "proxmox", "resources", "roles", "storageClass",
-	"cluster", "network", "routeTable",
+	"cluster", "network", "routeTable", "labels", "taints",
 }
 
 type Mutator struct{ DefaultWorkerClass string }

@@ -106,6 +106,8 @@ func TestAdoptionThatAlsoChangesATemplateInputIsDenied(t *testing.T) {
 		"osImage": map[string]any{"factory": map[string]any{}}, "podCpuLimit": "2", "podCpuRequest": "1",
 		"proxmox": map[string]any{"pool": "x"}, "resources": map[string]any{"cpu": "2", "memory": "4Gi"},
 		"roles": []any{"ingress-nginx"}, "storageClass": "replicated",
+		"labels":  map[string]any{"example.com/team": "a"},
+		"taints":  []any{map[string]any{"key": "dedicated", "value": "a", "effect": "NoSchedule"}},
 		"cluster": "other", "network": map[string]any{"name": "vpc"}, "routeTable": "to-internet",
 	}
 	for _, field := range templateInputs {
