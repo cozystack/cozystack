@@ -26,6 +26,13 @@ spec:
         - {{ printf "region=%s" .Values.backupStorage.region | quote }}
         - {{ printf "bucket_path={{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
     snapshotPeriodSeconds: 3600
+    # FDB sends TLS SNI only from 7.3.78 / 7.4.6, and SNI-routed S3 endpoints
+    # abort the handshake without it, so agents of older clusters run the
+    # same minor's SNI-capable patch. Keep in step with the initContainers
+    # tags in the foundationdb-operator package values.
+    minimumAgentVersions:
+      - "7.3.79"
+      - "7.4.8"
     backupDeploymentPodTemplateSpec:
       spec:
         containers:

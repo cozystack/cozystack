@@ -103,6 +103,16 @@ type FoundationDBTemplate struct {
 	// +optional
 	EncryptionKeyPath string `json:"encryptionKeyPath,omitempty"`
 
+	// MinimumAgentVersions raises the backup_agent above the cluster's own
+	// patch release. For each listed version, a cluster on the same
+	// major.minor but an older patch runs its backup agents at the listed
+	// version instead; patch releases of one minor are wire-compatible, so
+	// agents pick up client-side fixes (such as TLS SNI, needed by
+	// SNI-routed S3 endpoints) without upgrading the cluster.
+	// +optional
+	// +kubebuilder:validation:items:Pattern=`^[0-9]+\.[0-9]+\.[0-9]+$`
+	MinimumAgentVersions []string `json:"minimumAgentVersions,omitempty"`
+
 	// BackupDeploymentPodTemplateSpec is the PodTemplateSpec the driver
 	// stamps onto FoundationDBBackup.spec.backupDeploymentSpec.podTemplateSpec.
 	// Admins use it to mount credentials, CA bundles, or any other
