@@ -88,8 +88,17 @@
 {{-   if contains "PRIVATE KEY" ($tls.ca | default "" | toString) -}}
 {{-     fail (printf "kubernetesRegistries.config[%q].tls.ca holds a private key. It takes the CA certificate that signs the mirror's certificate, and it is copied into the cozystack-values Secret of every tenant." $endpoint) -}}
 {{-   end -}}
-{{-   if and $tls.ca (not (contains "-----BEGIN CERTIFICATE-----" $tls.ca)) -}}
-{{-     fail (printf "kubernetesRegistries.config[%q].tls.ca must hold a PEM certificate, a -----BEGIN CERTIFICATE----- block." $endpoint) -}}
+{{- /* Helm cannot parse a certificate, and the first thing that does is the node, which
+       rejects the whole machine config. Every pool in every tenant rolls onto this
+       value, so a truncated or mis-pasted CA is caught here: each BEGIN line needs a
+       base64 body and its own END line. Text between blocks is left alone, as Talos
+       leaves it. */ -}}
+{{-   if $tls.ca -}}
+{{-     $caBegins := regexFindAll "-----BEGIN CERTIFICATE-----" $tls.ca -1 -}}
+{{-     $caBlocks := regexFindAll "-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----" $tls.ca -1 -}}
+{{-     if or (not $caBlocks) (ne (len $caBegins) (len $caBlocks)) -}}
+{{-       fail (printf "kubernetesRegistries.config[%q].tls.ca must hold a PEM certificate: every -----BEGIN CERTIFICATE----- needs a base64 body and its own -----END CERTIFICATE----- line." $endpoint) -}}
+{{-     end -}}
 {{-   end -}}
 {{-   if and (hasKey $tls "insecureSkipVerify") (not (has (kindOf $tls.insecureSkipVerify) (list "bool" "invalid"))) -}}
 {{-     fail (printf "kubernetesRegistries.config[%q].tls.insecureSkipVerify must be true or false, got %v" $endpoint $tls.insecureSkipVerify) -}}

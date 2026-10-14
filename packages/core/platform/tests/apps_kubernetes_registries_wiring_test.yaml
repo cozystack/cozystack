@@ -452,6 +452,51 @@ tests:
       - failedTemplate:
           errorPattern: 'tls\.ca must hold a PEM certificate'
 
+  - it: refuses a CA block cut off before its END line
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must hold a PEM certificate'
+
+  - it: refuses a CA block whose body is not base64
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\nthis was pasted by mistake!\n-----END CERTIFICATE-----"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must hold a PEM certificate'
+
+  - it: refuses a CA bundle whose second certificate is cut off
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIC"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'tls\.ca must hold a PEM certificate'
+
+  - it: accepts a CA bundle of two certificates with CRLF line ends and a comment between them
+    set:
+      kubernetesRegistries:
+        config:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\r\nMIIB\r\n-----END CERTIFICATE-----\r\n# second\r\n-----BEGIN CERTIFICATE-----\r\nMIIC\r\n-----END CERTIFICATE-----\r\n"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'MIIC'
+
   - it: refuses a falsy CA that is not text
     set:
       kubernetesRegistries:
