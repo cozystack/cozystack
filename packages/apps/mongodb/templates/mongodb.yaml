@@ -156,8 +156,10 @@ spec:
       s3-storage:
         type: s3
         s3:
-          bucket: {{ .Values.backup.destinationPath | trimPrefix "s3://" | regexFind "^[^/]+" }}
-          prefix: {{ .Values.backup.destinationPath | trimPrefix "s3://" | splitList "/" | rest | join "/" }}
+          bucket: {{ include "mongodb.backup.bucket" . | quote }}
+          {{- with include "mongodb.backup.prefix" . }}
+          prefix: {{ . | quote }}
+          {{- end }}
           endpointUrl: {{ .Values.backup.endpointURL }}
           credentialsSecret: {{ .Release.Name }}-s3-creds
           insecureSkipTLSVerify: false

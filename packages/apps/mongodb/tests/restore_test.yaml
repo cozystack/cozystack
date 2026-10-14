@@ -267,6 +267,123 @@ tests:
           path: spec.backupSource.s3.forcePathStyle
           value: true
 
+  - it: sets bucket and prefix from destinationPath
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://mybucket/mongodb/prod/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: mybucket
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: mongodb/prod/
+
+  - it: keeps a prefix without a trailing slash as given
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://mybucket/mongodb/prod"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: mongodb/prod
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://mybucket/mongodb/prod/backup
+
+  - it: sets an empty prefix when destinationPath is the bucket root
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://mybucket"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: mybucket
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: ""
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://mybucket/backup
+
+  - it: keeps a numeric bucket and prefix as strings
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://2024/10"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: "2024"
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: "10"
+
+  - it: fails when destinationPath names no bucket
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath must name a bucket (s3://bucket/path/) when bootstrap.enabled is true"
+
+  - it: does not check the bucket when bootstrap is disabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: false
+      backup:
+        destinationPath: "s3://"
+    asserts:
+      - hasDocuments:
+          count: 0
+
   #####################
   # PITR              #
   #####################

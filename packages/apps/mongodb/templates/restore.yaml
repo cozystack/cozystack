@@ -5,6 +5,9 @@
 {{- if not .Values.backup.destinationPath }}
 {{- fail "backup.destinationPath is required when bootstrap.enabled is true" }}
 {{- end }}
+{{- if not (include "mongodb.backup.bucket" .) }}
+{{- fail "backup.destinationPath must name a bucket (s3://bucket/path/) when bootstrap.enabled is true" }}
+{{- end }}
 {{- if not .Values.backup.endpointURL }}
 {{- fail "backup.endpointURL is required when bootstrap.enabled is true" }}
 {{- end }}
@@ -30,6 +33,8 @@ spec:
     type: logical
     destination: {{ .Values.backup.destinationPath | trimSuffix "/" }}/{{ .Values.bootstrap.backupName }}
     s3:
+      bucket: {{ include "mongodb.backup.bucket" . | quote }}
+      prefix: {{ include "mongodb.backup.prefix" . | quote }}
       credentialsSecret: {{ .Release.Name }}-s3-creds
       endpointUrl: {{ .Values.backup.endpointURL }}
       insecureSkipTLSVerify: false
