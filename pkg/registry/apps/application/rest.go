@@ -598,6 +598,17 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
+	// Suspension is not part of the Application, so the rebuilt object always
+	// says suspend=false, and sending it as is resumes a release that an
+	// operator or a controller suspended. The CNPG restore driver relies on the
+	// suspension holding across its own patch of the Postgres app through this
+	// API: it purges the Cluster while the release is suspended and resumes it
+	// only once the purge is done, so the chart's next render lands
+	// bootstrap.recovery on an empty namespace. Resumed early, the release
+	// renders while the purge is still running, and the purge then deletes
+	// what it rendered.
+	helmRelease.Spec.Suspend = cur.Spec.Suspend
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
 	// Update the HelmRelease in Kubernetes.
@@ -606,10 +617,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// HelmRelease's status, which shares the object's resourceVersion. When a
 	// caller updates an app CR while a prior reconcile is still in flight, the
 	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. The HelmRelease spec is fully derived from the Application
-	// the caller just applied, so a stale-resourceVersion conflict is never a
-	// real spec conflict here: refresh the resourceVersion from the live object
-	// and retry.
+	// 409 Conflict. Apart from suspend, the HelmRelease spec is derived from the
+	// Application the caller just applied, so a stale-resourceVersion conflict
+	// is never a real spec conflict here: refresh the resourceVersion from the
+	// live object and retry. Suspend is refreshed with it, because the write
+	// that caused the conflict may be the one that suspended the release.
 	//
 	// The carried-over metadata is not derived from the Application, though, and
 	// the writer that caused the conflict is usually the controller that owns it
@@ -627,6 +639,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
 		return updateErr
 	})
