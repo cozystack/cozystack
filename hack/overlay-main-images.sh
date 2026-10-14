@@ -111,11 +111,10 @@ img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[
 # needs either a key or an `@sha256:`, and a .tag file carries neither until a
 # build stamps it, so an unstamped one is classified as a non-ref change, the
 # drift guard keeps the committed ref, and the overlay never replaces the
-# placeholder it exists to replace. 17 of the 19 .tag files in the tree pass on
-# `@sha256:` alone, which is why this went unnoticed; the exception that proves
-# it is packages/extra/seaweedfs/images/seaweedfs-cosi-driver.tag, digest-less
-# but third-party, so build-main never rebuilds it, the artifact copy is
-# byte-identical and this test is never reached.
+# placeholder it exists to replace. A .tag file that a build has stamped passes
+# on `@sha256:` alone, which is why this went unnoticed: a first-party ref is
+# digest-less only between the commit that adds a new image and the release
+# that first stamps it.
 #
 # Scoped to *.tag because only there is a whole line known to be a reference and
 # nothing else. An unkeyed line in a values.yaml is genuinely unclassifiable and

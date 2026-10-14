@@ -2,3 +2,4 @@
 packages/system/capi-providers-infraprovider/images/cluster-api-provider-kubevirt/patches/*.diff -whitespace
 packages/system/cilium/images/cilium-operator/patches/*.diff -whitespace
 packages/system/seaweedfs/images/seaweedfs/patches/*.diff -whitespace
+packages/system/seaweedfs/images/seaweedfs-cosi-driver/patches/*.diff -whitespace

@@ -1,0 +1,171 @@
+{{- /* Grants the dedicated Object Lock actions to identities issued before the
+       COSI driver granted them; files/object-lock-actions.sh says why. Runs on
+       every install and upgrade and changes nothing once every identity carries
+       them; install covers a release Flux reinstalls, whose filer keeps its
+       identities. The script exits 0 whether or not the grant succeeds, and the
+       Job stays behind for its logs. A pod that never runs still fails the
+       hook. */}}
+{{- if .Values.seaweedfs.cosi.enabled }}
+{{- $name := printf "%s-object-lock-actions" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- $env := .Values.global.seaweedfs.extraEnvironmentVars }}
+{{- $security := .Values.global.seaweedfs.enableSecurity }}
+{{- $fullname := include "seaweedfs.fullname" .Subcharts.seaweedfs }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  object-lock-actions.sh: |
+    {{- .Files.Get "files/object-lock-actions.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+- apiGroups: ["helm.toolkit.fluxcd.io"]
+  resources: ["helmreleases"]
+  resourceNames: [{{ .Release.Name | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: weed
+          image: {{ include "seaweedfs.s3.image" .Subcharts.seaweedfs }}
+          command: ["cp", "/usr/bin/weed", "/opt/weed/weed"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: weed
+              mountPath: /opt/weed
+      containers:
+        - name: grant
+          image: {{ .Values.seaweedfs.volume.resizeHook.image }}
+          command: ["/bin/sh", "/opt/script/object-lock-actions.sh"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          env:
+            - name: PATH
+              value: /opt/weed:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+            - name: MASTER
+              value: {{ $env.WEED_CLUSTER_SW_MASTER | quote }}
+            - name: FILER
+              value: {{ $env.WEED_CLUSTER_SW_FILER | quote }}
+            - name: RELEASE
+              value: {{ .Release.Name | quote }}
+            - name: JOB
+              value: {{ $name | quote }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: weed
+              mountPath: /opt/weed
+            - name: script
+              mountPath: /opt/script
+            {{- if $security }}
+            - name: security-config
+              mountPath: /etc/seaweedfs/security.toml
+              subPath: security.toml
+              readOnly: true
+            - name: ca-cert
+              mountPath: /usr/local/share/ca-certificates/ca/
+              readOnly: true
+            - name: client-cert
+              mountPath: /usr/local/share/ca-certificates/client/
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: weed
+          emptyDir: {}
+        - name: script
+          configMap:
+            name: {{ $name }}
+        {{- if $security }}
+        - name: security-config
+          configMap:
+            name: {{ $fullname }}-security-config
+        - name: ca-cert
+          secret:
+            secretName: {{ $fullname }}-ca-cert
+        - name: client-cert
+          secret:
+            secretName: {{ $fullname }}-client-cert
+        {{- end }}
+{{- end }}
