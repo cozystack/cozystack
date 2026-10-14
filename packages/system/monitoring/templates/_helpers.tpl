@@ -214,3 +214,12 @@
 {{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+  Alertmanager replica count. vmalert lists each replica as its own
+  notifier from the same number, because the Alertmanager cluster only
+  deduplicates notifications when every replica receives every alert.
+*/}}
+{{- define "monitoring.alertmanager.replicas" -}}
+3
+{{- end -}}
