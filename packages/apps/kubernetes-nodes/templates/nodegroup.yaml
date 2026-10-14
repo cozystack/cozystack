@@ -29,6 +29,7 @@
 {{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- include "kubernetes-nodes.assertSubstrateMatches" . }}
 {{- include "kubernetes-nodes.assertOsMatches" . }}
+{{- $labelsAndTaints := include "kubernetes-nodes.labelsAndTaints" . | fromYaml }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- /* Substrate selects which infrastructure provider renders this pool's
        machine template. Everything downstream of the template — autoscaler
@@ -1042,6 +1043,9 @@ spec:
         cluster.x-k8s.io/deployment-name: {{ $clusterName }}-{{ $groupName }}
         {{- range $group.roles }}
         node-role.kubernetes.io/{{ . }}: ""
+        {{- end }}
+        {{- range $k, $v := $labelsAndTaints.capi }}
+        {{ $k }}: {{ $v | quote }}
         {{- end }}
     spec:
       bootstrap:

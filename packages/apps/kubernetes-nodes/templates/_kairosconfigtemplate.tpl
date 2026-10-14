@@ -21,6 +21,7 @@
 {{- $root := .root }}
 {{- $group := .group }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $root | trim }}
+{{- $labelsAndTaints := include "kubernetes-nodes.labelsAndTaints" $root | fromYaml }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $root }}
 {{- $mgmtClusterDomain := (index ($root.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- $searchDomains := list (printf "svc.%s" $mgmtClusterDomain) $mgmtClusterDomain }}
@@ -90,6 +91,28 @@ spec:
         joinConfiguration:
           patches:
             directory: /etc/kubernetes/kairos-patches
+          {{- if or $labelsAndTaints.kubelet $labelsAndTaints.taints }}
+          nodeRegistration:
+            {{- with $labelsAndTaints.kubelet }}
+            {{- $pairs := list }}
+            {{- range $k, $v := . }}
+            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
+            {{- end }}
+            kubeletExtraArgs:
+              - name: node-labels
+                value: {{ join "," $pairs | quote }}
+            {{- end }}
+            {{- with $labelsAndTaints.taints }}
+            taints:
+              {{- range . }}
+              - key: {{ .key | quote }}
+                {{- if .value }}
+                value: {{ .value | quote }}
+                {{- end }}
+                effect: {{ .effect | quote }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
 {{- end }}
 
 {{- define "kubernetes.kairosConfigTemplateHash" -}}
