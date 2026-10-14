@@ -1,0 +1,10 @@
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: fdb-contract
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: FoundationDB
+    name: backup-contract
+  backupClassName: cozy-default
