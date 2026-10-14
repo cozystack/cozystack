@@ -1,0 +1,10 @@
+version = 3
+
+[plugins.'io.containerd.cri.v1.runtime']
+  device_ownership_from_security_context = true
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = 'io.containerd.runc.v2'
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+  SystemdCgroup = true

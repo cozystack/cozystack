@@ -218,6 +218,44 @@ check_bootstrap_version() {
   check_patched_sums capi-providers-bootstrap CABPT bootstrap-components-talos.yaml metadata-talos.yaml
 }
 
+@test "Kairos bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version KAIROS_COMPONENT_VERSION bootstrap-kairos
+}
+
+@test "Kairos bootstrap components-kairos.gz matches the vendored bootstrap-components-kairos.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components-kairos.yaml components-kairos.gz
+}
+
+# The Kairos manifests are rendered from the upstream commit the image is
+# built from, and the component version names that commit. A bump of one
+# without the others ships manifests of one commit running the code of another.
+@test "Kairos bootstrap version names the commit its image is built from" {
+  local dir="$REPO_ROOT/packages/system/capi-providers-bootstrap"
+  local commit version
+  commit="$(sed -n 's/^ARG COMMIT=//p' "$dir/images/cluster-api-provider-kairos/Dockerfile")"
+  version="$(sed -n 's/^KAIROS_COMPONENT_VERSION *= *//p' "$dir/Makefile")"
+  [ "${#commit}" -eq 40 ] || { echo "Dockerfile pins no full upstream commit: '$commit'" >&2; return 1; }
+  case "$version" in
+    *".${commit:0:7}."*) ;;
+    *) echo "KAIROS_COMPONENT_VERSION '$version' does not name commit ${commit:0:7}" >&2; return 1 ;;
+  esac
+}
+
+@test "Kairos bootstrap manifests run the manager image this package builds" {
+  local dir="$REPO_ROOT/packages/system/capi-providers-bootstrap"
+  local tag version
+  tag="$(cat "$dir/images/cluster-api-provider-kairos.tag")"
+  version="$(sed -n 's/^KAIROS_COMPONENT_VERSION *= *//p' "$dir/Makefile")"
+  case "$tag" in
+    *"/cluster-api-provider-kairos:$version@sha256:"*) ;;
+    *) echo "images/cluster-api-provider-kairos.tag '$tag' is not $version pinned by digest" >&2; return 1 ;;
+  esac
+  local images
+  images="$(sed -n 's/^ *image: //p' "$dir/files/bootstrap-components-kairos.yaml" | sort -u)"
+  [ "$images" = "$tag" ] \
+    || { echo "bootstrap-components-kairos.yaml runs '$images', the package builds '$tag'" >&2; return 1; }
+}
+
 @test "kubeadm bootstrap components.gz matches the vendored bootstrap-components.yaml" {
   check_pair capi-providers-bootstrap bootstrap-components.yaml
 }

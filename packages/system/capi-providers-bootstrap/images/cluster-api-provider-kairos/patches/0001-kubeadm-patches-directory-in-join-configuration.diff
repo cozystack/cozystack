@@ -1,0 +1,587 @@
+diff --git a/api/bootstrap/v1beta2/distribution.go b/api/bootstrap/v1beta2/distribution.go
+index b4d435c..3f97092 100644
+--- a/api/bootstrap/v1beta2/distribution.go
++++ b/api/bootstrap/v1beta2/distribution.go
+@@ -19,6 +19,7 @@ package v1beta2
+ import (
+ 	"encoding/json"
+ 	"fmt"
++	"path"
+ 	"strings"
+ 
+ 	"k8s.io/apimachinery/pkg/util/validation"
+@@ -277,5 +278,14 @@ func validateKubeadmConfig(kc *KairosConfig) field.ErrorList {
+ 		}
+ 	}
+ 
++	// The directory is created on the node and a kubelet patch is written into
++	// it, so it has to name one unambiguous absolute location.
++	if dir := jc.Patches.Directory; dir != "" && (!path.IsAbs(dir) || path.Clean(dir) != dir) {
++		errs = append(errs, field.Invalid(
++			jcPath.Child("patches", "directory"), dir,
++			"patches.directory must be an absolute, clean path",
++		))
++	}
++
+ 	return errs
+ }
+diff --git a/api/bootstrap/v1beta2/kubeadm_webhook_test.go b/api/bootstrap/v1beta2/kubeadm_webhook_test.go
+index 83b6ecd..eeaf89b 100644
+--- a/api/bootstrap/v1beta2/kubeadm_webhook_test.go
++++ b/api/bootstrap/v1beta2/kubeadm_webhook_test.go
+@@ -120,6 +120,33 @@ func TestValidateKubeadmConfig_Refusals(t *testing.T) {
+ 			},
+ 			wantSub: "nodeRegistration.name must be a valid DNS-1123 subdomain",
+ 		},
++		{
++			name: "relative patches.directory is refused",
++			mutate: func(kc *KairosConfig) {
++				kc.Spec.Kubeadm = &KubeadmConfig{JoinConfiguration: &kubeadmv1.JoinConfiguration{
++					Patches: kubeadmv1.Patches{Directory: "etc/kubernetes/patches"},
++				}}
++			},
++			wantSub: "patches.directory must be an absolute, clean path",
++		},
++		{
++			name: "patches.directory with a trailing slash is refused",
++			mutate: func(kc *KairosConfig) {
++				kc.Spec.Kubeadm = &KubeadmConfig{JoinConfiguration: &kubeadmv1.JoinConfiguration{
++					Patches: kubeadmv1.Patches{Directory: "/etc/kubernetes/patches/"},
++				}}
++			},
++			wantSub: "patches.directory must be an absolute, clean path",
++		},
++		{
++			name: "patches.directory with a .. segment is refused",
++			mutate: func(kc *KairosConfig) {
++				kc.Spec.Kubeadm = &KubeadmConfig{JoinConfiguration: &kubeadmv1.JoinConfiguration{
++					Patches: kubeadmv1.Patches{Directory: "/etc/kubernetes/../patches"},
++				}}
++			},
++			wantSub: "patches.directory must be an absolute, clean path",
++		},
+ 	}
+ 	for _, tc := range cases {
+ 		tc := tc
+@@ -151,6 +178,11 @@ func TestValidateKubeadmConfig_Accepts(t *testing.T) {
+ 				NodeRegistration: kubeadmv1.NodeRegistrationOptions{Name: "worker-0"},
+ 			}}
+ 		}},
++		{"absolute patches.directory", func(kc *KairosConfig) {
++			kc.Spec.Kubeadm = &KubeadmConfig{JoinConfiguration: &kubeadmv1.JoinConfiguration{
++				Patches: kubeadmv1.Patches{Directory: "/etc/kubernetes/patches"},
++			}}
++		}},
+ 		{"caCertHashes set without inline token is allowed", func(kc *KairosConfig) {
+ 			kc.Spec.Kubeadm = &KubeadmConfig{JoinConfiguration: &kubeadmv1.JoinConfiguration{
+ 				Discovery: kubeadmv1.Discovery{BootstrapToken: kubeadmv1.BootstrapTokenDiscovery{
+diff --git a/internal/bootstrap/render_dispatch_test.go b/internal/bootstrap/render_dispatch_test.go
+index ada012b..068ab15 100644
+--- a/internal/bootstrap/render_dispatch_test.go
++++ b/internal/bootstrap/render_dispatch_test.go
+@@ -58,6 +58,7 @@ func dispatchKubeadmWorkerData(kubevirt bool) TemplateData {
+ 			JoinConfiguration: "apiVersion: kubeadm.k8s.io/v1beta4\nkind: JoinConfiguration\nnodeRegistration:\n  name: kairos-worker-0\n",
+ 			ProviderIDPatch:   "providerID: \"vsphere://vm-uuid\"\n",
+ 			KubernetesVersion: "v1.30.0",
++			PatchesDirectory:  "/etc/kubernetes/kairos-patches",
+ 		},
+ 	}
+ 	if kubevirt {
+diff --git a/internal/bootstrap/template.go b/internal/bootstrap/template.go
+index c926f48..5d95e85 100644
+--- a/internal/bootstrap/template.go
++++ b/internal/bootstrap/template.go
+@@ -175,6 +175,10 @@ type KubeadmTemplateData struct {
+ 	// KubernetesVersion is the exact Kubernetes version the node must run
+ 	// (Machine.spec.version). The join unit refuses on a `kubeadm version` mismatch.
+ 	KubernetesVersion string
++	// PatchesDirectory is the absolute kubeadm patches directory that
++	// JoinConfiguration names. The join unit creates it, because kubeadm fails on
++	// a missing one, and ProviderIDPatch is written into it.
++	PatchesDirectory string
+ }
+ 
+ // HasKubeadm reports whether this render carries kubeadm worker-join inputs.
+diff --git a/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl b/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
+index 18540c2..477ecd7 100644
+--- a/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
++++ b/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
+@@ -75,9 +75,10 @@ write_files:
+ {{ .Kubeadm.JoinConfiguration | indent 6 }}
+   {{- if .Kubeadm.ProviderIDPatch }}
+   # kubeadm patch: sets the kubelet providerID so the Node registers with the
+-  # infrastructure provider's providerID (ADR 0010 P1 item 4). Applied via
+-  # `kubeadm join --patches`, so no YAML tool is needed on the node.
+-  - path: /etc/kubernetes/kairos-patches/kubeletconfiguration0+merge.yaml
++  # infrastructure provider's providerID (ADR 0010 P1 item 4). kubeadm reads it
++  # from the patches directory JoinConfiguration names, so no YAML tool is
++  # needed on the node.
++  - path: {{ printf "%s/kubeletconfiguration0+merge.yaml" .Kubeadm.PatchesDirectory | quote }}
+     permissions: "0600"
+     owner: root:root
+     content: |
+@@ -132,11 +133,10 @@ write_files:
+       # mid-join is refused (not retried) on the next boot.
+       : > "${ATTEMPTED}"
+ 
+-      JOIN_ARGS=(--config /etc/kubernetes/kairos-kubeadm-join.yaml)
+-      {{- if .Kubeadm.ProviderIDPatch }}
+-      JOIN_ARGS+=(--patches /etc/kubernetes/kairos-patches)
+-      {{- end }}
+-      kubeadm join "${JOIN_ARGS[@]}"
++      # kubeadm fails on a missing patches directory, and write_files creates it
++      # only when it has a patch to put there.
++      mkdir -p {{ .Kubeadm.PatchesDirectory | shquote }}
++      kubeadm join --config /etc/kubernetes/kairos-kubeadm-join.yaml
+ 
+       # Verified success: mark complete on persistent storage.
+       : > "${COMPLETED}"
+diff --git a/internal/bootstrap/validate.go b/internal/bootstrap/validate.go
+index 54a804f..68662cf 100644
+--- a/internal/bootstrap/validate.go
++++ b/internal/bootstrap/validate.go
+@@ -20,6 +20,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"net"
++	"path"
+ 	"regexp"
+ 	"strings"
+ 
+@@ -194,6 +195,11 @@ func validateTemplateData(d *TemplateData) error {
+ 		if strings.Contains(d.Kubeadm.ProviderIDPatch, "{{") {
+ 			errs = append(errs, fmt.Errorf("kubeadm.providerIDPatch must not contain '{{'"))
+ 		}
++		if dir := d.Kubeadm.PatchesDirectory; !path.IsAbs(dir) || path.Clean(dir) != dir {
++			errs = append(errs, fmt.Errorf("kubeadm.patchesDirectory %q must be an absolute, clean path", dir))
++		} else if err := rejectControlChars("kubeadm.patchesDirectory", dir); err != nil {
++			errs = append(errs, err)
++		}
+ 	}
+ 	return errors.Join(errs...)
+ }
+diff --git a/internal/bootstrap/validate_test.go b/internal/bootstrap/validate_test.go
+index 5abcc4a..190a0b0 100644
+--- a/internal/bootstrap/validate_test.go
++++ b/internal/bootstrap/validate_test.go
+@@ -118,3 +118,30 @@ func TestValidate_NilManagementEndpointSkipsNestedCheck(t *testing.T) {
+ 		t.Fatalf("render with nil ManagementEndpoint should not error: %v", err)
+ 	}
+ }
++
++// TestValidate_KubeadmPatchesDirectory asserts the renderer refuses a kubeadm
++// patches directory it cannot safely place a file in and create on the node.
++func TestValidate_KubeadmPatchesDirectory(t *testing.T) {
++	cases := []struct {
++		dir     string
++		wantErr bool
++	}{
++		{"/etc/kubernetes/kairos-patches", false},
++		{"", true},
++		{"etc/kubernetes/patches", true},
++		{"/etc/kubernetes/../patches", true},
++		{"/etc/kubernetes/patches/", true},
++		{"/etc/kubernetes/pat\nches", true},
++	}
++	for _, tc := range cases {
++		d := dispatchKubeadmWorkerData(false)
++		d.Kubeadm.PatchesDirectory = tc.dir
++		err := validateTemplateData(&d)
++		if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "kubeadm.patchesDirectory")) {
++			t.Errorf("dir %q: want a kubeadm.patchesDirectory error, got %v", tc.dir, err)
++		}
++		if !tc.wantErr && err != nil {
++			t.Errorf("dir %q: want no error, got %v", tc.dir, err)
++		}
++	}
++}
+diff --git a/internal/controllers/bootstrap/join.go b/internal/controllers/bootstrap/join.go
+index 57e0a39..5af409c 100644
+--- a/internal/controllers/bootstrap/join.go
++++ b/internal/controllers/bootstrap/join.go
+@@ -94,6 +94,8 @@ type KubeadmJoinMaterial struct {
+ 	JoinConfiguration string
+ 	// KubernetesVersion is the exact version the node must run (Machine.spec.version).
+ 	KubernetesVersion string
++	// PatchesDirectory is the kubeadm patches directory named in JoinConfiguration.
++	PatchesDirectory string
+ 	// TokenID is the non-secret ID half ("[a-z0-9]{6}") of the minted bootstrap
+ 	// token, written to KairosConfig.status.bootstrapTokenID for audit. Never the
+ 	// secret half.
+diff --git a/internal/controllers/bootstrap/kubeadm.go b/internal/controllers/bootstrap/kubeadm.go
+index f1e5b47..286b8e3 100644
+--- a/internal/controllers/bootstrap/kubeadm.go
++++ b/internal/controllers/bootstrap/kubeadm.go
+@@ -225,7 +225,7 @@ func (s *kubeadmJoinSource) WorkerJoin(ctx context.Context, req JoinRequest) (Wo
+ 			"waiting to mint a bootstrap token in the workload cluster: %v", err)
+ 	}
+ 
+-	joinCfgYAML, err := s.renderJoinConfiguration(req, trusted, token)
++	joinCfgYAML, patchesDir, err := s.renderJoinConfiguration(req, trusted, token)
+ 	if err != nil {
+ 		// A render failure is terminal: it is a bad spec or version, not transient.
+ 		return WorkerJoinMaterial{}, err
+@@ -234,6 +234,7 @@ func (s *kubeadmJoinSource) WorkerJoin(ctx context.Context, req JoinRequest) (Wo
+ 	return WorkerJoinMaterial{Kubeadm: &KubeadmJoinMaterial{
+ 		JoinConfiguration: joinCfgYAML,
+ 		KubernetesVersion: req.Machine.Spec.Version,
++		PatchesDirectory:  patchesDir,
+ 		TokenID:           tokenID,
+ 	}}, nil
+ }
+@@ -405,9 +406,9 @@ func (s *kubeadmJoinSource) verifyTrustChain(ctx context.Context, req JoinReques
+ 
+ // renderJoinConfiguration overlays the controller-owned fields onto the user's
+ // JoinConfiguration (if any) and marshals it with the CAPI version-aware
+-// marshaller. The minted token lands in discovery.bootstrapToken.token; it is
+-// never logged.
+-func (s *kubeadmJoinSource) renderJoinConfiguration(req JoinRequest, trusted trustedControlPlane, token string) (string, error) {
++// marshaller, returning it with the kubeadm patches directory it names. The
++// minted token lands in discovery.bootstrapToken.token; it is never logged.
++func (s *kubeadmJoinSource) renderJoinConfiguration(req JoinRequest, trusted trustedControlPlane, token string) (joinConfig, patchesDir string, err error) {
+ 	var jc kubeadmv1.JoinConfiguration
+ 	if req.Config != nil && req.Config.Spec.Kubeadm != nil && req.Config.Spec.Kubeadm.JoinConfiguration != nil {
+ 		jc = *req.Config.Spec.Kubeadm.JoinConfiguration.DeepCopy()
+@@ -427,7 +428,7 @@ func (s *kubeadmJoinSource) renderJoinConfiguration(req JoinRequest, trusted tru
+ 	}
+ 	endpoint, err := kubeadmJoinEndpoint(serverAddress, trusted)
+ 	if err != nil {
+-		return "", err
++		return "", "", err
+ 	}
+ 
+ 	// Bootstrap-token discovery: the minted token, the endpoint, and the CA pin.
+@@ -447,16 +448,21 @@ func (s *kubeadmJoinSource) renderJoinConfiguration(req JoinRequest, trusted tru
+ 	// too, but KairosConfigTemplate has no webhook registered, so without this the
+ 	// only gate would be admission on the KairosConfig CAPI core derives from it.
+ 	jc.ControlPlane = nil
++	// kubeadm refuses --patches next to --config, so the directory the
++	// providerID patch lands in is carried by the configuration itself.
++	if jc.Patches.Directory == "" {
++		jc.Patches.Directory = defaultKubeadmPatchesDir
++	}
+ 
+ 	version, err := semver.ParseTolerant(req.Machine.Spec.Version)
+ 	if err != nil {
+-		return "", fmt.Errorf("invalid Machine.spec.version %q: %w", req.Machine.Spec.Version, err)
++		return "", "", fmt.Errorf("invalid Machine.spec.version %q: %w", req.Machine.Spec.Version, err)
+ 	}
+ 	out, err := kubeadmtypes.MarshalJoinConfigurationForVersion(&jc, version)
+ 	if err != nil {
+-		return "", fmt.Errorf("marshal kubeadm JoinConfiguration: %w", err)
++		return "", "", fmt.Errorf("marshal kubeadm JoinConfiguration: %w", err)
+ 	}
+-	return out, nil
++	return out, jc.Patches.Directory, nil
+ }
+ 
+ func (s *kubeadmJoinSource) ttl() time.Duration {
+diff --git a/internal/controllers/bootstrap/kubeadm_join_command_test.go b/internal/controllers/bootstrap/kubeadm_join_command_test.go
+new file mode 100644
+index 0000000..1858e24
+--- /dev/null
++++ b/internal/controllers/bootstrap/kubeadm_join_command_test.go
+@@ -0,0 +1,280 @@
++/*
++Copyright 2024 The Kairos CAPI Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++implied. See the License for the specific language governing
++permissions and limitations under the License.
++*/
++
++package bootstrap
++
++import (
++	"bufio"
++	"context"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"testing"
++
++	. "github.com/onsi/gomega"
++	"gopkg.in/yaml.v3"
++	kubeadmv1 "sigs.k8s.io/cluster-api/api/bootstrap/kubeadm/v1beta2"
++
++	bootstrapv1beta2 "github.com/kairos-io/cluster-api-provider-kairos/api/bootstrap/v1beta2"
++	"github.com/kairos-io/cluster-api-provider-kairos/internal/bootstrap"
++)
++
++const (
++	kubeadmJoinScriptPath      = "/usr/local/bin/kairos-kubeadm-post-bootstrap.sh"
++	kubeadmProviderIDPatchFile = "kubeletconfiguration0+merge.yaml"
++)
++
++// kubeadmFlagsAllowedWithConfig mirrors isAllowedFlag in kubeadm's
++// cmd/kubeadm/app/apis/kubeadm/validation/validation.go: with --config, kubeadm
++// refuses every other flag except these and any "skip-*" flag.
++var kubeadmFlagsAllowedWithConfig = map[string]bool{
++	"config": true, "ignore-preflight-errors": true, "dry-run": true,
++	"kubeconfig": true, "node-name": true, "kubeconfig-dir": true, "upload-certs": true,
++	"print-manifest": true, "allow-missing-template-keys": true, "output": true,
++	"show-managed-fields": true, "print-join-command": true, "rootfs": true,
++	"v": true, "log-file": true, "yes": true,
++}
++
++// TestKubeadmJoinCommand runs the rendered join script against a kubeadm stub and
++// checks the command line it produces against kubeadm's own rules. With
++// KUBEADM_BIN set to a real kubeadm binary, the stub hands the call to it with
++// every join phase skipped, which exercises flag parsing and config loading
++// without touching the host or the network.
++func TestKubeadmJoinCommand(t *testing.T) {
++	if _, err := exec.LookPath("bash"); err != nil {
++		t.Skip("bash not available")
++	}
++	cases := []struct {
++		name         string
++		providerID   string
++		userPatches  string
++		wantPatchDir string
++	}{
++		{"providerID known", "kubevirt://worker-0", "", defaultKubeadmPatchesDir},
++		{"providerID unknown", "", "", defaultKubeadmPatchesDir},
++		{"user patches directory", "kubevirt://worker-0", "/etc/kubernetes/user-patches", "/etc/kubernetes/user-patches"},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			g := NewWithT(t)
++			version := kubeadmTestVersion(t)
++			cloudConfig := renderKubeadmWorker(t, version, tc.providerID, tc.userPatches)
++
++			root := t.TempDir()
++			script := materializeWriteFiles(t, cloudConfig, root)
++			args, joinConfigPath := runJoinScript(t, root, script, version)
++
++			g.Expect(args).NotTo(BeEmpty())
++			g.Expect(args[0]).To(Equal("join"))
++			for _, a := range args[1:] {
++				if !strings.HasPrefix(a, "--") {
++					continue
++				}
++				name := strings.SplitN(strings.TrimPrefix(a, "--"), "=", 2)[0]
++				g.Expect(kubeadmFlagsAllowedWithConfig[name] || strings.HasPrefix(name, "skip-")).
++					To(BeTrue(), "kubeadm refuses --%s together with --config", name)
++			}
++
++			raw, err := os.ReadFile(joinConfigPath)
++			g.Expect(err).NotTo(HaveOccurred())
++			var jc struct {
++				Patches struct {
++					Directory string `yaml:"directory"`
++				} `yaml:"patches"`
++			}
++			g.Expect(yaml.Unmarshal(raw, &jc)).To(Succeed())
++			g.Expect(jc.Patches.Directory).To(Equal(root + tc.wantPatchDir))
++			info, err := os.Stat(jc.Patches.Directory)
++			g.Expect(err).NotTo(HaveOccurred(), "kubeadm fails when the patches directory is missing")
++			g.Expect(info.IsDir()).To(BeTrue())
++
++			patch := filepath.Join(jc.Patches.Directory, kubeadmProviderIDPatchFile)
++			if tc.providerID == "" {
++				g.Expect(patch).NotTo(BeAnExistingFile())
++			} else {
++				content, err := os.ReadFile(patch)
++				g.Expect(err).NotTo(HaveOccurred())
++				g.Expect(string(content)).To(ContainSubstring(tc.providerID))
++			}
++			g.Expect(filepath.Join(root, "/var/lib/kairos/kairos-kubeadm-join.completed")).To(BeAnExistingFile())
++
++			if bin := os.Getenv("KUBEADM_BIN"); bin != "" {
++				out, err := exec.Command(bin, "config", "validate", "--config", joinConfigPath).CombinedOutput()
++				g.Expect(err).NotTo(HaveOccurred(), "kubeadm config validate: %s", out)
++			}
++		})
++	}
++}
++
++// kubeadmTestVersion is the Machine version to render for: the version of
++// KUBEADM_BIN when set, since the JoinConfiguration API version follows it.
++func kubeadmTestVersion(t *testing.T) string {
++	t.Helper()
++	bin := os.Getenv("KUBEADM_BIN")
++	if bin == "" {
++		return "v1.30.0"
++	}
++	out, err := exec.Command(bin, "version", "--output", "short").Output()
++	if err != nil {
++		t.Fatalf("%s version: %v", bin, err)
++	}
++	return strings.TrimSpace(string(out))
++}
++
++func renderKubeadmWorker(t *testing.T, version, providerID, userPatches string) string {
++	t.Helper()
++	src, req, _ := buildSource(t, defaultFixture(genTestCA(t, "cluster-ca")), nil)
++	req.Machine.Spec.Version = version
++	if userPatches != "" {
++		req.Config.Spec.Kubeadm = &bootstrapv1beta2.KubeadmConfig{
++			JoinConfiguration: &kubeadmv1.JoinConfiguration{
++				Patches: kubeadmv1.Patches{Directory: userPatches},
++			},
++		}
++	}
++	mat, err := src.WorkerJoin(context.Background(), req)
++	if err != nil {
++		t.Fatalf("WorkerJoin: %v", err)
++	}
++	td := bootstrap.TemplateData{
++		Role:       "worker",
++		UserName:   "kairos",
++		UserGroups: []string{"admin"},
++		GitHubUser: "testuser",
++		ProviderID: providerID,
++	}
++	bootstrapDistributions[bootstrapv1beta2.DistributionKubeadm].fillTemplateData(&td, req.Config, "", mat)
++	out, err := bootstrap.Render(bootstrapv1beta2.DistributionKubeadm, td)
++	if err != nil {
++		t.Fatalf("Render: %v", err)
++	}
++	return out
++}
++
++// materializeWriteFiles writes every write_files entry under root and returns the
++// join script's path. Absolute node paths in file contents are re-rooted too, so
++// the script and the JoinConfiguration agree on where things live.
++func materializeWriteFiles(t *testing.T, cloudConfig, root string) string {
++	t.Helper()
++	var cc struct {
++		WriteFiles []struct {
++			Path    string `yaml:"path"`
++			Content string `yaml:"content"`
++		} `yaml:"write_files"`
++	}
++	if err := yaml.Unmarshal([]byte(cloudConfig), &cc); err != nil {
++		t.Fatalf("parse cloud-config: %v", err)
++	}
++	reroot := regexp.MustCompile(`(^|[\s"'=:(])(/etc/kubernetes|/var/lib/kairos)`)
++	script := ""
++	for _, f := range cc.WriteFiles {
++		dst := filepath.Join(root, f.Path)
++		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
++			t.Fatal(err)
++		}
++		content := reroot.ReplaceAllString(f.Content, "${1}"+root+"${2}")
++		if err := os.WriteFile(dst, []byte(content), 0o700); err != nil {
++			t.Fatal(err)
++		}
++		if f.Path == kubeadmJoinScriptPath {
++			script = dst
++		}
++	}
++	if script == "" {
++		t.Fatalf("rendered cloud-config has no %s", kubeadmJoinScriptPath)
++	}
++	return script
++}
++
++// runJoinScript runs the join script with a kubeadm stub first on PATH and returns
++// the arguments the script passed to `kubeadm join` plus the --config path.
++func runJoinScript(t *testing.T, root, script, version string) ([]string, string) {
++	t.Helper()
++	stubDir := t.TempDir()
++	argsFile := filepath.Join(stubDir, "join-args")
++	stub := `#!/bin/bash
++set -euo pipefail
++if [ "$1" = version ]; then echo "$WANT_KUBEADM_VERSION"; exit 0; fi
++printf '%s\n' "$@" > "$KUBEADM_ARGS_FILE"
++if [ -n "${KUBEADM_BIN:-}" ]; then
++  exec "$KUBEADM_BIN" "$@" --skip-phases="$KUBEADM_JOIN_PHASES"
++fi
++`
++	if err := os.WriteFile(filepath.Join(stubDir, "kubeadm"), []byte(stub), 0o700); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command("bash", script)
++	cmd.Env = append(os.Environ(),
++		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
++		"WANT_KUBEADM_VERSION="+version,
++		"KUBEADM_ARGS_FILE="+argsFile,
++		"KUBEADM_JOIN_PHASES="+kubeadmJoinPhases(t),
++	)
++	if out, err := cmd.CombinedOutput(); err != nil {
++		t.Fatalf("join script failed: %v\n%s", err, out)
++	}
++	raw, err := os.ReadFile(argsFile)
++	if err != nil {
++		t.Fatalf("kubeadm join was not invoked: %v", err)
++	}
++	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
++	configPath := ""
++	for i, a := range args {
++		if a == "--config" && i+1 < len(args) {
++			configPath = args[i+1]
++		} else if v, ok := strings.CutPrefix(a, "--config="); ok {
++			configPath = v
++		}
++	}
++	if !strings.HasPrefix(configPath, root) {
++		t.Fatalf("kubeadm join got no --config under the test root: %v", args)
++	}
++	return args, configPath
++}
++
++// kubeadmJoinPhases lists the top-level `kubeadm join` phases of KUBEADM_BIN, so
++// skipping them all keeps working when kubeadm adds a phase.
++func kubeadmJoinPhases(t *testing.T) string {
++	t.Helper()
++	bin := os.Getenv("KUBEADM_BIN")
++	if bin == "" {
++		return ""
++	}
++	out, err := exec.Command(bin, "join", "--help").Output()
++	if err != nil {
++		t.Fatalf("%s join --help: %v", bin, err)
++	}
++	var phases []string
++	inList := false
++	sc := bufio.NewScanner(strings.NewReader(string(out)))
++	for sc.Scan() {
++		line := sc.Text()
++		switch {
++		case strings.Contains(line, "executes the following phases"):
++			inList = true
++		case inList && strings.HasPrefix(line, "```") && len(phases) > 0:
++			inList = false
++		case inList && line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "```"):
++			phases = append(phases, strings.Fields(line)[0])
++		}
++	}
++	if len(phases) == 0 {
++		t.Fatalf("no phases found in `%s join --help`", bin)
++	}
++	return strings.Join(phases, ",")
++}
+diff --git a/internal/controllers/bootstrap/render.go b/internal/controllers/bootstrap/render.go
+index c1a26ce..9fc651a 100644
+--- a/internal/controllers/bootstrap/render.go
++++ b/internal/controllers/bootstrap/render.go
+@@ -79,6 +79,7 @@ var bootstrapDistributions = map[string]bootstrapDistribution{
+ 			td.Kubeadm = &bootstrap.KubeadmTemplateData{
+ 				JoinConfiguration: w.Kubeadm.JoinConfiguration,
+ 				KubernetesVersion: w.Kubeadm.KubernetesVersion,
++				PatchesDirectory:  w.Kubeadm.PatchesDirectory,
+ 				ProviderIDPatch:   kubeadmProviderIDPatch(td.ProviderID),
+ 			}
+ 		},
+@@ -86,6 +87,10 @@ var bootstrapDistributions = map[string]bootstrapDistribution{
+ 	},
+ }
+ 
++// defaultKubeadmPatchesDir is the kubeadm patches directory used when the spec
++// does not name one.
++const defaultKubeadmPatchesDir = "/etc/kubernetes/kairos-patches"
++
+ // kubeadmProviderIDPatch returns a kubeadm kubeletconfiguration merge-patch that
+ // sets the Node providerID (ADR 0010 P1 item 4), or "" when no providerID is known
+ // (the infra provider owns it, e.g. Metal3, or it is discovered on-node). providerID

@@ -1,0 +1,2624 @@
+diff --git a/internal/bootstrap/dropin_test.go b/internal/bootstrap/dropin_test.go
+new file mode 100644
+index 0000000..14adfb8
+--- /dev/null
++++ b/internal/bootstrap/dropin_test.go
+@@ -0,0 +1,55 @@
++/*
++Copyright 2024 The Kairos CAPI Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++implied. See the License for the specific language governing
++permissions and limitations under the License.
++*/
++
++package bootstrap
++
++import (
++	"regexp"
++	"strings"
++	"testing"
++)
++
++// providerIDDropInWrite matches a shell redirect into a providerID drop-in
++// that k3s or the kubelet reads, or into a temporary name every writer shares.
++var providerIDDropInWrite = regexp.MustCompile(`>\s*"?\S*/(90-provider-id\.yaml|10-provider-id\.conf)(\.tmp)?"?'?\s*$`)
++
++// TestTemplates_ProviderIDDropInWrittenAtomically pins that the discovery
++// scripts write the providerID drop-ins to a per-process temporary file and
++// rename it into place. The boot stage and the unit's ExecStartPre run the
++// same script concurrently, and a reader must never see the file truncated
++// mid-write. An ExecStartPre that writes a static providerID itself is exempt:
++// the other writer of that drop-in, write_files, lands before runcmd starts k3s,
++// and the ExecStartPre finishes before k3s reads it.
++func TestTemplates_ProviderIDDropInWrittenAtomically(t *testing.T) {
++	entries, err := templateFS.ReadDir("templates")
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, e := range entries {
++		raw, err := templateFS.ReadFile("templates/" + e.Name())
++		if err != nil {
++			t.Fatal(err)
++		}
++		for i, line := range strings.Split(string(raw), "\n") {
++			if strings.HasPrefix(strings.TrimSpace(line), "ExecStartPre=") {
++				continue
++			}
++			if providerIDDropInWrite.MatchString(line) {
++				t.Errorf("%s:%d writes the drop-in in place or through a shared name; write a .tmp.$$ file and mv it: %s", e.Name(), i+1, strings.TrimSpace(line))
++			}
++		}
++	}
++}
+diff --git a/internal/bootstrap/runcmd_test.go b/internal/bootstrap/runcmd_test.go
+new file mode 100644
+index 0000000..7a464ed
+--- /dev/null
++++ b/internal/bootstrap/runcmd_test.go
+@@ -0,0 +1,119 @@
++/*
++Copyright 2024 The Kairos CAPI Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++implied. See the License for the specific language governing
++permissions and limitations under the License.
++*/
++
++package bootstrap
++
++import (
++	"path"
++	"regexp"
++	"strings"
++	"testing"
++
++	yaml "gopkg.in/yaml.v3"
++
++	bootstrapv1beta2 "github.com/kairos-io/cluster-api-provider-kairos/api/bootstrap/v1beta2"
++)
++
++// execLine matches any Exec*= command line of a unit (ExecStart, ExecStartPre,
++// ExecStartPost, ExecReload, ...).
++var execLine = regexp.MustCompile(`^\s*Exec[A-Za-z]*=(.*)$`)
++
++// systemctlStart matches a systemctl call that starts a unit.
++var systemctlStart = regexp.MustCompile(`\bsystemctl\b.*(\s--now\b|\s(re)?start\s)`)
++
++// TestRender_PostBootstrapStartDoesNotBlock pins that runcmd, and any unit that
++// starts another unit, only queue a oneshot unit from the same cloud-config.
++// The post-bootstrap units are oneshots that can retry for minutes, and
++// systemctl without --no-block waits for a oneshot to finish, which holds the
++// cloud-config stage for that long, so users and SSH keys are not applied
++// until it ends.
++func TestRender_PostBootstrapStartDoesNotBlock(t *testing.T) {
++	worker := func(d TemplateData) TemplateData {
++		d.Role = "worker"
++		return d
++	}
++	cases := []struct {
++		name string
++		dist string
++		data TemplateData
++	}{
++		{"kubeadm capv", bootstrapv1beta2.DistributionKubeadm, dispatchKubeadmWorkerData(false)},
++		{"kubeadm capk", bootstrapv1beta2.DistributionKubeadm, dispatchKubeadmWorkerData(true)},
++		{"k3s capv control-plane", bootstrapv1beta2.DistributionK3s, dispatchCPData(false)},
++		{"k3s capk control-plane", bootstrapv1beta2.DistributionK3s, dispatchCPData(true)},
++		{"k3s capv worker", bootstrapv1beta2.DistributionK3s, worker(dispatchCPData(false))},
++		{"k3s capk worker", bootstrapv1beta2.DistributionK3s, worker(dispatchCPData(true))},
++		{"k0s capv control-plane", bootstrapv1beta2.DistributionK0s, dispatchCPData(false)},
++		{"k0s capk control-plane", bootstrapv1beta2.DistributionK0s, dispatchCPData(true)},
++		{"k0s capv worker", bootstrapv1beta2.DistributionK0s, worker(dispatchCPData(false))},
++		{"k0s capk worker", bootstrapv1beta2.DistributionK0s, worker(dispatchCPData(true))},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			out, err := Render(tc.dist, tc.data)
++			if err != nil {
++				t.Fatalf("Render: %v", err)
++			}
++			var cc struct {
++				RunCmd     []string `yaml:"runcmd"`
++				WriteFiles []struct {
++					Path    string `yaml:"path"`
++					Content string `yaml:"content"`
++				} `yaml:"write_files"`
++			}
++			if err := yaml.Unmarshal([]byte(stripCloudConfigHeader(out)), &cc); err != nil {
++				t.Fatalf("parse cloud-config: %v", err)
++			}
++			oneshot := map[string]bool{}
++			commands := append([]string(nil), cc.RunCmd...)
++			for _, f := range cc.WriteFiles {
++				if !strings.HasSuffix(f.Path, ".service") {
++					continue
++				}
++				if strings.Contains(f.Content, "Type=oneshot") {
++					oneshot[path.Base(f.Path)] = true
++				}
++				for _, line := range strings.Split(f.Content, "\n") {
++					if m := execLine.FindStringSubmatch(line); m != nil {
++						commands = append(commands, m[1])
++					}
++				}
++			}
++			started := 0
++			for _, c := range commands {
++				if !systemctlStart.MatchString(c) || !startsOneOf(c, oneshot) {
++					continue
++				}
++				started++
++				if !strings.Contains(c, "--no-block") {
++					t.Errorf("%q waits for a oneshot unit to finish; add --no-block", c)
++				}
++			}
++			if started == 0 {
++				t.Fatal("no systemctl start of a oneshot unit found")
++			}
++		})
++	}
++}
++
++func startsOneOf(command string, units map[string]bool) bool {
++	for _, f := range strings.Fields(command) {
++		if units[f] {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/internal/bootstrap/stages_test.go b/internal/bootstrap/stages_test.go
+new file mode 100644
+index 0000000..ea7cd3e
+--- /dev/null
++++ b/internal/bootstrap/stages_test.go
+@@ -0,0 +1,87 @@
++/*
++Copyright 2024 The Kairos CAPI Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++implied. See the License for the specific language governing
++permissions and limitations under the License.
++*/
++
++package bootstrap
++
++import (
++	"testing"
++
++	yaml "gopkg.in/yaml.v3"
++
++	bootstrapv1beta2 "github.com/kairos-io/cluster-api-provider-kairos/api/bootstrap/v1beta2"
++)
++
++// TestRender_DNSResolversBeforeRuncmd pins that spec.dnsServers is applied in
++// boot.before. yip turns runcmd into the first step of the boot stage, ahead
++// of every stages.boot step, so a DNS step in boot is written only after
++// runcmd has started the join or post-bootstrap unit.
++func TestRender_DNSResolversBeforeRuncmd(t *testing.T) {
++	withDNS := func(d TemplateData) TemplateData {
++		d.DNSServers = []string{"192.0.2.53"}
++		return d
++	}
++	worker := func(d TemplateData) TemplateData {
++		d.Role = "worker"
++		return d
++	}
++	cases := []struct {
++		name string
++		dist string
++		data TemplateData
++	}{
++		{"kubeadm capv", bootstrapv1beta2.DistributionKubeadm, dispatchKubeadmWorkerData(false)},
++		{"kubeadm capk", bootstrapv1beta2.DistributionKubeadm, dispatchKubeadmWorkerData(true)},
++		{"k3s capv control-plane", bootstrapv1beta2.DistributionK3s, dispatchCPData(false)},
++		{"k3s capk control-plane", bootstrapv1beta2.DistributionK3s, dispatchCPData(true)},
++		{"k3s capv worker", bootstrapv1beta2.DistributionK3s, worker(dispatchCPData(false))},
++		{"k3s capk worker", bootstrapv1beta2.DistributionK3s, worker(dispatchCPData(true))},
++		{"k0s capv control-plane", bootstrapv1beta2.DistributionK0s, dispatchCPData(false)},
++		{"k0s capk control-plane", bootstrapv1beta2.DistributionK0s, dispatchCPData(true)},
++		{"k0s capv worker", bootstrapv1beta2.DistributionK0s, worker(dispatchCPData(false))},
++		{"k0s capk worker", bootstrapv1beta2.DistributionK0s, worker(dispatchCPData(true))},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			out, err := Render(tc.dist, withDNS(tc.data))
++			if err != nil {
++				t.Fatalf("Render: %v", err)
++			}
++			var cc struct {
++				Stages map[string][]map[string]any `yaml:"stages"`
++			}
++			if err := yaml.Unmarshal([]byte(stripCloudConfigHeader(out)), &cc); err != nil {
++				t.Fatalf("parse cloud-config: %v", err)
++			}
++			for _, step := range cc.Stages["boot"] {
++				if _, ok := step["dns"]; ok {
++					t.Errorf("boot stage step %q sets DNS; it runs after runcmd", step["name"])
++				}
++			}
++			found := false
++			for _, step := range cc.Stages["boot.before"] {
++				if dns, ok := step["dns"].(map[string]any); ok {
++					found = true
++					if ns, _ := dns["nameservers"].([]any); len(ns) != 1 || ns[0] != "192.0.2.53" {
++						t.Errorf("boot.before DNS nameservers = %v, want [192.0.2.53]", dns["nameservers"])
++					}
++				}
++			}
++			if !found {
++				t.Error("no DNS step in boot.before")
++			}
++		})
++	}
++}
+diff --git a/internal/bootstrap/template_test.go b/internal/bootstrap/template_test.go
+index 2aefead..f63055e 100644
+--- a/internal/bootstrap/template_test.go
++++ b/internal/bootstrap/template_test.go
+@@ -280,7 +280,7 @@ func TestRenderK3sCloudConfig_ControlPlaneSingleNode(t *testing.T) {
+ 	if !strings.Contains(result, "path: /usr/local/bin/kairos-k3s-post-bootstrap.sh") {
+ 		t.Error("Missing kairos-k3s-post-bootstrap.sh in write_files")
+ 	}
+-	if !strings.Contains(result, "systemctl enable --now kairos-k3s-post-bootstrap.service") {
++	if !strings.Contains(result, "systemctl enable --now --no-block kairos-k3s-post-bootstrap.service") {
+ 		t.Error("Missing systemctl enable for k3s post-bootstrap service in runcmd")
+ 	}
+ }
+@@ -446,7 +446,7 @@ func TestRenderK3sCloudConfig_CapkKubeconfigPush(t *testing.T) {
+ 	if !strings.Contains(result, "https://${lb_endpoint}:6443") {
+ 		t.Error("Missing ${lb_endpoint} reference in sed URL substitution")
+ 	}
+-	if !strings.Contains(result, "systemctl enable --now kairos-k3s-post-bootstrap.service") {
++	if !strings.Contains(result, "systemctl enable --now --no-block kairos-k3s-post-bootstrap.service") {
+ 		t.Error("Missing systemctl enable for k3s post-bootstrap service in runcmd")
+ 	}
+ }
+diff --git a/internal/bootstrap/templates/k0s_kairos_cloud_config_capk.yaml.tmpl b/internal/bootstrap/templates/k0s_kairos_cloud_config_capk.yaml.tmpl
+index 74d3621..ff182cd 100644
+--- a/internal/bootstrap/templates/k0s_kairos_cloud_config_capk.yaml.tmpl
++++ b/internal/bootstrap/templates/k0s_kairos_cloud_config_capk.yaml.tmpl
+@@ -483,11 +483,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       {{- if eq .Role "control-plane" }}
+@@ -528,7 +526,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       {{- if .IsHAControlPlane }}
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+@@ -1232,11 +1232,10 @@ MANIFEST_EOF
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
+-    {{- if .DNSServers }}
++  {{- if .DNSServers }}
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+@@ -1244,7 +1243,11 @@ stages:
+           - {{ . | quote }}
+         {{- end }}
+         path: "/etc/resolv.conf"
+-    {{- end }}
++  {{- end }}
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ 
+ {{- /*
+   Post-bootstrap service enablement: kairos-k0s-post-bootstrap.service is
+@@ -1265,7 +1268,8 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+ {{- if and .IsKubeVirt (eq .Role "control-plane") }}
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/bootstrap/templates/k0s_kairos_cloud_config_capv.yaml.tmpl b/internal/bootstrap/templates/k0s_kairos_cloud_config_capv.yaml.tmpl
+index 91ecda1..2bb416b 100644
+--- a/internal/bootstrap/templates/k0s_kairos_cloud_config_capv.yaml.tmpl
++++ b/internal/bootstrap/templates/k0s_kairos_cloud_config_capv.yaml.tmpl
+@@ -454,7 +454,8 @@ write_files:
+       # KubeletConfiguration drop-in merged via --config-dir before the kubelet
+       # registers the Node. Written with printf (not an interpolated heredoc); the
+       # only substituted value is the UUID validated above.
+-      printf 'apiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nproviderID: kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/10-provider-id.conf"
++      printf 'apiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nproviderID: kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/10-provider-id.conf.tmp.$$"
++      mv -f "${DROPIN_DIR}/10-provider-id.conf.tmp.$$" "${DROPIN_DIR}/10-provider-id.conf"
+       echo "fleet: providerID set to kairos-fleet://${NODE_ID}"
+   {{- end }}
+   {{- /*
+@@ -485,11 +486,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       {{- if eq .Role "control-plane" }}
+@@ -530,7 +529,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       {{- if .IsHAControlPlane }}
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+@@ -1391,20 +1392,10 @@ MANIFEST_EOF
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    {{- if and .IsFleet (not .ProviderID) (ne .Role "control-plane") }}
+-    # Fleet worker: also run the providerID drop-in writer as an early boot stage
+-    # (belt-and-suspenders alongside the k0sworker.service ExecStartPre), so the
+-    # KubeletConfiguration drop-in is present before the kubelet registers. The
+-    # script is idempotent and fails closed on a missing/malformed node_id.
+-    - name: "Discover providerID for k0s worker (fleet self-discovery)"
+-      commands:
+-        - /usr/local/bin/kairos-k0s-fleet-provider-id.sh || true
+-    {{- end }}
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
+-    {{- if .DNSServers }}
++  {{- if .DNSServers }}
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+@@ -1412,7 +1403,21 @@ stages:
+           - {{ . | quote }}
+         {{- end }}
+         path: "/etc/resolv.conf"
++  {{- end }}
++  boot:
++    {{- if and .IsFleet (not .ProviderID) (ne .Role "control-plane") }}
++    # Fleet worker: also run the providerID drop-in writer as a boot stage step,
++    # as a backstop. The k0sworker.service ExecStartPre is what puts the
++    # KubeletConfiguration drop-in in place before the kubelet registers; this
++    # step can run at the same time, which is why the script renames the file
++    # into place. It is idempotent and fails closed on a missing/malformed node_id.
++    - name: "Discover providerID for k0s worker (fleet self-discovery)"
++      commands:
++        - /usr/local/bin/kairos-k0s-fleet-provider-id.sh || true
+     {{- end }}
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ 
+ {{- /*
+   Post-bootstrap service enablement: kairos-k0s-post-bootstrap.service is
+@@ -1432,4 +1437,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/bootstrap/templates/k3s_kairos_cloud_config_capk.yaml.tmpl b/internal/bootstrap/templates/k3s_kairos_cloud_config_capk.yaml.tmpl
+index eb7246e..013accf 100644
+--- a/internal/bootstrap/templates/k3s_kairos_cloud_config_capk.yaml.tmpl
++++ b/internal/bootstrap/templates/k3s_kairos_cloud_config_capk.yaml.tmpl
+@@ -315,12 +315,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       {{- if eq .Role "control-plane" }}
+       After=k3s.service
+@@ -385,7 +383,8 @@ write_files:
+       fi
+       if [ -n "$PROVIDER_ID" ]; then
+         mkdir -p /etc/rancher/k3s/config.yaml.d
+-        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++        mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+       fi
+   {{- end }}
+   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
+@@ -647,6 +646,18 @@ MANIFEST_EOF
+ 
+ {{- /* DNS overrides and bootstrap stages */}}
+ stages:
++  {{- if .DNSServers }}
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++        {{- range .DNSServers }}
++          - {{ . | quote }}
++        {{- end }}
++        path: "/etc/resolv.conf"
++  {{- end }}
+   boot:
+     {{- if and (eq .Role "control-plane") (not .ProviderID) }}
+     - name: "Discover providerID for k3s (VM self-discovery)"
+@@ -660,15 +671,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    {{- if .DNSServers }}
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-        {{- range .DNSServers }}
+-          - {{ . | quote }}
+-        {{- end }}
+-        path: "/etc/resolv.conf"
+-    {{- end }}
+ 
+ runcmd:
+ {{- if .IsKubeVirt }}
+@@ -677,6 +679,8 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+ {{- end }}
+diff --git a/internal/bootstrap/templates/k3s_kairos_cloud_config_capv.yaml.tmpl b/internal/bootstrap/templates/k3s_kairos_cloud_config_capv.yaml.tmpl
+index b5a998e..acffcf9 100644
+--- a/internal/bootstrap/templates/k3s_kairos_cloud_config_capv.yaml.tmpl
++++ b/internal/bootstrap/templates/k3s_kairos_cloud_config_capv.yaml.tmpl
+@@ -265,12 +265,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       {{- if eq .Role "control-plane" }}
+       After=k3s.service
+@@ -419,7 +417,8 @@ write_files:
+       # stray leading whitespace on its top-level keys — k3s rejects a
+       # config.yaml.d file whose keys are indented. ${uuid} is validated above.
+       mkdir -p /etc/rancher/k3s/config.yaml.d
+-      printf 'kubelet-arg:\n  - provider-id=metal3://%s\nnode-label:\n  - metal3.io/uuid=%s\n' "${uuid}" "${uuid}" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++      printf 'kubelet-arg:\n  - provider-id=metal3://%s\nnode-label:\n  - metal3.io/uuid=%s\n' "${uuid}" "${uuid}" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++      mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+       echo "metal3-providerid: wrote provider-id=metal3://${uuid} and metal3.io/uuid=${uuid} for kubelet registration"
+   {{- end }}
+   {{- if and .IsFleet (not .ProviderID) }}
+@@ -466,7 +465,8 @@ write_files:
+         exit 0
+       fi
+       mkdir -p "${DROPIN_DIR}"
+-      printf 'kubelet-arg:\n  - provider-id=kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/90-provider-id.yaml"
++      printf 'kubelet-arg:\n  - provider-id=kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/90-provider-id.yaml.tmp.$$"
++      mv -f "${DROPIN_DIR}/90-provider-id.yaml.tmp.$$" "${DROPIN_DIR}/90-provider-id.yaml"
+       echo "fleet: providerID set to kairos-fleet://${NODE_ID}"
+   {{- else if and (eq .Role "control-plane") (not .ProviderID) (not .Metal3) }}
+   # VM self-discovery of providerID when not available at bootstrap (runs before k3s via ExecStartPre).
+@@ -509,7 +509,8 @@ write_files:
+           FORMATTED="${T0}-${T1}-${T2}-${REST:0:4}-${REST:4:12}"
+           PROVIDER_ID="vsphere://${FORMATTED}"
+           mkdir -p /etc/rancher/k3s/config.yaml.d
+-          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++          mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+           echo "Discovered providerID: $PROVIDER_ID"
+         fi
+       fi
+@@ -773,6 +774,18 @@ MANIFEST_EOF
+ 
+ {{- /* DNS overrides and bootstrap stages */}}
+ stages:
++  {{- if .DNSServers }}
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++        {{- range .DNSServers }}
++          - {{ . | quote }}
++        {{- end }}
++        path: "/etc/resolv.conf"
++  {{- end }}
+   boot:
+     {{- if and .IsFleet (not .ProviderID) }}
+     - name: "Discover providerID for k3s (fleet self-discovery)"
+@@ -790,15 +803,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    {{- if .DNSServers }}
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-        {{- range .DNSServers }}
+-          - {{ . | quote }}
+-        {{- end }}
+-        path: "/etc/resolv.conf"
+-    {{- end }}
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -806,5 +810,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl b/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
+index 477ecd7..02c279f 100644
+--- a/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
++++ b/internal/bootstrap/templates/kubeadm_kairos_cloud_config.yaml.tmpl
+@@ -171,11 +171,10 @@ write_files:
+ {{- end }}
+ 
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
+-    {{- if .DNSServers }}
++  {{- if .DNSServers }}
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+@@ -183,8 +182,15 @@ stages:
+           - {{ . | quote }}
+         {{- end }}
+         path: "/etc/resolv.conf"
+-    {{- end }}
++  {{- end }}
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ 
+ runcmd:
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-kubeadm-post-bootstrap.service || true
++  # --no-block: kubeadm join's discovery can retry for minutes, and waiting
++  # for the oneshot holds this cloud-config stage, so users and SSH keys are
++  # not applied until the join ends.
++  - /bin/systemctl enable --now --no-block kairos-kubeadm-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capk_init.yaml b/internal/bootstrap/testdata/golden/k0s_capk_init.yaml
+index 476bdbe..6e27f66 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capk_init.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capk_init.yaml
+@@ -320,11 +320,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -360,7 +358,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -942,6 +942,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capk_join.yaml b/internal/bootstrap/testdata/golden/k0s_capk_join.yaml
+index 3d699b3..e1ea696 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capk_join.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capk_join.yaml
+@@ -325,11 +325,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -365,7 +363,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -891,6 +891,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capk_single.yaml b/internal/bootstrap/testdata/golden/k0s_capk_single.yaml
+index f56f708..d789daf 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capk_single.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capk_single.yaml
+@@ -183,11 +183,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -223,7 +221,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -477,6 +477,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capv_init.yaml b/internal/bootstrap/testdata/golden/k0s_capv_init.yaml
+index 62213f6..b86e9a1 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capv_init.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capv_init.yaml
+@@ -351,11 +351,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -391,7 +389,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -940,4 +940,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capv_join.yaml b/internal/bootstrap/testdata/golden/k0s_capv_join.yaml
+index 64fbd8b..bc800cf 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capv_join.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capv_join.yaml
+@@ -363,11 +363,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -403,7 +401,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -870,4 +870,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/bootstrap/testdata/golden/k0s_capv_single.yaml b/internal/bootstrap/testdata/golden/k0s_capv_single.yaml
+index 199642c..3b49865 100644
+--- a/internal/bootstrap/testdata/golden/k0s_capv_single.yaml
++++ b/internal/bootstrap/testdata/golden/k0s_capv_single.yaml
+@@ -85,11 +85,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -125,7 +123,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -326,4 +326,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capk_init.yaml b/internal/bootstrap/testdata/golden/k3s_capk_init.yaml
+index 70656c4..6e62866 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capk_init.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capk_init.yaml
+@@ -209,12 +209,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -265,7 +263,8 @@ write_files:
+       fi
+       if [ -n "$PROVIDER_ID" ]; then
+         mkdir -p /etc/rancher/k3s/config.yaml.d
+-        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++        mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+       fi
+   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
+     permissions: "0755"
+@@ -465,5 +464,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capk_join.yaml b/internal/bootstrap/testdata/golden/k3s_capk_join.yaml
+index 2c6a6e0..6f2840d 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capk_join.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capk_join.yaml
+@@ -200,12 +200,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -256,7 +254,8 @@ write_files:
+       fi
+       if [ -n "$PROVIDER_ID" ]; then
+         mkdir -p /etc/rancher/k3s/config.yaml.d
+-        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++        mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+       fi
+   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
+     permissions: "0755"
+@@ -456,5 +455,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capk_single.yaml b/internal/bootstrap/testdata/golden/k3s_capk_single.yaml
+index 8584a59..c461658 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capk_single.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capk_single.yaml
+@@ -62,12 +62,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -118,7 +116,8 @@ write_files:
+       fi
+       if [ -n "$PROVIDER_ID" ]; then
+         mkdir -p /etc/rancher/k3s/config.yaml.d
+-        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++        printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++        mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+       fi
+   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
+     permissions: "0755"
+@@ -160,5 +159,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capv_init.yaml b/internal/bootstrap/testdata/golden/k3s_capv_init.yaml
+index fe535cb..e7e7bba 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capv_init.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capv_init.yaml
+@@ -260,12 +260,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -327,7 +325,8 @@ write_files:
+           FORMATTED="${T0}-${T1}-${T2}-${REST:0:4}-${REST:4:12}"
+           PROVIDER_ID="vsphere://${FORMATTED}"
+           mkdir -p /etc/rancher/k3s/config.yaml.d
+-          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++          mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+           echo "Discovered providerID: $PROVIDER_ID"
+         fi
+       fi
+@@ -522,5 +521,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capv_join.yaml b/internal/bootstrap/testdata/golden/k3s_capv_join.yaml
+index d9897dd..865cb9c 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capv_join.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capv_join.yaml
+@@ -248,12 +248,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -315,7 +313,8 @@ write_files:
+           FORMATTED="${T0}-${T1}-${T2}-${REST:0:4}-${REST:4:12}"
+           PROVIDER_ID="vsphere://${FORMATTED}"
+           mkdir -p /etc/rancher/k3s/config.yaml.d
+-          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++          mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+           echo "Discovered providerID: $PROVIDER_ID"
+         fi
+       fi
+@@ -510,5 +509,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/bootstrap/testdata/golden/k3s_capv_single.yaml b/internal/bootstrap/testdata/golden/k3s_capv_single.yaml
+index 11c3d6c..477f0f5 100644
+--- a/internal/bootstrap/testdata/golden/k3s_capv_single.yaml
++++ b/internal/bootstrap/testdata/golden/k3s_capv_single.yaml
+@@ -53,12 +53,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -120,7 +118,8 @@ write_files:
+           FORMATTED="${T0}-${T1}-${T2}-${REST:0:4}-${REST:4:12}"
+           PROVIDER_ID="vsphere://${FORMATTED}"
+           mkdir -p /etc/rancher/k3s/config.yaml.d
+-          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
++          printf "kubelet-arg:\n  - provider-id=%s\n" "$PROVIDER_ID" > /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$
++          mv -f /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml.tmp.$$ /etc/rancher/k3s/config.yaml.d/90-provider-id.yaml
+           echo "Discovered providerID: $PROVIDER_ID"
+         fi
+       fi
+@@ -157,5 +156,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capk.yaml
+index eac9937..7e55d98 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capk.yaml
+@@ -335,11 +335,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -375,7 +373,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -1000,16 +1000,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -1017,6 +1020,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capv.yaml
+index a663453..94c99a0 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_init_capv.yaml
+@@ -374,11 +374,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -414,7 +412,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -923,16 +923,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -940,4 +943,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capk.yaml
+index 8434d26..8371624 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capk.yaml
+@@ -340,11 +340,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -380,7 +378,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -949,16 +949,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -966,6 +969,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capv.yaml
+index a415da3..e7f7566 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_join_capv.yaml
+@@ -387,11 +387,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -427,7 +425,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+       # ADR 0005 §E.3: on HA control-plane nodes, also enable the etcd-leave
+       # responder timer so the node can cleanly `k0s etcd leave` when the
+       # controller requests it during a quorum-safe replacement/scale-down.
+@@ -854,16 +854,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -871,4 +874,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capk.yaml
+index 5eea90c..d24a246 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capk.yaml
+@@ -209,11 +209,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -249,7 +247,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -621,16 +621,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -638,6 +641,7 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+   - /bin/systemctl enable kairos-k0s-lb-sans.path || true
+   - /bin/systemctl start kairos-k0s-lb-sans.path || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv.yaml
+index f6612da..ec172f3 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv.yaml
+@@ -116,11 +116,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -156,7 +154,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -386,16 +386,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -403,4 +406,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_disabled_resolver.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_disabled_resolver.yaml
+index 40cc48a..43c7caa 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_disabled_resolver.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_disabled_resolver.yaml
+@@ -117,11 +117,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -157,7 +155,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -318,16 +318,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -335,4 +338,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_nil_resolver.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_nil_resolver.yaml
+index 40cc48a..43c7caa 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_nil_resolver.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_capv_nil_resolver.yaml
+@@ -117,11 +117,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -157,7 +155,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -318,16 +318,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -335,4 +338,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_docker.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_docker.yaml
+index 41d96de..0641d06 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_docker.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_cp_single_docker.yaml
+@@ -117,11 +117,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0scontroller.service
+@@ -157,7 +155,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -318,16 +318,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -335,4 +338,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_worker_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_worker_capk.yaml
+index 1010876..7519369 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_worker_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_worker_capk.yaml
+@@ -55,11 +55,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0sworker.service
+@@ -95,7 +93,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -188,16 +188,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -205,4 +208,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_worker_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_worker_capv.yaml
+index ad4c850..c944377 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_worker_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_worker_capv.yaml
+@@ -56,11 +56,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0sworker.service
+@@ -96,7 +94,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -185,16 +185,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -202,4 +205,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_worker_fleet.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_worker_fleet.yaml
+index 1a23dd7..b6cee20 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_worker_fleet.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_worker_fleet.yaml
+@@ -113,7 +113,8 @@ write_files:
+       # KubeletConfiguration drop-in merged via --config-dir before the kubelet
+       # registers the Node. Written with printf (not an interpolated heredoc); the
+       # only substituted value is the UUID validated above.
+-      printf 'apiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nproviderID: kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/10-provider-id.conf"
++      printf 'apiVersion: kubelet.config.k8s.io/v1beta1\nkind: KubeletConfiguration\nproviderID: kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/10-provider-id.conf.tmp.$$"
++      mv -f "${DROPIN_DIR}/10-provider-id.conf.tmp.$$" "${DROPIN_DIR}/10-provider-id.conf"
+       echo "fleet: providerID set to kairos-fleet://${NODE_ID}"
+   - path: /usr/local/etc/hostname
+     permissions: "0644"
+@@ -128,11 +129,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0sworker.service
+@@ -168,7 +167,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -220,23 +221,27 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    # Fleet worker: also run the providerID drop-in writer as an early boot stage
+-    # (belt-and-suspenders alongside the k0sworker.service ExecStartPre), so the
+-    # KubeletConfiguration drop-in is present before the kubelet registers. The
+-    # script is idempotent and fails closed on a missing/malformed node_id.
+-    - name: "Discover providerID for k0s worker (fleet self-discovery)"
+-      commands:
+-        - /usr/local/bin/kairos-k0s-fleet-provider-id.sh || true
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    # Fleet worker: also run the providerID drop-in writer as a boot stage step,
++    # as a backstop. The k0sworker.service ExecStartPre is what puts the
++    # KubeletConfiguration drop-in in place before the kubelet registers; this
++    # step can run at the same time, which is why the script renames the file
++    # into place. It is idempotent and fails closed on a missing/malformed node_id.
++    - name: "Discover providerID for k0s worker (fleet self-discovery)"
++      commands:
++        - /usr/local/bin/kairos-k0s-fleet-provider-id.sh || true
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -244,4 +249,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k0s_worker_metal3.yaml b/internal/controllers/bootstrap/testdata/golden/k0s_worker_metal3.yaml
+index bf4cdf5..dc69abb 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k0s_worker_metal3.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k0s_worker_metal3.yaml
+@@ -53,11 +53,9 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k0s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k0s
+-      # node registration that never happens on the installer, holding
+-      # up cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k0s node
++      # registration never happens there, so the post-bootstrap script could
++      # only wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       ConditionPathExists=!/run/cos/recovery_mode
+       After=k0sworker.service
+@@ -93,7 +91,9 @@ write_files:
+       # the main service file lands on disk during cloud-init early boot;
+       # this helper runs once multi-user.target is set up and triggers
+       # both enablement and immediate start of the post-bootstrap service.
+-      ExecStart=/bin/systemctl enable --now kairos-k0s-post-bootstrap.service
++      # --no-block: the post-bootstrap unit is a oneshot that can retry for
++      # minutes; waiting for it would hold this helper, and runcmd with it.
++      ExecStart=/bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap.service
+ 
+       [Install]
+       WantedBy=multi-user.target
+@@ -143,16 +143,19 @@ write_files:
+       written by cluster-api-provider-kairos as the last of its write_files;
+       k0s may start once this exists
+ stages:
+-  boot:
+-    - name: "Ensure SSH service is enabled"
+-      commands:
+-        - systemctl enable --now sshd || systemctl enable --now ssh || true
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
+     - name: "Configure DNS resolvers for early boot"
+       dns:
+         nameservers:
+           - 1.1.1.1
+           - 8.8.8.8
+         path: "/etc/resolv.conf"
++  boot:
++    - name: "Ensure SSH service is enabled"
++      commands:
++        - systemctl enable --now sshd || systemctl enable --now ssh || true
+ runcmd:
+   # Enable + start the helper service explicitly. `enable --now` both
+   # creates the multi-user.target.wants/ symlink for next boot AND starts
+@@ -160,4 +163,5 @@ runcmd:
+   # stages.initramfs.files to top-level write_files (runcmd is now too
+   # late in boot for ln-only symlink creation to be honored by systemd).
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k0s-post-bootstrap-enable.service || true
++  # --no-block: waiting for the helper would hold this cloud-config stage.
++  - /bin/systemctl enable --now --no-block kairos-k0s-post-bootstrap-enable.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capk.yaml
+index 1ec4529..80ad80a 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capk.yaml
+@@ -225,12 +225,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -478,6 +476,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -486,12 +493,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -499,5 +500,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capv.yaml
+index 65ced34..2436b67 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_init_capv.yaml
+@@ -280,12 +280,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -527,6 +525,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -535,12 +542,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -548,5 +549,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capk.yaml
+index af12a69..388e6fb 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capk.yaml
+@@ -216,12 +216,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -469,6 +467,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -477,12 +484,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -490,5 +491,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capv.yaml
+index a91ca1b..51d0fc4 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_join_capv.yaml
+@@ -268,12 +268,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -515,6 +513,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -523,12 +530,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -536,5 +537,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capk.yaml
+index 27b314e..5891ae2 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capk.yaml
+@@ -100,12 +100,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -264,6 +262,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -272,12 +279,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -285,5 +286,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv.yaml
+index 1a5ecb9..0d882d9 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv.yaml
+@@ -89,12 +89,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -247,6 +245,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -255,12 +262,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -268,5 +269,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv_serveraddr.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv_serveraddr.yaml
+index 1a5ecb9..0d882d9 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv_serveraddr.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_cp_single_capv_serveraddr.yaml
+@@ -89,12 +89,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s.service
+       Wants=k3s.service
+@@ -247,6 +245,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -255,12 +262,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -268,5 +269,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_worker_capk.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_worker_capk.yaml
+index 49e1097..9d5ecfa 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_worker_capk.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_worker_capk.yaml
+@@ -72,12 +72,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s-agent.service
+       Wants=k3s-agent.service
+@@ -157,6 +155,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -165,12 +172,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -178,5 +179,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_worker_capv.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_worker_capv.yaml
+index c968228..fd0d40c 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_worker_capv.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_worker_capv.yaml
+@@ -63,12 +63,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s-agent.service
+       Wants=k3s-agent.service
+@@ -142,6 +140,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -150,12 +157,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -163,5 +164,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_worker_fleet.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_worker_fleet.yaml
+index cab859c..58392c8 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_worker_fleet.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_worker_fleet.yaml
+@@ -63,12 +63,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s-agent.service
+       Wants=k3s-agent.service
+@@ -134,7 +132,8 @@ write_files:
+         exit 0
+       fi
+       mkdir -p "${DROPIN_DIR}"
+-      printf 'kubelet-arg:\n  - provider-id=kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/90-provider-id.yaml"
++      printf 'kubelet-arg:\n  - provider-id=kairos-fleet://%s\n' "${NODE_ID}" > "${DROPIN_DIR}/90-provider-id.yaml.tmp.$$"
++      mv -f "${DROPIN_DIR}/90-provider-id.yaml.tmp.$$" "${DROPIN_DIR}/90-provider-id.yaml"
+       echo "fleet: providerID set to kairos-fleet://${NODE_ID}"
+   - path: /usr/local/bin/kairos-k3s-post-bootstrap.sh
+     permissions: "0755"
+@@ -163,6 +162,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Discover providerID for k3s (fleet self-discovery)"
+       commands:
+@@ -174,12 +182,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -187,5 +189,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true
+diff --git a/internal/controllers/bootstrap/testdata/golden/k3s_worker_metal3.yaml b/internal/controllers/bootstrap/testdata/golden/k3s_worker_metal3.yaml
+index 8fd6c4a..f290d82 100644
+--- a/internal/controllers/bootstrap/testdata/golden/k3s_worker_metal3.yaml
++++ b/internal/controllers/bootstrap/testdata/golden/k3s_worker_metal3.yaml
+@@ -63,12 +63,10 @@ write_files:
+     content: |
+       [Unit]
+       Description=Kairos k3s post-bootstrap tasks
+-      # Skip on Kairos live installer (cdroot present in cmdline) — the
+-      # post-bootstrap script would block for 7+ minutes waiting for k3s
+-      # node registration that never happens on the installer (overlayfs
+-      # snapshotter cannot nest on the live tmpfs overlay), holding up
+-      # cloud-init's runcmd and preventing kairos-agent from rebooting
+-      # into the installed system. (KD-3b lab finding on Hadron.)
++      # Skip on Kairos live installer (cdroot present in cmdline): k3s node
++      # registration never happens there (overlayfs snapshotter cannot nest
++      # on the live tmpfs overlay), so the post-bootstrap script could only
++      # wait out its retries. (KD-3b lab finding on Hadron.)
+       ConditionKernelCommandLine=!cdroot
+       After=k3s-agent.service
+       Wants=k3s-agent.service
+@@ -107,6 +105,15 @@ write_files:
+     permissions: "0644"
+     owner: root:root
+ stages:
++  # boot.before finishes before boot starts, and runcmd is part of boot,
++  # so the resolvers are in place before anything runcmd starts.
++  boot.before:
++    - name: "Configure DNS resolvers for early boot"
++      dns:
++        nameservers:
++          - 1.1.1.1
++          - 8.8.8.8
++        path: "/etc/resolv.conf"
+   boot:
+     - name: "Ensure SSH service is enabled"
+       commands:
+@@ -115,12 +122,6 @@ stages:
+       commands:
+         - mkdir -p /etc/rancher/k3s
+         - mkdir -p /etc/rancher/k3s/config.yaml.d
+-    - name: "Configure DNS resolvers for early boot"
+-      dns:
+-        nameservers:
+-          - 1.1.1.1
+-          - 8.8.8.8
+-        path: "/etc/resolv.conf"
+ 
+ runcmd:
+   # `enable --now`: create the multi-user.target.wants/ symlink AND start
+@@ -128,5 +129,7 @@ runcmd:
+   # service would only auto-start on the NEXT boot — too late for the
+   # KD-3b push pattern, which needs to fire on the first installed-system
+   # boot. Same fix the k0s templates use via the helper service.
++  # --no-block: the unit is a oneshot that can retry for minutes, and
++  # waiting for it holds this cloud-config stage.
+   - /bin/systemctl daemon-reload || true
+-  - /bin/systemctl enable --now kairos-k3s-post-bootstrap.service || true
++  - /bin/systemctl enable --now --no-block kairos-k3s-post-bootstrap.service || true

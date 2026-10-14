@@ -763,6 +763,8 @@ spec:
     cgroupfs: systemd
     preferredAddressTypes: {{- toYaml $preferredAddressTypes | nindent 4 }}
   network:
+    dnsServiceIPs:
+      - {{ include "kubernetes.tenantDNSServiceIP" . | quote }}
     {{- /* A KubeVirt worker is a Pod in this cluster and dials the apiserver
           over the pod network, where a ClusterIP is meaningful. A Proxmox
           worker is a VM on the hypervisor network and cannot route to one at

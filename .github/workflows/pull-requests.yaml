@@ -79,6 +79,7 @@ jobs:
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
       talos: ${{ steps.p.outputs.talos }}
+      kairos-worker: ${{ steps.p.outputs.kairos-worker }}
     steps:
       # Claim the required context for THIS run before anything can be merged on
       # the strength of the last one. Commit statuses are latest-wins per (sha,
@@ -178,6 +179,9 @@ jobs:
           talos="$(hack/build-talos-needed.sh /tmp/changed_norenames.txt)"
           echo "Talos build needed: $talos"
           echo "talos=$talos" >> "$GITHUB_OUTPUT"
+          kairos_worker="$(hack/build-kairos-worker-needed.sh /tmp/changed_norenames.txt)"
+          echo "Kairos worker disk build needed: $kairos_worker"
+          echo "kairos-worker=$kairos_worker" >> "$GITHUB_OUTPUT"
           # Package dirs the PR edited (packages/<area>/<name>). Their committed
           # refs are the PR's intent and must survive the current-main overlay —
           # otherwise an upstream image bump in a non-build-unit package would be
@@ -353,6 +357,13 @@ jobs:
             sudo "$bats_source/install.sh" /usr/local
           fi
           bats --version | grep -qx "Bats $BATS_VERSION"
+          # hack/kairos-reconcile-script_test.bats runs the Kairos reconcile
+          # script with the envsubst its Job image ships.
+          if ! command -v envsubst >/dev/null; then
+            sudo apt-get update --quiet
+            sudo apt-get install --assume-yes --quiet gettext-base
+          fi
+          envsubst --version | head -n 1
       # setup-envtest and the kube-apiserver and etcd it fetches, so a pull
       # request downloads them only when the versions pinned in the Makefile
       # change, and an outage at their sources cannot fail unrelated changes.
@@ -487,6 +498,9 @@ jobs:
           # --binary so vendored binary provider bundles (components*.gz),
           # which some package image targets regenerate, survive reassembly
           # in finalize (a plain "Binary files differ" stub is unappliable).
+          # intent-to-add brings in the files the build created under the
+          # package, which a plain diff against HEAD leaves out.
+          git add --intent-to-add -- "$PKG"
           git diff --binary HEAD > "_out/fragments/${safe}.patch"
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
@@ -604,6 +618,85 @@ jobs:
           path: _out/oci/*.oci.tar
           if-no-files-found: error
 
+  # The Kairos worker disks are their own leg: each Kubernetes minor compiles
+  # kubelet, then AuroraBoot builds a raw disk in a privileged container that
+  # drives the runner's docker daemon, which outgrows a matrix job. The plan job
+  # classifies the rename-blind changed-path list with
+  # build-kairos-worker-needed.sh. A successful run stamps
+  # packages/apps/kubernetes-nodes/images/kairos-worker-*.tag, and finalize
+  # keeps those refs when it overlays base-branch images.
+  build-kairos-worker:
+    name: Build Kairos worker disks
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+      && needs.plan.outputs.kairos-worker == 'true'
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build Kairos worker disks
+        run: |
+          mkdir -p _out/oci
+          make -C packages/apps/kubernetes-nodes image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/amd64
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
+      - name: Capture Kairos worker patch fragment
+        run: |
+          mkdir -p _out/fragments
+          # A new minor's .tag is untracked; intent-to-add puts it in the diff.
+          git add --intent-to-add packages/apps/kubernetes-nodes/images/
+          git diff --binary HEAD > _out/fragments/kairos-worker.patch
+          echo "Kairos worker fragment:"; git --no-pager diff --stat HEAD
+      - name: Upload Kairos worker patch fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-patch-fragment-kairos-worker
+          path: _out/fragments/kairos-worker.patch
+          if-no-files-found: error
+      - name: Upload Kairos worker OCI image archives (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-kairos-worker
+          path: _out/oci/*.oci.tar
+          if-no-files-found: error
+
   # Reassemble the unified pr.patch from every fragment, then build the installer
   # LAST: `make -C packages/core/installer image` runs `flux push artifact
   # --path=packages`, which bundles the WHOLE digest-patched tree into the OCI
@@ -615,7 +708,7 @@ jobs:
     # to e2e (which needs finalize), so a red unit test skips the expensive
     # install+e2e path instead of wasting ~1h on it. Restores the gating the old
     # in-build-job tests gave, without re-coupling the cheap parallel builds.
-    needs: ["plan", "checks", "build", "build-talos"]
+    needs: ["plan", "checks", "build", "build-talos", "build-kairos-worker"]
     if: |
       !cancelled()
       && needs.plan.outputs.code == 'true'
@@ -623,6 +716,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && (needs.build-talos.result == 'success' || needs.build-talos.result == 'skipped')
+      && (needs.build-kairos-worker.result == 'success' || needs.build-kairos-worker.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
@@ -762,6 +856,12 @@ jobs:
               *) rebuilt="${rebuilt%]},\"packages/extra/bootbox\"]" ;;
             esac
           fi
+          if [ "$KAIROS_WORKER_RESULT" = "success" ]; then
+            case "$rebuilt" in
+              '[]') rebuilt='["packages/apps/kubernetes-nodes"]' ;;
+              *) rebuilt="${rebuilt%]},\"packages/apps/kubernetes-nodes\"]" ;;
+            esac
+          fi
           hack/overlay-main-images.sh _out/mainpkgs "$rebuilt" "$PR_TOUCHED" \
             || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
         env:
@@ -774,6 +874,8 @@ jobs:
           # own package. Preserve that generated ref only when the job actually
           # succeeded; when it was skipped, the base-branch ref should overlay.
           TALOS_RESULT: ${{ needs.build-talos.result }}
+          # Same for the Kairos worker disk refs build-kairos-worker stamps.
+          KAIROS_WORKER_RESULT: ${{ needs.build-kairos-worker.result }}
           # Packages THIS PR edited (changed-file dirs from the plan job's git
           # diff). Their committed refs are the PR's intent — an upstream image
           # bump in a non-build-unit package would otherwise be silently reverted
