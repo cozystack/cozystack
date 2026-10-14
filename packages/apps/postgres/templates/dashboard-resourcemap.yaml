@@ -14,13 +14,6 @@ rules:
   - {{ .Release.Name }}-external-write
   verbs: ["get", "list", "watch"]
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  resourceNames:
-  - {{ .Release.Name }}-credentials
-  verbs: ["get", "list", "watch"]
-- apiGroups:
   - cozystack.io
   resources:
   - workloadmonitors

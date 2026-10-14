@@ -189,11 +189,12 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
 fi
 log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}' from S3."
 
-# The passwords in <target>-credentials are chart-generated and do not match the
-# password hashes recovery brought back with the roles; the driver clears
-# bootstrap.enabled so the init-job reconciles them. Prove the app user can
-# actually log in against the restored copy - psql_exec above only ever used the
-# in-pod postgres superuser, so a broken credential would otherwise pass silently.
+# The roles recovery brought back carry the source's password hashes; the
+# driver clears bootstrap.enabled and CloudNativePG applies the verifier from
+# the target's account Secret, which a mint through the credentials API sets.
+# Prove the app user can actually log in against the restored copy - psql_exec
+# above only ever used the in-pod postgres superuser, so a broken credential
+# would otherwise pass silently.
 print_header "Step 40 verify: the app user authenticates against the restored copy"
 wait_for_app_login "$PG_TARGET_CLUSTER" app demo 360
 APP_GOT=$(psql_app_exec "$PG_TARGET_CLUSTER" app demo \

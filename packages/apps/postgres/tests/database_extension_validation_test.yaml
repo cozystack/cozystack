@@ -282,10 +282,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: 'REVOKE "mydb_admin" FROM "app";'
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'REVOKE "mydb_readonly" FROM "app";'
+          pattern: 'CREATE EXTENSION IF NOT EXISTS "pg_trgm"'
 
   # Past 54 bytes the name's <db>_admin/<db>_readonly roles truncate past 63
   # bytes. The next init-job run orphan-drops the truncated role, DROP OWNED only

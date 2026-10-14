@@ -6,8 +6,9 @@ suite: per-user CREATEROLE attribute
 # attribute cannot be carried by the generated <db>_admin group role and has to be
 # set on the login user itself.
 #
-# The attribute is reconciled on every run of the init script: flipping createRole
-# back to false emits NOCREATEROLE and revokes it.
+# The attribute is declared on the Cluster's managed role, which CloudNativePG
+# reconciles on every change: flipping createRole back to false renders
+# createrole: false and the operator revokes it.
 #
 # The guard on PostgreSQL 16 is a security boundary, not a cosmetic check. Before
 # PostgreSQL 16, CREATEROLE allowed granting membership in any non-superuser role,
@@ -17,6 +18,7 @@ suite: per-user CREATEROLE attribute
 
 templates:
   - templates/init-script.yaml
+  - templates/db.yaml
 
 release:
   name: pg-test
@@ -31,48 +33,83 @@ tests:
     set:
       users:
         app: {}
-    documentIndex: 1
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
     asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOREPLICATION NOCREATEROLE NOBYPASSRLS;'
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: app
+            login: true
+            inherit: true
+            replication: false
+            createrole: false
+            bypassrls: false
+            comment: user managed by helm
+            inRoles:
+              - "cozystack:managed"
+            passwordSecret:
+              name: pg-test.app.account
 
-  - it: "createRole=true emits CREATEROLE"
+  - it: "createRole=true renders createrole on the managed role"
     set:
       version: v18
       users:
         app:
           createRole: true
-    documentIndex: 1
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
     asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOREPLICATION CREATEROLE NOBYPASSRLS;'
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: app
+            createrole: true
+          any: true
 
-  - it: "createRole=false emits NOCREATEROLE so the attribute is revoked"
+  - it: "createRole=false renders createrole false so the attribute is revoked"
     set:
       version: v18
       users:
         app:
           createRole: false
-    documentIndex: 1
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
     asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE NOBYPASSRLS;'
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: app
+            createrole: false
+          any: true
 
-  - it: "createRole composes with replication"
+  - it: "createRole composes with replication and bypassRls"
     set:
       version: v18
       users:
         app:
           replication: true
           createRole: true
-    documentIndex: 1
+          bypassRls: true
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
     asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* REPLICATION CREATEROLE NOBYPASSRLS;'
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: app
+            replication: true
+            createrole: true
+            bypassrls: true
+          any: true
 
   - it: "createRole on PostgreSQL 15 fails fast"
     set:
@@ -80,6 +117,7 @@ tests:
       users:
         app:
           createRole: true
+    template: templates/init-script.yaml
     asserts:
       - failedTemplate:
           errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
@@ -90,6 +128,7 @@ tests:
       users:
         app:
           createRole: true
+    template: templates/init-script.yaml
     asserts:
       - failedTemplate:
           errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
@@ -99,36 +138,14 @@ tests:
       version: v15
       users:
         app: {}
-    documentIndex: 1
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE NOBYPASSRLS;'
-
-  - it: "bypassRls=true emits BYPASSRLS"
-    set:
-      version: v18
-      users:
-        app:
-          bypassRls: true
-    documentIndex: 1
-    asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE BYPASSRLS;'
-
-  - it: "bypassRls composes with createRole, which is what provisioning a privileged service role needs"
-    set:
-      version: v18
-      users:
-        app:
-          createRole: true
-          bypassRls: true
-    documentIndex: 1
-    asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* CREATEROLE BYPASSRLS;'
+          pattern: 'GRANT "cozystack:managed" TO "app";'
 
   - it: "bypassRls is allowed on PostgreSQL 15, it carries no escalation path of its own"
     set:
@@ -136,23 +153,35 @@ tests:
       users:
         app:
           bypassRls: true
-    documentIndex: 1
+    template: templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
     asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" WITH PASSWORD .* NOCREATEROLE BYPASSRLS;'
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: app
+            bypassrls: true
+          any: true
 
+  # CloudNativePG has no field for createrole_self_grant, so the init-script
+  # still sets it, once the role exists, since the hook may run before the
+  # operator has created it.
   - it: "createRole sets createrole_self_grant so the attribute is usable"
     set:
       version: v18
       users:
         app:
           createRole: true
-    documentIndex: 1
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "ALTER ROLE \"app\" SET createrole_self_grant = 'set, inherit';"
+          pattern: "SELECT 'ALTER ROLE \"app\" SET createrole_self_grant = ''set, inherit'';'\\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app'\\)\\\\gexec"
 
   - it: "withdrawing createRole resets createrole_self_grant"
     set:
@@ -160,8 +189,11 @@ tests:
       users:
         app:
           createRole: false
-    documentIndex: 1
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: 'ALTER ROLE "app" RESET createrole_self_grant;'
+          pattern: "SELECT 'ALTER ROLE \"app\" RESET createrole_self_grant;'\\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app'\\)\\\\gexec"
