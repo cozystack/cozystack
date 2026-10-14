@@ -46,7 +46,7 @@ streamed into.
    - The driver creates a `FoundationDBBackup` CR labelled by the
      BackupJob, sets `backupState=Running`, and waits for the operator to
      reconcile + the `backup_agent` to land a full snapshot
-     (`status.backupDetails.snapshotTime > 0`).
+     (`status.backupDetails.restorable: true` for its own directory).
    - Stamps a Cozystack `Backup` artefact (same name as the BackupJob).
      `Backup.spec.driverMetadata` carries the per-run blob path so the
      RestoreJob path can rebuild the blob-store config from it.
@@ -73,4 +73,4 @@ kubectl -n <ns> get foundationdbbackups.apps.foundationdb.org \
 
 The BackupJob should report `phase: Succeeded`. The operator-side
 FoundationDBBackup carries
-`status.backupDetails.{running: true, snapshotTime: <int>, url: <s3-url>}`.
+`status.backupDetails.{running: true, restorable: true, url: <s3-url>}`.
