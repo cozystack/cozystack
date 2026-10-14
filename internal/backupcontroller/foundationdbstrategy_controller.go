@@ -447,9 +447,11 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return nil, err
 	}
 
+	// The namespace prefix keeps same-named BackupJobs of different tenants
+	// apart when their strategies share a bucket.
 	blobName := rendered.BlobStoreConfiguration.BackupName
 	if blobName == "" {
-		blobName = j.Name
+		blobName = j.Namespace + "/" + j.Name
 	}
 
 	obj := &foundationdbtypes.FoundationDBBackup{

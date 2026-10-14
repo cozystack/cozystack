@@ -8955,9 +8955,9 @@ spec:
                       backupName:
                         description: |-
                           BackupName is the per-cluster path segment under the bucket. When
-                          empty, the driver fills it per BackupJob to give each run a
-                          discrete S3 path (one operator backup directory per Cozystack
-                          Backup artefact). Templating is supported.
+                          empty, the driver fills it with "<namespace>/<BackupJob name>" to
+                          give each run a discrete S3 path (one operator backup directory per
+                          Cozystack Backup artefact). Templating is supported.
                         maxLength: 1024
                         type: string
                       bucket:

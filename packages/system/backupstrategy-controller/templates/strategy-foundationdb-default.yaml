@@ -16,15 +16,15 @@ spec:
       # writes, so the api_key never lands in Strategy spec or Backup.status.
       accountName: {{ printf "@%s" $endpointHost | quote }}
       bucket: {{ $bucketName | quote }}
-      # BackupName is left to the driver — it picks the BackupJob name so
-      # each Cozystack BackupJob writes to a discrete S3 directory.
+      # BackupName is left to the driver: "<namespace>/<BackupJob name>", so
+      # each Cozystack BackupJob writes to a discrete S3 directory and
+      # tenants sharing the bucket stay apart.
       # secure_connection is computed from the endpoint scheme so an admin
       # switching backupStorage.endpoint to https:// does NOT silently
       # downgrade FDB to plaintext.
       urlParameters:
         - {{ printf "secure_connection=%s" $secureConn | quote }}
         - {{ printf "region=%s" .Values.backupStorage.region | quote }}
-        - {{ printf "bucket_path={{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
     snapshotPeriodSeconds: 3600
     # FDB sends TLS SNI only from 7.3.78 / 7.4.6, and SNI-routed S3 endpoints
     # abort the handshake without it, so agents of older clusters run the

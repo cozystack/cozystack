@@ -142,9 +142,9 @@ type FoundationDBBlobStoreTemplate struct {
 	Bucket string `json:"bucket,omitempty"`
 
 	// BackupName is the per-cluster path segment under the bucket. When
-	// empty, the driver fills it per BackupJob to give each run a
-	// discrete S3 path (one operator backup directory per Cozystack
-	// Backup artefact). Templating is supported.
+	// empty, the driver fills it with "<namespace>/<BackupJob name>" to
+	// give each run a discrete S3 path (one operator backup directory per
+	// Cozystack Backup artefact). Templating is supported.
 	// +optional
 	// +kubebuilder:validation:MaxLength=1024
 	BackupName string `json:"backupName,omitempty"`
