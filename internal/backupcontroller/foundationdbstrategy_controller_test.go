@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -246,6 +247,72 @@ func TestEnsureFoundationDBRestore_IdempotentByLabel(t *testing.T) {
 	}
 	if !apiequality.Semantic.DeepEqual(got.Spec.BlobStoreConfiguration, blob) {
 		t.Errorf("BlobStoreConfiguration: got %#v want %#v", got.Spec.BlobStoreConfiguration, blob)
+	}
+}
+
+func TestFoundationDBRestoreAgents_StartedStoppedAndRemoved(t *testing.T) {
+	tmpl := *newRenderedFoundationDBTemplate()
+	tmpl.MinimumAgentVersions = []string{"7.3.79"}
+	tmpl.BackupDeploymentPodTemplateSpec = &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "foundationdb",
+			Env:  []corev1.EnvVar{{Name: "FDB_BLOB_CREDENTIALS", Value: "/creds.json"}},
+		}}},
+	}
+	strategy := &strategyv1alpha1.FoundationDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "fdb-strategy"},
+		Spec:       strategyv1alpha1.FoundationDBSpec{Template: tmpl},
+	}
+	rj := newFoundationDBRestoreJob("rj-agents", "tenant")
+	c := newFoundationDBStrategyTestClient(t, strategy, rj, newFoundationDBApp("fdb-target", "tenant"))
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme()}
+	backup := &backupsv1alpha1.Backup{Spec: backupsv1alpha1.BackupSpec{
+		StrategyRef: corev1.TypedLocalObjectReference{Name: "fdb-strategy"},
+	}}
+	cluster := &foundationdbtypes.FoundationDBCluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "foundationdb-fdb-target"},
+		Spec:       foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+	}
+	target := foundationdbRestoreTarget{Namespace: "tenant", AppName: "fdb-target"}
+	blob := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1"}
+
+	for range 2 {
+		if err := r.ensureFoundationDBRestoreAgents(context.Background(), rj, backup, target, cluster, blob, nil); err != nil {
+			t.Fatalf("ensureFoundationDBRestoreAgents: %v", err)
+		}
+	}
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected one agents FoundationDBBackup, got %d", len(list.Items))
+	}
+	got := list.Items[0]
+	if got.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("backupState = %q, want Stopped (agents only, no backup)", got.Spec.BackupState)
+	}
+	if got.Spec.ClusterName != "foundationdb-fdb-target" || got.Spec.Version != "7.3.79" {
+		t.Errorf("cluster/version = %q/%q, want foundationdb-fdb-target/7.3.79", got.Spec.ClusterName, got.Spec.Version)
+	}
+	if got.Spec.PodTemplateSpec == nil || got.Spec.PodTemplateSpec.Spec.Containers[0].Env[0].Value != "/creds.json" {
+		t.Errorf("agents miss the strategy pod template: %+v", got.Spec.PodTemplateSpec)
+	}
+	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "" {
+		t.Errorf("agents must not carry the BackupJob owner label: %v", got.Labels)
+	}
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Name != rj.Name {
+		t.Errorf("agents must be owned by the RestoreJob: %+v", got.OwnerReferences)
+	}
+
+	if err := r.deleteFoundationDBRestoreAgents(context.Background(), rj); err != nil {
+		t.Fatalf("deleteFoundationDBRestoreAgents: %v", err)
+	}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("agents left after the restore: %d", len(list.Items))
 	}
 }
 
@@ -1873,6 +1940,46 @@ func TestEnsureFoundationDBBackup_PodTemplateAtSpecRoot(t *testing.T) {
 	}
 	if env := got.Spec.PodTemplateSpec.Spec.Containers[0].Env; len(env) != 1 || env[0].Value != "/creds.json" {
 		t.Errorf("pod template env not carried over: %+v", env)
+	}
+}
+
+func TestRefreshFoundationDBBackupStatus(t *testing.T) {
+	now := time.Date(2026, 10, 14, 8, 0, 0, 0, time.UTC)
+	running := func(restorable bool, annotation string) *foundationdbtypes.FoundationDBBackup {
+		b := &foundationdbtypes.FoundationDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk", Generation: 1},
+			Status: foundationdbtypes.FoundationDBBackupStatus{
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: restorable},
+				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			},
+		}
+		if annotation != "" {
+			b.Annotations = map[string]string{foundationdbStatusRefreshAnnotation: annotation}
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		in   *foundationdbtypes.FoundationDBBackup
+		want string
+	}{
+		{"reconciled but not restorable is nudged", running(false, ""), now.Format(time.RFC3339)},
+		{"stale nudge is renewed", running(false, now.Add(-2*time.Minute).Format(time.RFC3339)), now.Format(time.RFC3339)},
+		{"recent nudge is kept", running(false, now.Add(-10*time.Second).Format(time.RFC3339)), now.Add(-10 * time.Second).Format(time.RFC3339)},
+		{"restorable is left alone", running(true, ""), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFoundationDBStrategyTestClient(t, tc.in)
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+			r.refreshFoundationDBBackupStatus(context.Background(), tc.in.DeepCopy(), now)
+			got := &foundationdbtypes.FoundationDBBackup{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "fdb-bk"}, got); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if a := got.Annotations[foundationdbStatusRefreshAnnotation]; a != tc.want {
+				t.Errorf("annotation = %q, want %q", a, tc.want)
+			}
+		})
 	}
 }
 
