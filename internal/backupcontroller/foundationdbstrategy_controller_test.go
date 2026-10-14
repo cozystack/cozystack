@@ -151,11 +151,11 @@ func TestEnsureFoundationDBBackup_IdempotentByLabel(t *testing.T) {
 	if got.Spec.BackupState != foundationdbtypes.BackupStateRunning {
 		t.Errorf("BackupState: got %q want %q", got.Spec.BackupState, foundationdbtypes.BackupStateRunning)
 	}
-	if got.Spec.BlobStoreConfiguration.BackupName != "bj-1" {
+	if got.Spec.BlobStoreConfiguration.BackupName != "tenant/bj-1" {
 		// Template left BackupName empty, ensure path must default it to
-		// the BackupJob name so each Cozystack BackupJob owns a discrete
-		// blob-store directory.
-		t.Errorf("BlobStoreConfiguration.BackupName: got %q want bj-1 (BackupJob name fallback)", got.Spec.BlobStoreConfiguration.BackupName)
+		// the BackupJob's namespace and name so each Cozystack BackupJob
+		// owns a discrete blob-store directory.
+		t.Errorf("BlobStoreConfiguration.BackupName: got %q want tenant/bj-1 (BackupJob fallback)", got.Spec.BlobStoreConfiguration.BackupName)
 	}
 	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj-1" {
 		t.Errorf("OwningJobName label missing or wrong: %v", got.Labels)
