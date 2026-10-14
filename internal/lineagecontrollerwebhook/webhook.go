@@ -193,12 +193,19 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstr
 	crd := cfg.appCRDMap[appRef{gv.Group, owner.GetKind()}]
 	resourceSelectors := h.getResourceSelectors(obj.GroupVersionKind().GroupKind(), crd)
 
-	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
-		if b {
-			return corev1alpha1.TenantResourceLabelValue
-		}
-		return "false"
-	}(matchResourceToExcludeInclude(ctx, obj.GetName(), templateLabels, obj.GetLabels(), resourceSelectors))
+	selected := matchResourceToExcludeInclude(ctx, obj.GetName(), templateLabels, obj.GetLabels(), resourceSelectors)
+	// The verdict can be narrowed by the object and never widened: a chart that
+	// renders tenantresource "false" keeps it even where the definition selects
+	// the name, while a chart-set "true" is replaced by the computed verdict.
+	// This is what lets a chart take a Secret the definition still selects off
+	// the tenantsecrets projection while the definition catches up.
+	if obj.GetLabels()[corev1alpha1.TenantResourceLabelKey] == "false" {
+		selected = false
+	}
+	labels[corev1alpha1.TenantResourceLabelKey] = "false"
+	if selected {
+		labels[corev1alpha1.TenantResourceLabelKey] = corev1alpha1.TenantResourceLabelValue
+	}
 	return labels, nil
 }
 
