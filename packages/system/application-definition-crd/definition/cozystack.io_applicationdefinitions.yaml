@@ -62,6 +62,272 @@ spec:
                 - plural
                 - singular
                 type: object
+              credentials:
+                description: |-
+                  Credentials declares the kind's accounts and how the API stores their
+                  passwords. Its presence converts the kind to platform-minted credentials.
+                properties:
+                  accounts:
+                    description: |-
+                      Accounts are the sources the kind's accounts come from. A kind may list
+                      several, for example a values map of tenant users and a static platform
+                      account.
+                    items:
+                      description: |-
+                        CredentialAccountSource is one source of a kind's accounts. Which fields
+                        apply depends on Kind.
+                      properties:
+                        expression:
+                          description: Expression is the CEL expression of an Expression
+                            source.
+                          type: string
+                        kind:
+                          description: CredentialAccountSourceKind says how a source
+                            yields account names.
+                          enum:
+                          - ValuesMap
+                          - ValuesList
+                          - Static
+                          - Expression
+                          - Webhook
+                          type: string
+                        name:
+                          description: Name is the account of a Static source.
+                          type: string
+                        nameField:
+                          description: |-
+                            NameField is the field of each object a ValuesList source takes the
+                            account name from.
+                          type: string
+                        owner:
+                          description: Owner defaults to tenant.
+                          enum:
+                          - tenant
+                          - platform
+                          type: string
+                        path:
+                          description: |-
+                            Path is the values key a ValuesMap or ValuesList source reads, as a
+                            dotted path from the top of the application spec.
+                          type: string
+                        webhook:
+                          description: Webhook is the endpoint of a Webhook source.
+                          properties:
+                            clientConfig:
+                              description: |-
+                                WebhookClientConfig contains the information to make a TLS
+                                connection with the webhook
+                              properties:
+                                caBundle:
+                                  description: |-
+                                    caBundle is a PEM encoded CA bundle which will be used to validate the webhook's server certificate.
+                                    If unspecified, system trust roots on the apiserver are used.
+                                  format: byte
+                                  type: string
+                                service:
+                                  description: |-
+                                    service is a reference to the service for this webhook. Either
+                                    `service` or `url` must be specified.
+
+                                    If the webhook is running within the cluster, then you should use `service`.
+                                  properties:
+                                    name:
+                                      description: |-
+                                        name is the name of the service.
+                                        Required
+                                      type: string
+                                    namespace:
+                                      description: |-
+                                        namespace is the namespace of the service.
+                                        Required
+                                      type: string
+                                    path:
+                                      description: |-
+                                        path is an optional URL path which will be sent in any request to
+                                        this service.
+                                      type: string
+                                    port:
+                                      description: |-
+                                        port is the port on the service that hosts the webhook.
+                                        Default to 443 for backward compatibility.
+                                        `port` should be a valid port number (1-65535, inclusive).
+                                      format: int32
+                                      type: integer
+                                  required:
+                                  - name
+                                  - namespace
+                                  type: object
+                                url:
+                                  description: |-
+                                    url gives the location of the webhook, in standard URL form
+                                    (`scheme://host:port/path`). Exactly one of `url` or `service`
+                                    must be specified.
+
+                                    The `host` should not refer to a service running in the cluster; use
+                                    the `service` field instead. The host might be resolved via external
+                                    DNS in some apiservers (e.g., `kube-apiserver` cannot resolve
+                                    in-cluster DNS as that would be a layering violation). `host` may
+                                    also be an IP address.
+
+                                    Please note that using `localhost` or `127.0.0.1` as a `host` is
+                                    risky unless you take great care to run this webhook on all hosts
+                                    which run an apiserver which might need to make calls to this
+                                    webhook. Such installs are likely to be non-portable, i.e., not easy
+                                    to turn up in a new cluster.
+
+                                    The scheme must be "https"; the URL must begin with "https://".
+
+                                    A path is optional, and if present may be any string permissible in
+                                    a URL. You may use the path to pass an arbitrary string to the
+                                    webhook, for example, a cluster identifier.
+
+                                    Attempting to use a user or basic auth e.g. "user:password@" is not
+                                    allowed. Fragments ("#...") and query parameters ("?...") are not
+                                    allowed, either.
+                                  type: string
+                              type: object
+                            timeoutSeconds:
+                              format: int32
+                              maximum: 30
+                              minimum: 1
+                              type: integer
+                          required:
+                          - clientConfig
+                          type: object
+                        when:
+                          description: |-
+                            When is a values key, as a dotted path, that switches a Static account
+                            on when it holds true; absent, the account is always on.
+                          type: string
+                      required:
+                      - kind
+                      type: object
+                    minItems: 1
+                    type: array
+                  format:
+                    description: |-
+                      Format is how a password is stored in the account Secret: the verifier the
+                      engine checks a login against, or the plaintext for an engine that needs it.
+                    properties:
+                      kind:
+                        description: Kind defaults to BuiltIn.
+                        enum:
+                        - BuiltIn
+                        - Webhook
+                        type: string
+                      name:
+                        description: |-
+                          Name of the format. The built-in names are scram-sha-256, mysql-native,
+                          sha256 and plaintext; a Webhook format carries any name.
+                        minLength: 1
+                        type: string
+                      webhook:
+                        description: Webhook is the endpoint of a Webhook format.
+                        properties:
+                          clientConfig:
+                            description: |-
+                              WebhookClientConfig contains the information to make a TLS
+                              connection with the webhook
+                            properties:
+                              caBundle:
+                                description: |-
+                                  caBundle is a PEM encoded CA bundle which will be used to validate the webhook's server certificate.
+                                  If unspecified, system trust roots on the apiserver are used.
+                                format: byte
+                                type: string
+                              service:
+                                description: |-
+                                  service is a reference to the service for this webhook. Either
+                                  `service` or `url` must be specified.
+
+                                  If the webhook is running within the cluster, then you should use `service`.
+                                properties:
+                                  name:
+                                    description: |-
+                                      name is the name of the service.
+                                      Required
+                                    type: string
+                                  namespace:
+                                    description: |-
+                                      namespace is the namespace of the service.
+                                      Required
+                                    type: string
+                                  path:
+                                    description: |-
+                                      path is an optional URL path which will be sent in any request to
+                                      this service.
+                                    type: string
+                                  port:
+                                    description: |-
+                                      port is the port on the service that hosts the webhook.
+                                      Default to 443 for backward compatibility.
+                                      `port` should be a valid port number (1-65535, inclusive).
+                                    format: int32
+                                    type: integer
+                                required:
+                                - name
+                                - namespace
+                                type: object
+                              url:
+                                description: |-
+                                  url gives the location of the webhook, in standard URL form
+                                  (`scheme://host:port/path`). Exactly one of `url` or `service`
+                                  must be specified.
+
+                                  The `host` should not refer to a service running in the cluster; use
+                                  the `service` field instead. The host might be resolved via external
+                                  DNS in some apiservers (e.g., `kube-apiserver` cannot resolve
+                                  in-cluster DNS as that would be a layering violation). `host` may
+                                  also be an IP address.
+
+                                  Please note that using `localhost` or `127.0.0.1` as a `host` is
+                                  risky unless you take great care to run this webhook on all hosts
+                                  which run an apiserver which might need to make calls to this
+                                  webhook. Such installs are likely to be non-portable, i.e., not easy
+                                  to turn up in a new cluster.
+
+                                  The scheme must be "https"; the URL must begin with "https://".
+
+                                  A path is optional, and if present may be any string permissible in
+                                  a URL. You may use the path to pass an arbitrary string to the
+                                  webhook, for example, a cluster identifier.
+
+                                  Attempting to use a user or basic auth e.g. "user:password@" is not
+                                  allowed. Fragments ("#...") and query parameters ("?...") are not
+                                  allowed, either.
+                                type: string
+                            type: object
+                          timeoutSeconds:
+                            format: int32
+                            maximum: 30
+                            minimum: 1
+                            type: integer
+                        required:
+                        - clientConfig
+                        type: object
+                    required:
+                    - name
+                    type: object
+                  secretLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      SecretLabels are added to every account Secret of the kind, for an operator
+                      that notices a changed Secret only when it carries a label.
+                    type: object
+                  valuesPath:
+                    description: |-
+                      ValuesPath makes the HelmRelease pull each tenant account's stored value
+                      into this values key, under u<sha256 hex of the user name>, for a chart
+                      whose operator cannot read a Secret. It starts with "_", which the
+                      Application API hides on read and refuses on write, so the value never
+                      appears in the application.
+                    pattern: ^_[A-Za-z0-9_]*$
+                    type: string
+                required:
+                - accounts
+                - format
+                type: object
               dashboard:
                 description: Dashboard configuration for this resource
                 properties:

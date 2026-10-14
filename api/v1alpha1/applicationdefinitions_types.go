@@ -61,6 +61,11 @@ type ApplicationDefinitionSpec struct {
 
 	// Dashboard configuration for this resource
 	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
+
+	// Credentials declares the kind's accounts and how the API stores their
+	// passwords. Its presence converts the kind to platform-minted credentials.
+	// +optional
+	Credentials *ApplicationDefinitionCredentials `json:"credentials,omitempty"`
 }
 
 type ApplicationDefinitionApplication struct {
