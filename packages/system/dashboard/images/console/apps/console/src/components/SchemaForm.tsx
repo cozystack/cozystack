@@ -13,6 +13,7 @@ import {
 import { customTemplates, customWidgets } from "./rjsf-templates.tsx"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
 import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
+import { FreeformObjectField } from "./FreeformObjectField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
 import { SourceField } from "./SourceField.tsx"
 import "./schema-form.css"
@@ -65,6 +66,14 @@ function bindAdditionalProperties(
   uiNode: UiSchema | undefined,
 ): UiSchema | undefined {
   const node: SchemaNode = fieldSchema
+
+  if (
+    node.type === "object" &&
+    (!node.properties || Object.keys(node.properties).length === 0) &&
+    node.additionalProperties === true
+  ) {
+    return { ...uiNode, "ui:field": "FreeformObjectField" }
+  }
 
   const isAdditionalPropertiesMap =
     node.type === "object" &&
@@ -313,6 +322,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
   const customFields = useMemo(
     () => ({
       AdditionalPropertiesField: AdditionalPropertiesField,
+      FreeformObjectField: FreeformObjectField,
       ResourceQuotasField: ResourceQuotasField,
       SourceField: SourceField,
     }),
