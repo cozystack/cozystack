@@ -1017,7 +1017,7 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 	}
 	fdbRestore, err := r.ensureFoundationDBRestore(ctx, restoreJob, targetClusterName, blobCfg, customParams, snap)
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBRestore: %v", err))
+		return r.failFoundationDBRestore(ctx, restoreJob, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBRestore: %v", err))
 	}
 
 	switch {
@@ -1043,11 +1043,7 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 		deadline := options.effectiveRestoreDeadline()
 		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
 			detail := fmt.Sprintf("state=%q running=%t", fdbRestore.Status.State, fdbRestore.Status.Running)
-			if err := r.deleteFoundationDBRestoreAgents(ctx, restoreJob); err != nil {
-				getLogger(ctx).Debug("failed to delete restore backup agents on deadline expiry; continuing with RestoreJob failure",
-					"restorejob", restoreJob.Name, "error", err.Error())
-			}
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+			return r.failFoundationDBRestore(ctx, restoreJob, fmt.Sprintf(
 				"apps.foundationdb.org/FoundationDBRestore did not complete within %s (%s; override via spec.options.restoreTimeoutSeconds)",
 				deadline, detail))
 		}
@@ -1154,6 +1150,10 @@ const foundationdbRestoreAgentsLabel = "backups.cozystack.io/foundationdb-restor
 // operator run the agents without starting a backup. The agents get the
 // backup's strategy rendered against the target application, so they pick up
 // the current credentials, CA and agent version.
+//
+// A destination that already has any FoundationDBBackup keeps its agents and
+// gets none from here: the operator reads backup state for the whole cluster,
+// so a Stopped CR next to a running backup would discontinue that backup.
 func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	ctx context.Context,
 	rj *backupsv1alpha1.RestoreJob,
@@ -1164,12 +1164,13 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	snap *foundationdbBackupSnapshot,
 ) error {
 	list := &foundationdbtypes.FoundationDBBackupList{}
-	if err := r.List(ctx, list, client.InNamespace(rj.Namespace),
-		client.MatchingLabels{foundationdbRestoreAgentsLabel: rj.Name}); err != nil {
+	if err := r.List(ctx, list, client.InNamespace(rj.Namespace)); err != nil {
 		return err
 	}
-	if len(list.Items) > 0 {
-		return nil
+	for i := range list.Items {
+		if list.Items[i].Spec.ClusterName == cluster.Name {
+			return nil
+		}
 	}
 
 	strategy := &strategyv1alpha1.FoundationDB{}
@@ -1215,6 +1216,16 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 		return err
 	}
 	return r.Create(ctx, obj)
+}
+
+// failFoundationDBRestore marks the RestoreJob Failed after removing the
+// agents started for it. The Failed RestoreJob is never reconciled again, so a
+// delete that does not go through is retried before the job is marked.
+func (r *RestoreJobReconciler) failFoundationDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, message string) (ctrl.Result, error) {
+	if err := r.deleteFoundationDBRestoreAgents(ctx, rj); err != nil {
+		return ctrl.Result{}, err
+	}
+	return r.markRestoreJobFailed(ctx, rj, message)
 }
 
 // deleteFoundationDBRestoreAgents removes the agents started for a RestoreJob
