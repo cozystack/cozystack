@@ -65,7 +65,10 @@ func RegisterStaticTypes(scheme *runtime.Scheme) {
 		&OptionList{},
 		&Tap{},
 		&TapList{},
+		&Credential{},
+		&CredentialList{},
+		&CredentialRequest{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
-	klog.V(1).Info("Registered static kinds: TenantNamespace, TenantSecret, TenantModule, Option, Tap")
+	klog.V(1).Info("Registered static kinds: TenantNamespace, TenantSecret, TenantModule, Option, Tap, Credential, CredentialRequest")
 }
