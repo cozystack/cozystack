@@ -95,6 +95,7 @@ evictionSoftMemory: {{ $evictionSoftMemory | quote }}
 {{- $root := .root }}
 {{- $group := .group }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $root | trim }}
+{{- $labelsAndTaints := include "kubernetes-nodes.labelsAndTaints" $root | fromYaml }}
 {{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
        in-guest Talos installer image matches the OS this pool actually booted.
@@ -218,8 +219,23 @@ spec:
           # main's kubeadm config (kubeletExtraArgs node-
           # labels: "gpu=on") so HAMi behaviour is identical
           # before and after the Talos worker rollover.
+          {{- end }}
+          {{- $nodeLabels := $labelsAndTaints.kubelet }}
+          {{- if $group.gpus }}
+          {{- $_ := set $nodeLabels "gpu" "on" }}
+          {{- end }}
+          {{- with $nodeLabels }}
           nodeLabels:
-            gpu: "on"
+            {{- range $k, $v := . }}
+            {{- /* The chart's own gpu key stays bare so GPU pools keep their
+                   template hash; a tenant key is quoted, because a bare null
+                   key does not survive as a string. */}}
+            {{- if and $group.gpus (eq $k "gpu") }}
+            gpu: {{ $v | quote }}
+            {{- else }}
+            {{ $k | quote }}: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
           {{- end }}
           {{- /* Emitted only when the pool resolves to a non-empty list, so a
                  pool without modules renders the machine config it rendered
@@ -270,6 +286,16 @@ spec:
                 imagefs.available: "1m30s"
               evictionMinimumReclaim:
                 memory.available: "256Mi"
+              {{- with $labelsAndTaints.taints }}
+              registerWithTaints:
+                {{- range . }}
+                - key: {{ .key | quote }}
+                  {{- if .value }}
+                  value: {{ .value | quote }}
+                  {{- end }}
+                  effect: {{ .effect | quote }}
+                {{- end }}
+              {{- end }}
           install:
             disk: /dev/vda
             image: {{ $root.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ $talosSchematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ $talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}

@@ -41,6 +41,12 @@ type ConfigSpec struct {
 	// List of node roles. Each role `r` labels nodes with `node-role.kubernetes.io/<r>`. Use `[ingress-nginx]` for a pool that hosts the tenant ingress-nginx controller.
 	// +kubebuilder:default:={}
 	Roles []string `json:"roles,omitempty"`
+	// Labels on every node of this pool. Keys under `node-role.kubernetes.io` are refused: list node roles in `roles`. Keys under `node-restriction.kubernetes.io` and `node.cluster.x-k8s.io` are synced to the Nodes by Cluster API and change in place. Every other label goes through the pool's bootstrap config, so changing it rolls the pool. Other `kubernetes.io` and `k8s.io` namespaces are refused, except `kubelet.kubernetes.io` and `node.kubernetes.io`, and so are hostname, os and arch, which describe the node itself, and the deprecated beta zone, region and instance-type labels. `topology.kubernetes.io/zone`, `topology.kubernetes.io/region` and `node.kubernetes.io/instance-type` are accepted on `kubevirt` and refused on `proxmox`, where the cloud controller manager sets them. On a Kairos pool the bootstrap labels join into one kubelet argument of at most 1024 characters. On a GPU pool the chart sets `gpu: "on"` itself.
+	// +kubebuilder:default:={}
+	Labels map[string]string `json:"labels,omitempty"`
+	// Taints on every node of this pool, registered by the kubelet when the node joins. Changing them rolls the pool. A pod without a matching toleration is not scheduled onto a node with a `NoSchedule` or `NoExecute` taint, and `NoExecute` also evicts it if it already runs there. `PreferNoSchedule` blocks nothing: the scheduler only tries to place such a pod elsewhere. A toleration matches when its effect is empty or equal to the taint's, its key is empty or equal, and its value is equal, or any value with `operator: Exists`. The kubevirt-csi node plugin tolerates every taint. On a GPU pool the device plugin has to tolerate the taint, or the pool advertises no GPUs. The GPU operator's daemonsets and its node-feature-discovery worker tolerate `nvidia.com/gpu` with `NoSchedule` and no other taint a pool can set. With HAMi enabled, HAMi's device plugin replaces the GPU operator's and tolerates no taint. Any other taint needs matching tolerations in the parent cluster's `addons.gpuOperator.valuesOverride` or `addons.hami.valuesOverride`.
+	// +kubebuilder:default:={}
+	Taints []Taint `json:"taints,omitempty"`
 	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
@@ -171,6 +177,16 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type Taint struct {
+	// `NoSchedule`, `PreferNoSchedule` or `NoExecute`.
+	Effect TaintEffect `json:"effect"`
+	// Taint key, in the label key format. Must not be in a kubernetes.io, k8s.io or x-k8s.io namespace.
+	// +kubebuilder:validation:Pattern="^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$"
+	Key string `json:"key"`
+	// Taint value.
+	Value string `json:"value,omitempty"`
+}
+
 type Talos struct {
 	// Complete PEM certificate block(s) CDI must trust when importing this pool's worker OS disk image over HTTPS — the no-osImage default and `osImage.factory` path. Empty by default, so the importer uses only its system trust store, which is what the public factory needs. Set this when the factory in use (`imageFactoryURL` or `osImage.factory.imageFactoryURL`) is a self-hosted factory or mirror served by an internal CA, which the importer otherwise rejects with `x509: certificate signed by unknown authority`. The chart renders it into a ConfigMap in the release namespace — CDI requires certConfigMap to sit alongside the DataVolume — and references that from the worker DataVolume's `source.http.certConfigMap`; CDI appends it to the system pool rather than replacing it, so a publicly-trusted endpoint verifies either way. A pool on `osImage.builtin` clones a golden image and builds no HTTP source, so this field has no effect there.
 	// +kubebuilder:default:=""
@@ -214,6 +230,9 @@ type WorkerImageFactory struct {
 	// Talos version. Defaults to `talos.version`.
 	Version string `json:"version,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="NoSchedule";"PreferNoSchedule";"NoExecute"
+type TaintEffect string
 
 // +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31"
 type Version string
