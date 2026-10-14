@@ -23,8 +23,8 @@ cilium:
     mode: "kubernetes"
   image:
     repository: ghcr.io/cozystack/cozystack/cilium
-    tag: v1.6.4
-    digest: "sha256:136a7dfff4d6adcd448424c2354144160028a8e96eb6558b917fd3ee6d7b39fe"
+    tag: v1.6.5-rc.2
+    digest: "sha256:19267183b66061522ebd065b0c3100ab6fb38f839f787b4c34e7d28b0ea5d9a6"
   envoy:
     enabled: true
     # Upstream default is {} — no requests/limits. The embedded envoy DaemonSet
