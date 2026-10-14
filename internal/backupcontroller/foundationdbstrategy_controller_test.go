@@ -509,11 +509,14 @@ func TestFoundationDBBackupReady(t *testing.T) {
 			t.Fatalf("generations.reconciled < generation must not be ready")
 		}
 	})
-	t.Run("ready when running + restorable + reconciled", func(t *testing.T) {
+	t.Run("ready when running + restorable + reconciled on its own directory", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Generation: 1},
+			Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+				AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1",
+			}},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -600,36 +603,69 @@ func TestFoundationDBBackupDeadlineExceeded(t *testing.T) {
 // URI synthesis
 // ---------------------------------------------------------------------------
 
-func TestFoundationDBBackupURI_PrefersOperatorReportedURL(t *testing.T) {
+// The URI recorded on a Backup must name this CR's own directory: the
+// operator copies status.backupDetails.url from the cluster-wide status, so
+// it can name another backup's directory.
+func TestFoundationDBBackupURI_IgnoresClusterWideStatus(t *testing.T) {
 	fdb := &foundationdbtypes.FoundationDBBackup{
 		Spec: foundationdbtypes.FoundationDBBackupSpec{
 			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				Bucket:      "bkt",
-				BackupName:  "bj-1",
+				AccountName:   "@s3.example",
+				Bucket:        "bkt",
+				BackupName:    "tenant/bj-2",
+				URLParameters: []string{"secure_connection=1", "region=us-east-1"},
 			},
 		},
 		Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{URL: "blobstore://bkt/bj-1?secure_connection=0"},
+			BackupDetails: &foundationdbtypes.BackupDetails{URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
 		},
 	}
-	if got, want := foundationdbBackupURI(fdb), "blobstore://bkt/bj-1?secure_connection=0"; got != want {
+	want := "blobstore://@s3.example:443/tenant/bj-2?bucket=bkt&region=us-east-1&secure_connection=1"
+	if got := foundationdbBackupURI(fdb); got != want {
 		t.Errorf("URI: got %q want %q", got, want)
 	}
 }
 
-func TestFoundationDBBackupURI_FallsBackToSpec(t *testing.T) {
-	fdb := &foundationdbtypes.FoundationDBBackup{
-		Spec: foundationdbtypes.FoundationDBBackupSpec{
-			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				Bucket:      "bkt",
-				BackupName:  "bj-1",
-			},
+func TestFoundationDBBlobURL_MatchesOperatorFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  foundationdbtypes.BlobStoreConfiguration
+		want string
+	}{
+		{"plain http gets port 80", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", Bucket: "b", BackupName: "n", URLParameters: []string{"secure_connection=0"}}, "blobstore://@s3.example:80/n?bucket=b&secure_connection=0"},
+		{"explicit port kept", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example:8333", Bucket: "b", BackupName: "n"}, "blobstore://@s3.example:8333/n?bucket=b"},
+		{"key and secret in account", foundationdbtypes.BlobStoreConfiguration{AccountName: "key:secret@s3.example", Bucket: "b", BackupName: "n"}, "blobstore://key:secret@s3.example:443/n?bucket=b"},
+		{"unset bucket uses the operator default", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", BackupName: "n"}, "blobstore://@s3.example:443/n?bucket=fdb-backups"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := foundationdbBlobURL(tc.cfg)
+			if err != nil || got != tc.want {
+				t.Errorf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+	if _, err := foundationdbBlobURL(foundationdbtypes.BlobStoreConfiguration{AccountName: "s3.example", BackupName: "n"}); err == nil {
+		t.Errorf("an account without @ must be rejected, as the operator does")
+	}
+}
+
+func TestFoundationDBBackupReady_RejectsAnotherBackupsDirectory(t *testing.T) {
+	b := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Generation: 1},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+			AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-2",
+		}},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 		},
 	}
-	if got, want := foundationdbBackupURI(fdb), "blobstore://bkt/bj-1"; got != want {
-		t.Errorf("URI: got %q want %q", got, want)
+	if foundationdbBackupReady(b) {
+		t.Fatalf("a backup whose status shows another directory must not be ready")
+	}
+	b.Status.BackupDetails.URL = "blobstore://@s3.example:443/tenant/bj-2?secure_connection=1&bucket=bkt"
+	if !foundationdbBackupReady(b) {
+		t.Errorf("the backup's own directory, in any parameter order, must be ready")
 	}
 }
 
@@ -657,29 +693,6 @@ func TestFoundationDBBackupStateConstants_OnlyReadableValues(t *testing.T) {
 	}
 	if foundationdbtypes.BackupStateStopped != "Stopped" {
 		t.Errorf("BackupStateStopped: got %q want \"Stopped\"", foundationdbtypes.BackupStateStopped)
-	}
-}
-
-// TestFoundationDBBackupURI_EmptyBucketIsEmpty pins #10 from review: when
-// bucket is unset the helper must NOT fall back to AccountName as the
-// bucket-slot value. AccountName looks like "<api_key>@<host:port>", so
-// the resulting URL "blobstore://<api_key>@<host>/<backupName>" matches
-// nothing the operator actually writes and would mislead anyone trying
-// to locate the artefact in object storage. The helper is informational
-// only (load-bearing coordinates live on Backup.status.driverMetadata),
-// so the right answer is "".
-func TestFoundationDBBackupURI_EmptyBucketIsEmpty(t *testing.T) {
-	fdb := &foundationdbtypes.FoundationDBBackup{
-		Spec: foundationdbtypes.FoundationDBBackupSpec{
-			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				BackupName:  "bj-1",
-				// Bucket intentionally empty.
-			},
-		},
-	}
-	if got := foundationdbBackupURI(fdb); got != "" {
-		t.Errorf("empty bucket must produce empty URI; got %q (must not graft AccountName into the bucket slot)", got)
 	}
 }
 
@@ -1951,8 +1964,11 @@ func TestRefreshFoundationDBBackupStatus(t *testing.T) {
 	running := func(restorable bool, annotation string) *foundationdbtypes.FoundationDBBackup {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk", Generation: 1},
+			Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+				AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1",
+			}},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: restorable},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: restorable, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -1970,6 +1986,11 @@ func TestRefreshFoundationDBBackupStatus(t *testing.T) {
 		{"stale nudge is renewed", running(false, now.Add(-2*time.Minute).Format(time.RFC3339)), now.Format(time.RFC3339)},
 		{"recent nudge is kept", running(false, now.Add(-10*time.Second).Format(time.RFC3339)), now.Add(-10 * time.Second).Format(time.RFC3339)},
 		{"restorable is left alone", running(true, ""), ""},
+		{"another backup's directory is nudged", func() *foundationdbtypes.FoundationDBBackup {
+			b := running(true, "")
+			b.Status.BackupDetails.URL = "blobstore://@s3.example:443/tenant/bj-0?bucket=bkt"
+			return b
+		}(), now.Format(time.RFC3339)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newFoundationDBStrategyTestClient(t, tc.in)
@@ -2325,5 +2346,55 @@ func TestCreateFoundationDBBackupArtifact_RecordsDirectoryOwnership(t *testing.T
 				t.Errorf("agent-version = %q, want 7.3.79", md[foundationdbAgentVersionKey])
 			}
 		})
+	}
+}
+
+func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	prior := func(name string, generation, reconciled int64, extra map[string]string) *foundationdbtypes.FoundationDBBackup {
+		labels := map[string]string{foundationdbClusterLabel: cluster}
+		for k, v := range extra {
+			labels[k] = v
+		}
+		return &foundationdbtypes.FoundationDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name, Generation: generation, Labels: labels},
+			Spec:       foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+			Status:     foundationdbtypes.FoundationDBBackupStatus{Generations: &foundationdbtypes.BackupGenerationStatus{Reconciled: reconciled}},
+		}
+	}
+	for _, obj := range []*foundationdbtypes.FoundationDBBackup{
+		prior("stopped-done", 2, 2, nil),
+		prior("stopped-pending", 2, 1, nil),
+		prior("restore-agents", 1, 1, map[string]string{foundationdbRestoreAgentsLabel: "rj"}),
+	} {
+		if err := c.Create(context.Background(), obj); err != nil {
+			t.Fatalf("seed %s: %v", obj.Name, err)
+		}
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(context.Background(), job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	names := map[string]bool{}
+	for _, b := range listFoundationDBBackups(t, c) {
+		names[b.Name] = true
+	}
+	if names["stopped-done"] {
+		t.Errorf("a prior backup whose stop the operator reconciled must be deleted")
+	}
+	if !names["stopped-pending"] {
+		t.Errorf("a prior backup must stay until the operator has acted on its stop")
+	}
+	if !names["restore-agents"] {
+		t.Errorf("restore agents must not be pruned by the backup path")
+	}
+	if len(names) != 3 {
+		t.Errorf("expected the new backup plus the two kept CRs, got %v", names)
 	}
 }

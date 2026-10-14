@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -56,9 +57,10 @@ const (
 	foundationdbPollInterval = 10 * time.Second
 
 	// The operator reconciles a FoundationDBBackup only on generation or
-	// annotation changes, so a backup that becomes restorable after its last
-	// reconcile keeps restorable=false in status. The driver bumps this
-	// annotation, at most once per interval, to make it re-read the backup.
+	// annotation changes, so status set at its last reconcile goes stale (a
+	// backup that turns restorable later keeps restorable=false). The driver
+	// bumps this annotation, at most once per interval, to make it re-read
+	// the backup.
 	foundationdbStatusRefreshAnnotation = "backups.cozystack.io/status-refresh"
 	foundationdbStatusRefreshInterval   = time.Minute
 
@@ -252,6 +254,7 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBBackup: %v", err))
 	}
+	r.pruneStoppedFoundationDBBackups(ctx, j, clusterName)
 
 	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
 		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
@@ -328,17 +331,22 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 	if b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
 		return false
 	}
-	return true
+	// The operator reports backup state for the whole cluster, so a new CR
+	// can see the previous backup's directory running and restorable before
+	// its own backup has started.
+	return foundationdbSameBlobURL(b.Status.BackupDetails.URL, foundationdbBackupURI(b))
 }
 
-// refreshFoundationDBBackupStatus asks the operator to re-read a running
-// backup that it has reconciled but not yet reported restorable. Failures
-// only delay readiness, so they are logged and not returned.
+// refreshFoundationDBBackupStatus asks the operator to re-read a backup it has
+// reconciled but that is not ready yet: not restorable, or still showing
+// another backup of the cluster, whose stop lets this one start only on a
+// later reconcile. Failures only delay readiness, so they are logged and not
+// returned.
 func (r *BackupJobReconciler) refreshFoundationDBBackupStatus(ctx context.Context, b *foundationdbtypes.FoundationDBBackup, now time.Time) {
-	if b == nil || b.Status.BackupDetails == nil || !b.Status.BackupDetails.Running || b.Status.BackupDetails.Restorable {
+	if b == nil || foundationdbBackupReady(b) {
 		return
 	}
-	if b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
+	if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
 		return
 	}
 	if last, err := time.Parse(time.RFC3339, b.Annotations[foundationdbStatusRefreshAnnotation]); err == nil && now.Sub(last) < foundationdbStatusRefreshInterval {
@@ -373,6 +381,9 @@ func foundationdbBackupNotReadyDetail(b *foundationdbtypes.FoundationDBBackup) s
 	}
 	if !b.Status.BackupDetails.Restorable {
 		return "waiting for first full snapshot (restorable=false)"
+	}
+	if !foundationdbSameBlobURL(b.Status.BackupDetails.URL, foundationdbBackupURI(b)) {
+		return fmt.Sprintf("operator reports another backup running on the cluster (%s)", b.Status.BackupDetails.URL)
 	}
 	return "waiting"
 }
@@ -593,6 +604,38 @@ func (r *BackupJobReconciler) stopOtherFoundationDBBackups(ctx context.Context, 
 		}
 	}
 	return nil
+}
+
+// pruneStoppedFoundationDBBackups deletes the cluster's earlier backup CRs
+// once the operator has acted on their stop. A Stopped CR adds nothing after
+// that, and it is a hazard: the operator reads backup state for the whole
+// cluster, so reconciling it again (after an operator restart, say) would
+// discontinue the running backup. The data stays; the Backup that recorded
+// the directory owns it. Failures are logged and retried on the next pass.
+func (r *BackupJobReconciler) pruneStoppedFoundationDBBackups(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) {
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := r.List(ctx, list,
+		client.InNamespace(j.Namespace),
+		client.MatchingLabels{foundationdbClusterLabel: clusterName},
+	); err != nil {
+		getLogger(ctx).Debug("failed to list FoundationDBBackups to prune", "backupjob", j.Name, "error", err.Error())
+		return
+	}
+	for i := range list.Items {
+		b := &list.Items[i]
+		if b.Labels[backupsv1alpha1.OwningJobNameLabel] == j.Name && b.Labels[backupsv1alpha1.OwningJobNamespaceLabel] == j.Namespace {
+			continue
+		}
+		if _, restoreAgents := b.Labels[foundationdbRestoreAgentsLabel]; restoreAgents {
+			continue
+		}
+		if b.Spec.BackupState != foundationdbtypes.BackupStateStopped || b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
+			continue
+		}
+		if err := r.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
+			getLogger(ctx).Debug("failed to prune a stopped FoundationDBBackup", "fdbBackup", b.Name, "error", err.Error())
+		}
+	}
 }
 
 // stopFoundationDBBackupForJob is the single-CR variant of
@@ -869,16 +912,68 @@ func foundationdbBackupURI(fdbBackup *foundationdbtypes.FoundationDBBackup) stri
 	if fdbBackup == nil {
 		return ""
 	}
-	// Prefer the operator-reported URL when present: it's the canonical
-	// path the agent is actually writing to.
-	if fdbBackup.Status.BackupDetails != nil && fdbBackup.Status.BackupDetails.URL != "" {
-		return fdbBackup.Status.BackupDetails.URL
-	}
-	cfg := fdbBackup.Spec.BlobStoreConfiguration
-	if cfg.Bucket == "" || cfg.BackupName == "" {
+	u, err := foundationdbBlobURL(fdbBackup.Spec.BlobStoreConfiguration)
+	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("blobstore://%s/%s", cfg.Bucket, cfg.BackupName)
+	return u
+}
+
+// foundationdbBlobURL builds the backup URL the way the operator v2.30.0 does
+// (BlobStoreConfiguration.getURL): the account from accountName, the backup
+// name as the path, bucket and urlParameters as the query, and port 443 (80
+// for secure_connection=0) when the account names none. It is the URL of this
+// CR's own directory; status.backupDetails.url is not, because the operator
+// copies it from the cluster-wide `fdbbackup status`.
+func foundationdbBlobURL(cfg foundationdbtypes.BlobStoreConfiguration) (string, error) {
+	account, host, ok := strings.Cut(cfg.AccountName, "@")
+	if !ok || host == "" || cfg.BackupName == "" {
+		return "", fmt.Errorf("incomplete blob-store configuration")
+	}
+	bucket := cfg.Bucket
+	if bucket == "" {
+		bucket = "fdb-backups" // the operator's default for an unset bucket
+	}
+	u := &url.URL{Scheme: "blobstore", Host: host, Path: cfg.BackupName}
+	if key, secret, hasSecret := strings.Cut(account, ":"); hasSecret {
+		u.User = url.UserPassword(key, secret)
+	} else {
+		u.User = url.User(account)
+	}
+	query := u.Query()
+	query.Set("bucket", bucket)
+	defaultPort := 443
+	for _, param := range cfg.URLParameters {
+		name, value, found := strings.Cut(param, "=")
+		if !found {
+			continue
+		}
+		query.Set(name, value)
+		if (name == "sc" || name == "secure_connection") && value == "0" {
+			defaultPort = 80
+		}
+	}
+	u.RawQuery = query.Encode()
+	if u.Port() == "" {
+		u.Host = fmt.Sprintf("%s:%d", u.Host, defaultPort)
+	}
+	return u.String(), nil
+}
+
+// foundationdbSameBlobURL reports whether two backup URLs name the same
+// directory: host, path and bucket, whatever the parameter order.
+func foundationdbSameBlobURL(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return ua.Host == ub.Host &&
+		strings.Trim(ua.Path, "/") == strings.Trim(ub.Path, "/") &&
+		ua.Query().Get("bucket") == ub.Query().Get("bucket")
 }
 
 // ---------------------------------------------------------------------------
