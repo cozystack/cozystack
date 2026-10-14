@@ -373,6 +373,14 @@ spec:
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
+        orphanIdentities:
+          {{- $orphans := dig "orphanIdentities" "auto" (.Values.cosi | default dict) }}
+          {{- if eq $orphans "auto" }}
+          {{- /* A filer published for Client-topology clusters (ingress.yaml)
+                 holds identities of BucketAccesses in those clusters. */}}
+          {{- $orphans = ternary "report" "delete" (not (empty .Values.filer.grpcHost)) }}
+          {{- end }}
+          mode: {{ $orphans | quote }}
         resources:
           requests:
             cpu: "100m"

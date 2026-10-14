@@ -1,0 +1,145 @@
+suite: seaweedfs orphan identities hook
+
+templates:
+  - templates/orphan-identities-hook.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-foo
+
+tests:
+  - it: renders nothing without COSI
+    set:
+      seaweedfs.cosi.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: every object is a hook on both install and upgrade
+    asserts:
+      - hasDocuments:
+          count: 7
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: only reports unless the chart is told to delete
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MODE
+            value: report
+
+  - it: passes delete through when set
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      seaweedfs.cosi.orphanIdentities.mode: delete
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MODE
+            value: delete
+
+  - it: can list BucketAccesses in every namespace and nothing else cluster-wide
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["objectstorage.k8s.io"]
+              resources: ["bucketaccesses"]
+              verbs: ["list"]
+
+  - it: names its cluster-scoped objects after the namespace so tenants do not share them
+    release:
+      name: seaweedfs-system
+      namespace: tenant-bar
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-bar-seaweedfs-system-orphan-identities
+      - equal:
+          path: roleRef.name
+          value: tenant-bar-seaweedfs-system-orphan-identities
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: seaweedfs-system-orphan-identities
+            namespace: tenant-bar
+
+  - it: the Job outlives a run so its logs stay readable
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+
+  - it: the Job runs under a restrictive non-root securityContext
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+
+  - it: ships the script and points it at the cluster
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: ["/bin/sh", "/opt/script/orphan-identities.sh"]
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MASTER
+            value: seaweedfs-master:9333
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FILER
+            value: seaweedfs-filer-client:8888
+
+  - it: the script in the ConfigMap is the file under test
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["orphan-identities.sh"]
+          pattern: 'OrphanIdentityRemoved'
+
+  - it: mounts the gRPC client credentials when security is on
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: client-cert
+            secret:
+              secretName: seaweedfs-client-cert
