@@ -611,7 +611,7 @@ jobs:
       # nocloud disk asset and export its id; the container lane boots no disk,
       # so nothing in this workflow reads that id any more and resolving it only
       # added a way to fail a release PR over an asset it does not use. The
-      # asset is still resolved where it is still consumed, in e2e-tag.yaml.
+      # asset's presence is still checked in e2e-tag.yaml and promote-rc.yaml.
       - name: Verify draft release exists (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -631,15 +631,10 @@ jobs:
             }
 
 
-  # In-tree e2e, on Talos nodes running as CONTAINERS. The QEMU substrate this
-  # lane used to boot is off the per-PR path only: it is still wired into
-  # e2e-tag.yaml, which runs `make prepare-env` -> `make -C packages/core/testing
-  # prepare-cluster`. That target and hack/e2e-prepare-cluster.bats are
-  # therefore live code, not leftovers, and deleting them takes every
-  # release-candidate run with them. They carry the coverage containers cannot:
-  # DRBD, and with it the `replicated` StorageClass, its Immediate binding mode
-  # and the tenant StorageClass propagation that only applies to
-  # remotely-accessible classes.
+  # In-tree e2e, on Talos nodes running as CONTAINERS, like every other e2e
+  # lane. What containers cannot carry has no lane at all: DRBD, and with it
+  # the `replicated` StorageClass, its Immediate binding mode and the tenant
+  # StorageClass propagation that only applies to remotely-accessible classes.
   e2e:
     name: "E2E Tests"
     # hack/e2e-compose.yaml gives each of the three nodes `cpus: 8` and
