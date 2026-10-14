@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -171,6 +172,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
+	app = app.DeepCopy()
+
 	// Validate Application name format (DNS-1035 plus any kind-specific rules)
 	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
@@ -202,6 +205,16 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// Omission permits a chart default; explicit null suppresses it in Helm.
+	// Normalize only repairable fields before admission and persistence.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
 	r.warnLegacyPresets(app)
 
 	// Run the genericapiserver-supplied validating admission chain
@@ -213,7 +226,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// this hook explicitly — unlike genericregistry.Store, which
 	// wires it automatically.
 	if createValidation != nil {
-		if err := createValidation(ctx, obj); err != nil {
+		if err := createValidation(ctx, app); err != nil {
 			return nil, err
 		}
 	}
@@ -518,20 +531,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
-	// Validate the update if a validation function is provided
-	if updateValidation != nil {
-		if err := updateValidation(ctx, newObj, oldObj); err != nil {
-			klog.Errorf("Update validation failed for Application %s: %v", name, err)
-			return nil, false, err
-		}
-	}
-
 	// Assert the new object is of type Application
 	app, ok := newObj.(*appsv1alpha1.Application)
 	if !ok {
 		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
+
+	app = app.DeepCopy()
 
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
@@ -540,6 +547,23 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Admission must validate the same normalized values that will be stored.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, false, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
+	// Validate the update if a validation function is provided
+	if updateValidation != nil {
+		if err := updateValidation(ctx, app, oldObj); err != nil {
+			klog.Errorf("Update validation failed for Application %s: %v", name, err)
+			return nil, false, err
+		}
 	}
 
 	// Enforce hierarchical quota allocation on quota changes too: raising a
@@ -560,9 +584,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Fetch the live HelmRelease: it backs the ResourceVersion when the
-	// converted object carries none, and runtime-managed labels are carried
-	// over from it below.
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
+
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
@@ -570,31 +596,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
-	helmRelease.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
-	helmRelease.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
-	helmRelease.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
-
-	// Merge system labels (from config) directly
-	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
-	// Merge user labels with prefix
-	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
-	// Add application metadata labels
-	if helmRelease.Labels == nil {
-		helmRelease.Labels = make(map[string]string)
-	}
-	helmRelease.Labels[ApplicationKindLabel] = r.kindName
-	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
-	helmRelease.Labels[ApplicationNameLabel] = app.Name
-	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
-
-	// The flux-shard-operator assigns each tenant HelmRelease to a
-	// helm-controller shard by rewriting this label at runtime. Rebuilding
-	// the object from the Application reverts it to the ApplicationDefinition
-	// default, which would bounce the HelmRelease off its shard on every
-	// update, so the live value wins.
-	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
-		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
-	}
+	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
@@ -608,6 +610,13 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// the caller just applied, so a stale-resourceVersion conflict is never a
 	// real spec conflict here: refresh the resourceVersion from the live object
 	// and retry.
+	//
+	// The carried-over metadata is not derived from the Application, though, and
+	// the writer that caused the conflict is usually the controller that owns it
+	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
+	// carry-over exists for. Keeping the copy read before the conflict would put
+	// the stale metadata back and undo that write, so rebuild from the
+	// conversion output against the object just read.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
@@ -615,10 +624,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
+			helmRelease = converted.DeepCopy()
+			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
-			helmRelease.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
-			helmRelease.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
-			helmRelease.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
 		}
 		return updateErr
 	})
@@ -1168,15 +1176,13 @@ func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appN
 }
 
 // mergeMaps combines two maps of labels or annotations
+// mergeMaps merges b over a into a freshly allocated map. It never returns
+// either input: callers mutate the result in place, and a may be a long-lived
+// shared map (e.g. r.releaseConfig.Labels) that concurrent requests must not
+// write to.
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
 		return nil
-	}
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
 	}
 	merged := make(map[string]string, len(a)+len(b))
 	for k, v := range a {
@@ -1239,6 +1245,69 @@ func mergeGarbageCollectionFinalizers(current, previous, desired []string) []str
 		}
 	}
 	return result
+}
+
+// applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
+// Application, given the live object it is about to replace. The PUT is a full
+// replace, so anything not restated here is dropped:
+//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
+//     remove the HelmRelease instantly, orphaning every resource of the release.
+//   - ownerReferences: garbage collection and lineage.
+//   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
+//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     owned by this API and recomputed from the Application, so stale ones are
+//     dropped and a deletion on the Application propagates.
+//
+// hr must be a fresh conversion output: the function overlays the live metadata
+// and is not idempotent against its own result.
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application, previousFinalizers []string) {
+	hr.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
+	hr.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
+	hr.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
+	hr.OwnerReferences = cur.OwnerReferences
+	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
+	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
+
+	// Merge system labels (from config) directly
+	hr.Labels = mergeMaps(r.releaseConfig.Labels, hr.Labels)
+	// Merge user labels with prefix
+	hr.Labels = mergeMaps(hr.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if hr.Labels == nil {
+		hr.Labels = make(map[string]string)
+	}
+	hr.Labels[ApplicationKindLabel] = r.kindName
+	hr.Labels[ApplicationGroupLabel] = r.gvk.Group
+	hr.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		hr.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+}
+
+// omitPrefixedMap returns the entries of a map whose keys do NOT carry the
+// predefined prefix, keeping the keys as-is. It is the complement of
+// filterPrefixedMap: prefixed keys are owned by this API and recomputed from
+// the Application on every write, while the remaining keys belong to other
+// controllers and must be preserved.
+func omitPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if !strings.HasPrefix(k, prefix) {
+			processed[k] = v
+		}
+	}
+	return processed
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application.
