@@ -44,6 +44,14 @@ spec:
             - --cert=/etc/etcd/pki/client/cert/tls.crt
             - --key=/etc/etcd/pki/client/cert/tls.key
             - --cluster
+            # etcd compacts itself (periodic, 5m retention, see etcd-cluster.yaml).
+            # Compacting again to the latest revision either fails because nothing
+            # was written since, or drops the history that retention keeps for
+            # watchers to resume from.
+            - --compaction=false
+            # dbQuotaUsage below is dbSize over this value, and the tool assumes
+            # 2 GiB unless told the quota the cluster actually runs with.
+            - --etcd-storage-quota-bytes={{ include "calculateQuotaBackendBytes" .Values.size }}
             - --defrag-rule
             - "dbQuotaUsage > 0.8 || dbSize - dbSizeInUse > 200*1024*1024"
             volumeMounts:
