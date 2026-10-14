@@ -1,0 +1,127 @@
+suite: keycloak and proxy placement across failure domains
+templates:
+  - templates/sts.yaml
+  - templates/proxy.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+set:
+  _cluster:
+    root-host: example.org
+    cluster-domain: cozy.local
+
+tests:
+  - it: leaves Keycloak placement to the scheduler by default
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+
+  - it: renders Keycloak affinity and spread constraints when set
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values: [zone-a, zone-b]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels:
+              app: keycloak-ha
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values
+          value: [zone-a, zone-b]
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].nodeTaintsPolicy
+          value: Honor
+
+  - it: leaves proxy placement to the scheduler by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+
+  - it: renders proxy affinity and spread constraints when set
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values: [zone-a, zone-b]
+      encryption.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels:
+              app: keycloak-kms-proxy
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values
+          value: [zone-a, zone-b]
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+
+  # A single replica has nothing to keep available during a drain, and a
+  # PodDisruptionBudget on it would only block the drain.
+  - it: renders no disruption budget for a single proxy replica
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: keeps one proxy replica through voluntary disruptions when replicated
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: PodDisruptionBudget
+    set:
+      encryption.enabled: true
+      encryption.replicas: 2
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app: keycloak-kms-proxy

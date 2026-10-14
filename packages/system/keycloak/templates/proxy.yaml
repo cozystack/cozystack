@@ -126,6 +126,14 @@ spec:
         app: keycloak-kms-proxy
     spec:
       serviceAccountName: keycloak-kms-proxy
+      {{- with .Values.encryption.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.encryption.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       automountServiceAccountToken: {{ $k8sAuth }}
       securityContext:
         runAsNonRoot: true
@@ -303,6 +311,20 @@ spec:
                 path: ca.crt
         {{- end }}
       {{- end }}
+{{- if gt $replicas 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: keycloak-kms-proxy
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

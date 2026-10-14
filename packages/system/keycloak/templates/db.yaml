@@ -9,7 +9,16 @@ spec:
   imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
   storage:
     size: 20Gi
-  {{- if .Values._cluster.scheduling }}
+  {{- with .Values.database.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if .Values.database.topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range .Values.database.topologySpreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "cnpg.io/cluster" "keycloak-db")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+  {{- else if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
   {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
