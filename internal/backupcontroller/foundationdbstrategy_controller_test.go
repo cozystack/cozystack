@@ -2398,3 +2398,86 @@ func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
 		t.Errorf("expected the new backup plus the two kept CRs, got %v", names)
 	}
 }
+
+// Two BackupJobs of one cluster overlap when the second starts before the
+// first reaches a restorable snapshot. The first one's CR is stopped; it must
+// not be pruned while that job still runs, or the job recreates it and stops
+// the newer backup in turn.
+func TestReconcileFoundationDB_OverlappingJobsDoNotStopEachOther(t *testing.T) {
+	c, bj, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	bj2 := bj.DeepCopy()
+	bj2.ObjectMeta = metav1.ObjectMeta{Namespace: bj.Namespace, Name: "bj2"}
+	if err := c.Create(ctx, bj2); err != nil {
+		t.Fatalf("seed bj2: %v", err)
+	}
+	if err := c.Status().Update(ctx, bj2); err != nil {
+		t.Fatalf("seed bj2 status: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	reconcile := func(j *backupsv1alpha1.BackupJob) {
+		t.Helper()
+		fresh := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(j), fresh); err != nil {
+			t.Fatalf("get %s: %v", j.Name, err)
+		}
+		if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+			t.Fatalf("reconcile %s: %v", j.Name, err)
+		}
+	}
+	ownedBy := func(job string) []foundationdbtypes.FoundationDBBackup {
+		var out []foundationdbtypes.FoundationDBBackup
+		for _, b := range listFoundationDBBackups(t, c) {
+			if b.Labels[backupsv1alpha1.OwningJobNameLabel] == job {
+				out = append(out, b)
+			}
+		}
+		return out
+	}
+
+	reconcile(bj)
+	reconcile(bj2)
+	// The operator acts on the stop of bj's CR.
+	first := ownedBy(bj.Name)
+	if len(first) != 1 || first[0].Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Fatalf("expected bj's CR stopped by bj2, got %+v", first)
+	}
+	first[0].Status.Generations = &foundationdbtypes.BackupGenerationStatus{Reconciled: first[0].Generation}
+	if err := c.Update(ctx, &first[0]); err != nil {
+		t.Fatalf("mark stop reconciled: %v", err)
+	}
+	reconcile(bj2)
+	reconcile(bj)
+	reconcile(bj2)
+
+	second := ownedBy("bj2")
+	if len(second) != 1 || second[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("the newer backup must keep running, got %+v", second)
+	}
+	if got := ownedBy(bj.Name); len(got) != 1 || got[0].Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("the older job must keep its stopped CR instead of recreating a running one, got %+v", got)
+	}
+}
+
+func TestReconcileFoundationDBRestore_InvalidAgentsFailRestore(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*foundationdbtypes.FoundationDBBackup); ok {
+				return apierrors.NewInvalid(foundationdbtypes.GroupVersion.WithKind("FoundationDBBackup").GroupKind(), obj.GetName(), nil)
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}
+	_, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("an invalid agents object must fail the RestoreJob, not requeue: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed", rj.Status.Phase)
+	}
+}

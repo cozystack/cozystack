@@ -14,11 +14,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
@@ -30,15 +32,23 @@ import (
 const fdbCleanupURL = "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt&secure_connection=1"
 
 func newFoundationDBCleanupClient(objs ...client.Object) client.Client {
+	return newFoundationDBCleanupClientWith(nil, objs...)
+}
+
+func newFoundationDBCleanupClientWith(funcs *interceptor.Funcs, objs ...client.Object) client.Client {
 	s := runtime.NewScheme()
 	_ = scheme.AddToScheme(s)
 	_ = backupsv1alpha1.AddToScheme(s)
 	_ = strategyv1alpha1.AddToScheme(s)
 	_ = foundationdbtypes.AddToScheme(s)
 	_ = foundationdbapp.AddToScheme(s)
-	return clientfake.NewClientBuilder().WithScheme(s).
+	b := clientfake.NewClientBuilder().WithScheme(s).
 		WithStatusSubresource(&batchv1.Job{}).
-		WithObjects(objs...).Build()
+		WithObjects(objs...)
+	if funcs != nil {
+		b = b.WithInterceptorFuncs(*funcs)
+	}
+	return b.Build()
 }
 
 func newFoundationDBCleanupStrategy() *strategyv1alpha1.FoundationDB {
@@ -256,6 +266,9 @@ func TestCleanupFoundationDBBackup_SkipAnnotationReleases(t *testing.T) {
 	if jobs := listCleanupJobs(t, c); len(jobs) != 0 {
 		t.Errorf("skip annotation must not start a delete Job, got %d", len(jobs))
 	}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, &foundationdbtypes.FoundationDBBackup{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the operator CR must not keep streaming into a released directory, got err=%v", err)
+	}
 }
 
 func TestBackupReconcile_HoldsFinalizerWhileFoundationDBCleanupRuns(t *testing.T) {
@@ -425,5 +438,73 @@ func TestFoundationDBCleanupScript_ExitCodes(t *testing.T) {
 				t.Errorf("exit code = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCleanupFoundationDBBackup_TransientCredentialsErrorRetries(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy())
+	// The configured source Secret does not exist: ReasonSourceMissing, which
+	// clears on its own once the bucket controller writes it.
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10), CredentialsConfig: defaultCfg()}
+
+	if _, err := r.cleanupFoundationDBBackup(context.Background(), newFoundationDBCleanupBackup(true)); err == nil {
+		t.Fatalf("a transient credentials error must be returned for a retry, not release the Backup")
+	}
+	if jobs := listCleanupJobs(t, c); len(jobs) != 0 {
+		t.Errorf("no delete Job without credentials, got %d", len(jobs))
+	}
+}
+
+func TestCleanupFoundationDBBackup_InvalidJobReleases(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*batchv1.Job); ok {
+				return apierrors.NewInvalid(schema.GroupKind{Group: "batch", Kind: "Job"}, obj.GetName(), nil)
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}
+	c := newFoundationDBCleanupClientWith(&funcs, ns, newFoundationDBCleanupStrategy())
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Recorder: rec}
+
+	res, err := r.cleanupFoundationDBBackup(context.Background(), newFoundationDBCleanupBackup(true))
+	if err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("an invalid Job cannot be fixed by retrying; expected a release, got %+v, %v", res, err)
+	}
+	select {
+	case e := <-rec.Events:
+		if !strings.Contains(e, "ArtifactNotDeleted") {
+			t.Errorf("event %q must say the data was left behind", e)
+		}
+	default:
+		t.Errorf("releasing without deleting must record an event")
+	}
+}
+
+func TestCleanupFoundationDBBackup_RendersWithBackupParameters(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	strategy := newFoundationDBCleanupStrategy()
+	strategy.Spec.Template.BackupDeploymentPodTemplateSpec.Spec.Volumes[0].Secret.SecretName = "{{ .Parameters.credentialsSecret }}"
+	c := newFoundationDBCleanupClient(ns, strategy)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	backup := newFoundationDBCleanupBackup(true)
+	raw, err := marshalFoundationDBBackupSnapshot(nil, &strategy.Spec.Template, map[string]string{"credentialsSecret": "per-class-creds"}, nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup.Status.UnderlyingResources = raw
+
+	if _, err := r.cleanupFoundationDBBackup(context.Background(), backup); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	jobs := listCleanupJobs(t, c)
+	if len(jobs) != 1 {
+		t.Fatalf("expected the delete Job, got %d", len(jobs))
+	}
+	if got := jobs[0].Spec.Template.Spec.Volumes[0].Secret.SecretName; got != "per-class-creds" {
+		t.Errorf("delete Job must use the credentials the backup ran with, got Secret %q", got)
 	}
 }
