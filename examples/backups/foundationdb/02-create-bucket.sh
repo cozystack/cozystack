@@ -50,6 +50,9 @@ done
 FDB_ENDPOINT_HOSTPORT=${FDB_ENDPOINT_FULL#http://}
 FDB_ENDPOINT_HOSTPORT=${FDB_ENDPOINT_HOSTPORT#https://}
 FDB_ACCOUNT_NAME="${FDB_ACCESS_KEY}@${FDB_ENDPOINT_HOSTPORT}"
+# FDB looks the account up in blob_credentials.json as "<api_key>@<host>"
+# without the port, so the JSON key must drop it.
+FDB_CREDS_ACCOUNT="${FDB_ACCESS_KEY}@${FDB_ENDPOINT_HOSTPORT%%[:/]*}"
 
 # Determine whether the endpoint is TLS-terminated. When the BucketInfo
 # endpoint URL starts with https:// we toggle the operator's
@@ -71,7 +74,7 @@ create_creds_secret() {
     local secret_name="${app_name}-fdb-backup-creds"
     local creds_json
     creds_json=$(jq -nc \
-        --arg account "$FDB_ACCOUNT_NAME" \
+        --arg account "$FDB_CREDS_ACCOUNT" \
         --arg key "$FDB_ACCESS_KEY" \
         --arg secret "$FDB_SECRET_KEY" \
         '{accounts: {($account): {api_key: $key, secret: $secret}}}')
