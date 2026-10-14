@@ -3,6 +3,8 @@ package backupcontroller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -58,7 +60,7 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 		return ctrl.Result{}, nil
 	}
 	url := md[foundationdbStorageURIKey]
-	jobName := backup.Name + "-cleanup"
+	jobName := foundationdbCleanupJobName(backup.Name)
 
 	if backup.Annotations[foundationdbSkipArtifactCleanupAnnotation] == "true" {
 		existing := &batchv1.Job{}
@@ -67,6 +69,11 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 		}
 		getLogger(ctx).Debug("skipping FoundationDB artifact cleanup per annotation; directory left in bucket", "backup", backup.Name, "url", url)
 		return ctrl.Result{}, nil
+	}
+
+	// A restore may still be reading the directory.
+	if restoring, err := r.foundationdbBackupBeingRestored(ctx, backup); err != nil || restoring {
+		return ctrl.Result{RequeueAfter: foundationdbPollInterval}, err
 	}
 
 	if done, err := r.removeFoundationDBOperatorBackup(ctx, backup); err != nil || !done {
@@ -96,7 +103,13 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
 		// Collect the failed Job so the next pass starts a fresh one; the
-		// Backup stays Terminating until the directory is gone.
+		// Backup stays Terminating, a visible signal, until the directory is
+		// gone or the skip annotation releases it.
+		if r.Recorder != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactDeleteFailed",
+				"deleting FoundationDB backup %s failed (see Job %s/%s); retrying. Annotate the Backup %s=true to release it and leave the data",
+				url, job.Namespace, job.Name, foundationdbSkipArtifactCleanupAnnotation)
+		}
 		_ = r.deleteFoundationDBCleanupJob(ctx, job)
 		return ctrl.Result{RequeueAfter: foundationdbPollInterval}, nil
 	default:
@@ -133,9 +146,46 @@ func (r *BackupReconciler) removeFoundationDBOperatorBackup(ctx context.Context,
 		return false, r.Patch(ctx, fdbBackup, client.MergeFrom(base))
 	}
 	if fdbBackup.Status.Generations != nil && fdbBackup.Status.Generations.Reconciled < fdbBackup.Generation {
-		return false, nil
+		// The operator acts on the stop only while the cluster exists. With
+		// the cluster gone there is nothing to stop, so the CR goes now.
+		err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: fdbBackup.Spec.ClusterName}, &foundationdbtypes.FoundationDBCluster{})
+		if err == nil || !apierrors.IsNotFound(err) {
+			return false, err
+		}
 	}
 	return false, client.IgnoreNotFound(r.Delete(ctx, fdbBackup))
+}
+
+// foundationdbBackupBeingRestored reports whether a RestoreJob that reads this
+// Backup has not finished yet.
+func (r *BackupReconciler) foundationdbBackupBeingRestored(ctx context.Context, backup *backupsv1alpha1.Backup) (bool, error) {
+	list := &backupsv1alpha1.RestoreJobList{}
+	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
+		return false, err
+	}
+	for i := range list.Items {
+		rj := &list.Items[i]
+		if rj.Spec.BackupRef.Name != backup.Name {
+			continue
+		}
+		if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded && rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// foundationdbCleanupJobName keeps the Job name within the 63 characters a
+// Job's pod label allows: a long Backup name is cut and made unique again
+// with a hash of the full name.
+func foundationdbCleanupJobName(backupName string) string {
+	const suffix = "-cleanup"
+	if len(backupName)+len(suffix) <= 63 {
+		return backupName + suffix
+	}
+	sum := sha256.Sum256([]byte(backupName))
+	hash := hex.EncodeToString(sum[:])[:8]
+	return backupName[:63-len(suffix)-len(hash)-1] + "-" + hash + suffix
 }
 
 func (r *BackupReconciler) startFoundationDBCleanupJob(ctx context.Context, backup *backupsv1alpha1.Backup, jobName, url string) (ctrl.Result, error) {
@@ -181,8 +231,7 @@ func (r *BackupReconciler) startFoundationDBCleanupJob(ctx context.Context, back
 	job := buildFoundationDBCleanupJob(backup, jobName, url, foundationdbCleanupBaseImage+":"+version, rendered.BackupDeploymentPodTemplateSpec)
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		// Forbidden (namespace went Terminating after the check) or Invalid
-		// (a Backup name too long for <name>-cleanup) cannot be fixed by
-		// retrying.
+		// cannot be fixed by retrying.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			return r.releaseFoundationDBCleanup(ctx, backup, url, fmt.Sprintf("cannot create cleanup Job: %v", err)), nil
 		}
