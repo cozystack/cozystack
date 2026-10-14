@@ -1,0 +1,129 @@
+suite: the Cluster declares every role as CloudNativePG managed roles
+
+# Tenant accounts, the per-database roles and the marker are declared on the
+# Cluster, so the operator creates each account with the verifier in its account
+# Secret, applies a changed Secret live, and reverts drift. Each role is rendered
+# as the init-script created it, because the operator reverts an attribute that
+# differs, revokes a parent role missing from inRoles and clears a comment the
+# spec leaves unset, while the init-script finds roles to drop by that comment
+# and by membership in the marker. These tests pin that render and the account
+# Secret naming the API shares.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: declares the marker with no login and no comment
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: "cozystack:managed"
+            login: false
+
+  - it: declares the database roles with no login, no inherit, the comment and the marker
+    set:
+      databases:
+        shop: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: shop_admin
+            login: false
+            inherit: false
+            comment: role managed by helm
+            inRoles:
+              - "cozystack:managed"
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: shop_readonly
+            login: false
+            inherit: false
+            comment: role managed by helm
+            inRoles:
+              - "cozystack:managed"
+
+  - it: gives an account its database roles through inRoles and its Secret by the account name
+    set:
+      users:
+        Web.App: {}
+        reporter: {}
+      databases:
+        shop:
+          roles:
+            admin: [Web.App]
+            readonly: [reporter]
+        logs:
+          roles:
+            readonly: [Web.App, reporter]
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: Web.App
+            login: true
+            inherit: true
+            replication: false
+            createrole: false
+            bypassrls: false
+            comment: user managed by helm
+            inRoles:
+              - "cozystack:managed"
+              - logs_readonly
+              - shop_admin
+            passwordSecret:
+              name: pg-test.web-app.account
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: reporter
+            inRoles:
+              - "cozystack:managed"
+              - logs_readonly
+              - shop_readonly
+            passwordSecret:
+              name: pg-test.reporter.account
+          any: true
+
+  # The API refuses two users that map to one account name; the chart refuses
+  # the same for a HelmRelease written around it, since the operator would read
+  # one Secret for both roles.
+  - it: refuses two users that map to one account name
+    set:
+      users:
+        web_app: {}
+        web-app: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'users "web-app" and "web_app" both map to the account name "web-app"; rename one of them'
+
+  - it: renders no managed roles beyond the marker for a release without users or databases
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - lengthEqual:
+          path: spec.managed.roles
+          count: 1
