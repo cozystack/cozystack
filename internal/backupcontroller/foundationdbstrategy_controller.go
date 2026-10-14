@@ -809,6 +809,10 @@ func (r *BackupJobReconciler) createFoundationDBBackupArtifact(
 		foundationdbAccountNameKey:     fdbBackup.Spec.BlobStoreConfiguration.AccountName,
 		foundationdbBucketKey:          fdbBackup.Spec.BlobStoreConfiguration.Bucket,
 		foundationdbBlobBackupNameKey:  fdbBackup.Spec.BlobStoreConfiguration.BackupName,
+		foundationdbAgentVersionKey:    fdbBackup.Spec.Version,
+	}
+	if rendered.BlobStoreConfiguration.BackupName == "" {
+		driverMD[foundationdbOwnsDirectoryKey] = "true"
 	}
 	if uri := foundationdbBackupURI(fdbBackup); uri != "" {
 		driverMD[foundationdbStorageURIKey] = uri
@@ -1013,7 +1017,11 @@ func (r *RestoreJobReconciler) reconcileFoundationDBRestore(ctx context.Context,
 		customParams = append(customParams, snap.CustomParameters...)
 	}
 	if err := r.ensureFoundationDBRestoreAgents(ctx, restoreJob, backup, target, targetCluster, blobCfg, snap); err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to start backup agents for the restore: %v", err))
+		var terminal *foundationdbRestoreAgentsError
+		if errors.As(err, &terminal) {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to start backup agents for the restore: %v", err))
+		}
+		return ctrl.Result{}, err
 	}
 	fdbRestore, err := r.ensureFoundationDBRestore(ctx, restoreJob, targetClusterName, blobCfg, customParams, snap)
 	if err != nil {
@@ -1138,6 +1146,13 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestore(
 	return obj, nil
 }
 
+// foundationdbRestoreAgentsError is a failure to start restore agents that a
+// retry cannot fix (missing strategy or application, unrenderable template).
+// Any other error is transient and requeues the RestoreJob.
+type foundationdbRestoreAgentsError struct{ error }
+
+func (e *foundationdbRestoreAgentsError) Unwrap() error { return e.error }
+
 // foundationdbRestoreAgentsLabel marks the FoundationDBBackup that runs the
 // backup agents for a RestoreJob. It deliberately differs from the OwningJob
 // labels so the BackupJob path never mistakes it for a backup of its own.
@@ -1175,11 +1190,17 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 
 	strategy := &strategyv1alpha1.FoundationDB{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
-		return fmt.Errorf("get FoundationDB strategy %q: %w", backup.Spec.StrategyRef.Name, err)
+		if apierrors.IsNotFound(err) {
+			return &foundationdbRestoreAgentsError{fmt.Errorf("FoundationDB strategy %q not found", backup.Spec.StrategyRef.Name)}
+		}
+		return err
 	}
 	app := &foundationdbapp.FoundationDB{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
-		return fmt.Errorf("get target FoundationDB application: %w", err)
+		if apierrors.IsNotFound(err) {
+			return &foundationdbRestoreAgentsError{fmt.Errorf("target FoundationDB application %s/%s not found", target.Namespace, target.AppName)}
+		}
+		return err
 	}
 	var parameters map[string]string
 	if snap != nil {
@@ -1187,7 +1208,7 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	}
 	rendered, err := renderFoundationDBTemplate(strategy.Spec.Template, app, parameters)
 	if err != nil {
-		return fmt.Errorf("render FoundationDB strategy: %w", err)
+		return &foundationdbRestoreAgentsError{fmt.Errorf("render FoundationDB strategy: %w", err)}
 	}
 
 	obj := &foundationdbtypes.FoundationDBBackup{
@@ -1205,6 +1226,7 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 			BackupState:            foundationdbtypes.BackupStateStopped,
 			BlobStoreConfiguration: blob,
 			AgentCount:             int32PtrCopy(rendered.AgentCount),
+			CustomParameters:       append([]string(nil), rendered.CustomParameters...),
 		},
 	}
 	if rendered.BackupDeploymentPodTemplateSpec != nil {

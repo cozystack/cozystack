@@ -301,6 +301,9 @@ func TestFoundationDBRestoreAgents_StartedStoppedAndRemoved(t *testing.T) {
 	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "" {
 		t.Errorf("agents must not carry the BackupJob owner label: %v", got.Labels)
 	}
+	if len(got.Spec.CustomParameters) != len(tmpl.CustomParameters) || got.Spec.CustomParameters[0] != tmpl.CustomParameters[0] {
+		t.Errorf("agents must carry the strategy's customParameters: got %v want %v", got.Spec.CustomParameters, tmpl.CustomParameters)
+	}
 	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Name != rj.Name {
 		t.Errorf("agents must be owned by the RestoreJob: %+v", got.OwnerReferences)
 	}
@@ -2243,5 +2246,84 @@ func TestReconcileFoundationDB_NotRestorableRequestsStatusRefresh(t *testing.T) 
 	got := listFoundationDBBackups(t, c)[0]
 	if got.Annotations[foundationdbStatusRefreshAnnotation] == "" {
 		t.Errorf("a reconciled, not yet restorable backup must get a status-refresh annotation; annotations=%v", got.Annotations)
+	}
+}
+
+func TestReconcileFoundationDBRestore_TransientAgentErrorRequeues(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*strategyv1alpha1.FoundationDB); ok {
+				return apierrors.NewServiceUnavailable("injected outage")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err == nil {
+		t.Fatalf("expected the transient error returned for a requeue")
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a transient error must not fail the RestoreJob")
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 0 {
+		t.Errorf("no agents expected after the failed attempt, got %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_MissingStrategyFailsRestore(t *testing.T) {
+	_, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	backup.Spec.StrategyRef.Name = "gone"
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a strategy that does not exist", rj.Status.Phase)
+	}
+}
+
+func TestCreateFoundationDBBackupArtifact_RecordsDirectoryOwnership(t *testing.T) {
+	apps := foundationdbapp.GroupName
+	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+	for _, tc := range []struct {
+		name       string
+		backupName string
+		wantOwned  bool
+	}{
+		{"driver-named directory is owned", "", true},
+		{"pinned directory is shared", "{{ .Application.metadata.name }}", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-own"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps},
+				},
+			}
+			c := newFoundationDBStrategyTestClient(t, job)
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyAPIGroup, Kind: strategyv1alpha1.FoundationDBStrategyKind, Name: "fdb-strategy"},
+			}
+			rendered := newRenderedFoundationDBTemplate()
+			rendered.BlobStoreConfiguration.BackupName = tc.backupName
+			fdbBackup := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk"},
+				Spec:       foundationdbtypes.FoundationDBBackupSpec{Version: "7.3.79"},
+				Status:     foundationdbtypes.FoundationDBBackupStatus{BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true}},
+			}
+			artifact, err := r.createFoundationDBBackupArtifact(context.Background(), job, resolved, fdbBackup, rendered, newFoundationDBApp("fdb-src", "tenant"))
+			if err != nil {
+				t.Fatalf("createFoundationDBBackupArtifact: %v", err)
+			}
+			md := artifact.Spec.DriverMetadata
+			if (md[foundationdbOwnsDirectoryKey] == "true") != tc.wantOwned {
+				t.Errorf("owns-directory = %q, want owned=%v", md[foundationdbOwnsDirectoryKey], tc.wantOwned)
+			}
+			if md[foundationdbAgentVersionKey] != "7.3.79" {
+				t.Errorf("agent-version = %q, want 7.3.79", md[foundationdbAgentVersionKey])
+			}
+		})
 	}
 }
