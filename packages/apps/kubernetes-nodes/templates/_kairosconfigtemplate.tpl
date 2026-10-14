@@ -21,6 +21,7 @@
 {{- $root := .root }}
 {{- $group := .group }}
 {{- $kubeletVersion := include "kubernetes-nodes.kubernetesVersion" (dict "root" $root "class" .class) }}
+{{- $labelsAndTaints := include "kubernetes-nodes.labelsAndTaints" $root | fromYaml }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $root }}
 {{- $mgmtClusterDomain := (index ($root.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- $searchDomains := list (printf "svc.%s" $mgmtClusterDomain) $mgmtClusterDomain }}
@@ -93,13 +94,27 @@ spec:
         joinConfiguration:
           patches:
             directory: /etc/kubernetes/kairos-patches
-          {{- if $group.gpus }}
-          {{- /* HAMi's device plugin runs only on gpu=on nodes; the Talos
-                 template labels its GPU workers the same way. */}}
+          {{- if or $labelsAndTaints.kubelet $labelsAndTaints.taints }}
           nodeRegistration:
+            {{- with $labelsAndTaints.kubelet }}
+            {{- $pairs := list }}
+            {{- range $k, $v := . }}
+            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
+            {{- end }}
             kubeletExtraArgs:
               - name: node-labels
-                value: "gpu=on"
+                value: {{ join "," $pairs | quote }}
+            {{- end }}
+            {{- with $labelsAndTaints.taints }}
+            taints:
+              {{- range . }}
+              - key: {{ .key | quote }}
+                {{- if .value }}
+                value: {{ .value | quote }}
+                {{- end }}
+                effect: {{ .effect | quote }}
+              {{- end }}
+            {{- end }}
           {{- end }}
 {{- end }}
 
