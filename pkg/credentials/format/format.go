@@ -95,6 +95,9 @@ func Encode(name, password string) (string, error) {
 	case MySQLNative:
 		return encodeMySQLNative(password), nil
 	case SHA256:
+		// Unsalted by the engine's choice: ClickHouse checks a login against
+		// password_sha256_hex and accepts no other form. The 32-character
+		// random password behind it is what makes the digest safe to store.
 		sum := sha256.Sum256([]byte(password))
 		return hex.EncodeToString(sum[:]), nil
 	case Plaintext:
@@ -130,6 +133,10 @@ func hmacSHA256(key []byte, message string) []byte {
 	return mac.Sum(nil)
 }
 
+// encodeMySQLNative is MariaDB's PASSWORD(): SHA-1 of SHA-1, unsalted, which
+// the mysql_native_password plugin stores and checks against and accepts in no
+// other form. The 32-character random password behind it is what makes the
+// digest safe to store.
 func encodeMySQLNative(password string) string {
 	first := sha1.Sum([]byte(password))
 	second := sha1.Sum(first[:])
