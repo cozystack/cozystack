@@ -15,8 +15,9 @@
 #      never skipped — and the script fails loudly if the target is unresolvable;
 #   2. the staged credentials Secret is tenant-invisible (managed-by set,
 #      tenantresource stripped); and
-#   3. the operator is scaled to 0 BEFORE etcd-migrate --apply and back to 1
-#      AFTER, with --apply always carrying the S3 backup destination.
+#   3. the operator is scaled to 0 BEFORE etcd-migrate --apply, with --apply
+#      always carrying the S3 backup destination, and stays at 0 after a
+#      successful adoption. Only a failed adoption restores it to 1.
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
 # own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
@@ -105,17 +106,30 @@ lineno() {
   [ "$(jq -r '.data.AWS_ACCESS_KEY_ID' "$staged")" = "QUtJQUVYQU1QTEU=" ]
   [ "$(jq -r '.metadata.namespace // "absent"' "$staged")" = "absent" ]
 
-  # Order: stage creds -> scale operator down -> --apply -> scale up -> stamp.
+  # Steps run in this order, stage creds, scale the operator down, --apply, stamp.
   s_stage=$(lineno "STAGE tenant-foo")
   s_down=$(lineno "SCALE 0")
   s_apply=$(lineno "ETCD-MIGRATE --apply")
-  s_up=$(lineno "SCALE 1")
   s_stamp=$(lineno "STAMP")
-  [ -n "$s_stage" ] && [ -n "$s_down" ] && [ -n "$s_apply" ] && [ -n "$s_up" ] && [ -n "$s_stamp" ]
+  [ -n "$s_stage" ] && [ -n "$s_down" ] && [ -n "$s_apply" ] && [ -n "$s_stamp" ]
   [ "$s_stage" -lt "$s_down" ]
   [ "$s_down" -lt "$s_apply" ]
-  [ "$s_apply" -lt "$s_up" ]
-  [ "$s_up" -lt "$s_stamp" ]
+  [ "$s_apply" -lt "$s_stamp" ]
+  rm -rf "$WORK"
+}
+
+@test "successful adoption leaves the legacy operator at 0 for the v1alpha2 operator to replace" {
+  prep
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # A legacy operator back at 1 takes etcd-headless away from the adopted
+  # members, see the success path of migration 50.
+  grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
+  if grep -qF -- "SCALE 1" "$FAKE_CMDLOG"; then echo "FAIL: the legacy operator was scaled back up after a successful adoption"; false; fi
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
 
