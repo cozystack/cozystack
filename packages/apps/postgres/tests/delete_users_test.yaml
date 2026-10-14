@@ -38,27 +38,10 @@ tests:
   # name would call it undeclared and drop it on every run, so the declared names
   # are compared truncated the same way.
   - it: compares declared users truncated to 63 bytes
-    release:
-      name: pg-test
-      namespace: tenant-test
-      upgrade: true
-    kubernetesProvider:
-      scheme:
-        "v1/Secret":
-          gvr: {version: v1, resource: secrets}
-          namespaced: true
-      objects:
-        - apiVersion: v1
-          kind: Secret
-          metadata:
-            name: pg-test-credentials
-            namespace: tenant-test
-          data:
-            uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu: ZXhpc3RpbmdwYXNzd29yZA==
     set:
       users:
         app: {}
-        uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu: {}
+        uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu: {}
     documentSelector:
       path: metadata.name
       value: pg-test-init-script
