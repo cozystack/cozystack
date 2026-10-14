@@ -19,18 +19,11 @@ Tenants reference `cozy-default` from `BackupJob`, `Plan`, and `RestoreJob` reso
 | `apps.cozystack.io/RabbitMQ`     | RabbitMQ definitions (management API) | `strategy.backups.cozystack.io/Rabbitmq` `cozy-default-rabbitmq`          |
 | `apps.cozystack.io/Redis`        | RDB dump Job (sentinel-discovered master) | `strategy.backups.cozystack.io/Redis` `cozy-default-redis`            |
 | `apps.cozystack.io/Valkey`       | RDB dump Job (sentinel-discovered master) | `strategy.backups.cozystack.io/Redis` `cozy-default-redis`            |
+| `apps.cozystack.io/FoundationDB` | FoundationDB operator backup_agent   | `strategy.backups.cozystack.io/FoundationDB` `cozy-default-foundationdb`   |
 | `apps.cozystack.io/VMInstance`   | Velero + kubevirt-velero-plugin      | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vminstance`    |
 | `apps.cozystack.io/VMDisk`       | Velero                               | `strategy.backups.cozystack.io/Velero` `cozy-default-velero-vmdisk`        |
 
 Valkey runs on the same RedisFailover operator as Redis, so `cozy-default-redis` serves both: the driver hands the template `.Release.Prefix` (`redis-` or `valkey-`, after the app's Kind), from which it builds the Sentinel Service and the auth and CA Secret names. A Valkey backup restores only into a Valkey app, a Redis backup only into a Redis app. The Valkey chart has no TLS option, so a Valkey dump always connects in plaintext.
-
-### Shipped but NOT bound (admin opt-in required)
-
-| Application Kind                 | Driver                               | Strategy CR                                                                |
-|----------------------------------|--------------------------------------|----------------------------------------------------------------------------|
-| `apps.cozystack.io/FoundationDB` | FoundationDB operator backup_agent   | `strategy.backups.cozystack.io/FoundationDB` `cozy-default-foundationdb`   |
-
-The FoundationDB strategy CR is rendered by the chart so admins can reference it from a custom BackupClass once the operator-side plumbing (mounting `cozy-backups-creds` into the `cozy-foundationdb-operator` Deployment) is wired manually. See "FoundationDB caveat" below.
 
 ### Endpoint format per driver
 
@@ -42,7 +35,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | Etcd            | `destination.s3.endpoint`       | full URL (scheme preserved) |
 | MariaDB         | `storage.s3.endpoint`           | bare host:port (scheme stripped); `tls.enabled` derived from the scheme |
 | MongoDB         | `s3.endpointUrl`                | full URL (scheme preserved); on the default flow the app's `backup.endpointURL`, on `useSystemBucket` the strategy coordinate injected by the driver |
-| FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | bare host:port + derived secure flag |
+| FoundationDB    | `blobStoreConfiguration.accountName` + `urlParameters.secure_connection` | `@<host:port>` + derived secure flag; `FDB_TLS_CA_FILE` set to the system bundle when secure |
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
 | Redis (dump Job)   | `S3_ENDPOINT` env | bare host:port (from projected Secret); `https://` prepended when unscheme'd |
@@ -52,9 +45,9 @@ The projected `cozy-backups-creds.endpoint` key is **stripped of scheme** so cha
 
 VM-driven (Velero) backups land in the same `cozy-backups` bucket under the `velero/` prefix. A `BackupStorageLocation` named `cozy-default` is shipped by the `backupstrategy-controller` chart (`packages/system/backupstrategy-controller/templates/velero-bsl.yaml`) so endpoint/bucket/region come from the same `backupStorage` values block used by Strategy CRs and the projector.
 
-### FoundationDB caveat
+### FoundationDB notes
 
-The strategy CR `cozy-default-foundationdb` is shipped, but it is **not** bound by `cozy-default` yet. Restore runs `fdbrestore` from inside the `cozy-foundationdb-operator` Deployment, which does not yet mount `cozy-backups-creds`. Until the operator deployment is updated to mount the projected Secret, FDB platform-default restore silently fails — admins who need it today should keep using a per-app `Bucket` plus a custom `BackupClass`, or wire the credentials file into the operator deployment themselves.
+**Where the S3 credentials and CA come from.** Two processes talk to the blob store: the per-backup `backup_agent` Deployment in the tenant namespace, and the `cozy-foundationdb-operator` Deployment itself, which runs `fdbbackup` and `fdbrestore`. Both read `blob_credentials.json` from `cozy-backups-creds` through the `FDB_BLOB_CREDENTIALS` environment variable; the Secret is projected into `cozy-foundationdb-operator` through `backupStorage.systemNamespaces`. The strategy's `accountName` is `@<host:port>`, so FDB takes both the key and the secret from that file, under the account `@<host>` (port excluded) that the projector writes. Credentials are not passed as a `customParameters` entry: the operator prefixes every entry with `--`, so a `--blob_credentials=...` entry reaches FDB as `----blob_credentials` and is rejected. FoundationDB never loads the OS trust store on its own — with `secure_connection=1` and no `FDB_TLS_CA_FILE` every handshake fails — so both Deployments point `FDB_TLS_CA_FILE` at the image's system bundle (`/etc/pki/tls/certs/ca-bundle.crt`), which verifies the provisioned bucket's ACME endpoint. An external S3 endpoint behind a private CA needs `FDB_TLS_CA_FILE` pointed at a file holding that CA in both places (a custom FoundationDB Strategy, and the `fdb-operator.extraEnv`/`volumes`/`volumeMounts` values of the operator package — Helm replaces these lists, so an override must restate the credentials entries too); the variable replaces the trust store rather than extending it. `backupStorage.endpointCASecretName` does not apply to FoundationDB.
 
 **Cleanup gotcha (zombie backup_agent).** Unlike CNPG/MariaDB/Altinity (one-shot operator-side Backup CRs), the FoundationDB driver creates an `apps.foundationdb.org/FoundationDBBackup` CR that drives a **long-lived** `backup_agent` Deployment streaming continuously to S3. Deleting a Cozystack `Backup` (e.g. via retention sweeping) does NOT stop that Deployment — the agent keeps writing until the next BackupJob's `stopOtherFoundationDBBackups` call swaps it out, until an admin invokes `examples/backups/foundationdb/cleanup.sh`, or until the operator-side CR is deleted by hand. If a tenant deletes their last Cozystack Backup and never submits another BackupJob, the agent pods will continue running indefinitely and accumulate S3 PUTs. This is intentional today (the driver has no RBAC verb to stop the operator-side CR on Cozystack-Backup deletion) but admins should be aware of it.
 
@@ -187,7 +180,7 @@ The bucket lives in `tenant-root` and is provisioned through the `apps.cozystack
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | CNPG, MariaDB, Etcd, RabbitMQ, Redis      |
 | `accessKey` / `secretKey` (plus `bucketName`, `endpoint`, `region`) | ClickHouse sidecar  |
 | `cloud`                                       | Velero (AWS credentials file format)      |
-| `blob_credentials.json`                       | FoundationDB backup_agent                 |
+| `blob_credentials.json`                       | FoundationDB backup_agent and operator    |
 
 The Redis dump Job additionally reads the `endpoint`, `bucketName`, and `region` keys (alongside the `AWS_*` pair) via `secretKeyRef`, the same set the ClickHouse sidecar consumes.
 

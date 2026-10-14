@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -115,7 +117,7 @@ func TestProject_HappyPath_FlatKeys(t *testing.T) {
 	if err := json.Unmarshal(got.Data["blob_credentials.json"], &blob); err != nil {
 		t.Fatalf("blob_credentials.json invalid: %v", err)
 	}
-	host := "seaweedfs-s3.tenant-root.svc:8333"
+	host := "@seaweedfs-s3.tenant-root.svc"
 	if blob.Accounts[host].APIKey != "AK" || blob.Accounts[host].Secret != "SK" {
 		t.Fatalf("blob host record wrong: %+v", blob.Accounts)
 	}
@@ -338,9 +340,9 @@ func TestBuildFDBBlobCredentials_EndpointForms(t *testing.T) {
 		wantHost string
 		wantErr  bool
 	}{
-		{"url with scheme", "http://s3.example.com:8333", "s3.example.com:8333", false},
-		{"https url", "https://s3.example.com", "s3.example.com", false},
-		{"bare host:port", "s3.example.com:8333", "s3.example.com:8333", false},
+		{"url with scheme", "http://s3.example.com:8333", "@s3.example.com", false},
+		{"https url", "https://s3.example.com", "@s3.example.com", false},
+		{"bare host:port", "s3.example.com:8333", "@s3.example.com", false},
 		{"empty", "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -653,14 +655,30 @@ func TestProject_HappyPath_HTTPEndpoint(t *testing.T) {
 	if string(got.Data["endpoint"]) != "seaweedfs-s3.tenant-root.svc:8333" {
 		t.Errorf("http scheme not stripped: %q", got.Data["endpoint"])
 	}
-	// blob_credentials.json account key must also be the bare host.
+	// blob_credentials.json account key is "@" plus the host without port.
 	var blob struct {
 		Accounts map[string]any `json:"accounts"`
 	}
 	if err := json.Unmarshal(got.Data["blob_credentials.json"], &blob); err != nil {
 		t.Fatalf("invalid blob_credentials.json: %v", err)
 	}
-	if _, ok := blob.Accounts["seaweedfs-s3.tenant-root.svc:8333"]; !ok {
+	if _, ok := blob.Accounts["@seaweedfs-s3.tenant-root.svc"]; !ok {
 		t.Errorf("blob account host not stripped: %+v", blob.Accounts)
+	}
+}
+
+func TestSystemCredentialsProjector_SkipsMissingNamespace(t *testing.T) {
+	present := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cozy-velero"}}
+	c := newFakeClient(flatSourceSecret(), present)
+	p := NewSystemCredentialsProjector(c, defaultCfg(), "cozy-velero,cozy-foundationdb-operator", 0)
+
+	p.projectAll(context.Background(), logr.Discard())
+
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "cozy-velero", Name: "cozy-backups-creds"}, &corev1.Secret{}); err != nil {
+		t.Fatalf("Secret not projected into the existing namespace: %v", err)
+	}
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: "cozy-foundationdb-operator", Name: "cozy-backups-creds"}, &corev1.Secret{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected no Secret in the missing namespace, got err=%v", err)
 	}
 }

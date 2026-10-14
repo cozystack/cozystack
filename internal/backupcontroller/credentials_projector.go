@@ -110,7 +110,7 @@ func (c BackupCredentialsConfig) IsEnabled() bool {
 //   - accessKey / secretKey + bucketName / endpoint / region — ClickHouse
 //     sidecar.
 //   - cloud — Velero credentials file ([default] section).
-//   - blob_credentials.json — FoundationDB backup_agent.
+//   - blob_credentials.json — FoundationDB backup_agent and operator.
 //
 // The source Secret is read in two formats:
 //
@@ -391,21 +391,23 @@ func buildVeleroCredentialsFile(accessKey, secretKey string) string {
 	return fmt.Sprintf("[default]\naws_access_key_id=%s\naws_secret_access_key=%s\n", accessKey, secretKey)
 }
 
-// buildFDBBlobCredentials renders the JSON file the FoundationDB
-// backup_agent reads when invoked with --blob_credentials=<path>. The
-// account key is the bare host:port (no scheme); the FoundationDB
-// strategy CR's accountName field carries the same value so they line up.
+// buildFDBBlobCredentials renders the JSON file FoundationDB reads through
+// FDB_BLOB_CREDENTIALS. The default strategy's accountName is "@<host:port>"
+// (no key before the "@"), and for such a URL FDB looks the account up as
+// "@<host>": the port is not part of the key, so it is dropped here.
 //
 // Returns a typed error when endpoint is empty so the caller can surface
 // a clear reason rather than write an account keyed by "".
 func buildFDBBlobCredentials(endpoint, accessKey, secretKey string) ([]byte, error) {
 	host := stripScheme(endpoint)
+	host, _, _ = strings.Cut(host, "/")
+	host, _, _ = strings.Cut(host, ":")
 	if host == "" {
 		return nil, fmt.Errorf("endpoint is empty; cannot build blob_credentials.json")
 	}
 	doc := map[string]any{
 		"accounts": map[string]any{
-			host: map[string]string{
+			"@" + host: map[string]string{
 				"api_key": accessKey,
 				"secret":  secretKey,
 			},

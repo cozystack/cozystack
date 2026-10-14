@@ -96,8 +96,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	resolved, err := ResolveBackupClass(ctx, r.Client, j.Spec.BackupClassName, normalizedAppRef)
 	if err != nil {
 		// ErrNoMatchingStrategy is a documented configuration error
-		// (e.g. tenant fires FoundationDB BackupJob against cozy-default,
-		// which intentionally does not bind FDB). Mark Failed terminally
+		// (e.g. tenant fires a BackupJob for a Kind its BackupClass does
+		// not bind). Mark Failed terminally
 		// so the tenant sees the misbinding instead of an infinite
 		// requeue loop with no status signal.
 		if errors.Is(err, ErrNoMatchingStrategy) {
