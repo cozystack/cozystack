@@ -66,8 +66,7 @@ type FoundationDBSpec struct {
 	//                  access keys through BackupDeploymentPodTemplateSpec
 	//                  volumes/env (typical pattern: mount a Secret-backed
 	//                  blob_credentials.json file and set
-	//                  FDB_BLOB_CREDENTIALS to its path, or pass
-	//                  --blob_credentials=<path> via CustomParameters).
+	//                  FDB_BLOB_CREDENTIALS to its path).
 	Template FoundationDBTemplate `json:"template"`
 }
 
@@ -93,8 +92,9 @@ type FoundationDBTemplate struct {
 
 	// CustomParameters are extra knobs passed to the backup_agent and
 	// fdbrestore processes. Templating is supported on each element.
-	// Common entries include --blob_credentials=<path> and the
-	// --knob_http_request_* tuning knobs.
+	// Write each entry without leading dashes (e.g.
+	// knob_http_request_timeout=60): the FoundationDB operator prepends
+	// "--" itself.
 	// +optional
 	CustomParameters []string `json:"customParameters,omitempty"`
 
