@@ -104,5 +104,5 @@ replace (
 	k8s.io/mount-utils => k8s.io/mount-utils v0.36.0
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.0
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.0
-	kubevirt.io/csi-driver => github.com/kubevirt/csi-driver v0.0.0-20260924151015-cb4770e4e475
+	kubevirt.io/csi-driver => github.com/kubevirt/csi-driver v0.0.0-20261015123618-1522252e7248
 )
