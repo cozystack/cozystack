@@ -33,8 +33,7 @@ have opposite correct answers:
 
 The comparison runs against the resolved version string rather than the enum,
 the same value that goes into spec.general.version, which is the field the
-operator itself branches on. So the floor tracks the version mapping, and an
-images.opensearch override cannot move it out from under the operator either.
+operator itself branches on. So the floor tracks the version mapping.
 
 `default dict` guards tls: null, which Helm delivers as nil rather than
 coalescing the key back to the values.yaml default. Measured on v4.2.4, through
