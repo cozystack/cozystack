@@ -4,6 +4,7 @@ templates:
   - templates/gateway-hostname-policy.yaml
   - templates/ingress-hostname-policy.yaml
   - templates/database-external-tls-policy.yaml
+  - templates/scheduling-class-policy.yaml
 release:
   name: cozystack-basics
   namespace: cozy-system
@@ -32,3 +33,6 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/database-external-tls-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/scheduling-class-policy.yaml

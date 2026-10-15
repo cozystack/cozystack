@@ -162,13 +162,14 @@ chart-emitted CronJob renders only when `backup.schedule` is non-empty.
 
 ### ClickHouse Keeper parameters
 
-| Name                               | Description                                                  | Type       | Value      |
-| ---------------------------------- | ------------------------------------------------------------ | ---------- | ---------- |
-| `clickhouseKeeper`                 | ClickHouse Keeper configuration.                             | `object`   | `{}`       |
-| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination.           | `bool`     | `true`     |
-| `clickhouseKeeper.size`            | Persistent Volume Claim size available for application data. | `quantity` | `1Gi`      |
-| `clickhouseKeeper.resourcesPreset` | Default sizing preset.                                       | `string`   | `t1.micro` |
-| `clickhouseKeeper.replicas`        | Number of Keeper replicas.                                   | `int`      | `3`        |
+| Name                               | Description                                                                                                                                                                                                                                                                                   | Type       | Value      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `clickhouseKeeper`                 | ClickHouse Keeper configuration.                                                                                                                                                                                                                                                              | `object`   | `{}`       |
+| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination.                                                                                                                                                                                                                                            | `bool`     | `true`     |
+| `clickhouseKeeper.size`            | Persistent Volume Claim size available for application data.                                                                                                                                                                                                                                  | `quantity` | `1Gi`      |
+| `clickhouseKeeper.resourcesPreset` | Default sizing preset.                                                                                                                                                                                                                                                                        | `string`   | `t1.micro` |
+| `clickhouseKeeper.replicas`        | Number of Keeper replicas.                                                                                                                                                                                                                                                                    | `int`      | `3`        |
+| `schedulingClass`                  | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant. | `string`   | `""`       |
 
 
 ## Parameter examples and reference
