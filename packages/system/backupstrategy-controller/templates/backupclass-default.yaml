@@ -80,6 +80,13 @@ spec:
         name: cozy-default-redis
     - application:
         apiGroup: apps.cozystack.io
+        kind: Kubernetes
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Kubernetes
+        name: cozy-default-kubernetes
+    - application:
+        apiGroup: apps.cozystack.io
         kind: Kafka
       strategyRef:
         apiGroup: strategy.backups.cozystack.io

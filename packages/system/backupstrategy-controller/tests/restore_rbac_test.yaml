@@ -13,11 +13,11 @@ release:
   namespace: cozy-backup-controller
 
 tests:
-  - it: "ClusterRole can read and delete DataVolumes"
+  - it: "ClusterRole can read, list and delete DataVolumes"
     asserts:
       - contains:
           path: rules
           content:
             apiGroups: ["cdi.kubevirt.io"]
             resources: ["datavolumes"]
-            verbs: ["get", "delete"]
+            verbs: ["get", "list", "delete"]
