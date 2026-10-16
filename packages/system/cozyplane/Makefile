@@ -17,7 +17,7 @@ test:
 # them; keep the three cozyplane packages on the same ref). Makefile and
 # tests/ are Cozystack-side and survive the vendor, and so does the version
 # stanza below: Cozystack owns the chart version, upstream keeps 0.0.0.
-COZYPLANE_REF=2608ed75b4c5351a5e418d9e4a61b8575ed90565
+COZYPLANE_REF=d328c1d8365265948ea8437501e8b7382e5b1712
 CHART_VERSION=0.3.29
 
 update:
