@@ -20,7 +20,8 @@
   a full-data backup is a Velero volume snapshot, not this strategy.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "rabbitmqs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Rabbitmq
 metadata:

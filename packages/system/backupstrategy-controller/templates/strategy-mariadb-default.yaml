@@ -1,7 +1,8 @@
 {{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
 {{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "mariadbs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: MariaDB
 metadata:

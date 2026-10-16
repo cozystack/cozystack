@@ -167,9 +167,11 @@
   declared that cluster-derived state should be treated as resolved. Live
   deploys go through Flux and never set it.
 
-  Every default Strategy added from here on should gate on this helper as well
-  as on the bucket name. The siblings that predate it are not wedged today only
-  because their CRDs already shipped in an earlier release.
+  Every default Strategy gates on this helper as well as on the bucket name,
+  including the kinds whose CRDs shipped long ago: the bucket gate is also open
+  on the very first render of an external-S3 install (provisionBucket=false),
+  where no CRD exists yet. hack/backupstrategy-crd-gate.bats fails CI on any
+  template that renders a Strategy CR without it.
 */}}
 {{- define "backupstrategy-controller.crdEstablished" -}}
 {{- if .root.Values.backupStorage.bucketNameOverride -}}

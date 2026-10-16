@@ -1,5 +1,6 @@
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if and .Values.velero.bslEnabled $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "veleroes.strategy.backups.cozystack.io") -}}
+{{- if and .Values.velero.bslEnabled $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Velero
 metadata:

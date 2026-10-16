@@ -11,13 +11,12 @@
   directly or Helm will try to evaluate the inner expression at chart
   install time and fail.
 
-  Gate on a resolved $bucketName: an ungated Strategy CR has no RESTMapping
-  on a fresh install, Helm Build() fails "no matches for kind", and the
-  release applies zero objects (including the CRDs). See
-  strategy-mongodb-default.yaml for the full rationale.
+  Gated, like every default Strategy, on a resolved $bucketName and on its
+  CRD being established; see the crdEstablished helper.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "redis.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Redis
 metadata:
