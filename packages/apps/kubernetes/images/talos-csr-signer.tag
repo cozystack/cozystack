@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/talos-csr-signer:v1.6.4@sha256:7051e90245cb446ce4deb857d4337e2fd69ce84436243ba60939d374defc2a07
+ghcr.io/cozystack/cozystack/talos-csr-signer:v1.6.5@sha256:f64f312ea417636b3528f7414e180b9d806bbc35ed31c86e8e2d20cbc8c62bfe
