@@ -22,11 +22,12 @@
 ## recreates it. Pools do not wait on that status: they read each golden
 ## directly, as described below.
 ##
-## A tenant node group opts into a clone explicitly by setting `osImage.builtin`
-## (optionally overriding schematicID/version) on its own `KubernetesNodes` resource
-## -- one per pool since the Phase 2 split, NOT `nodeGroups` on the parent `Kubernetes`
-## CR, which is still accepted and stored there but has no effect. The pool then
-## clones the golden named deterministically
+## A tenant node group clones a golden when its own `KubernetesNodes` resource sets
+## `osImage.builtin` (optionally overriding schematicID/version) -- one per pool since
+## the Phase 2 split, NOT `nodeGroups` on the parent `Kubernetes` CR, which is still
+## accepted and stored there but has no effect. With this package enabled the platform
+## writes `osImage.builtin: {}` into a pool created without `osImage`, see "New pools
+## and existing pools" below. The pool then clones the golden named deterministically
 ## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
 ## rather than degrade silently when the referenced (schematicID, version) has no
 ## matching entry in this catalog, when its golden terminally failed to import
@@ -76,6 +77,54 @@
 ##
 ## Worker pools that do not set `osImage.builtin` import over HTTP and never touch
 ## this catalog.
+##
+## New pools and existing pools. The platform value that configures this catalog,
+## `kubernetesWorkerImage`, also sets what a NEW pool starts with: when a
+## `KubernetesNodes` is created with this package enabled, cozystack-api writes
+## `osImage.builtin: {}` into its spec, together with `talos.imageFactoryURL` and
+## `talos.installerRepository` when the platform value sets them, for every one of
+## those fields the spec leaves out. A field the spec carries, even an empty one,
+## is kept, so `osImage.factory: {}` opts a new pool out. Nothing is written to a
+## pool that exists, and nothing rolls because of it. A new pool stored with
+## `builtin` fails to render when the golden it names is not in this catalog: a
+## Talos version or schematic with no entry, a `storageClass` other than the
+## golden's, or a `diskSize` below its `storage`. The cause is in the pool's
+## HelmRelease; give the pool `osImage.factory: {}` or add the entry. Moving an
+## existing pool onto a golden is a step you take, and it rolls that pool:
+##
+##   1. Resolve what the pool boots. It is the pool's own `talos.schematicID` and
+##      `talos.version` unless `osImage` overrides them:
+##
+##        kubectl -n <tenant namespace> get kubernetesnodes.apps.cozystack.io <cluster>-<pool> \
+##          -o jsonpath='{.spec.talos.schematicID} {.spec.talos.version} {.spec.storageClass} {.spec.diskSize}{"\n"}'
+##
+##   2. Check that this catalog has an entry for that (schematicID, version), that
+##      its golden has imported (`kubectl -n cozy-public get datavolume
+##      talos-worker-<schematicID>-<version>`), that its `storageClass` equals the
+##      pool's, and that the pool's `diskSize` is not below its `storage`. The
+##      pool's render refuses to proceed otherwise.
+##
+##   3. Patch the pool. Two things belong in the same patch. `osImage.factory` is
+##      set to null: a pool that carries both `osImage.builtin` and
+##      `osImage.factory` fails to render ("set only one of"), a pool that opted
+##      out or pinned a factory version carries the latter, and on a pool without
+##      it the null does nothing. `talos.installerRepository` is set whenever the
+##      pool should follow the platform's installer: defaults are applied when a
+##      pool is read and written back by the first edit, so the pool already
+##      carries the public installer prefix explicitly and keeps it unless told
+##      otherwise.
+##
+##        kubectl -n <tenant namespace> patch kubernetesnodes.apps.cozystack.io <cluster>-<pool> \
+##          --type merge -p '{"spec":{"osImage":{"factory":null,"builtin":{}},"talos":{"installerRepository":"<prefix>"}}}'
+##
+## One patch is one roll: the source of the worker disk and the installer reach the
+## pool together, and CAPI replaces every worker. It creates the replacements before
+## it removes the old workers (`maxSurge` is the pool's `maxReplicas`, `maxUnavailable`
+## is 1), so for a while the pool holds both generations and needs room for them, a
+## workload running one replica restarts, and a volume on the worker's own disk is
+## lost with its node. Going back is the same patch the other way round,
+## `{"spec":{"osImage":{"builtin":null,"factory":{}}}}`, which rolls the pool
+## again.
 ##
 ## An entry is effectively immutable once its golden exists. The DataVolume is named
 ## from `(schematicID, version)` alone, while `storage`, `storageClass` and the

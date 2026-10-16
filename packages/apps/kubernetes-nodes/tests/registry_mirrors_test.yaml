@@ -1,11 +1,13 @@
-suite: worker registry mirrors (talos.registryMirrors)
+suite: worker registry mirrors (talos.registryMirrors and the platform kubernetesRegistries)
 
-# The kubernetes-nodes worker pool pulls the same ghcr.io/siderolabs/kubelet image
-# as the parent kubernetes chart and its talos values are kept in sync with it, so
-# it carries the same talos.registryMirrors knob rendered into the worker
-# TalosConfigTemplate's machine.registries.mirrors. Empty by default (byte-identical
-# render); a set value routes worker image pulls through a mirror. Free-form
-# tenant-facing input is shell-escaped because it is emitted into the reconcile-Job's
+# A worker pool pulls its images through mirrors set on the pool (talos.registryMirrors)
+# or, when the pool sets none, on the platform (_cluster.kubernetes-registries.mirrors,
+# written by the platform chart from kubernetesRegistries). The platform's `config`
+# carries the TLS settings of mirror endpoints. They reach Talos as RegistryMirrorConfig
+# and RegistryTLSConfig documents appended to the worker machine config, never as the
+# deprecated machine.registries section, and nothing is rendered while both are empty,
+# so a pool without mirrors keeps the machine config, and the template name, it had.
+# Free-form input is shell-escaped because it is emitted into the reconcile-Job's
 # unquoted `cat <<EOF | kubectl apply` heredoc. See cozystack/cozystack#3513.
 
 templates:
@@ -30,8 +32,14 @@ set:
     memory: 4Gi
 
 tests:
-  - it: default renders no machine-level mirrors block
+  - it: renders no registry configuration by default
     asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'mirrors:'
@@ -39,7 +47,20 @@ tests:
           path: kind
           value: Job
 
-  - it: talos.registryMirrors renders machine.registries.mirrors into the worker TalosConfigTemplate
+  - it: renders nothing for an empty platform setting
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries: {}
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: talos.registryMirrors becomes a RegistryMirrorConfig document, not machine.registries
     set:
       talos:
         registryMirrors:
@@ -49,34 +70,401 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
+          pattern: '(?m)^\s+---\n\s+apiVersion: v1alpha1\n\s+endpoints:\n\s+- url: http://ghcr-mirror\.kube-system\.svc\n\s+kind: RegistryMirrorConfig\n\s+name: ghcr\.io\n'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
           pattern: 'mirrors:'
         documentSelector:
           path: kind
           value: Job
+
+  - it: skipFallback and overridePath are carried onto the document and its endpoints
+    set:
+      talos:
+        registryMirrors:
+          registry.k8s.io:
+            endpoints:
+              - http://harbor.example.org/v2/registry-k8s-io/
+              - https://second.example.org
+            overridePath: true
+            skipFallback: true
+    asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'ghcr\.io:'
-        documentSelector:
-          path: kind
-          value: Job
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'http://ghcr-mirror\.kube-system\.svc'
+          pattern: '- overridePath: true\n\s+url: http://harbor\.example\.org/v2/registry-k8s-io/\n\s+- overridePath: true\n\s+url: https://second\.example\.org\n\s+kind: RegistryMirrorConfig\n\s+name: registry\.k8s\.io\n\s+skipFallback: true'
         documentSelector:
           path: kind
           value: Job
 
-  - it: registryMirrors values are shell-escaped so they cannot execute in the reconcile-Job heredoc
+  - it: one document per mirror host, in a stable order
+    set:
+      talos:
+        registryMirrors:
+          quay.io:
+            endpoints: [http://q.example.org]
+          docker.io:
+            endpoints: [http://d.example.org]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: docker\.io\n(.|\n)*kind: RegistryMirrorConfig\n\s+name: quay\.io'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # Talos reads the text as one YAML stream. Without the separator two mirrors are a
+  # single mapping with duplicate keys, which the loader refuses and no node boots.
+  - it: documents are separated by a --- line, mirrors and tls settings alike
+    set:
+      talos:
+        registryMirrors:
+          quay.io:
+            endpoints: [http://q.example.org]
+          docker.io:
+            endpoints: [http://d.example.org]
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: docker\.io\n\s+---\n\s+apiVersion: v1alpha1\n\s+endpoints:\n\s+- url: http://q\.example\.org\n\s+kind: RegistryMirrorConfig\n\s+name: quay\.io\n\s+---\n\s+apiVersion: v1alpha1\n\s+insecureSkipVerify: true\n\s+kind: RegistryTLSConfig\n\s+name: mirror\.example\.org\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a mirror carries neither skipFallback nor overridePath unless it sets them
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'skipFallback|overridePath'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # A quoted false is a non-empty string. Read by truthiness it would switch the
+  # setting on, and for insecureSkipVerify that is TLS verification turned off by a
+  # value written to keep it on.
+  - it: a quoted false leaves skipFallback, overridePath and insecureSkipVerify off
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipFallback: "false"
+            overridePath: "false"
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                insecureSkipVerify: "false"
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'skipFallback|overridePath|insecureSkipVerify|kind: RegistryTLSConfig'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: the platform mirrors apply when the pool sets none
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          mirrors:
+            docker.io:
+              endpoints:
+                - http://10.0.0.1:8082
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'url: http://10\.0\.0\.1:8082\n\s+kind: RegistryMirrorConfig\n\s+name: docker\.io'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: the pool's own mirrors replace the platform map as a whole
     set:
       talos:
         registryMirrors:
           ghcr.io:
             endpoints:
-              - http://mirror$(id)
+              - http://pool-mirror.example.org
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          mirrors:
+            docker.io:
+              endpoints:
+                - http://10.0.0.1:8082
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'http://mirror\\\$\(id\)'
+          pattern: 'name: ghcr\.io'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'docker\.io'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: the platform tls settings apply next to the pool's own mirrors
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - https://mirror.example.org
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'insecureSkipVerify: true\n\s+kind: RegistryTLSConfig\n\s+name: mirror\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a multi-line CA renders as a block scalar inside the document
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ca: \|-\n\s+-----BEGIN CERTIFICATE-----\n\s+MIIB\n\s+-----END CERTIFICATE-----\n\s+kind: RegistryTLSConfig\n\s+name: mirror\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: only the CA and the skip-verify switch are read from a tls block
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                ca: "PEM"
+                clientIdentity:
+                  key: secret-key
+              auth:
+                password: secret-password
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'secret-key|secret-password|clientIdentity'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a tls entry that sets nothing renders no document
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls: {}
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: mirror values are shell-escaped so they cannot execute in the reconcile-Job heredoc
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror$(id)`id`\.example.org
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'http://mirror\\\$\(id\)\\`id\\`\\\\\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: platform tls values are shell-escaped too
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                ca: "MIIB$(id)"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ca: MIIB\\\$\(id\)'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a mirror that is not a map is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io: https://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io" must be a map with an endpoints list'
+
+  - it: a mirror key the chart does not read is refused instead of dropped
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipfallback: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": skipfallback is not supported'
+
+  - it: a mirror without endpoints is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            skipFallback: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io" has no endpoints'
+
+  - it: a non-string endpoint is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - url: http://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": every endpoint must be a URL string'
+
+  # RegistryMirrorConfig and RegistryTLSConfig exist from Talos 1.12. An older node
+  # rejects the whole config on an unknown document, so the render says so instead.
+  - it: refuses registry configuration for a pool that resolves below Talos 1.12
+    set:
+      talos:
+        version: v1.11.5
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'which Talos has only since 1.12, and this pool resolves to Talos v1\.11\.5'
+
+  - it: refuses the platform mirrors for a pool that resolves below Talos 1.12
+    set:
+      talos:
+        version: v1.11.5
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          mirrors:
+            docker.io:
+              endpoints:
+                - http://10.0.0.1:8082
+    asserts:
+      - failedTemplate:
+          errorPattern: 'which Talos has only since 1.12'
+
+  - it: refuses the platform tls settings alone for a pool that resolves below Talos 1.12
+    set:
+      talos:
+        version: v1.11.5
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls:
+                insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'which Talos has only since 1.12'
+
+  # An entry that sets neither ca nor insecureSkipVerify renders no document, so a pool
+  # that uses no mirror keeps rendering on an older Talos.
+  - it: renders a pool below Talos 1.12 when the platform config entry produces no document
+    set:
+      talos:
+        version: v1.11.5
+      _cluster:
+        cluster-domain: cozy.local
+        kubernetes-registries:
+          config:
+            mirror.example.org:
+              tls: {}
+            other.example.org:
+              tls:
+                insecureSkipVerify: false
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: renders a pool below Talos 1.12 that sets no registry configuration
+    set:
+      talos:
+        version: v1.11.5
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a pre-release of Talos 1.12 is accepted
+    set:
+      talos:
+        version: v1.12.0-beta.1
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: RegistryMirrorConfig'
         documentSelector:
           path: kind
           value: Job

@@ -19,7 +19,7 @@
   to the rendered machine config can ever reach the cluster: the apply is
   denied server-side and the stale spec stays (cozystack/cozystack#3515,
   observed with machine.network.searchDomains after a clusterDomain
-  correction; the same holds for certSANs, machine.registries, nameservers and
+  correction; the same holds for certSANs, the registry mirrors, nameservers and
   any future field). Naming the template after a content hash — the idiom
   KubevirtMachineTemplate already uses in this chart — turns a content change
   into a NEW template instead of a rejected mutation, and CAPI propagates it
@@ -125,6 +125,25 @@
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" -}}
+{{- /* Registry mirrors and their TLS settings. A pool's own talos.registryMirrors
+       replaces the platform map as a whole, so a pool that sets one gets exactly
+       what it wrote; the platform's TLS settings apply either way, since they are
+       keyed by mirror endpoint and an entry for a host no mirror uses does nothing.
+       Both reach Talos as separate documents appended to the machine config, which
+       the deprecated machine.registries section replaced in Talos 1.12; the section
+       is not rendered at all. Talos below 1.12 would reject those documents and the
+       node would never take its config, so the render refuses that pairing instead.
+       The refusal waits for a document to exist: a platform config entry that sets
+       neither ca nor insecureSkipVerify: true renders nothing, and must not fail a pool
+       that uses no mirror. Cozystack supports workers on Talos 1.13 and newer; 1.12 is only
+       where the documents begin, so this check is a backstop, not the support floor. */}}
+{{- $clusterRegistries := (index ($root.Values._cluster | default dict) "kubernetes-registries") | default dict }}
+{{- $registryMirrors := $root.Values.talos.registryMirrors | default $clusterRegistries.mirrors | default dict }}
+{{- $registryConfig := $clusterRegistries.config | default dict }}
+{{- $registryDocuments := include "kubernetes.talosRegistryDocuments" (dict "mirrors" $registryMirrors "config" $registryConfig) }}
+{{- if and $registryDocuments (not (semverCompare ">=1.12.0-0" $talosVersion)) }}
+{{-   fail (printf "nodeGroup %q: registry mirrors and registry TLS settings are rendered as RegistryMirrorConfig and RegistryTLSConfig documents, which Talos has only since 1.12, and this pool resolves to Talos %s. Cozystack supports workers on Talos 1.13 and newer: move the pool there, or clear talos.registryMirrors and the platform kubernetesRegistries." (include "kubernetes-nodes.groupName" $root) $talosVersion) }}
+{{- end }}
 {{- /* The spec proper. Everything above only computes inputs; nothing above
        this line may emit output, or the leading newline lands in the caller's
        heredoc and in the hash. */ -}}
@@ -133,7 +152,7 @@ spec:
     spec:
       generateType: none
       talosVersion: "{{ $talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}"
-      {{- /* INVARIANT (cozystack/cozystack#3513): the data block below is emitted from the unquoted `TCT_MANIFEST="$(cat <<EOF` heredoc in the talos-reconcile Job, so it is subject to shell parameter expansion and command substitution at Job runtime. Every tenant-controlled free-form value interpolated into it must therefore be either shell-escaped for backslash, dollar and backtick (as talosVersion here and registryMirrors below are) or render-time pattern-validated to exclude those bytes (as the kubelet reservation fields are in nodegroup.yaml). A new such field added here without one of the two silently reopens command injection into a host-cluster Pod. Note: an asterisk-slash sequence inside this Helm comment closes it early and breaks the render, so the kubelet field names are spelled out here rather than written as globs. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. */}}
+      {{- /* INVARIANT (cozystack/cozystack#3513): the data block below is emitted from the unquoted `TCT_MANIFEST="$(cat <<EOF` heredoc in the talos-reconcile Job, so it is subject to shell parameter expansion and command substitution at Job runtime. Every tenant-controlled free-form value interpolated into it must therefore be either shell-escaped for backslash, dollar and backtick (as talosVersion here and the registry documents at the end are) or render-time pattern-validated to exclude those bytes (as the kubelet reservation fields are in nodegroup.yaml). A new such field added here without one of the two silently reopens command injection into a host-cluster Pod. Note: an asterisk-slash sequence inside this Helm comment closes it early and breaks the render, so the kubelet field names are spelled out here rather than written as globs. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. */}}
       data: |
         version: v1alpha1
         persist: true
@@ -255,12 +274,6 @@ spec:
             rbac: true
             kubePrism:
               enabled: false
-          {{- with $root.Values.talos.registryMirrors }}
-          registries:
-            mirrors:
-              {{- /* registryMirrors is free-form tenant-facing input rendered into the unquoted reconcile-Job heredoc, so the value is escaped (backslash, dollar, backtick) to render as a literal and never be shell-expanded or command-substituted at Job runtime. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. See cozystack/cozystack#3513. */}}
-              {{- toYaml . | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" | nindent 14 }}
-          {{- end }}
         cluster:
           id: ${CLUSTER_ID}
           secret: ${CLUSTER_SECRET}
@@ -283,6 +296,10 @@ spec:
                 disabled: true
               service:
                 disabled: true
+        {{- with $registryDocuments }}
+        ---
+        {{- . | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" | nindent 8 }}
+        {{- end }}
 {{- end }}
 
 {{- /*
@@ -293,4 +310,74 @@ spec:
 */}}
 {{- define "kubernetes.talosConfigTemplateHash" -}}
 {{- include "kubernetes.talosConfigTemplateSpec" . | sha256sum | trunc 6 -}}
+{{- end }}
+
+{{- /*
+  The Talos documents that carry registry mirrors and their TLS settings, joined
+  by document separators and not indented, escaped or prefixed: the caller owns
+  those, because they depend on where the text is embedded.
+
+  Input: `mirrors` (registry host to {endpoints, skipFallback, overridePath}) and
+  `config` (mirror endpoint host to {tls: {insecureSkipVerify, ca}}). The mirror
+  shape is the one talos.registryMirrors has always had; each endpoint becomes
+  {url, overridePath}, with the host's overridePath on every one of them.
+
+  Only tls.insecureSkipVerify and tls.ca are read from config. Credentials and
+  client keys are left out on purpose: this text is stored in the TalosConfigTemplate
+  and the reconcile Job in the tenant namespace, so whatever is rendered here is
+  readable there.
+
+  The three switches (overridePath, skipFallback, insecureSkipVerify) are on only for
+  a true value, and a quoted "false" is off, not on: read by truthiness it would be a
+  non-empty string, and the one that skips TLS verification would turn it off for a
+  value written to keep it on.
+*/}}
+{{- define "kubernetes.talosRegistryDocuments" -}}
+{{- $docs := list }}
+{{- range $host, $mirror := .mirrors }}
+{{-   if not (kindIs "map" $mirror) }}
+{{-     fail (printf "registry mirror %q must be a map with an endpoints list, got %v" $host $mirror) }}
+{{-   end }}
+{{-   range $key, $_ := $mirror }}
+{{-     if not (has $key (list "endpoints" "skipFallback" "overridePath")) }}
+{{-       fail (printf "registry mirror %q: %s is not supported, only endpoints, skipFallback and overridePath are read, and a misspelt switch would be dropped without a word" $host $key) }}
+{{-     end }}
+{{-   end }}
+{{-   $endpoints := list }}
+{{-   range $mirror.endpoints }}
+{{-     if not (kindIs "string" .) }}
+{{-       fail (printf "registry mirror %q: every endpoint must be a URL string, got %v" $host .) }}
+{{-     end }}
+{{-     $endpoint := dict "url" . }}
+{{-     if eq (toString $mirror.overridePath) "true" }}
+{{-       $_ := set $endpoint "overridePath" true }}
+{{-     end }}
+{{-     $endpoints = append $endpoints $endpoint }}
+{{-   end }}
+{{-   if not $endpoints }}
+{{-     fail (printf "registry mirror %q has no endpoints" $host) }}
+{{-   end }}
+{{-   $doc := dict "apiVersion" "v1alpha1" "kind" "RegistryMirrorConfig" "name" $host "endpoints" $endpoints }}
+{{-   if eq (toString $mirror.skipFallback) "true" }}
+{{-     $_ := set $doc "skipFallback" true }}
+{{-   end }}
+{{-   $docs = append $docs ($doc | toYaml | trim) }}
+{{- end }}
+{{- range $endpoint, $entry := .config }}
+{{-   $tls := dict }}
+{{-   if kindIs "map" $entry }}
+{{-     $tls = $entry.tls | default dict }}
+{{-   end }}
+{{-   $doc := dict "apiVersion" "v1alpha1" "kind" "RegistryTLSConfig" "name" $endpoint }}
+{{-   if eq (toString $tls.insecureSkipVerify) "true" }}
+{{-     $_ := set $doc "insecureSkipVerify" true }}
+{{-   end }}
+{{-   if $tls.ca }}
+{{-     $_ := set $doc "ca" ($tls.ca | toString) }}
+{{-   end }}
+{{-   if gt (len $doc) 3 }}
+{{-     $docs = append $docs ($doc | toYaml | trim) }}
+{{-   end }}
+{{- end }}
+{{- join "\n---\n" $docs -}}
 {{- end }}

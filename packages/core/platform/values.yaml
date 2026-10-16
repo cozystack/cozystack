@@ -727,8 +727,8 @@ backupStorage: {}
 backupStrategyController: {}
 # Overrides for the optional cozystack.kubernetes-worker-image package (the
 # golden Talos worker OS images tenant Kubernetes node pools clone instead of
-# each worker importing the raw image over HTTP). Everything set here is
-# forwarded verbatim into the emitted Package CR as
+# each worker importing the raw image over HTTP). Everything set here except
+# installerRepository is forwarded verbatim into the emitted Package CR as
 # components.kubernetes-worker-image.values, so it lands on that chart's
 # HelmRelease and deep-merges over its defaults
 # (packages/system/kubernetes-worker-image/values.yaml documents every knob:
@@ -742,6 +742,43 @@ backupStrategyController: {}
 # cannot clone across StorageClasses, so a cluster whose worker pools are not on
 # `replicated` must move the golden onto their class). Empty (the default)
 # forwards nothing and keeps the child chart defaults.
+#
+# The same block also sets what a NEW worker pool starts with, so the image source
+# is stated in one place. When a KubernetesNodes is created, cozystack-api fills in
+# the fields its spec leaves out:
+#   osImage.builtin: {}          when the catalog package is enabled, so the pool
+#                                clones a golden (not for substrate proxmox);
+#   talos.imageFactoryURL        from imageFactoryURL (not for substrate proxmox,
+#                                whose disk is cloned from a VM template);
+#   talos.installerRepository    from installerRepository.
+# `installerRepository` is the registry prefix of the Talos installer image a pool
+# upgrades its nodes with, `<installerRepository>/<schematicID>:<version>`. It is
+# not derived from imageFactoryURL, which only says where the OS image is fetched
+# from: a file server or a caching mirror serves that without serving an installer.
+# A factory that also serves the installer, as the public one does, is
+# `<host>/installer`. Not forwarded to the catalog chart.
+#
+# A pool created without `osImage`, on a cluster that runs the catalog, is stored
+# with `osImage.builtin: {}`. It then fails to render, with the cause in its
+# HelmRelease, when the golden it names is not in the catalog: a Talos version or
+# schematic the catalog lacks, a storageClass other than the golden's, or a
+# diskSize below its storage. Such a pool sets `osImage.factory: {}` or gets the
+# catalog entry.
+#
+# imageFactoryURL is a plain http(s) URL with no user name, password, query or
+# fragment in it, and the platform refuses anything else even when the catalog is
+# off: it is copied into every tenant namespace and into the spec of every new pool.
+#
+# A field the spec already carries, empty or not, is never overwritten, so a pool
+# can opt out with `osImage.factory: {}`. Only creation is affected: a pool that
+# exists is not touched and does not roll, and moving one onto these defaults is
+# done by hand (see the header of the kubernetes-worker-image values). Nothing is
+# filled in for a key left unset here.
+#
+# A pool that is written straight as a HelmRelease never passes through
+# cozystack-api and is not filled in. The ComputePlane module does that, and so did
+# the migration that adopted the node groups of the kubernetes app. Such a pool still
+# takes kubernetesRegistries when it renders.
 kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
@@ -768,37 +805,53 @@ scheduling:
 #   loginTheme: acme
 #   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
-# Container registry mirrors configuration
+# Container registry mirrors for the workers of tenant Kubernetes clusters. They
+# apply to every image a worker pulls from a listed registry: system images, the
+# in-guest Talos installer and the images of the tenant's own workloads. The worker
+# OS disk image is not one of them, it is fetched over HTTP (see
+# kubernetesWorkerImage.imageFactoryURL).
+#
+# Forwarded into _cluster.kubernetes-registries and rendered into the machine config
+# of each worker pool as RegistryMirrorConfig and RegistryTLSConfig documents, which
+# Talos has from 1.12. Cozystack supports workers on Talos 1.13 and newer, and a pool
+# pinned below 1.12 that would get a document does not render until it is moved. A
+# pool's own talos.registryMirrors, when set, replaces `mirrors` for that pool;
+# `config` applies to every pool.
+#
+# `mirrors` is keyed by the registry the images come from. Each entry takes
+# `endpoints` (URLs tried in order), `skipFallback` (never fall back to the original
+# registry) and `overridePath` (use an endpoint's path as written instead of adding
+# /v2). `config` is keyed by the host, and port when not 443, of a mirror endpoint,
+# and carries only `tls.ca` (PEM text) and `tls.insecureSkipVerify`. Credentials and
+# client keys are refused at render: the machine config is stored in the tenant's
+# namespace and they would be readable there.
+#
+# The machine config is part of the name of a pool's TalosConfigTemplate, so a change
+# rolls pools. Setting or changing `mirrors` rolls every pool that has no
+# talos.registryMirrors of its own; setting or changing `config` rolls every pool,
+# whether it has mirrors or not, since its documents are rendered for all of them. An
+# entry that sets neither `ca` nor `insecureSkipVerify: true` renders nothing and rolls
+# nothing.
+# Empty (the default) renders nothing and rolls nothing.
 #
 # Example:
-# registries:
+# kubernetesRegistries:
 #   mirrors:
 #     docker.io:
 #       endpoints:
 #         - http://10.0.0.1:8082
 #     ghcr.io:
 #       endpoints:
-#         - http://10.0.0.1:8083
-#     gcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8084
-#     registry.k8s.io:
-#       endpoints:
-#         - http://10.0.0.1:8085
-#     quay.io:
-#       endpoints:
-#         - http://10.0.0.1:8086
-#     cr.fluentbit.io:
-#       endpoints:
-#         - http://10.0.0.1:8087
-#     docker-registry3.mariadb.com:
-#       endpoints:
-#         - http://10.0.0.1:8088
+#         - https://mirror.example.org
+#       skipFallback: true
 #   config:
-#     "10.0.0.1:8082":
+#     mirror.example.org:
 #       tls:
-#         insecureSkipVerify: true
-registries: {}
+#         ca: |-
+#           -----BEGIN CERTIFICATE-----
+#           ...
+#           -----END CERTIFICATE-----
+kubernetesRegistries: {}
 # Resource allocation ratios
 resources:
   cpuAllocationRatio: 10
