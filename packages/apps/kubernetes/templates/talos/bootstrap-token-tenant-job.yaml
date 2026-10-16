@@ -8,10 +8,55 @@
   kube-system, which the management cluster can only reach via the
   Kamaji-issued admin kubeconfig stored as <release>-admin-kubeconfig.
 
-  The Job runs as a Helm post-install/post-upgrade hook so it executes
-  after the KamajiControlPlane has reconciled and the admin kubeconfig
-  Secret exists. It is idempotent (kubectl apply) and re-runs harmlessly
-  on every upgrade.
+  Why a main-phase resource and not a Helm post-install/post-upgrade hook
+  (the earlier shape): the hook is unreliable on the very failure it was
+  meant to cover. This release carries
+  release.cozystack.io/helm-install-disable-wait: "true" (cozystack-api
+  sets it on both Install.DisableWait and Upgrade.DisableWait), so there
+  is NO main-resource wait phase in front of the hooks — a post-install
+  hook is not gated on MachineDeployment Ready and does fire on a fresh
+  install, so the "hook waits on MD, MD waits on the token" deadlock
+  cannot happen here. What actually breaks is upgrades: a post-UPGRADE
+  hook only runs after a successful upgrade, and a release whose upgrade
+  keeps failing (these tenants were observed at thousands of
+  HR.status.upgradeFailures) never reaches its hook — so the token Secret
+  never lands and the workers stay system:anonymous. pre-* hooks are not
+  usable either: they fire before non-hook templates apply, so
+  <release>-admin-kubeconfig (materialised by Kamaji after the
+  KamajiControlPlane is applied) is not yet available.
+
+  As an ordinary main-phase resource (mirroring talos-reconcile-job.yaml)
+  the Job is applied on every install and every reconcile regardless of
+  hook phase. It lands together with the KamajiControlPlane and
+  talos-secrets; a wait-for-kubeconfig init container holds the Pod until
+  Kamaji publishes the admin kubeconfig Secret (the Secret volume is
+  optional so kubelet does not FailedMount in the meantime), then the
+  kubectl container runs and completes. Under disable-wait Helm does not
+  gate the release on the Job, so it self-heals through the content-hash
+  + TTL mechanism below rather than by failing the release.
+
+  Churn-free across upgrades. A Job's spec.template is immutable and the
+  generated HelmRelease sets no Force, so a static Job name would fail any
+  upgrade that lands while the Job is live (or inside
+  ttlSecondsAfterFinished) with `spec.template: field is immutable`, and
+  RetryOnFailure would loop on it. The Job therefore carries a
+  content-hash name suffix over its whole rendered spec (mirrors
+  talos-reconcile-job.yaml and the KubevirtMachineTemplate idiom in
+  cluster.yaml): an identical render keeps the name and Helm no-ops it;
+  any change that flows into the spec — notably .Values.images.kubectl —
+  yields a new name so a fresh Job runs and Helm prunes the old one. The
+  hash also folds in the looked-up bootstrap token — both halves,
+  bootstrapTokenId and bootstrapTokenSecret — because the token reaches
+  the Job only through secretKeyRef and so never changes the render on
+  its own: without this, a rotated token (a recreated talos-secrets
+  Secret) would leave Helm no-oping a completed Job and the tenant stuck
+  on the stale bootstrap-token. talos-secrets.yaml regenerates the two
+  halves independently (each guarded by its own empty check), so a change
+  to either half must rotate the name; folding both in guarantees that.
+  Folding the token in rotates the name on rotation so the new token is
+  applied and the old Job is pruned. (One idempotent re-run happens on
+  the first reconcile after a fresh install, when the looked-up token
+  flips from empty to its value; the kubectl apply is a no-op.)
 */}}
 ---
 apiVersion: v1
@@ -21,30 +66,23 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "0"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ .Release.Name }}-bootstrap-token-tenant
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+{{- /* Job spec rendered through a named template so the immutable Job's name
+       can carry a content hash of the whole spec (see the header comment).
+       Invoked with the root context, so .Release / .Values / .Files resolve
+       as usual. */}}
+{{- define "kubernetes.bootstrap-token-tenant-job-spec" -}}
 spec:
-  # backoffLimit + restartPolicy: OnFailure gives the Job up to 11 attempts at
-  # the tenant apiserver with exponential backoff (capped at 6 min between
-  # restarts). Worst case ~15 min, well inside the chart's HR install timeout
-  # (release.cozystack.io/helm-install-timeout: 20m on the cozyrds entry) so
-  # the Job either succeeds within the HR window or fails the chart upgrade
-  # loudly, instead of letting Helm mark the install "successful" while the
-  # bootstrap-token Secret never lands in the tenant kube-system.
+  # restartPolicy: OnFailure + backoffLimit gives the kubectl container up to
+  # 11 attempts at the tenant apiserver with exponential backoff, covering the
+  # transient unreadiness window after Kamaji bootstraps the konnectivity plane.
+  # It does NOT fail the release loudly: under helm-install-disable-wait Helm
+  # does not wait on this Job (see the header and talos-reconcile-job.yaml), so
+  # an exhausted backoffLimit leaves the release green with no token Secret.
+  # ttlSecondsAfterFinished then clears the Job so a later reconcile recreates
+  # it (unchanged render => same hash => same name) and retries. The
+  # wait-for-kubeconfig init container — not backoffLimit — covers the
+  # admin-kubeconfig-not-yet-provisioned window, because a Pod blocked in an
+  # init wait never counts as a failed attempt.
   backoffLimit: 10
   ttlSecondsAfterFinished: 600
   template:
@@ -55,12 +93,17 @@ spec:
       # so the management ServiceAccount token is not needed. Drop it.
       automountServiceAccountToken: false
       serviceAccountName: {{ .Release.Name }}-bootstrap-token-tenant
+      # Hold the Pod until Kamaji has published <release>-admin-kubeconfig; the
+      # kubeconfig volume is optional so kubelet does not FailedMount while the
+      # Secret is still absent. Shared with kccm/csi/cluster-autoscaler.
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" . | nindent 6 }}
       containers:
         - name: kubectl
           image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
           env:
             - name: KUBECONFIG
-              value: /tenant-admin/super-admin.svc
+              value: /etc/kubernetes/kubeconfig/super-admin.svc
             - name: TOKEN_ID
               valueFrom:
                 secretKeyRef:
@@ -72,8 +115,8 @@ spec:
                   name: {{ .Release.Name }}-talos-secrets
                   key: bootstrapTokenSecret
           volumeMounts:
-            - name: tenant-admin
-              mountPath: /tenant-admin
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
               readOnly: true
           resources:
             requests:
@@ -168,6 +211,40 @@ spec:
 
               echo "[$(date -u +%H:%M:%S)] talos:node-apiserver-endpoint-discovery RBAC ensured"
       volumes:
-        - name: tenant-admin
+        - name: kubeconfig
           secret:
             secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
+{{- end }}
+{{- /* Render the spec, then hash it (plus the looked-up bootstrap token, both
+       halves) into a 6-char name suffix so the immutable Job is churn-free
+       across upgrades yet still rotates when its image or the bootstrap token
+       changes. See the header comment. lookup returns empty during `helm
+       template`/unittest, so the token contribution is stable there and the
+       render stays testable. */}}
+{{- $jobSpec := include "kubernetes.bootstrap-token-tenant-job-spec" . }}
+{{- $btId := "" }}
+{{- $btSecret := "" }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-talos-secrets" .Release.Name) }}
+{{- if and $existing $existing.data }}
+{{-   if hasKey $existing.data "bootstrapTokenId" }}
+{{-     $btId = index $existing.data "bootstrapTokenId" | b64dec }}
+{{-   end }}
+{{-   if hasKey $existing.data "bootstrapTokenSecret" }}
+{{-     $btSecret = index $existing.data "bootstrapTokenSecret" | b64dec }}
+{{-   end }}
+{{- end }}
+{{- $jobHash := printf "%s\n%s\n%s" $jobSpec $btId $btSecret | sha256sum | trunc 6 }}
+{{- /* Truncate the name prefix, never the hash, so the name stays within the
+       63-char DNS-label limit while the 6-char content hash is always the
+       suffix. A no-op for normal-length release names. */}}
+{{- $jobName := printf "%s-bootstrap-token-tenant" .Release.Name | trunc 56 | trimSuffix "-" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jobName }}-{{ $jobHash }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+{{ $jobSpec }}

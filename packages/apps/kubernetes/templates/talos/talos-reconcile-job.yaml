@@ -63,7 +63,8 @@
   RBAC, ServiceAccount and egress CiliumNetworkPolicy are main-phase too;
   the wait loop tolerates its dependencies (and its own network policy)
   not yet being in place, so Helm's kind-ordered apply needs no explicit
-  sequencing. The bootstrap-token Job stays a post-install hook.
+  sequencing. The bootstrap-token Job is main-phase too, for the same
+  reasons (see bootstrap-token-tenant-job.yaml).
 
   Churn-free across upgrades. The Job is immutable (spec.template cannot
   be patched), so it carries a content-hash name suffix — mirrors the
