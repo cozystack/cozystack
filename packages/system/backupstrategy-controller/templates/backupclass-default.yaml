@@ -85,13 +85,13 @@ spec:
         apiGroup: strategy.backups.cozystack.io
         kind: Kafka
         name: cozy-default-kafka
-    # FoundationDB intentionally NOT bound in cozy-default. The Strategy
-    # CR cozy-default-foundationdb is shipped (admins can wire it into a
-    # custom BackupClass), but Restore goes through fdbrestore in the
-    # foundationdb operator pod itself (cozy-foundationdb-operator). That
-    # operator deployment does not yet mount cozy-backups-creds, so a
-    # platform-default FDB restore would silently fail. See DESIGN.md /
-    # backup-classes.md for the open gap and follow-up work.
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: FoundationDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: FoundationDB
+        name: cozy-default-foundationdb
     - application:
         apiGroup: apps.cozystack.io
         kind: VMInstance
