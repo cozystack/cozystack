@@ -16,7 +16,7 @@ opensearch-operator:
     # retag and mirror. `make image` rewrites both keys on every build.
     image:
       repository: ghcr.io/cozystack/cozystack/opensearch-operator
-      tag: v1.6.5-rc.3@sha256:cd5c0b8f248e18c0ed2e78edc48cd897f864eb4bec5be1aa1ec4993cbccab6b8
+      tag: v1.6.5@sha256:cd5c0b8f248e18c0ed2e78edc48cd897f864eb4bec5be1aa1ec4993cbccab6b8
   kubeRbacProxy:
     image:
       # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream
