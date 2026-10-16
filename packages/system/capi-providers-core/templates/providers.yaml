@@ -5,7 +5,7 @@ metadata:
   name: cluster-api
 spec:
   # https://github.com/kubernetes-sigs/cluster-api
-  version: v1.10.1-core
+  version: v1.13.7-core
   fetchConfig:
     selector:
       matchLabels:

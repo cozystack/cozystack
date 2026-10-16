@@ -74,6 +74,9 @@ spec:
         {{- if .Values.watchConfigSecret }}
         - --watch-configsecret
         {{- end }}
+        {{- if .Values.watchConfigMap }}
+        - --watch-configmap
+        {{- end }}
         {{- with .Values.leaderElection }}
         - --leader-elect={{ .enabled }}
         {{- if .leaseDuration }}
@@ -85,6 +88,12 @@ spec:
         {{- if .retryPeriod }}
         - --leader-elect-retry-period={{ .retryPeriod }}
         {{- end }}
+        {{- if $.Values.profilerAddress }}
+        - --profiler-address=localhost{{ $.Values.profilerAddress }}
+        {{- end }}
+        {{- if $.Values.contentionProfiling }}
+        - --contention-profiling={{ $.Values.contentionProfiling }}
+        {{- end }}
         {{- end }}
         command:
         - /manager
@@ -94,18 +103,21 @@ spec:
         imagePullPolicy: {{ .Values.image.manager.pullPolicy }}
         name: manager
         ports:
+        {{- if $.Values.profilerAddress }}
+        {{- $profilerPort := $.Values.profilerAddress | toString | trimPrefix ":" | int }}
+        - containerPort: {{ $profilerPort }}
+          name: profiler
+          protocol: TCP
+        {{- end }}
         - containerPort: 9443
           name: webhook-server
           protocol: TCP
-          {{- if $.Values.diagnosticsAddress }}
-          {{- $diagnosticsPort := $.Values.diagnosticsAddress }}
-          {{- if contains ":" $diagnosticsPort -}}
-          {{ $diagnosticsPort = ( split ":" $.Values.diagnosticsAddress)._1 | int }}
-          {{- end }}
-        - containerPort: {{ $diagnosticsPort | int }}
-          name: metrics
+        {{- if .Values.diagnosticsAddress }}
+        {{- $diagnosticsPort := .Values.diagnosticsAddress | toString | trimPrefix ":" | int }}
+        - containerPort: {{ $diagnosticsPort }}
+          name: diagnostics
           protocol: TCP
-          {{- end }}
+        {{- end }}
         {{- with .Values.resources.manager }}
         resources:
         {{- toYaml . | nindent 12 }}
@@ -123,15 +135,15 @@ spec:
         {{- toYaml . | nindent 12 }}
         {{- end }}
         terminationMessagePolicy: FallbackToLogsOnError
-        {{- $healthAddr := $.Values.healthAddr }}
-        {{- if contains ":" $healthAddr -}}
-        {{ $healthAddr = ( split ":" $.Values.healthAddr)._1 | int }}
+        {{- $healthPort := 9440 }}
+        {{- if .Values.healthAddr }}
+        {{- $healthPort = .Values.healthAddr | toString | trimPrefix ":" | int }}
         {{- end }}
         livenessProbe:
           failureThreshold: 3
           httpGet:
             path: /healthz
-            port: {{ $healthAddr | default 9440 }}
+            port: {{ $healthPort }}
             scheme: HTTP
           initialDelaySeconds: 15
           periodSeconds: 20
@@ -141,7 +153,7 @@ spec:
           failureThreshold: 3
           httpGet:
             path: /readyz
-            port: {{ $healthAddr | default 9440 }}
+            port: {{ $healthPort }}
             scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 10

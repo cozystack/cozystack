@@ -6360,7 +6360,10 @@ EOF
   fi
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  # Named at v1beta1: status.v1beta2.readyReplicas exists only there, and a bare
+  # resource name follows whichever version the cluster prefers, which is
+  # v1beta2 from Cluster API v1.11. v1beta1 is served until v1.16.
+  kubectl wait machinedeployments.v1beta1.cluster.x-k8s.io kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
   for component in cilium coredns csi vsnap-crd; do
       kubectl wait hr "kubernetes-${test_name}-${component}" -n tenant-test --timeout=5m --for=condition=ready

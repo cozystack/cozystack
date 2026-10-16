@@ -1,0 +1,15 @@
+--- core-components.yaml
++++ core-components.yaml
+@@ -19898,6 +19898,12 @@
+               fieldPath: metadata.uid
+         image: registry.k8s.io/cluster-api/cluster-api-controller:v1.13.7
+         imagePullPolicy: IfNotPresent
++        startupProbe:
++          httpGet:
++            path: /healthz
++            port: healthz
++          failureThreshold: 30
++          periodSeconds: 10
+         livenessProbe:
+           httpGet:
+             path: /healthz

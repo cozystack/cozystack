@@ -18,22 +18,22 @@ load test_helper
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 check_pair() {
-  local pkg="$1" yaml="$2"
+  local pkg="$1" yaml="$2" blob="${3:-components.gz}"
   local dir="$REPO_ROOT/packages/system/$pkg/files"
 
   [ -f "$dir/$yaml" ]      || { echo "missing $pkg/files/$yaml" >&2; return 1; }
-  [ -f "$dir/components.gz" ] || { echo "missing $pkg/files/components.gz" >&2; return 1; }
+  [ -f "$dir/$blob" ] || { echo "missing $pkg/files/$blob" >&2; return 1; }
 
   local work; work="$(mktemp -d)"
-  gzip -dc "$dir/components.gz" > "$work/decompressed.yaml"
+  gzip -dc "$dir/$blob" > "$work/decompressed.yaml"
 
   if ! cmp -s "$work/decompressed.yaml" "$dir/$yaml"; then
-    echo "$pkg: components.gz does not match $yaml" >&2
+    echo "$pkg: $blob does not match $yaml" >&2
     echo "the chart mounts the blob, so the cluster would run what the YAML does not say" >&2
-    if grep -q '^components:' "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null; then
+    if [ "$blob" = components.gz ] && grep -q '^components:' "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null; then
       echo "run: make -C packages/system/$pkg components" >&2
     else
-      echo "regenerate: gzip -9 -n -c files/$yaml > files/components.gz" >&2
+      echo "regenerate: gzip -9 -n -c files/$yaml > files/$blob" >&2
     fi
     head -40 "$work/decompressed.yaml" > "$work/a"
     head -40 "$dir/$yaml" > "$work/b"
@@ -117,10 +117,122 @@ check_sums() {
   fi
 }
 
+# Packages that carry patches/ vendor a file that differs from the release
+# asset, so its sum cannot be pinned directly. Reverting the patches recovers
+# the asset, and that is checked against the pinned sum instead: a hand edit of
+# the vendored file, a patch changed without a refresh, or a sum moved without
+# the file all show up here.
+check_patched_sums() {
+  local pkg="$1" makefile_var="$2" yaml="$3" metadata="${4:-metadata.yaml}"
+  local dir="$REPO_ROOT/packages/system/$pkg"
+
+  local sum_components sum_metadata
+  sum_components="$(sed -n "s/^${makefile_var}_SHA256_COMPONENTS=//p" "$dir/Makefile")"
+  sum_metadata="$(sed -n "s/^${makefile_var}_SHA256_METADATA=//p" "$dir/Makefile")"
+  [ -n "$sum_components" ] && [ -n "$sum_metadata" ] \
+    || { echo "$pkg: Makefile pins no ${makefile_var}_SHA256_* sums" >&2; return 1; }
+
+  local work; work="$(mktemp -d)"
+  cp "$dir/files/$yaml" "$work/asset.yaml"
+  local patches=() i
+  for i in "$dir"/patches/*.diff; do
+    [ -e "$i" ] && patches+=("$i")
+  done
+  for (( i = ${#patches[@]} - 1; i >= 0; i-- )); do
+    patch -s -f -R "$work/asset.yaml" < "${patches[$i]}" \
+      || { echo "$pkg: $(basename "${patches[$i]}") does not revert cleanly from files/$yaml" >&2; rm -rf "$work"; return 1; }
+  done
+
+  if ! printf '%s  %s\n%s  %s\n' "$sum_components" "$work/asset.yaml" "$sum_metadata" "$dir/files/$metadata" \
+      | sha256sum -c - >/dev/null 2>&1; then
+    echo "$pkg: files/$yaml without patches/, or files/$metadata, does not match the sum its Makefile pins" >&2
+    rm -rf "$work"
+    return 1
+  fi
+  rm -rf "$work"
+}
+
 @test "capmox vendored files match the sums its Makefile pins" {
   check_sums capi-providers-infraprovider-proxmox CAPMOX infrastructure-components.yaml
 }
 
 @test "in-cluster IPAM vendored files match the sums its Makefile pins" {
   check_sums capi-providers-ipam-in-cluster CAIP ipam-components.yaml
+}
+
+@test "CAPI core components.gz matches the vendored core-components.yaml" {
+  check_pair capi-providers-core core-components.yaml
+}
+
+@test "CAPI core vendored files match the sums its Makefile pins" {
+  check_patched_sums capi-providers-core CAPI core-components.yaml
+}
+
+@test "CAPI core ships the version its Makefile vendored" {
+  check_version capi-providers-core CAPI_VERSION
+}
+
+# capi-providers-bootstrap ships two providers, kubeadm and Talos, each with its
+# own ConfigMap and BootstrapProvider, so the single-provider check above does
+# not fit it. This asserts that the ConfigMap and the provider object for one of
+# them both carry <Makefile version>-<suffix>.
+check_bootstrap_version() {
+  local makefile_var="$1" suffix="$2"
+  local dir="${3:-$REPO_ROOT/packages/system/capi-providers-bootstrap}"
+
+  local version
+  version="$(sed -n "s/^${makefile_var} *= *//p" "$dir/Makefile")"
+  [ -n "$version" ] || { echo "capi-providers-bootstrap: no $makefile_var in Makefile" >&2; return 1; }
+
+  local want="$version-$suffix"
+  grep -qxF "  name: $want" "$dir/templates/configmaps.yaml" \
+    || { echo "capi-providers-bootstrap: no ConfigMap named $want" >&2; return 1; }
+  grep -qxF "  version: $want" "$dir/templates/providers.yaml" \
+    || { echo "capi-providers-bootstrap: no BootstrapProvider at version $want" >&2; return 1; }
+}
+
+# A version carries dots, which a pattern match would take for any character.
+@test "the bootstrap version check compares the version literally" {
+  local fx="$BATS_TEST_TMPDIR/bootstrap"
+  mkdir -p "$fx/templates"
+  echo 'CAPI_VERSION=v1.13.7' > "$fx/Makefile"
+  printf 'metadata:\n  name: v1x13x7-bootstrap\n' > "$fx/templates/configmaps.yaml"
+  printf 'spec:\n  version: v1x13x7-bootstrap\n' > "$fx/templates/providers.yaml"
+  run check_bootstrap_version CAPI_VERSION bootstrap "$fx"
+  [ "$status" -ne 0 ]
+}
+
+@test "kubeadm bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version CAPI_VERSION bootstrap
+}
+
+@test "Talos bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version CABPT_UPSTREAM_VERSION bootstrap-talos
+}
+
+@test "Talos bootstrap components-talos.gz matches the vendored bootstrap-components-talos.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components-talos.yaml components-talos.gz
+}
+
+@test "Talos bootstrap vendored files match the sums its Makefile pins" {
+  check_patched_sums capi-providers-bootstrap CABPT bootstrap-components-talos.yaml metadata-talos.yaml
+}
+
+@test "kubeadm bootstrap components.gz matches the vendored bootstrap-components.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components.yaml
+}
+
+@test "kubeadm bootstrap vendored files match the sums its Makefile pins" {
+  check_sums capi-providers-bootstrap CAPI bootstrap-components.yaml
+}
+
+# The core and the kubeadm bootstrap provider are cut from one Cluster API
+# release; running them at different versions is not a combination upstream
+# tests.
+@test "CAPI core and kubeadm bootstrap vendor the same Cluster API release" {
+  local core boot
+  core="$(sed -n 's/^CAPI_VERSION=//p' "$REPO_ROOT/packages/system/capi-providers-core/Makefile")"
+  boot="$(sed -n 's/^CAPI_VERSION=//p' "$REPO_ROOT/packages/system/capi-providers-bootstrap/Makefile")"
+  [ -n "$core" ] && [ "$core" = "$boot" ] \
+    || { echo "core vendors '$core', kubeadm bootstrap vendors '$boot'" >&2; return 1; }
 }
