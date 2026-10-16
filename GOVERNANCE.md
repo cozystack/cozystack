@@ -116,7 +116,7 @@ After several months of working together, maintainers will decide whether to gra
 
 We decide things by consensus. Maintainers talk it through, in a pull request, an issue, a community meeting or one-on-one, until everyone can live with the outcome. Most decisions never need more than that.
 
-A vote is the last resort, for when the maintainers have tried and cannot agree. Any maintainer can call one by opening an issue in the [community](https://github.com/cozystack/community) repository with the question. Maintainers vote in comments on that issue. Voting stays open for seven days or until every maintainer has voted, and each maintainer has one vote.
+A vote is the last resort, for when the maintainers have tried and cannot agree. Any maintainer can call one by opening an issue in the [community](https://github.com/cozystack/community) repository with the question. Maintainers vote in comments on that issue. Voting stays open for seven days or until every maintainer has voted, and each maintainer has one vote. A vote counts only if more than half of the maintainers take part.
 
 A proposal passes with a simple majority of the votes cast, and that majority must include maintainers from at least two organisations. A maintainer's organisation is the one listed for them in [MAINTAINERS.md](./MAINTAINERS.md); maintainers without an affiliation count as their own organisation. Maintainers keep that entry current, and a change of employer counts from the moment it is recorded.
 
