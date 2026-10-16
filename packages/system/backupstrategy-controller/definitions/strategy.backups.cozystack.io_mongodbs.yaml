@@ -17,122 +17,41 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          MongoDB defines a backup strategy that delegates execution to the Percona
-          Server for MongoDB operator (psmdb.percona.com). The strategy carries a
-          templated logical-backup configuration; the driver materialises
-          PerconaServerMongoDBBackup objects per BackupJob and surfaces them as
-          Cozystack Backup artifacts. Restores create a PerconaServerMongoDBRestore
-          CR with clusterName pointing at the target cluster and a backupSource
-          carrying the S3 destination read back from the source backup, so the same
-          artifact restores in-place or into a differently-named instance.
-
-          The strategy always names the storage (spec.template.storageName) psmdb
-          resolves against the source cluster's spec.backup.storages. On the legacy
-          flow the S3/credentials for that storage live on the PerconaServerMongoDB CR
-          (the mongodb chart declares them when backup.enabled=true and
-          useSystemBucket=false). On the useSystemBucket flow the chart cannot know the
-          platform bucket at render time, so the strategy also carries the storage's S3
-          coordinates (spec.template.s3) and the driver SSA-injects them onto the
-          cluster at BackupJob time.
         properties:
           apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
           spec:
-            description: MongoDBSpec specifies the desired psmdb-operator-driven backup
-              strategy.
             properties:
               template:
-                description: |-
-                  Template carries the templated PerconaServerMongoDBBackup configuration.
-                  String fields support Helm-style Go templating with two top-level
-                  values:
-                    .Application - the application object (apps.cozystack.io/MongoDB)
-                    .Parameters  - the parameters from the matched BackupClassStrategy.
-                                   These values MUST NOT carry credentials — the psmdb
-                                   storage (bucket/endpoint/credentialsSecret) lives on the
-                                   PerconaServerMongoDB CR, referenced here only by name.
                 properties:
                   compressionLevel:
-                    description: |-
-                      CompressionLevel tunes the compression algorithm (algorithm-specific).
-                      Left unset the operator picks its default.
                     type: integer
                   compressionType:
-                    description: |-
-                      CompressionType is the pbm compression algorithm (e.g. "gzip", "zstd",
-                      "s2", "snappy", "lz4", "pgzip", "none"). Defaults to the operator-side
-                      default when empty. Templating is supported.
                     type: string
                   s3:
-                    description: |-
-                      S3 carries the system-bucket storage coordinates the driver SSA-patches
-                      onto the source PerconaServerMongoDB's spec.backup.storages[StorageName]
-                      on the useSystemBucket flow. PBM takes these as static CR fields (not
-                      secret refs), and the platform bucket name / endpoint are only known at
-                      BackupJob time, so the cozy-default strategy carries them (endpointUrl
-                      already scheme'd by the endpoint helper) and the driver injects them. Nil
-                      means the legacy flow: rely on the storage the app chart rendered
-                      statically, and patch nothing.
                     properties:
                       bucket:
-                        description: Bucket is the S3 bucket name (the COSI-assigned
-                          system bucket).
                         type: string
                       credentialsSecret:
-                        description: |-
-                          CredentialsSecret names the Secret carrying AWS_ACCESS_KEY_ID /
-                          AWS_SECRET_ACCESS_KEY. Defaults to cozy-backups-creds when empty.
                         type: string
                       endpointUrl:
-                        description: EndpointURL is the full S3 endpoint URL including
-                          scheme.
                         type: string
                       forcePathStyle:
-                        description: ForcePathStyle selects path-style S3 addressing.
                         type: boolean
                       insecureSkipTLSVerify:
-                        description: InsecureSkipTLSVerify disables S3 endpoint certificate
-                          verification.
                         type: boolean
                       prefix:
-                        description: Prefix scopes this release's backups under the
-                          bucket.
                         type: string
                       region:
-                        description: Region is the S3 region.
                         type: string
                     type: object
                   storageName:
-                    description: |-
-                      StorageName names a storage entry in the source cluster's
-                      spec.backup.storages. On the legacy flow the mongodb chart declares
-                      "s3-storage" when backup.enabled=true and useSystemBucket=false; on the
-                      useSystemBucket flow the driver injects an entry under this same name from
-                      the S3 coordinates below. Leave empty to use "s3-storage". Templating is
-                      supported.
                     type: string
                   type:
-                    description: |-
-                      Type selects the backup type. Only "logical" is supported (logical
-                      dumps are portable across clusters, which is what makes
-                      restore-to-differently-named instances work). Defaults to "logical"
-                      when empty.
                     enum:
                     - logical
                     type: string
@@ -141,56 +60,32 @@ spec:
             - template
             type: object
           status:
-            description: |-
-              MongoDBStatus reports observed state for the strategy CR. Driver controllers
-              surface diagnostic conditions here (e.g. validation issues).
             properties:
               conditions:
-                description: Conditions holds the latest available observations.
                 items:
-                  description: Condition contains details for one aspect of the current
-                    state of this API Resource.
                   properties:
                     lastTransitionTime:
-                      description: |-
-                        lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
                       format: date-time
                       type: string
                     message:
-                      description: |-
-                        message is a human readable message indicating details about the transition.
-                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       type: string
                     status:
-                      description: status of the condition, one of True, False, Unknown.
                       enum:
                       - "True"
                       - "False"
                       - Unknown
                       type: string
                     type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
