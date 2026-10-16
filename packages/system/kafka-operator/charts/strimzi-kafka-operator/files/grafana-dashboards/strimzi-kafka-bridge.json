@@ -231,7 +231,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -307,7 +307,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -383,7 +383,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -459,7 +459,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -3020,6 +3020,7 @@
   },
   "timezone": "",
   "title": "Strimzi Kafka Bridge",
+  "uid": "069669ed52041ef4",
   "version": 6,
   "weekStart": ""
 }

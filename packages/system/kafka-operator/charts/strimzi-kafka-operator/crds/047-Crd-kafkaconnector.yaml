@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -78,13 +78,13 @@ spec:
                       type: integer
                       description: "The maximum number of connector restarts that the operator will try. If the connector remains in a failed state after reaching this limit, it must be restarted manually by the user. Defaults to an unlimited number of restarts."
                   description: Automatic restart of connector and tasks configuration.
+                version:
+                  type: string
+                  description: Desired version or version range to respect when starting the Kafka Connector. This is only supported when using Kafka Connect version 4.1.0 and higher.
                 config:
                   x-kubernetes-preserve-unknown-fields: true
                   type: object
-                  description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max."
-                pause:
-                  type: boolean
-                  description: Whether the connector should be paused. Defaults to false.
+                  description: "The Kafka Connector configuration. The following properties cannot be set: name, connector.class, tasks.max, connector.plugin.version."
                 state:
                   type: string
                   enum:
@@ -170,3 +170,5 @@ spec:
                     type: string
                   description: The list of topics used by the Kafka Connector.
               description: The status of the Kafka Connector.
+          required:
+            - spec

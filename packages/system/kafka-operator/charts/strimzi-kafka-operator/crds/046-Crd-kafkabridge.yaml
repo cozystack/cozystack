@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -62,10 +62,10 @@ spec:
                 replicas:
                   type: integer
                   minimum: 0
-                  description: The number of pods in the `Deployment`.  Defaults to `1`.
+                  description: The number of pods in the `Deployment`. Required in the `v1` version of the Strimzi API.
                 image:
                   type: string
-                  description: "The container image used for Kafka Bridge pods. If no image name is explicitly specified, the image name corresponds to the image specified in the Cluster Operator configuration. If an image name is not defined in the Cluster Operator configuration, a default value is used."
+                  description: "The container image used for HTTP Bridge pods. If no image name is explicitly specified, the image name corresponds to the image specified in the Cluster Operator configuration. If an image name is not defined in the Cluster Operator configuration, a default value is used."
                 bootstrapServers:
                   type: string
                   description: A list of host:port pairs for establishing the initial connection to the Kafka cluster.
@@ -98,32 +98,10 @@ spec:
                         required:
                           - secretName
                       description: Trusted certificates for TLS connection.
-                  description: TLS configuration for connecting Kafka Bridge to the cluster.
+                  description: TLS configuration for connecting HTTP Bridge to the cluster.
                 authentication:
                   type: object
                   properties:
-                    accessToken:
-                      type: object
-                      properties:
-                        key:
-                          type: string
-                          description: The key under which the secret value is stored in the Kubernetes Secret.
-                        secretName:
-                          type: string
-                          description: The name of the Kubernetes Secret containing the secret value.
-                      required:
-                        - key
-                        - secretName
-                      description: Link to Kubernetes Secret containing the access token which was obtained from the authorization server.
-                    accessTokenIsJwt:
-                      type: boolean
-                      description: Configure whether access token should be treated as JWT. This should be set to `false` if the authorization server returns opaque tokens. Defaults to `true`.
-                    accessTokenLocation:
-                      type: string
-                      description: Path to the token file containing an access token to be used for authentication.
-                    audience:
-                      type: string
-                      description: "OAuth audience to use when authenticating against the authorization server. Some authorization servers require the audience to be explicitly set. The possible values depend on how the authorization server is configured. By default, `audience` is not specified when performing the token endpoint request."
                     certificateAndKey:
                       type: object
                       properties:
@@ -135,68 +113,16 @@ spec:
                           description: The name of the file certificate in the Secret.
                         key:
                           type: string
-                          description: The name of the private key in the Secret.
+                          description: "The name of the private key in the secret. The private key must be in unencrypted PKCS #8 format. For more information, see RFC 5208: https://datatracker.ietf.org/doc/html/rfc5208."
                       required:
                         - secretName
                         - certificate
                         - key
                       description: Reference to the `Secret` which holds the certificate and private key pair.
-                    clientAssertion:
+                    config:
+                      x-kubernetes-preserve-unknown-fields: true
                       type: object
-                      properties:
-                        key:
-                          type: string
-                          description: The key under which the secret value is stored in the Kubernetes Secret.
-                        secretName:
-                          type: string
-                          description: The name of the Kubernetes Secret containing the secret value.
-                      required:
-                        - key
-                        - secretName
-                      description: Link to Kubernetes secret containing the client assertion which was manually configured for the client.
-                    clientAssertionLocation:
-                      type: string
-                      description: Path to the file containing the client assertion to be used for authentication.
-                    clientAssertionType:
-                      type: string
-                      description: "The client assertion type. If not set, and either `clientAssertion` or `clientAssertionLocation` is configured, this value defaults to `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`."
-                    clientId:
-                      type: string
-                      description: OAuth Client ID which the Kafka client can use to authenticate against the OAuth server and use the token endpoint URI.
-                    clientSecret:
-                      type: object
-                      properties:
-                        key:
-                          type: string
-                          description: The key under which the secret value is stored in the Kubernetes Secret.
-                        secretName:
-                          type: string
-                          description: The name of the Kubernetes Secret containing the secret value.
-                      required:
-                        - key
-                        - secretName
-                      description: Link to Kubernetes Secret containing the OAuth client secret which the Kafka client can use to authenticate against the OAuth server and use the token endpoint URI.
-                    connectTimeoutSeconds:
-                      type: integer
-                      description: "The connect timeout in seconds when connecting to authorization server. If not set, the effective connect timeout is 60 seconds."
-                    disableTlsHostnameVerification:
-                      type: boolean
-                      description: Enable or disable TLS hostname verification. Default value is `false`.
-                    enableMetrics:
-                      type: boolean
-                      description: Enable or disable OAuth metrics. Default value is `false`.
-                    httpRetries:
-                      type: integer
-                      description: "The maximum number of retries to attempt if an initial HTTP request fails. If not set, the default is to not attempt any retries."
-                    httpRetryPauseMs:
-                      type: integer
-                      description: "The pause to take before retrying a failed HTTP request. If not set, the default is to not pause at all but to immediately repeat a request."
-                    includeAcceptHeader:
-                      type: boolean
-                      description: Whether the Accept header should be set in requests to the authorization servers. The default value is `true`.
-                    maxTokenExpirySeconds:
-                      type: integer
-                      description: Set or limit time-to-live of the access tokens to the specified number of seconds. This should be set if the authorization server returns opaque tokens.
+                      description: Configuration for the custom authentication mechanism. Only properties with the `sasl.` and `ssl.keystore.` prefixes are allowed. Specify other options in the regular configuration section of the custom resource.
                     passwordSecret:
                       type: object
                       properties:
@@ -210,59 +136,9 @@ spec:
                         - secretName
                         - password
                       description: Reference to the `Secret` which holds the password.
-                    readTimeoutSeconds:
-                      type: integer
-                      description: "The read timeout in seconds when connecting to authorization server. If not set, the effective read timeout is 60 seconds."
-                    refreshToken:
-                      type: object
-                      properties:
-                        key:
-                          type: string
-                          description: The key under which the secret value is stored in the Kubernetes Secret.
-                        secretName:
-                          type: string
-                          description: The name of the Kubernetes Secret containing the secret value.
-                      required:
-                        - key
-                        - secretName
-                      description: Link to Kubernetes Secret containing the refresh token which can be used to obtain access token from the authorization server.
-                    saslExtensions:
-                      additionalProperties:
-                        type: string
-                      type: object
-                      description: SASL extensions parameters.
-                    scope:
-                      type: string
-                      description: OAuth scope to use when authenticating against the authorization server. Some authorization servers require this to be set. The possible values depend on how authorization server is configured. By default `scope` is not specified when doing the token endpoint request.
-                    tlsTrustedCertificates:
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          secretName:
-                            type: string
-                            description: The name of the Secret containing the certificate.
-                          certificate:
-                            type: string
-                            description: The name of the file certificate in the secret.
-                          pattern:
-                            type: string
-                            description: "Pattern for the certificate files in the secret. Use the link:https://en.wikipedia.org/wiki/Glob_(programming)[_glob syntax_] for the pattern. All files in the secret that match the pattern are used."
-                        oneOf:
-                          - properties:
-                              certificate: {}
-                            required:
-                              - certificate
-                          - properties:
-                              pattern: {}
-                            required:
-                              - pattern
-                        required:
-                          - secretName
-                      description: Trusted certificates for TLS connection to the OAuth server.
-                    tokenEndpointUri:
-                      type: string
-                      description: Authorization server token endpoint URI.
+                    sasl:
+                      type: boolean
+                      description: Enable or disable SASL on this authentication mechanism.
                     type:
                       type: string
                       enum:
@@ -270,8 +146,8 @@ spec:
                         - scram-sha-256
                         - scram-sha-512
                         - plain
-                        - oauth
-                      description: "Authentication type. Currently the supported types are `tls`, `scram-sha-256`, `scram-sha-512`, `plain`, and 'oauth'. `scram-sha-256` and `scram-sha-512` types use SASL SCRAM-SHA-256 and SASL SCRAM-SHA-512 Authentication, respectively. `plain` type uses SASL PLAIN Authentication. `oauth` type uses SASL OAUTHBEARER Authentication. The `tls` type uses TLS Client Authentication. The `tls` type is supported only over TLS connections."
+                        - custom
+                      description: "Specifies the authentication type. Supported types are `tls`, `scram-sha-256`, `scram-sha-512`, `plain`, and `custom`. `tls` uses TLS client authentication and is supported only over TLS connections. `scram-sha-256` and `scram-sha-512` use SASL SCRAM-SHA-256 and SASL SCRAM-SHA-512 authentication, respectively. `plain` uses SASL PLAIN authentication. `custom` allows you to configure a custom authentication mechanism."
                     username:
                       type: string
                       description: Username used for the authentication.
@@ -284,7 +160,34 @@ spec:
                     port:
                       type: integer
                       minimum: 1023
-                      description: The port which is the server listening on.
+                      description: Port the server listens on.
+                    tls:
+                      type: object
+                      properties:
+                        certificateAndKey:
+                          type: object
+                          properties:
+                            secretName:
+                              type: string
+                              description: The name of the Secret containing the certificate.
+                            certificate:
+                              type: string
+                              description: The name of the file certificate in the Secret.
+                            key:
+                              type: string
+                              description: "The name of the private key in the secret. The private key must be in unencrypted PKCS #8 format. For more information, see RFC 5208: https://datatracker.ietf.org/doc/html/rfc5208."
+                          required:
+                            - secretName
+                            - certificate
+                            - key
+                          description: Reference to the `Secret` which holds the certificate and private key pair.
+                        config:
+                          x-kubernetes-preserve-unknown-fields: true
+                          type: object
+                          description: "Additional configuration for the HTTP server TLS. Properties with the following prefixes cannot be set: ssl. (with the exception of: ssl.enabled.cipher.suites, ssl.enabled.protocols)."
+                      required:
+                        - certificateAndKey
+                      description: TLS configuration for clients connections to the HTTP Bridge.
                     cors:
                       type: object
                       properties:
@@ -396,7 +299,7 @@ spec:
                             type: string
                             description: The system property value.
                       description: A map of additional system properties which will be passed using the `-D` option to the JVM.
-                  description: '**Currently not supported** JVM Options for pods.'
+                  description: JVM Options for pods.
                 logging:
                   type: object
                   properties:
@@ -427,23 +330,70 @@ spec:
                       description: '`ConfigMap` entry where the logging configuration is stored. '
                   required:
                     - type
-                  description: Logging configuration for Kafka Bridge.
+                  description: Logging configuration for HTTP Bridge.
                 clientRackInitImage:
                   type: string
                   description: The image of the init container used for initializing the `client.rack`.
                 rack:
                   type: object
                   properties:
+                    envVarName:
+                      type: string
+                      description: The name of the environment variable that defines the rack ID. Its value sets the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect or MirrorMaker 2.
                     topologyKey:
                       type: string
                       example: topology.kubernetes.io/zone
                       description: "A key that matches labels assigned to the Kubernetes cluster nodes. The value of the label is used to set a broker's `broker.rack` config, and the `client.rack` config for Kafka Connect or MirrorMaker 2."
-                  required:
-                    - topologyKey
+                    type:
+                      type: string
+                      enum:
+                        - topology-label
+                        - environment-variable
+                      description: "Specifies the rack awareness type. Supported types are `topology-label` and `environment-variable`. `topology-label` uses a Kubernetes worker node label to set the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect and MirrorMaker 2. `environment-variable` uses an environment variable to set the `broker.rack` configuration for Kafka brokers and the `client.rack` configuration for Kafka Connect and MirrorMaker 2. When not specified, `topology-label` type is used by default."
                   description: Configuration of the node label which will be used as the client.rack consumer configuration.
-                enableMetrics:
-                  type: boolean
-                  description: Enable the metrics for the Kafka Bridge. Default is false.
+                  x-kubernetes-validations:
+                    - rule: (has(self.type) && self.type != "topology-label") || self.topologyKey != ""
+                      message: topologyKey property is required
+                    - rule: has(self.type) == false || self.type != "environment-variable" || self.envVarName != ""
+                      message: envVarName property is required
+                metricsConfig:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      enum:
+                        - jmxPrometheusExporter
+                        - strimziMetricsReporter
+                      description: Metrics type. The supported types are `jmxPrometheusExporter` and `strimziMetricsReporter`. Type `jmxPrometheusExporter` uses the Prometheus JMX Exporter to expose Kafka JMX metrics in Prometheus format through an HTTP endpoint. Type `strimziMetricsReporter` uses the Strimzi Metrics Reporter to directly expose Kafka metrics in Prometheus format through an HTTP endpoint.
+                    valueFrom:
+                      type: object
+                      properties:
+                        configMapKeyRef:
+                          type: object
+                          properties:
+                            key:
+                              type: string
+                            name:
+                              type: string
+                            optional:
+                              type: boolean
+                          description: Reference to the key in the ConfigMap containing the configuration.
+                      description: ConfigMap entry where the Prometheus JMX Exporter configuration is stored.
+                    values:
+                      type: object
+                      properties:
+                        allowList:
+                          type: array
+                          items:
+                            type: string
+                          description: A list of regex patterns to filter the metrics to collect. Should contain at least one element.
+                      description: Configuration values for the Strimzi Metrics Reporter.
+                  required:
+                    - type
+                  description: Metrics configuration.
+                  x-kubernetes-validations:
+                    - rule: self.type != 'jmxPrometheusExporter' || has(self.valueFrom)
+                      message: valueFrom property is required
                 livenessProbe:
                   type: object
                   properties:
@@ -518,7 +468,7 @@ spec:
                             - RollingUpdate
                             - Recreate
                           description: Pod replacement strategy for deployment configuration changes. Valid values are `RollingUpdate` and `Recreate`. Defaults to `RollingUpdate`.
-                      description: Template for Kafka Bridge `Deployment`.
+                      description: Template for HTTP Bridge `Deployment`.
                     pod:
                       type: object
                       properties:
@@ -1020,6 +970,35 @@ spec:
                               ip:
                                 type: string
                           description: The pod's HostAliases. HostAliases is an optional list of hosts and IPs that will be injected into the Pod's hosts file if specified.
+                        dnsPolicy:
+                          type: string
+                          enum:
+                            - ClusterFirst
+                            - ClusterFirstWithHostNet
+                            - Default
+                            - None
+                          description: "The pod's DNSPolicy. Defaults to `ClusterFirst`. Valid values are `ClusterFirstWithHostNet`, `ClusterFirst`, `Default` or `None`."
+                        dnsConfig:
+                          type: object
+                          properties:
+                            nameservers:
+                              type: array
+                              items:
+                                type: string
+                            options:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  name:
+                                    type: string
+                                  value:
+                                    type: string
+                            searches:
+                              type: array
+                              items:
+                                type: string
+                          description: "The pod's DNSConfig. If specified, it will be merged to the generated DNS configuration based on the DNSPolicy."
                         enableServiceLinks:
                           type: boolean
                           description: Indicates whether information about services should be injected into Pod's environment variables.
@@ -1055,7 +1034,7 @@ spec:
                                     type: boolean
                                   secretName:
                                     type: string
-                                description: Secret to use populate the volume.
+                                description: '`Secret` to use to populate the volume.'
                               configMap:
                                 type: object
                                 properties:
@@ -1076,20 +1055,20 @@ spec:
                                     type: string
                                   optional:
                                     type: boolean
-                                description: ConfigMap to use to populate the volume.
+                                description: '`ConfigMap` to use to populate the volume.'
                               emptyDir:
                                 type: object
                                 properties:
                                   medium:
                                     type: string
+                                    enum:
+                                      - Memory
+                                    description: "Medium represents the type of storage medium should back this volume. Valid values are unset or `Memory`. When not set, it will use the node's default medium."
                                   sizeLimit:
-                                    type: object
-                                    properties:
-                                      amount:
-                                        type: string
-                                      format:
-                                        type: string
-                                description: EmptyDir to use to populate the volume.
+                                    type: string
+                                    pattern: "^([0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$"
+                                    description: The total amount of local storage required for this EmptyDir volume (for example 1Gi).
+                                description: '`EmptyDir` to use to populate the volume.'
                               persistentVolumeClaim:
                                 type: object
                                 properties:
@@ -1097,7 +1076,7 @@ spec:
                                     type: string
                                   readOnly:
                                     type: boolean
-                                description: PersistentVolumeClaim object to use to populate the volume.
+                                description: '`PersistentVolumeClaim` object to use to populate the volume.'
                               csi:
                                 type: object
                                 properties:
@@ -1116,7 +1095,15 @@ spec:
                                     additionalProperties:
                                       type: string
                                     type: object
-                                description: CSIVolumeSource object to use to populate the volume.
+                                description: '`CSIVolumeSource` object to use to populate the volume.'
+                              image:
+                                type: object
+                                properties:
+                                  pullPolicy:
+                                    type: string
+                                  reference:
+                                    type: string
+                                description: '`ImageVolumeSource` object to use to populate the volume.'
                             oneOf:
                               - properties:
                                   secret: {}
@@ -1124,8 +1111,12 @@ spec:
                                   emptyDir: {}
                                   persistentVolumeClaim: {}
                                   csi: {}
+                                  image: {}
                           description: Additional volumes that can be mounted to the pod.
-                      description: Template for Kafka Bridge `Pods`.
+                        hostUsers:
+                          type: boolean
+                          description: "Use the host user namespace. Optional. Defaults to `true`. When `true` or not set, the pod runs in the host user namespace. This is required when the pod needs features available only in the host namespace, such as loading kernel modules with `CAP_SYS_MODULE`.When set to `false`, the pod runs in a new user namespace. Setting `false` helps mitigate container breakout vulnerabilities and allows containers to run as `root` without granting `root` privileges on the host. This property is alpha-level in Kubernetes and is supported only by Kubernetes clusters that enable the `UserNamespacesSupport` feature."
+                      description: Template for HTTP Bridge `Pods`.
                     apiService:
                       type: object
                       properties:
@@ -1158,7 +1149,7 @@ spec:
                               - IPv4
                               - IPv6
                           description: "Specifies the IP Families used by the service. Available options are `IPv4` and `IPv6`. If unspecified, Kubernetes will choose the default value based on the `ipFamilyPolicy` setting."
-                      description: Template for Kafka Bridge API `Service`.
+                      description: Template for HTTP Bridge API `Service`.
                     podDisruptionBudget:
                       type: object
                       properties:
@@ -1180,7 +1171,7 @@ spec:
                           type: integer
                           minimum: 0
                           description: "Maximum number of unavailable pods to allow automatic Pod eviction. A Pod eviction is allowed when the `maxUnavailable` number of pods or fewer are unavailable after the eviction. Setting this value to 0 prevents all voluntary evictions, so the pods must be evicted manually. Defaults to 1."
-                      description: Template for Kafka Bridge `PodDisruptionBudget`.
+                      description: Template for HTTP Bridge `PodDisruptionBudget`.
                     bridgeContainer:
                       type: object
                       properties:
@@ -1323,7 +1314,7 @@ spec:
                               subPathExpr:
                                 type: string
                           description: Additional volume mounts which should be applied to the container.
-                      description: Template for the Kafka Bridge container.
+                      description: Template for the HTTP Bridge container.
                     clusterRoleBinding:
                       type: object
                       properties:
@@ -1341,7 +1332,7 @@ spec:
                               type: object
                               description: Annotations added to the Kubernetes resource.
                           description: Metadata applied to the resource.
-                      description: Template for the Kafka Bridge ClusterRoleBinding.
+                      description: Template for the HTTP Bridge ClusterRoleBinding.
                     serviceAccount:
                       type: object
                       properties:
@@ -1359,7 +1350,7 @@ spec:
                               type: object
                               description: Annotations added to the Kubernetes resource.
                           description: Metadata applied to the resource.
-                      description: Template for the Kafka Bridge service account.
+                      description: Template for the HTTP Bridge service account.
                     initContainer:
                       type: object
                       properties:
@@ -1502,23 +1493,27 @@ spec:
                               subPathExpr:
                                 type: string
                           description: Additional volume mounts which should be applied to the container.
-                      description: Template for the Kafka Bridge init container.
-                  description: Template for Kafka Bridge resources. The template allows users to specify how a `Deployment` and `Pod` is generated.
+                      description: Template for the HTTP Bridge init container.
+                  description: Template for HTTP Bridge resources. The template allows users to specify how a `Deployment` and `Pod` is generated.
                 tracing:
                   type: object
                   properties:
                     type:
                       type: string
                       enum:
-                        - jaeger
                         - opentelemetry
-                      description: "Type of the tracing used. Currently the only supported type is `opentelemetry` for OpenTelemetry tracing. As of Strimzi 0.37.0, `jaeger` type is not supported anymore and this option is ignored."
+                      description: Type of the tracing used. Currently the only supported type is `opentelemetry` for OpenTelemetry tracing.
                   required:
                     - type
-                  description: The configuration of tracing in Kafka Bridge.
+                  description: The configuration of tracing in HTTP Bridge.
+                config:
+                  x-kubernetes-preserve-unknown-fields: true
+                  type: object
+                  description: "Additional configuration for the HTTP bridge. The following prefixes cannot be set: kafka., http., bridge.metrics. The following options cannot be set: bridge.id, bridge.tracing, bridge.metrics."
               required:
+                - replicas
                 - bootstrapServers
-              description: The specification of the Kafka Bridge.
+              description: The specification of the HTTP Bridge.
             status:
               type: object
               properties:
@@ -1548,11 +1543,13 @@ spec:
                   description: The generation of the CRD that was last reconciled by the operator.
                 url:
                   type: string
-                  description: The URL at which external client applications can access the Kafka Bridge.
+                  description: The URL at which external client applications can access the HTTP Bridge.
                 replicas:
                   type: integer
                   description: The current number of pods being used to provide this resource.
                 labelSelector:
                   type: string
                   description: Label selector for pods providing this resource.
-              description: The status of the Kafka Bridge.
+              description: The status of the HTTP Bridge.
+          required:
+            - spec

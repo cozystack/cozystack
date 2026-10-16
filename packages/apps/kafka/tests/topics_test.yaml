@@ -37,6 +37,9 @@ tests:
       - isKind:
           of: KafkaTopic
         documentIndex: 1
+      - isAPIVersion:
+          of: kafka.strimzi.io/v1
+        documentIndex: 0
 
   - it: sets topic name and cluster label
     release:
