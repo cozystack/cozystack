@@ -117,3 +117,16 @@ After several months of working together, maintainers will decide whether to gra
 Ideally, all project decisions are resolved by consensus of the maintainers.
 If this is not possible, a vote will be called.
 The voting process is a simple majority in which each maintainer receives one vote.
+A vote passes only if the majority includes maintainers from at least two different organisations, so no single organisation can carry a decision on its own votes.
+
+For this purpose, a maintainer's organisation is their employer, or the organisation they represent in the project, as listed in [MAINTAINERS.md](./MAINTAINERS.md). Maintainers who are not affiliated with any organisation each count as their own. Maintainers keep their affiliation in [MAINTAINERS.md](./MAINTAINERS.md) up to date, and a change of employer takes effect for voting as soon as it is recorded there.
+
+## Vendor Neutrality
+
+Cozystack is a vendor-neutral project. No single company, product or commercial agenda directs its roadmap, governance, brand or releases, as committed in the Vendor Neutrality Manifesto in the [Code of Conduct](./CODE_OF_CONDUCT.md). Companies that offer commercial support or services around Cozystack take part on the same terms as any other contributor.
+
+In practice this means:
+
+* Decisions that go to a vote need support from maintainers of more than one organisation, as described above.
+* The project's channels, website, social accounts and other resources belong to the project and are not used to promote one vendor over another. Where the project lists commercial offerings, it lists every provider that asks to be included.
+* The maintainers actively seek maintainers and reviewers from organisations not yet represented, and report the organisational make-up of the maintainer team in [MAINTAINERS.md](./MAINTAINERS.md).
