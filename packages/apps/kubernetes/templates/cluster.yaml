@@ -344,8 +344,9 @@ metadata:
 {{- /*
   Aggregation-layer UID plumbing. What is rendered per version, why an
   opt-out renders nothing rather than failing, and how the operator's own
-  entries change that are in docs/oidc-tenant.md. That table is the one
-  to update; there is deliberately no copy of it here.
+  entries change that are in the "Aggregated API servers" section of the
+  Kubernetes OIDC guide in cozystack/website (kubernetes/oidc-authentication).
+  That table is the one to update; there is deliberately no copy of it here.
 
   The chart never renders a --feature-gates term of its own, so it never
   enables an alpha gate for the operator; it reads the operator's gate entries

@@ -39,7 +39,8 @@
   gpu.replaceDefaults drops whichever would apply, and the operator's own
   .gpu entries are appended on top (see the per-key comment below for
   which key each variant reads). A vgpu cluster at stock values therefore
-  gets the gate and no device table. See docs/gpu-vgpu.md for the
+  gets the gate and no device table. See
+  https://cozystack.io/docs/v1.6/virtualization/vgpu/ for the
   user-facing knobs.
 
   Both pieces are VM-facing and are emitted only for the two variants
