@@ -1,10 +1,11 @@
 #!/usr/bin/env bats
-# The flux CLI, yq and the helm-unittest plugin are build inputs like any image
-# or action, so they are pinned the same way: a fixed version, and for flux and
-# yq bytes checked against the release that version names. A floating install
-# comes back by copy-paste from an older step rather than by anyone deciding to
-# unpin one, which is why this scans every workflow instead of the steps that
-# happened to be fixed. Other downloaded tools are not covered here.
+# The flux CLI, yq, syft and the helm-unittest plugin are build inputs like any
+# image or action, so they are pinned the same way: a fixed version, and for
+# flux, yq and syft bytes checked against the release that version names. A
+# floating install comes back by copy-paste from an older step rather than by
+# anyone deciding to unpin one, which is why this scans every workflow instead
+# of the steps that happened to be fixed. Other downloaded tools are not
+# covered here.
 
 load test_helper
 
@@ -15,6 +16,27 @@ WORKFLOWS="$REPO_ROOT/.github/workflows"
 workflow_code() {
   grep --recursive --line-number --extended-regexp "$1" "$WORKFLOWS" \
     | grep --invert-match --extended-regexp '^[^:]+:[0-9]+:[[:space:]]*#' || true
+}
+
+# Prints file:line for every non-comment download matching the URL ERE that is
+# not followed within three lines by `sha256sum -c -` on the named variable.
+# Each download, not each file: one checked step must not cover another.
+unchecked_downloads() {
+  awk -v url="$1" -v sum="$2" '
+    FNR == 1 { if (pend) print pend; pend = "" }
+    /^[[:space:]]*#/ { next }
+    $0 ~ url { if (pend) print pend; pend = FILENAME ":" FNR; n = 0; next }
+    pend && /sha256sum -c -/ && index($0, sum) { pend = ""; next }
+    pend && ++n >= 3 { print pend; pend = "" }
+    END { if (pend) print pend }
+  ' "$WORKFLOWS"/*.yaml "$WORKFLOWS"/*.yml 2>/dev/null
+}
+
+# Fails unless every `KEY: "..."` in the workflows has the same value.
+one_value_of() {
+  local values
+  values="$(workflow_code "$1: \"" | grep --only-matching "$1: \"[0-9a-f.]*\"" | sort --unique)"
+  [ "$(printf '%s\n' "$values" | grep --count .)" -eq 1 ] || { printf '%s\n' "$values"; false; }
 }
 
 @test "no workflow executes the fluxcd.io install script" {
@@ -63,20 +85,27 @@ workflow_code() {
 
 @test "every yq download is checksum-verified at one version" {
   [ -n "$(workflow_code 'mikefarah/yq/releases/download')" ]
-  # Each download, not each file: the check has to follow within three lines.
-  unchecked="$(awk '
-    FNR == 1 { if (pend) print pend; pend = "" }
-    /^[[:space:]]*#/ { next }
-    /mikefarah\/yq\/releases\/download/ { if (pend) print pend; pend = FILENAME ":" FNR; n = 0; next }
-    pend && /sha256sum -c -/ && /YQ_SHA256/ { pend = ""; next }
-    pend && ++n >= 3 { print pend; pend = "" }
-    END { if (pend) print pend }
-  ' "$WORKFLOWS"/*.yaml "$WORKFLOWS"/*.yml 2>/dev/null)"
+  unchecked="$(unchecked_downloads 'mikefarah/yq/releases/download' YQ_SHA256)"
   [ -z "$unchecked" ] || { printf '%s\n' "$unchecked"; false; }
-  for key in YQ_VERSION YQ_SHA256; do
-    values="$(workflow_code "$key: \"" | grep --only-matching "$key: \"[0-9a-f.]*\"" | sort --unique)"
-    [ "$(printf '%s\n' "$values" | grep --count .)" -eq 1 ] || { printf '%s\n' "$values"; false; }
-  done
+  one_value_of YQ_VERSION
+  one_value_of YQ_SHA256
+}
+
+@test "no workflow installs syft through a script fetched at run time" {
+  # anchore/sbom-action and its download-syft action are pinned by commit, but
+  # run syft's install.sh from a tag of another repository. The release jobs
+  # that need syft hold the app token, the GHCR login and an OIDC token for the
+  # identity release signatures are verified against.
+  hits="$(workflow_code 'anchore/sbom-action|anchore/syft/.*install\.sh|get\.anchore\.io')"
+  [ -z "$hits" ] || { printf '%s\n' "$hits"; false; }
+}
+
+@test "every syft download is checksum-verified at one version" {
+  [ -n "$(workflow_code 'anchore/syft/releases/download')" ]
+  unchecked="$(unchecked_downloads 'anchore/syft/releases/download' SYFT_SHA256)"
+  [ -z "$unchecked" ] || { printf '%s\n' "$unchecked"; false; }
+  one_value_of SYFT_VERSION
+  one_value_of SYFT_SHA256
 }
 
 @test "every helm plugin install names a version" {
