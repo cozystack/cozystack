@@ -119,6 +119,8 @@ If this is not possible, a vote will be called.
 The voting process is a simple majority in which each maintainer receives one vote.
 A vote passes only if the majority includes maintainers from at least two different organisations, so no single organisation can carry a decision on its own votes.
 
+Any maintainer can call a vote by opening an issue in the [community](https://github.com/cozystack/community) repository that states the question. Maintainers vote in comments on that issue. The vote stays open for seven days, or until every maintainer has voted, and the result is decided by the votes cast.
+
 For this purpose, a maintainer's organisation is their employer, or the organisation they represent in the project, as listed in [MAINTAINERS.md](./MAINTAINERS.md). Maintainers who are not affiliated with any organisation each count as their own. Maintainers keep their affiliation in [MAINTAINERS.md](./MAINTAINERS.md) up to date, and a change of employer takes effect for voting as soon as it is recorded there.
 
 ## Vendor Neutrality
