@@ -180,17 +180,24 @@ func (r *FluxPlunger) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 		// the holder of the leader Lease reconciles, a stopping instance keeps that
 		// Lease through its drain (ApplyShutdownTimings), and controller-runtime
 		// serialises reconciles per key within the one process, so there is no
-		// concurrent owner to race. Releasing it un-sticks the release and lets
-		// error-recovery start over. A suspension flux-plunger does not own belongs to
-		// an operator or another controller and must be left untouched.
+		// concurrent owner to race. The one exception is a stop that overran the
+		// manager's grace period: Start then returns without joining its workers,
+		// and a reconcile still in flight can set a fence after the drain's last
+		// listing, which the next leader or the pre-delete hook then releases.
+		// Releasing it un-sticks the release and lets error-recovery start over. A
+		// suspension flux-plunger does not own belongs to an operator or another
+		// controller and must be left untouched.
 		if !r.ownsSuspension(hr) {
 			logger.Info("HelmRelease is suspended by external process, skipping")
-			// On a release flux-plunger recovered before, the suspension is most
-			// likely one an earlier flux-plunger left mid-recovery under the shared
-			// flux-client-side-apply manager, which no one will lift unless told.
-			if _, recovered := hr.Annotations[annotationLastProcessedVersion]; recovered {
+			// A release frozen in the failure recovery starts from is most likely
+			// one an earlier flux-plunger left suspended mid-recovery under the
+			// shared flux-client-side-apply manager, which no one will lift unless
+			// told: helm-controller rewrites no condition of a suspended release.
+			// The processed-version annotation is no sign of it, since it stays on
+			// every release flux-plunger ever recovered.
+			if hasNoDeployedReleasesError(hr) {
 				r.recordEvent(hr, corev1.EventTypeWarning, "SuspensionNotOwned",
-					"Left a suspension flux-plunger does not own untouched on a release it has recovered before; if an earlier flux-plunger left it, resume the release (see the flux-plunger chart README)")
+					"Left a suspension flux-plunger does not own untouched on a release stuck with no deployed releases; if an earlier flux-plunger left it mid-recovery, resume the release (see the flux-plunger chart README)")
 			} else {
 				r.recordEvent(hr, corev1.EventTypeNormal, "SuspensionNotOwned",
 					"Left an externally-owned suspension untouched; flux-plunger only clears suspensions it set")
@@ -406,13 +413,14 @@ func (r *FluxPlunger) reconcileTerminating(ctx context.Context, hr *helmv2.HelmR
 		// Another manager's suspension: helm-controller skips the uninstall for it
 		// and leaves the release's resources in place, which a migration that
 		// suspends then deletes relies on. That is not flux-plunger's decision to
-		// override, and not a release its fence should hold. A release that
-		// carries flux-plunger's processed-version annotation was recovered before,
-		// so the suspension that skips its uninstall was not a migration's choice (an
-		// operator's hand, or one an earlier flux-plunger release left behind): that
-		// is the orphaning this controller exists to prevent, and a Warning.
+		// override, and not a release its fence should hold. A release frozen in
+		// the failure recovery starts from is most likely suspended by an earlier
+		// flux-plunger that stopped mid-recovery, not by a migration's choice: that
+		// is the orphaning this controller exists to prevent, and a Warning. The
+		// processed-version annotation is no sign of it, since it stays on every
+		// release flux-plunger ever recovered.
 		logger.Info("HelmRelease is being deleted while suspended by another manager; helm-controller skips the uninstall")
-		if _, recovered := hr.Annotations[annotationLastProcessedVersion]; recovered {
+		if hasNoDeployedReleasesError(hr) {
 			r.recordEvent(hr, corev1.EventTypeWarning, "TerminatingWhileSuspended",
 				"HelmRelease is being deleted while suspended by another manager; helm-controller skips the Helm uninstall for a suspended release, so its resources are left behind")
 		} else {
