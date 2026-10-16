@@ -93,6 +93,15 @@ kube::codegen::gen_client \
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 $CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/internalapi/..." paths="./api/migration/..." output:crd:artifacts:config=${TMPDIR}
+# The strategy CRDs embed whole upstream schemas (PodTemplateSpec, operator
+# backup specs) whose descriptions make up most of their size, and
+# backupstrategy-controller renders them from templates, so Helm stores
+# each one twice per release (chart file and manifest). With descriptions
+# the stored release passes the 1 MiB Secret limit and the upgrade that
+# renders the default Strategy CRs fails; hack/helm-release-size.bats
+# holds the budget.
+$CONTROLLER_GEN crd:maxDescLen=0 paths="./api/backups/strategy/..." output:crd:artifacts:config=${TMPDIR}/strategy
+rm ${TMPDIR}/strategy.backups.cozystack.io*.yaml
 
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
@@ -101,7 +110,7 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
-mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
+mv ${TMPDIR}/strategy/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
 mv ${TMPDIR}/forklift.cozystack.io*.yaml ${MIGRATION_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
