@@ -160,7 +160,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: docker.io/clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+          # Routed through cozy-lib.image like the other cleanup hooks, so the
+          # cluster images-registry applies. The clastix/kubectl Renovate
+          # manager in .github/renovate.json matches this file by its path.
+          image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $root) }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
