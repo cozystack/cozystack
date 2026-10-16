@@ -65,7 +65,11 @@ a failure there leaves the Secrets in place.
 {{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of certificates must be a Kubernetes resource name, got %q" .) -}}
 {{- end -}}
 {{- end -}}
-{{- $name := printf "%s-secrets-cleanup" $root.Release.Name -}}
+{{- /* A Job name goes into the job-name label of its pods, which takes at
+       most 63 characters, while the apps API admits release names of up to
+       53. Cutting the suffix keeps the whole release name, so the name stays
+       unique. */ -}}
+{{- $name := printf "%s-secrets-cleanup" $root.Release.Name | trunc 63 | trimSuffix "-" -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
