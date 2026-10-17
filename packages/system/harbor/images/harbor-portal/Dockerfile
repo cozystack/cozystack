@@ -26,7 +26,7 @@ RUN npm install js-yaml@4.1.0 \
     && cp /harbor/LICENSE dist/
 RUN cd app-swagger-ui && npm install --unsafe-perm && npm run build
 
-FROM goharbor/photon:5.0@sha256:0e06d58615400bf2a3fe7da1175b889e2827969e3ac42e1c4010010770e6a712
+FROM goharbor/photon:5.0@sha256:20a1419aba1cf84a6569e442a89a5cdea03b910b1bc87d63681499bf3dc99c43
 RUN tdnf install -y nginx shadow >> /dev/null \
     && tdnf clean all \
     && ln -sf /dev/stdout /var/log/nginx/access.log \
