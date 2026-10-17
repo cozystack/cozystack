@@ -419,7 +419,7 @@ spec:
       apps.cozystack.io/application.group: apps.cozystack.io
       apps.cozystack.io/application.kind: Monitoring
       apps.cozystack.io/application.name: {{ $.Release.Name }}
-  replicaCount: 3
+  replicaCount: {{ include "monitoring.alertmanager.replicas" $ }}
   configSecret: alertmanager
   {{- if and $emailEnabled $email.authUsername }}
   secrets:

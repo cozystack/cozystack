@@ -327,3 +327,12 @@
 {{- define "monitoring.tracingCentral" -}}
 {{- if and (ne .Release.Namespace "tenant-root") (eq (toString (dig "tracingCentral" false (.Values._namespace | default dict))) "true") -}}true{{- end -}}
 {{- end -}}
+
+{{- /*
+  Alertmanager replica count. vmalert lists each replica as its own
+  notifier from the same number, because the Alertmanager cluster only
+  deduplicates notifications when every replica receives every alert.
+*/}}
+{{- define "monitoring.alertmanager.replicas" -}}
+3
+{{- end -}}
