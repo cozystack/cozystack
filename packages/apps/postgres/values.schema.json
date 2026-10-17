@@ -94,6 +94,23 @@
         "2xlarge"
       ]
     },
+    "resourcesAllocationRatio": {
+      "description": "Overrides the cluster-wide allocation ratios for this database only, so its limits (from `resources` or `resourcesPreset`) can stay high while its requests reflect normal use. Unset by default: the cluster-wide ratios apply and the rendered requests are unchanged. A ratio below 1 is refused, since the request would exceed the limit.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU ratio for this database; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "memory": {
+          "description": "Memory ratio for this database; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "size": {
       "description": "Persistent Volume Claim size available for application data.",
       "default": "10Gi",
