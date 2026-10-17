@@ -55,6 +55,61 @@
       "matchPackageNames": ["sigs.k8s.io/controller-runtime", "k8s.io/**"]
     },
     {
+      "description": "cel-go moved to cel.dev/cel-go, and the github.com/google/cel-go repository has no tags past v0.30.0. proxy.golang.org still serves v0.31.0 and v0.32.0 from its cache, but a build that resolves modules from the repository (GOPROXY=direct, or an Athens or Artifactory proxy that fetches from VCS) fails on them, and v0.32.0 declares the module path cel.dev/cel-go, which k8s.io/apiserver does not import. The rule can go once nothing in the module graph requires github.com/google/cel-go.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/google/cel-go"],
+      "allowedVersions": "<0.31.0"
+    },
+    {
+      "description": "The newest kube-openapi commits require structured-merge-diff v7, and k8s.io/apimachinery v0.37 does not compile against it (pkg/util/managedfields/internal/typeconverter.go hands v7 schema types to v6). Renovate does not raise kube-openapi; each module keeps the commit its dependencies require, and it moves with the Kubernetes libraries.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["k8s.io/kube-openapi"],
+      "enabled": false
+    },
+    {
+      "description": "Renovate offers a dependency's patch and minor update as one update to the newest minor unless they are split, so the Flux hold below would also drop the patch releases it means to let through.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/fluxcd/**"],
+      "separateMinorPatch": true
+    },
+    {
+      "description": "structured-merge-diff v7 is a new module path that k8s.io/apimachinery v0.37 does not compile against: its managedfields package hands v7 schema types to v6 (pkg/util/managedfields/internal/typeconverter.go). It moves when the Kubernetes libraries do.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["sigs.k8s.io/structured-merge-diff/**"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "The Flux API modules describe the CRDs of the Flux release the platform installs (internal/fluxinstall), so they stay on that release line; patches still arrive. A newer minor would let the operator and the apps API write fields the installed controllers do not know. They move together with the Flux release.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["github.com/fluxcd/**"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
+      "description": "controller-runtime's admission.Patched takes gomodules.xyz/jsonpatch/v2 operations, so the flux-shard-operator webhook cannot build its patch with v3 types. The major moves when controller-runtime does.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["gomodules.xyz/jsonpatch/**"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "jwx v4 removes jwk.Cache, on which the token proxy's JWKS refresh and readiness are built, so the major needs that code rewritten rather than an import path bump.",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["packages/system/dashboard/images/token-proxy/**"],
+      "matchPackageNames": ["github.com/lestrrat-go/jwx/**"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Upstream kubevirt csi-driver builds against kubevirt.io/api v1.2 and CDI API v1.59; with a newer CDI API its controller no longer compiles (it passes ResourceRequirements where the newer DataVolume type wants VolumeResourceRequirements). Both follow upstream csi-driver.",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["packages/apps/kubernetes/images/kubevirt-csi-driver/**"],
+      "matchPackageNames": ["kubevirt.io/api", "kubevirt.io/containerized-data-importer-api"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
       "description": "Never bump the Go toolchain directive. go.mod is generated and the toolchain is pinned deliberately; raising it needs a matching setup-go and a codegen run, which is out of scope for an automated dependency bump.",
       "matchManagers": ["gomod"],
       "matchDepTypes": ["golang"],
@@ -73,7 +128,7 @@
       "schedule": ["before 6am on monday"]
     },
     {
-      "description": "The Harbor rebuilds reproduce one upstream release, so their build bases follow upstream's Makefile at that tag (GOBUILDIMAGE, NODEBUILDIMAGE) rather than the newest image. A golang tag bump builds Harbor with a toolchain upstream never shipped it with, and a node major breaks the Angular portal build. Tag bumps are disabled here; digest refreshes of the same tag still arrive through the digest group above. Move the tags by hand with HARBOR_VERSION.",
+      "description": "The Harbor rebuilds reproduce one upstream release, and their Dockerfiles assert that the Go and node versions they build with equal GOBUILDIMAGE and NODEBUILDIMAGE in upstream's Makefile at that tag, so a tag that moves either version fails the build. Digest refreshes of the same tag still arrive through the digest group above; move the tags with HARBOR_VERSION.",
       "matchManagers": ["dockerfile"],
       "matchFileNames": ["packages/system/harbor/images/**"],
       "matchUpdateTypes": ["major", "minor", "patch"],
@@ -110,6 +165,36 @@
       "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
       "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "enabled": false
+    },
+    {
+      "description": "The flux action's tag has to equal the Flux CLI version it installs, which follows the Flux release the platform runs: hack/verify-promoted-packages.sh restates that CLI's excludeOCI set, and hack/ci-tool-installs-contract.bats fails when the two differ. The action moves together with the Flux release.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["fluxcd/flux2"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "AlmaLinux 10 builds its amd64 userland for x86-64-v3 (AVX2). The kubevirt CSI node service runs mkfs, blkid, fsck and mount from this image inside tenant VMs, and on a vCPU without x86-64-v3 each of them exits at startup while the pod looks healthy; the same CPU floor broke the driver's sidecars before. The image stays on AlmaLinux 9.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/apps/kubernetes/images/kubevirt-csi-driver/**"],
+      "matchPackageNames": ["almalinux", "docker.io/library/almalinux"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "outline-server declares engines node 18.x, and npm ci in the shadowbox build fails with EBADENGINE on any other node major. The node tag moves when outline-server raises its engine.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/apps/vpn/images/shadowbox/**"],
+      "matchPackageNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "The cleanup hooks (post-delete, and kafka's pre-delete) run clastix/kubectl against the management cluster, and kubectl supports one minor of skew with the API server. The tag stays on a minor the supported management cluster versions accept; digest refreshes of that tag still arrive.",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["docker.io/clastix/kubectl"],
+      "matchUpdateTypes": ["major", "minor"],
       "enabled": false
     }
   ]

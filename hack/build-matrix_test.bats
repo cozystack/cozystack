@@ -122,6 +122,22 @@ load test_helper
   rm -f "$tmp"
 }
 
+@test "kubevirt-csi-node change fans out to the kubernetes build" {
+  tmp=$(mktemp)
+  echo "packages/system/kubevirt-csi-node/templates/deploy.yaml" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/kubernetes"]' ]
+  rm -f "$tmp"
+}
+
+@test "kubevirt-csi-node change does not duplicate an already-selected kubernetes build" {
+  tmp=$(mktemp)
+  printf 'packages/system/kubevirt-csi-node/templates/deploy.yaml\npackages/apps/kubernetes/values.yaml\n' > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/kubernetes"]' ]
+  rm -f "$tmp"
+}
+
 @test "cozy-lib change forces the full matrix" {
   tmp=$(mktemp)
   echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp"

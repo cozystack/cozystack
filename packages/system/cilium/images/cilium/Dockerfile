@@ -6,7 +6,7 @@ FROM quay.io/cilium/cilium:${VERSION} AS upstream
 # throwaway alpine stage and copy the results back over the upstream image.
 # The agent compiles BPF at startup from /var/lib/cilium/bpf, so replacing
 # the source files is sufficient.
-FROM docker.io/library/alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS patcher
+FROM docker.io/library/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS patcher
 RUN apk add --no-cache patch
 WORKDIR /work
 COPY --from=upstream /var/lib/cilium/bpf/bpf_host.c ./bpf_host.c

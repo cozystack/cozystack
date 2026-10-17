@@ -205,7 +205,7 @@ func dataVolumeFailureMessage(dv *unstructured.Unstructured) string {
 		}
 		message, _ := cond["message"].(string)
 		var parts []string
-		for _, part := range strings.Split(message, " and ") {
+		for part := range strings.SplitSeq(message, " and ") {
 			if part != "" {
 				parts = append(parts, part)
 			}
