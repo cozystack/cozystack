@@ -147,6 +147,9 @@ spec:
             - clusterRef
             - destination
             type: object
+            x-kubernetes-validations:
+            - message: spec is immutable; create a new EtcdSnapshot instead
+              rule: self == oldSelf
           status:
             description: EtcdSnapshotStatus is the observed state of an EtcdSnapshot.
             properties:
