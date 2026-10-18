@@ -629,3 +629,62 @@ tests:
           path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
       - notExists:
           path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/taints"]
+
+  - it: announces the role labels next to the pool's own labels
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      roles: [ingress-nginx, storage]
+      labels:
+        workload: db
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+          value: node-role.kubernetes.io/ingress-nginx=,node-role.kubernetes.io/storage=,workload=db
+
+  - it: announces the role labels of a pool without labels of its own
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      roles: [ingress-nginx]
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+          value: node-role.kubernetes.io/ingress-nginx=
+
+  - it: announces a GPU pool's gpu label and GPU count
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      labels:
+        workload: ml
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+        - name: nvidia.com/AD102GL_L40S
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+          value: gpu=on,workload=ml
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/gpu-type"]
+          value: nvidia.com/gpu
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/gpu-count"]
+          value: "2"
+
+  - it: announces no GPU capacity for a pool without GPUs
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notExists:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/gpu-type"]
+      - notExists:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/gpu-count"]
