@@ -187,7 +187,7 @@
       "x-kubernetes-int-or-string": true
     },
     "gpus": {
-      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM). A pool on a Kairos WorkerClass refuses GPUs: no NVIDIA driver path for Kairos workers exists yet, so use a Talos class for a GPU pool.",
+      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM). A pool on a Kairos WorkerClass refuses GPUs: no NVIDIA driver path for Kairos workers exists yet, so use a Talos class for a GPU pool. The GPU capacity a pool announces to the cluster-autoscaler for scaling from zero counts only `nvidia.com/` devices and announces them as `nvidia.com/gpu`, which is how the device plugin serves a GPU without MIG. Only that resource is announced, so a pod that requests MIG resources (GPU Operator `migStrategy: mixed`) or HAMi's `nvidia.com/gpumem` or `nvidia.com/gpucores` does not scale such a pool up from zero. With `migStrategy: mixed`, in a pool whose GPUs are all MIG-partitioned, a pod requesting `nvidia.com/gpu` still scales it up, gets a node it cannot run on, and the autoscaler later removes that node. With the default `single`, each MIG slice is served as `nvidia.com/gpu`, so, as with HAMi, a pool scaled to zero is planned for fewer GPUs than it serves.",
       "type": "array",
       "default": [],
       "items": {

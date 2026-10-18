@@ -159,3 +159,15 @@ func TestRenderProofSkipsAutoscalerLabelAndTaintHints(t *testing.T) {
 		t.Fatal("a changed memory capacity passed the proof")
 	}
 }
+
+// The GPU hints for scale from zero are new with the class-era chart as well;
+// the GPUs themselves are part of the compared machine template.
+func TestRenderProofSkipsAutoscalerGPUHints(t *testing.T) {
+	md := func(annotations string) []byte {
+		return []byte("apiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: pool\n  annotations:\n    capacity.cluster-autoscaler.kubernetes.io/memory: 3Gi\n" + annotations + "spec: {replicas: 1}\n---\napiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: KubevirtMachineTemplate\nmetadata:\n  name: vm-a\nspec: {}\n")
+	}
+	current := md("    capacity.cluster-autoscaler.kubernetes.io/gpu-type: nvidia.com/gpu\n    capacity.cluster-autoscaler.kubernetes.io/gpu-count: \"1\"\n")
+	if err := VerifyRendered(current, md("")); err != nil {
+		t.Fatalf("GPU hints failed the proof: %v", err)
+	}
+}
