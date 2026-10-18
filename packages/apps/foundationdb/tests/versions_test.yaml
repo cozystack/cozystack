@@ -1,0 +1,69 @@
+suite: FoundationDB version map
+
+templates:
+  - templates/cluster.yaml
+
+release:
+  name: foundationdb-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: defaults to 7.3.63
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.3.63"
+
+  - it: maps v7.4 to its tag
+    set:
+      version: v7.4
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.4.1"
+
+  - it: names the value and the versions on offer when version is null
+    set:
+      version: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "FoundationDB version <nil> is not supported, allowed versions are [v7.3 v7.4]"
+
+  - it: renders a leftover cluster.version on the line version selects
+    set:
+      cluster:
+        version: "7.3.69"
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.3.63"
+
+  - it: refuses a leftover cluster.version on another line than version
+    set:
+      cluster:
+        version: "7.4.2"
+    asserts:
+      - failedTemplate:
+          errorMessage: "cluster.version 7.4.2 is no longer read, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
+
+  - it: refuses a leftover cluster.version on a line the chart no longer offers
+    set:
+      cluster:
+        version: "7.1.67"
+    asserts:
+      - failedTemplate:
+          errorMessage: "cluster.version 7.1.67 is no longer read, and it is on a different release line than version v7.3. Set version to the line the cluster runs, upgrading the cluster first if that line is no longer offered, or remove cluster.version to move the cluster to 7.3.63."
+
+  - it: renders once version picks the line cluster.version is on
+    set:
+      version: v7.4
+      cluster:
+        version: "7.4.2"
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.4.1"
