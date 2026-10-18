@@ -1,0 +1,19 @@
+suite: keycloak-operator CRDs declare the realm settings the platform sets
+# keycloak-configure renders the cozy ClusterKeycloakRealm with spec.sessions
+# and spec.organizationsEnabled, and spec.login when configured. The apiserver
+# drops any field the CRD does not declare without an error, so with a chart
+# that lacks them the realm never gets those settings.
+includeCrds: true
+templates:
+  - charts/keycloak-operator/crds/v1.edp.epam.com_clusterkeycloakrealms.yaml
+tests:
+  - it: declares the session, organization and login settings
+    asserts:
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.sessions.properties.ssoSessionSettings.properties.idleTimeout
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.sessions.properties.ssoSessionSettings.properties.maxLifespan
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.organizationsEnabled
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.login
