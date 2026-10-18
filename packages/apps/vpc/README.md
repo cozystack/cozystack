@@ -27,10 +27,18 @@ A VM or a pod may be connected to multiple secondary Subnets at once. Each secon
 
 ### Common parameters
 
-| Name                 | Description                      | Type                | Value   |
-| -------------------- | -------------------------------- | ------------------- | ------- |
-| `subnets`            | Subnets of a VPC                 | `map[string]object` | `{...}` |
-| `subnets[name].cidr` | Subnet CIDR, e.g. 192.168.0.0/24 | `cidr`              | `{}`    |
+| Name                       | Description                                                                                                       | Type       | Value |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------- | ----- |
+| `subnets`                  | Subnets of a VPC                                                                                                  | `[]object` | `[]`  |
+| `subnets[i].name`          | Subnet name                                                                                                       | `string`   | `""`  |
+| `subnets[i].cidr`          | IP address range                                                                                                  | `string`   | `""`  |
+| `subnets[i].allowSubnets`  | Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM | `[]string` | `[]`  |
+| `peers`                    | VPC peering connections (bidirectional declaration required)                                                      | `[]object` | `[]`  |
+| `peers[i].vpcName`         | Logical name of the remote VPC (without "virtualprivatecloud-" prefix)                                            | `string`   | `""`  |
+| `peers[i].tenantNamespace` | Namespace of the remote tenant                                                                                    | `string`   | `""`  |
+| `routes`                   | Static routes for the VPC                                                                                         | `[]object` | `[]`  |
+| `routes[i].cidr`           | Destination CIDR                                                                                                  | `string`   | `""`  |
+| `routes[i].nextHopIP`      | Next hop IP address                                                                                               | `string`   | `""`  |
 
 
 ## Examples
@@ -41,10 +49,10 @@ metadata:
   name: vpc00
 spec:
   subnets:
-    sub00:
+    - name: sub00
       cidr: 172.16.0.0/24
-    sub01:
+    - name: sub01
       cidr: 172.16.1.0/24
-    sub02:
+    - name: sub02
       cidr: 172.16.2.0/24
 ```
