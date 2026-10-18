@@ -28,6 +28,7 @@
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- include "kubernetes-nodes.assertSubstrateMatches" . }}
+{{- include "kubernetes-nodes.assertOsMatches" . }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- /* Substrate selects which infrastructure provider renders this pool's
        machine template. Everything downstream of the template — autoscaler
@@ -40,6 +41,25 @@
 {{-   fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
 {{- end }}
 {{- $isProxmox := eq $substrate "proxmox" }}
+{{- $os := .Values.os | default "talos" }}
+{{- if not (has $os (list "talos" "kairos")) }}
+{{-   fail (printf "os %q is not supported; use \"talos\" or \"kairos\"" $os) }}
+{{- end }}
+{{- if eq $os "kairos" }}
+{{-   if $isProxmox }}
+{{-     fail "os kairos is only supported on the kubevirt substrate" }}
+{{-   end }}
+{{-   $_ := include "kubernetes-nodes.kairosImage" . }}
+{{-   if .Values.osImage }}
+{{-     fail "osImage selects a Talos image and does not apply to os kairos; set kairos.image instead" }}
+{{-   end }}
+{{-   if .Values.kernelModules }}
+{{-     fail "kernelModules are loaded through the Talos machine config and do not apply to os kairos" }}
+{{-   end }}
+{{-   if .Values.gpus }}
+{{-     fail "gpus are not supported on os kairos: the Kairos worker image carries no GPU driver" }}
+{{-   end }}
+{{- end }}
 {{- if $isProxmox }}
 {{- /* Proxmox has no equivalent of a VirtualMachineClusterInstancetype, so the
          instancetype lookup that normally supplies effective CPU and memory has
@@ -209,6 +229,25 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
+      {{- if eq ($.Values.os | default "talos") "kairos" }}
+      - metadata:
+          name: disk-system
+          annotations:
+            cdi.kubevirt.io/storage.usePopulator: "false"
+        spec:
+          source:
+            registry:
+              {{- /* The CDI importer refuses a reference carrying both a tag
+                     and a digest; the digest alone pins the same image. */}}
+              url: {{ printf "docker://%s" (regexReplaceAll ":[^/:@]+@" (include "kubernetes-nodes.kairosImage" $) "@") | quote }}
+          storage:
+            resources:
+              requests:
+                storage: {{ .group.diskSize | default "20Gi" | quote }}
+            {{- with (.group.storageClass | default $.Values.storageClass) }}
+            storageClassName: {{ . | quote }}
+            {{- end }}
+      {{- else }}
       {{- /* This pool selects its worker OS image source via .Values.osImage (the
              WorkerImage union in values.yaml); every field defaults to the pool's
              talos.*:
@@ -536,6 +575,7 @@ spec:
             {{- with $cloneWorkerSC | default (.group.storageClass | default $.Values.storageClass) }}
             storageClassName: {{ . | quote }}
             {{- end }}
+      {{- end }}
       template:
         metadata:
           annotations:
@@ -564,6 +604,14 @@ spec:
           {{- end }}
           {{- end }}
           domain:
+            {{- /* Kairos worker disks are GPT images without a BIOS boot
+                   partition; SeaBIOS stops at "Booting from Hard Disk". */}}
+            {{- if eq ($.Values.os | default "talos") "kairos" }}
+            firmware:
+              bootloader:
+                efi:
+                  secureBoot: false
+            {{- end }}
             {{- if and .group.resources .group.resources.cpu }}
             cpu:
               threads: 1
@@ -998,9 +1046,15 @@ spec:
     spec:
       bootstrap:
         configRef:
+          {{- if eq $os "kairos" }}
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KairosConfigTemplate
+          name: {{ printf "%s-%s-kairos-%s" $clusterName $groupName (include "kubernetes.kairosConfigTemplateHash" (dict "root" $ "group" $group)) }}
+          {{- else }}
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: TalosConfigTemplate
           name: {{ $talosConfigTemplateName }}
+          {{- end }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $clusterName }}
       infrastructureRef:

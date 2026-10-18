@@ -1,0 +1,35 @@
+suite: tenant DNS Service IP published to the control plane
+
+# Kamaji writes the tenant kubelet-config ConfigMap's clusterDNS from the
+# TenantControlPlane's dnsServiceIPs. A worker that takes its kubelet
+# configuration from that ConfigMap (a kubeadm join) gets no cluster DNS
+# unless the chart sets it, and the address has to be the ClusterIP the
+# chart pins on the tenant CoreDNS Service.
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+tests:
+  - it: sets dnsServiceIPs on the KamajiControlPlane to the tenant CoreDNS ClusterIP
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.network.dnsServiceIPs
+          value: ["10.95.0.10"]
+
+  - it: pins the tenant CoreDNS Service to the same ClusterIP
+    template: templates/helmreleases/coredns.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.coredns.service.clusterIP
+          value: "10.95.0.10"
