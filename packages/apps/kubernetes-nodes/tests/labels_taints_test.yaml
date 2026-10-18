@@ -1,0 +1,549 @@
+suite: pool labels and taints
+
+# Labels in the domains Cluster API syncs from a Machine to its Node
+# (node-role.kubernetes.io, node-restriction.kubernetes.io,
+# node.cluster.x-k8s.io) go on the MachineDeployment template. Every other
+# label, and every taint, goes through the bootstrap config of the pool's OS:
+# Talos machine.nodeLabels and kubelet registerWithTaints, kubeadm node-labels
+# and nodeRegistration.taints on Kairos.
+templates:
+  - templates/nodegroup.yaml
+  - templates/talos-reconcile-job.yaml
+  - templates/kairos-reconcile-job.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 30Gi
+  storageClass: replicated
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  kairos:
+    image: registry.example.com/kairos/worker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+tests:
+  - it: registers a Talos pool's labels through the machine config
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        example.com/team: storage
+        tier: "2"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+"example\.com/team": "storage"\n\s+"tier": "2"\n'
+
+  - it: registers a Talos pool's taints with the kubelet
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: example.com/dedicated
+          value: gpu
+          effect: NoSchedule
+        - key: example.com/maintenance
+          effect: NoExecute
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'registerWithTaints:\s*\n\s+- key: "example\.com/dedicated"\n\s+value: "gpu"\n\s+effect: "NoSchedule"\n\s+- key: "example\.com/maintenance"\n\s+effect: "NoExecute"\n'
+
+  - it: keeps a GPU pool's gpu=on label next to its own labels
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+      labels:
+        example.com/team: ml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+"example\.com/team": "ml"\n\s+gpu: "on"\n'
+
+  - it: renders no label or taint block for a pool without them
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:|registerWithTaints:'
+
+  - it: registers a Kairos pool's labels and taints through kubeadm
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      os: kairos
+      labels:
+        example.com/team: storage
+        tier: "2"
+      taints:
+        - key: example.com/dedicated
+          value: gpu
+          effect: NoSchedule
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'kubeletExtraArgs:\s*\n\s+- name: node-labels\n\s+value: "example\.com/team=storage,tier=2"\n'
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'taints:\s*\n\s+- key: "example\.com/dedicated"\n\s+value: "gpu"\n\s+effect: "NoSchedule"\n'
+
+  - it: renders no node registration block for a Kairos pool without labels or taints
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      os: kairos
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["spec.yaml"]
+          pattern: 'nodeRegistration:'
+
+  - it: puts labels in Cluster API managed domains on the MachineDeployment template, not on the kubelet
+    set:
+      labels:
+        node-role.kubernetes.io/storage: ""
+        node-restriction.kubernetes.io/rack: r1
+        node.cluster.x-k8s.io/pool: fast
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["node-role.kubernetes.io/storage"]
+          value: ""
+        template: templates/nodegroup.yaml
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+      - equal:
+          path: spec.template.metadata.labels["node-restriction.kubernetes.io/rack"]
+          value: r1
+        template: templates/nodegroup.yaml
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+      - equal:
+          path: spec.template.metadata.labels["node.cluster.x-k8s.io/pool"]
+          value: fast
+        template: templates/nodegroup.yaml
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:'
+        template: templates/talos-reconcile-job.yaml
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: refuses a label the kubelet may not set and Cluster API does not sync
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        cloud.kubernetes.io/region: eu
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "cloud.kubernetes.io/region" is in a kubernetes.io namespace'
+
+  - it: refuses a well-known label that describes the node itself
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        kubernetes.io/os: plan9
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "kubernetes.io/os" describes the node itself'
+
+  - it: refuses a deprecated zone label
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        failure-domain.beta.kubernetes.io/zone: a
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "failure-domain.beta.kubernetes.io/zone" is deprecated'
+
+  - it: accepts topology and instance-type labels on KubeVirt, where nothing else sets them
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        topology.kubernetes.io/zone: a
+        node.kubernetes.io/instance-type: big
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+"node\.kubernetes\.io/instance-type": "big"\n\s+"topology\.kubernetes\.io/zone": "a"\n'
+
+  - it: refuses a topology label on Proxmox, where the cloud controller manager sets it
+    template: templates/talos-reconcile-job.yaml
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["192.0.2.1"]
+      labels:
+        topology.kubernetes.io/zone: a
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "topology.kubernetes.io/zone" is set by the Proxmox cloud controller manager'
+
+  - it: accepts a label in a kubelet-allowed kubernetes.io domain
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        node.kubernetes.io/pool: fast
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+"node\.kubernetes\.io/pool": "fast"\n'
+
+  - it: refuses a label value that is not a valid label value
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        example.com/team: $(id)
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "example.com/team" has value "\$\(id\)"'
+
+  - it: refuses an invalid label key
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        "bad key": x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "bad key" is not a valid label key'
+
+  - it: refuses the gpu label on a GPU pool, where the chart sets it
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+      labels:
+        gpu: "off"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "gpu" is set by the chart on a GPU pool'
+
+  - it: refuses a taint with an unknown effect
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: example.com/dedicated
+          effect: Sometimes
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "example.com/dedicated" has effect "Sometimes"'
+
+  - it: refuses a taint in a kubernetes.io or x-k8s.io namespace
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: node.cluster.x-k8s.io/uninitialized
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "node.cluster.x-k8s.io/uninitialized" is in a namespace reserved for Kubernetes and Cluster API'
+
+  - it: refuses a taint value that could break out of the reconcile script
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: example.com/dedicated
+          value: $(id)
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "example.com/dedicated" has value "\$\(id\)"'
+
+  - it: refuses the same taint key and effect twice
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: example.com/dedicated
+          value: a
+          effect: NoSchedule
+        - key: example.com/dedicated
+          value: b
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "example.com/dedicated" with effect "NoSchedule" is listed twice'
+
+  - it: refuses an invalid label on a Kairos pool too
+    template: templates/nodegroup.yaml
+    set:
+      os: kairos
+      labels:
+        example.com/team: $(id)
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "example.com/team" has value "\$\(id\)"'
+
+  - it: quotes a tenant label key, so a key such as null stays a string
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        "null": x
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+"null": "x"\n'
+
+  - it: refuses a label that repeats one of the pool's roles
+    template: templates/talos-reconcile-job.yaml
+    set:
+      roles: [storage]
+      labels:
+        node-role.kubernetes.io/storage: x
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "node-role.kubernetes.io/storage" is already set by roles'
+
+  - it: refuses a k8s.io label namespace
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        example.k8s.io/x: y
+    asserts:
+      - failedTemplate:
+          errorPattern: 'label "example.k8s.io/x" is in a kubernetes.io namespace'
+
+  - it: syncs a node-restriction.kubernetes.io subdomain label through Cluster API
+    template: templates/nodegroup.yaml
+    set:
+      labels:
+        rack.node-restriction.kubernetes.io/id: r1
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["rack.node-restriction.kubernetes.io/id"]
+          value: r1
+
+  - it: accepts a kubelet.kubernetes.io label through the kubelet
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        kubelet.kubernetes.io/x: y
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '"kubelet\.kubernetes\.io/x": "y"'
+
+  - it: refuses an invalid taint key
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: "bad key"
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "bad key" is not a valid taint key'
+
+  - it: refuses a taint in a kubernetes.io namespace
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: node.kubernetes.io/x
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'taint "node.kubernetes.io/x" is in a namespace reserved'
+
+  - it: refuses a taint without an effect
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: example.com/x
+    asserts:
+      - failedTemplate:
+          errorPattern: "missing property 'effect'"
+
+  - it: renders a Kairos taint without a value
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      os: kairos
+      taints:
+        - key: example.com/x
+          effect: NoExecute
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'taints:\s*\n\s+- key: "example\.com/x"\n\s+effect: "NoExecute"\n'
+
+  - it: refuses Kairos labels longer than the kubelet argument the template allows
+    template: templates/nodegroup.yaml
+    set:
+      os: kairos
+      labels:
+        example.com/a0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/b0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/c0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/d0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/e0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/f0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/g0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/h0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/i0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+        example.com/j0123456789012345678901234567890123456789: a01234567890123456789012345678901234567890123456789012345678
+    asserts:
+      - failedTemplate:
+          errorPattern: 'node-labels argument of at most 1024 characters'
+
+  - it: refuses a label key whose prefix is longer than 253 characters
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x: y
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a valid label key'
+
+  - it: accepts a label key whose prefix is exactly 253 characters
+    template: templates/talos-reconcile-job.yaml
+    set:
+      labels:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x: y
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '/x": "y"'
+
+  - it: refuses a taint key whose prefix is longer than 253 characters
+    template: templates/talos-reconcile-job.yaml
+    set:
+      taints:
+        - key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x
+          effect: NoSchedule
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a valid taint key'
+
+  - it: accepts Kairos labels that join into exactly 1024 characters
+    template: templates/kairos-reconcile-job.yaml
+    set:
+      os: kairos
+      labels:
+        example.com/k00: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k01: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k02: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k03: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k04: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k05: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k06: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k07: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k08: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k09: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k10: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k11: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k12: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+        example.com/k13: vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["spec.yaml"]
+          pattern: 'name: node-labels'
+
+  # cluster-autoscaler builds the template node of a pool scaled to zero from
+  # these two annotations alone (cloudprovider/clusterapi Labels and Taints).
+  - it: announces the pool's labels and taints to the autoscaler for scale from zero
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      labels:
+        workload: db
+        node-role.kubernetes.io/storage: ""
+      taints:
+        - key: dedicated
+          value: db
+          effect: NoSchedule
+        - key: example.com/maintenance
+          effect: NoExecute
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+          value: node-role.kubernetes.io/storage=,workload=db
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/taints"]
+          value: dedicated=db:NoSchedule,example.com/maintenance:NoExecute
+
+  - it: announces a Kairos pool's labels and taints to the autoscaler too
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      os: kairos
+      labels:
+        workload: db
+      taints:
+        - key: dedicated
+          value: db
+          effect: NoSchedule
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+          value: workload=db
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/taints"]
+          value: dedicated=db:NoSchedule
+
+  - it: renders no autoscaler label or taint annotation for a pool without them
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - notExists:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/labels"]
+      - notExists:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/taints"]
