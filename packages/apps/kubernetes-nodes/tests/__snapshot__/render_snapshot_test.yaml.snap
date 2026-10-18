@@ -82,6 +82,9 @@ matches the golden render of a GPU pool:
     metadata:
       annotations:
         capacity.cluster-autoscaler.kubernetes.io/cpu: 3600m
+        capacity.cluster-autoscaler.kubernetes.io/gpu-count: "1"
+        capacity.cluster-autoscaler.kubernetes.io/gpu-type: nvidia.com/gpu
+        capacity.cluster-autoscaler.kubernetes.io/labels: gpu=on
         capacity.cluster-autoscaler.kubernetes.io/memory: 6800Mi
         cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: 30m
         cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "3"
@@ -390,6 +393,7 @@ matches the golden render of the pool objects:
     metadata:
       annotations:
         capacity.cluster-autoscaler.kubernetes.io/cpu: 1800m
+        capacity.cluster-autoscaler.kubernetes.io/labels: node-role.kubernetes.io/ingress-nginx=
         capacity.cluster-autoscaler.kubernetes.io/memory: 3297Mi
         cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: 30m
         cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "3"

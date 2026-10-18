@@ -1013,10 +1013,18 @@ metadata:
     {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
     {{- end }}
-    {{- /* The autoscaler reads a pool scaled to zero's labels and taints only
-           from these, in its own "k=v,k=v" and "k=v:Effect,k:Effect" forms. */}}
+    {{- /* A pool scaled to zero has no Node, so the autoscaler takes its
+           labels, taints and GPUs only from these annotations. Labels and
+           taints use its own "k=v,k=v" and "k=v:Effect,k:Effect" forms. */}}
+    {{- $nodeLabels := merge (dict) $labelsAndTaints.capi $labelsAndTaints.kubelet }}
+    {{- range $group.roles }}
+    {{-   $_ := set $nodeLabels (printf "node-role.kubernetes.io/%s" .) "" }}
+    {{- end }}
+    {{- if $group.gpus }}
+    {{-   $_ := set $nodeLabels "gpu" "on" }}
+    {{- end }}
     {{- $autoscalerLabels := list }}
-    {{- range $k, $v := merge (dict) $labelsAndTaints.capi $labelsAndTaints.kubelet }}
+    {{- range $k, $v := $nodeLabels }}
     {{-   $autoscalerLabels = append $autoscalerLabels (printf "%s=%s" $k $v) }}
     {{- end }}
     {{- if $autoscalerLabels }}
@@ -1028,6 +1036,15 @@ metadata:
     {{- end }}
     {{- if $autoscalerTaints }}
     capacity.cluster-autoscaler.kubernetes.io/taints: {{ join "," $autoscalerTaints | quote }}
+    {{- end }}
+    {{- if $group.gpus }}
+    {{- /* gpu-type is the resource name the template node offers. Inside the
+           tenant the device plugin, the GPU operator's or HAMi's, serves every
+           attached GPU as nvidia.com/gpu, whatever host device the pool names.
+           The count is of physical GPUs: HAMi splits each into several, so with
+           HAMi a pool scaled to zero is planned for fewer GPUs than it serves. */}}
+    capacity.cluster-autoscaler.kubernetes.io/gpu-type: nvidia.com/gpu
+    capacity.cluster-autoscaler.kubernetes.io/gpu-count: {{ len $group.gpus | quote }}
     {{- end }}
 spec:
   clusterName: {{ $clusterName }}
