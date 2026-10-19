@@ -517,7 +517,7 @@ done
 for path in packages/core/talos/values.yaml packages/core/installer/values.yaml packages/apps/kubernetes/values.yaml; do
   git diff $PREV..$NEW -- "$path" | head -40
 done
-git diff --name-only $PREV..$NEW -- 'images/*/Dockerfile'
+git diff --name-only $PREV..$NEW -- '*Dockerfile' '*Containerfile'
 
 # C. Every cited #NNNN exists and is a merged PR (not an issue)
 grep -oE '#[0-9]+' docs/changelogs/$NEW.md | sort -u | sed 's/#//' | xargs -P 20 -I{} sh -c '
