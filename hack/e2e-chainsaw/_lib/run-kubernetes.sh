@@ -5230,9 +5230,10 @@ _cozy_guard_kubectl() {
 cozy_guard_helmrelease() {
   local _ns="$1"
   local _hr="$2"
-  # Non-empty on a release whose install strategy the cluster is known to set,
-  # which is the parent Application HelmRelease and nothing else here. See the
-  # branch that reads it for why the check cannot be applied to the addons.
+  # Non-empty on a release whose install strategy the cluster is known to set:
+  # the parent Application HelmRelease and the worker pool release, which is an
+  # Application HelmRelease too. See the branch that reads it for why the check
+  # cannot be applied to the addons.
   local _strategy_required="${3:-}"
   local _probe _strategy _history _ready _read_rc
   _cozy_guard_read_bounds
@@ -5437,16 +5438,32 @@ cozy_guard_addon_helmreleases() {
 # keeps the parent's own verdict, which an early return past the addons would
 # drop.
 #
+# The worker pool release of parent kubernetes-<test>. The pool is a
+# KubernetesNodes named <test>-md0 (see the apply in the run), and the
+# aggregated apiserver names its HelmRelease kubernetes-nodes-<test>-md0. That
+# name does not start with the addon prefix kubernetes-<test>-, so the addon
+# listing never selects it, and it is read on its own. Derived from the parent
+# rather than passed in, for the same reason as the addon prefix below.
+cozy_pool_helmrelease_name() {
+  local _parent="$1"
+  printf 'kubernetes-nodes-%s-md0\n' "${_parent#kubernetes-}"
+}
+
 # The addon prefix is derived here rather than passed in, so the parent name and
 # the prefix that selects its children cannot drift apart.
 cozy_guard_all_helmreleases() {
   local _ns="$1"
   local _parent="$2"
   local _failed=0
-  # The parent is asked to prove its install strategy read back non-empty; the
-  # addons are not, because most of them legitimately set none. See the branch
-  # in cozy_guard_helmrelease that reads this argument.
+  # The parent and the pool release are asked to prove their install strategy
+  # read back non-empty: both are Application HelmReleases, which the apiserver
+  # stamps. The addons are not, because most of them legitimately set none. See
+  # the branch in cozy_guard_helmrelease that reads this argument.
   cozy_guard_helmrelease "$_ns" "${_parent}" required || _failed=1
+  # The pool release sits on the node-join path, through the talos-reconcile
+  # Job it renders, so a failed action on it is as much a finding as one on the
+  # parent. By the time this runs the pool has scaled, so the release exists.
+  cozy_guard_helmrelease "$_ns" "$(cozy_pool_helmrelease_name "${_parent}")" required || _failed=1
   cozy_guard_addon_helmreleases "$_ns" "${_parent}-" || _failed=1
   # These releases are now classified, and the same flag the failure-path report
   # uses records it. The two are not alternatives: this call runs before the
@@ -5515,7 +5532,7 @@ cozy_report_helmrelease_remediation() {
   local _ns="$1"
   local _parent="$2"
   local _label="${3:-}"
-  local _addon_hrs _hr _deadline _budget
+  local _addon_hrs _hr _pool _deadline _budget
   [ "${_COZY_GUARD_REPORT_DONE}" -eq 0 ] || return 0
   # An empty parent name means the run failed before the release was created, so
   # there is no history anywhere to read yet.
@@ -5541,6 +5558,16 @@ cozy_report_helmrelease_remediation() {
   cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_parent}" || return 0
   echo "=== ${_label}tenant HelmRelease remediation footprint (management cluster, ns ${_ns}) — classification only, this does not decide the run ==="
   cozy_guard_helmrelease "$_ns" "${_parent}" required || true
+  # The pool release is created by a later apply than the parent, so a run that
+  # failed between the two has none to read. Its absence is then a fact about
+  # where the run stopped, not a failed read, and is reported as such.
+  _pool=$(cozy_pool_helmrelease_name "${_parent}")
+  cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_pool}" || return 0
+  if _cozy_guard_kubectl get hr -n "$_ns" "${_pool}" -o name >/dev/null 2>&1; then
+    cozy_guard_helmrelease "$_ns" "${_pool}" required || true
+  else
+    echo "» ${_pool} does not exist - the run ended before the worker pool was applied, or its HelmRelease was never created; nothing to read"
+  fi
   cozy_diag_phase_has_time "the addon HelmRelease listing of ${_parent}" || return 0
   if [ "$(date +%s)" -ge "${_deadline}" ]; then
     echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; the addon releases of ${_parent} were not listed, so nothing was observed about any of them ===" >&2
