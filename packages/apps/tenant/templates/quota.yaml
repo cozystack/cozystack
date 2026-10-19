@@ -7,6 +7,20 @@ metadata:
 spec:
   hard:
     {{- include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | nindent 6 }}
+{{- /* The LimitRange only exists so pods without requests or limits still pass
+       a quota that tracks cpu, memory or ephemeral-storage. Under a quota on
+       anything else it would still hand every container a 128Mi memory limit,
+       which refuses any pod that requests more without a limit of its own,
+       virt-launcher included. */}}
+{{- $hard := include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | fromYaml }}
+{{- $computeKeys := list "requests.cpu" "limits.cpu" "requests.memory" "limits.memory" "requests.ephemeral-storage" "limits.ephemeral-storage" }}
+{{- $boundsCompute := false }}
+{{- range $key, $_ := $hard }}
+{{-   if has $key $computeKeys }}
+{{-     $boundsCompute = true }}
+{{-   end }}
+{{- end }}
+{{- if $boundsCompute }}
 ---
 apiVersion: v1
 kind: LimitRange
@@ -24,4 +38,5 @@ spec:
         memory: "128Mi"
         ephemeral-storage: "50Mi"
       type: Container
+{{- end }}
 {{- end }}

@@ -1,0 +1,114 @@
+suite: tenant LimitRange follows a compute quota
+
+# The LimitRange defaults cpu, memory and ephemeral-storage so pods without
+# requests or limits still pass a quota that tracks them. Under a quota on
+# anything else it only gets in the way: its 128Mi default memory limit refuses
+# any container that requests more without a limit of its own, virt-launcher
+# included. Each test pins the document count, so a quota that stops rendering
+# at all reddens here too.
+templates:
+  - templates/quota.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+tests:
+  - it: renders nothing without resourceQuotas
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no LimitRange under a quota on load balancers alone
+    set:
+      resourceQuotas:
+        services.loadbalancers: "1"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+      - equal:
+          path: spec.hard["services.loadbalancers"]
+          value: "1"
+        documentIndex: 0
+
+  - it: renders no LimitRange under a quota on storage alone
+    set:
+      resourceQuotas:
+        storage: 100Gi
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+
+  - it: renders no LimitRange under a quota on GPUs alone
+    set:
+      resourceQuotas:
+        nvidia.com/gpu: "2"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+
+  - it: renders the LimitRange under a quota on cpu
+    set:
+      resourceQuotas:
+        cpu: "4"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: LimitRange
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: tenant-range-limits
+        documentIndex: 1
+
+  - it: renders the LimitRange under a quota on memory, with its defaults unchanged
+    set:
+      resourceQuotas:
+        memory: 8Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: LimitRange
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].default.memory
+          value: 128Mi
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].defaultRequest.memory
+          value: 128Mi
+        documentIndex: 1
+
+  - it: renders the LimitRange under a quota on ephemeral-storage
+    set:
+      resourceQuotas:
+        ephemeral-storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: LimitRange
+        documentIndex: 1
+
+  - it: renders the LimitRange when memory sits beside other quota keys
+    set:
+      resourceQuotas:
+        services.loadbalancers: "1"
+        memory: 8Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: LimitRange
+        documentIndex: 1
