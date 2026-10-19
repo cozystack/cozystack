@@ -167,3 +167,18 @@ assert_agreement() {
   fi
   rm -rf "$TMP"
 }
+
+@test "user namespace opt-in changes the bootstrap reference and zero restores it" {
+  TMP=$(mktemp -d)
+  render_pool "$TMP/plain.yaml"
+  render_pool "$TMP/r.yaml" --set talos.userNamespacesLimit=11255
+  assert_agreement "$TMP" "user namespaces"
+  plain=$(md_config_ref_name "$TMP/plain.yaml")
+  enabled=$(md_config_ref_name "$TMP/r.yaml")
+  [ "$plain" != "$enabled" ]
+  render_pool "$TMP/r.yaml" --set talos.userNamespacesLimit=0
+  assert_agreement "$TMP" "user namespaces disabled"
+  disabled=$(md_config_ref_name "$TMP/r.yaml")
+  [ "$plain" = "$disabled" ]
+  rm -rf "$TMP"
+}
