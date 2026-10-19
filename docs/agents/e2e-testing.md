@@ -2,7 +2,7 @@
 
 Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-chainsaw/`, the bootstrap/OpenAPI BATS (`hack/e2e-*.bats`), `hack/*.sh` test helpers, either E2E CI workflow (`.github/workflows/pull-requests.yaml` for same-repo pull requests, `.github/workflows/e2e-fork.yaml` for forks), or `packages/core/testing/`. §10 covers how the two split the work and which invariants hold them together.
 
-The app suite is **Kyverno Chainsaw** (`hack/e2e-chainsaw/`, one directory per app, each with a `chainsaw-test.yaml`; §7 lists the other layouts Chainsaw accepts). Cluster bootstrap (`hack/e2e-install-cozystack.bats`, `hack/e2e-prepare-cluster.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
+The app suite is **Kyverno Chainsaw** (`hack/e2e-chainsaw/`, one directory per app, usually with a `chainsaw-test.yaml`; the README there describes the layouts a suite can take, and §7 how they are selected). Cluster bootstrap (`hack/e2e-install-cozystack.bats`, `hack/e2e-prepare-cluster.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
 ## The core principle
 

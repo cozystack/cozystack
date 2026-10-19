@@ -175,9 +175,30 @@ lg_allowlisted() {
     awk -v s="$1" '$1 !~ /^#/ && $1 == s { print $2; exit }' "$2"
 }
 
+# lg_suite_has_test ROOT SUITE — true when ROOT/SUITE is a directory in or
+# below which Chainsaw would find a Test: a chainsaw-test.yaml, a
+# chainsaw-test.yml, or a numbered step file such as 01-install.yaml. This is
+# the rule hack/select-e2e.sh enumerates the suites with (the find and sed that
+# build all_apps there), spelled the same way on purpose: a layout one side
+# accepts and the other refuses would run a suite the selector never selects,
+# or make a suite that runs impossible to allowlist. Change both together. A
+# parked chainsaw-test.yaml.disabled matches none of the names.
+lg_suite_has_test() {
+    local root=$1 suite=$2 path
+    [ -d "$root/$suite" ] || return 1
+    while IFS= read -r path; do
+        case ${path##*/} in
+            chainsaw-test.yaml|chainsaw-test.yml) return 0 ;;
+        esac
+        [[ ${path##*/} =~ ^[0-9]+-[^/]*\.ya?ml$ ]] && return 0
+    done < <(find "$root/$suite" -mindepth 1 ! -type d \( -name chainsaw-test.yaml -o -name chainsaw-test.yml -o -name '[0-9]*-*.yaml' -o -name '[0-9]*-*.yml' \) 2>/dev/null)
+    return 1
+}
+
 # lg_allowlist_validate ALLOWLIST ROOT — every entry must name an existing suite
 # directory under ROOT and carry an issue ref, so a renamed or removed suite
-# cannot keep an exemption nobody reads.
+# cannot keep an exemption nobody reads. A suite directory is one Chainsaw
+# would find a Test in, whatever its layout (lg_suite_has_test).
 lg_allowlist_validate() {
     local list=$1 root=$2 bad=0 suite ref rest
     # `|| [ -n "$suite" ]` keeps a last line with no newline, which `read`
@@ -189,8 +210,8 @@ lg_allowlist_validate() {
             echo "leak-guard: allowlist line for '$suite' must be '<suite-dir> <issue-ref>'" >&2
             bad=1
         fi
-        if [ ! -f "$root/$suite/chainsaw-test.yaml" ] && [ ! -f "$root/$suite/chainsaw-test.yml" ]; then
-            echo "leak-guard: allowlist names '$suite', which is not a suite directory under $root" >&2
+        if ! lg_suite_has_test "$root" "$suite"; then
+            echo "leak-guard: allowlist names '$suite', which is not a suite directory under $root (no chainsaw-test.yaml, chainsaw-test.yml or numbered step file in or below it)" >&2
             bad=1
         fi
     done <"$list"
