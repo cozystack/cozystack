@@ -42,6 +42,10 @@
 {{- define "kubernetes.talosConfigTemplateSpec" -}}
 {{- $root := .root }}
 {{- $group := .group }}
+{{- $userNamespacesLimit := $root.Values.talos.userNamespacesLimit | default 0 | int }}
+{{- if lt $userNamespacesLimit 0 }}
+{{- fail (printf "talos.userNamespacesLimit must be zero or a positive value, got %d" $userNamespacesLimit) }}
+{{- end }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $root | trim }}
 {{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
@@ -140,6 +144,10 @@ spec:
         machine:
           type: worker
           token: ${TALOS_TOKEN}
+          {{- if gt $userNamespacesLimit 0 }}
+          sysctls:
+            user.max_user_namespaces: "{{ $userNamespacesLimit }}"
+          {{- end }}
           network:
             # Management CoreDNS as the worker's host
             # resolver, plus management cluster search
