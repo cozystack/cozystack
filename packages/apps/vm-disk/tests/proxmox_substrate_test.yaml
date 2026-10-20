@@ -151,3 +151,34 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "substrate must be \"kubevirt\" or \"proxmox\""
+  - it: refuses substrate proxmox when the disk already is a DataVolume
+    template: templates/proxmox-volume.yaml
+    capabilities:
+      apiVersions:
+        - cdi.kubevirt.io/v1beta1/DataVolume
+    kubernetesProvider:
+      scheme:
+        "v1/ConfigMap":
+          gvr: {group: "", version: v1, resource: configmaps}
+          namespaced: true
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-data
+            namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "already exists as a DataVolume"
+  - it: skips the DataVolume guard on a cluster without CDI
+    # Proxmox-only platform: the CDI API is not served, and a lookup of it
+    # would fail the render rather than return nothing.
+    template: templates/proxmox-volume.yaml
+    capabilities:
+      apiVersions: []
+    asserts:
+      - isKind:
+          of: VirtualMachineVolume

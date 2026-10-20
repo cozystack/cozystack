@@ -292,3 +292,14 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "Specified disk not exists in cluster: missing"
+  - it: derives the SMBIOS UUID from namespace, name and seed without touching the KubeVirt API
+    # A Proxmox-only platform serves no kubevirt.io API, and a lookup of an
+    # unserved kind fails the render; the UUID must come from the hash alone.
+    template: templates/proxmox-vm.yaml
+    capabilities:
+      apiVersions: []
+    documentIndex: 2
+    asserts:
+      - matchRegex:
+          path: spec.vmSpec.smbiosUUID
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-9[0-9a-f]{3}-[0-9a-f]{12}$"

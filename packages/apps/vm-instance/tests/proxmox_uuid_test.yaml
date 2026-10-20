@@ -1,0 +1,92 @@
+suite: vm-instance on proxmox keeps the SMBIOS UUID of the existing machine
+# Dropping cloudInitSeed must not re-run cloud-init: with no seed the UUID
+# the kubemox machine already carries wins over the hash. Mirrors the
+# KubeVirt helper, reading the kubemox object instead.
+release:
+  name: vm-instance-web
+  namespace: tenant-test
+templates:
+  - templates/proxmox-vm.yaml
+set:
+  substrate: proxmox
+  fullnameOverride: vm-instance-web
+  disks:
+    - name: web-system
+  networks:
+    - name: lan
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+capabilities:
+  apiVersions:
+    - proxmox.alperen.cloud/v1alpha1/VirtualMachine
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr: {group: "", version: v1, resource: configmaps}
+      namespaced: true
+    "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume":
+      gvr: {group: proxmox.alperen.cloud, version: v1alpha1, resource: virtualmachinevolumes}
+      namespaced: true
+    "proxmox.alperen.cloud/v1alpha1/VirtualMachine":
+      gvr: {group: proxmox.alperen.cloud, version: v1alpha1, resource: virtualmachines}
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        allowedNodes: |
+          - pve1
+        networks: |
+          lan:
+            bridge: vmbr0
+            ipPool: lan-pool
+        profiles: |
+          ubuntu:
+            ostype: l26
+            bios: seabios
+            machine: q35
+            scsiController: virtio-scsi-single
+        instancetypes: |
+          u1.medium:
+            cores: 1
+            memoryMiB: 4096
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-disk-web-system
+        namespace: tenant-test
+      spec:
+        nodeName: pve1
+        storage: local-zfs
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachine
+      metadata:
+        name: vm-instance-web
+        namespace: tenant-test
+      spec:
+        vmSpec:
+          smbiosUUID: 11111111-2222-4333-9444-555555555555
+tests:
+  - it: keeps the existing UUID with no seed
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.vmSpec.smbiosUUID
+          value: 11111111-2222-4333-9444-555555555555
+  - it: takes the hash once a seed is set
+    set:
+      cloudInitSeed: rerun-1
+    documentIndex: 1
+    asserts:
+      - notEqual:
+          path: spec.vmSpec.smbiosUUID
+          value: 11111111-2222-4333-9444-555555555555
+      - matchRegex:
+          path: spec.vmSpec.smbiosUUID
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-9[0-9a-f]{3}-[0-9a-f]{12}$"

@@ -126,7 +126,7 @@ spec:
     socket: {{ $sizing.sockets }}
     memory: {{ $sizing.memoryMiB }}
     guestAgent: true
-    smbiosUUID: {{ include "virtual-machine.stableUuid" . | quote }}
+    smbiosUUID: {{ include "virtual-machine.proxmoxStableUuid" . | quote }}
     firmware:
       bios: {{ $bios }}
       machine: {{ $profile.machine | default "q35" }}

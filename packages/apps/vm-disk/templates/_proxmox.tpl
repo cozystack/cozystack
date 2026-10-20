@@ -6,8 +6,11 @@
   is dashboard-only, which is why this reads the live object of the other
   substrate and refuses when it exists.
 
+  Each lookup is gated on its API being served: a lookup of a kind the
+  cluster does not know fails the render instead of returning nothing, and a
+  Proxmox-only cluster has no CDI just as a KubeVirt-only one has no kubemox.
   Inert offline, like the other lookup guards in this chart: with no apiserver
-  the lookups are empty and the render proceeds, so `helm template` and the
+  the gates are closed and the render proceeds, so `helm template` and the
   unit tests are unaffected and a first install has nothing to compare against.
 */}}
 {{- define "vm-disk.substrate" -}}
@@ -16,11 +19,11 @@
 {{- fail (printf "substrate must be \"kubevirt\" or \"proxmox\", got %q" $substrate) -}}
 {{- end -}}
 {{- if eq $substrate "proxmox" -}}
-{{- if lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace .Release.Name -}}
+{{- if and (.Capabilities.APIVersions.Has "cdi.kubevirt.io/v1beta1/DataVolume") (lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace .Release.Name) -}}
 {{- fail (printf "vm-disk: %s already exists as a DataVolume (substrate kubevirt) and substrate is now \"proxmox\". A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name) -}}
 {{- end -}}
 {{- else -}}
-{{- if lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace .Release.Name -}}
+{{- if and (.Capabilities.APIVersions.Has "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume") (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace .Release.Name) -}}
 {{- fail (printf "vm-disk: %s already exists as a VirtualMachineVolume (substrate proxmox) and substrate is now %q. A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name $substrate) -}}
 {{- end -}}
 {{- end -}}
