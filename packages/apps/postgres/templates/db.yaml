@@ -272,6 +272,10 @@ spec:
     because CNPG rejects a second one, and a restored Cluster keeps its recovery
     block. Changing bootstrap on an existing Cluster is accepted, and the
     remaining fields come from the live object or CNPG's defaults (app/app).
+    A release turning bootstrap.enabled off still drops recovery.source and
+    recoveryTarget: they are read only at bootstrap, and CNPG's webhook
+    rejects a source once its externalClusters entry, rendered only with
+    bootstrap.enabled, is gone.
   */}}
   {{- $live := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Release.Name }}
   {{- $liveBootstrap := dig "spec" "bootstrap" dict ($live | default dict) }}
