@@ -35,10 +35,10 @@ type Config struct {
 	// RawNamesAllowed.
 	RawResourceNames RawNamesPolicy
 
-	// LostCapacityGrace is how long a device stays missing or unhealthy, or
-	// a node NotReady, before the node has lost capacity. kubelet reports
-	// zero allocatable after every restart, so it must outlast a plugin
-	// re-registration.
+	// LostCapacityGrace is how long a node may serve fewer units of a
+	// resource than its devices hold, or stay NotReady, before it has lost
+	// capacity. kubelet reports zero allocatable after every restart, so it
+	// must outlast a plugin re-registration.
 	LostCapacityGrace time.Duration
 
 	// AttachmentGrace is how long an attachment the VMI webhook recorded
