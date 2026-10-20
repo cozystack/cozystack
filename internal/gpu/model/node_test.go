@@ -94,6 +94,14 @@ func TestEligible(t *testing.T) {
 		// the field and the condition already decide.
 		{name: "node.kubernetes.io/unschedulable taint on a schedulable node", node: readyNode(withTaint(corev1.TaintNodeUnschedulable, corev1.TaintEffectNoSchedule)), want: true},
 		{name: "node.kubernetes.io/not-ready taint on a ready node", node: readyNode(withTaint(corev1.TaintNodeNotReady, corev1.TaintEffectNoExecute)), want: true},
+		{
+			name: "Gt toleration does not count",
+			node: readyNode(func(n *corev1.Node) {
+				n.Spec.Taints = []corev1.Taint{{Key: "example.com/gpu-gen", Value: "5", Effect: corev1.TaintEffectNoSchedule}}
+			}),
+			tolerations: []corev1.Toleration{{Key: "example.com/gpu-gen", Operator: corev1.TolerationOpGt, Value: "3", Effect: corev1.TaintEffectNoSchedule}},
+			want:        false,
+		},
 		{name: "toleration of another effect", node: readyNode(withTaint(farTaint, corev1.TaintEffectNoExecute)), tolerations: []corev1.Toleration{{Key: farTaint, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}}, want: false},
 	}
 	for _, tc := range tests {

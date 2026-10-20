@@ -111,6 +111,18 @@ func TestPodFrom(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "init container before a sidecar does not run beside it",
+			pod: corev1.Pod{Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{
+					gpuContainer(corev1.ResourceList{h100Name: two}, nil),
+					sidecar(corev1.ResourceList{h100Name: one}),
+				},
+				Containers: []corev1.Container{gpuContainer(corev1.ResourceList{h100Name: one}, nil)},
+			}},
+			want:   map[corev1.ResourceName]int64{h100Name: 2},
+			wantOK: true,
+		},
+		{
 			name: "finished pod holds nothing",
 			pod: corev1.Pod{
 				Spec:   corev1.PodSpec{Containers: []corev1.Container{gpuContainer(corev1.ResourceList{h100Name: two}, nil)}},

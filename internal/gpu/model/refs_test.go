@@ -101,7 +101,8 @@ func TestTemplateDeviceName(t *testing.T) {
 	if TemplateDeviceName(long, 0) == TemplateDeviceName(other, 0) {
 		t.Error("two long VMI names sharing a prefix map to one device")
 	}
-	if TemplateDeviceName(long, 0) != TemplateDeviceName(long, 0) {
-		t.Error("TemplateDeviceName is not deterministic")
+	// sha256 of long starts with a2a436117d; the cut keeps 236 characters.
+	if got, want := TemplateDeviceName(long, 0), strings.Repeat("a", 120)+"."+strings.Repeat("b", 115)+"-a2a436117d-gpu-0"; got != want {
+		t.Errorf("TemplateDeviceName(long, 0) = %q, want %q", got, want)
 	}
 }
