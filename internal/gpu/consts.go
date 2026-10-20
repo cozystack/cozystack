@@ -31,8 +31,10 @@ const (
 	// to a VMI, so a reinvocation recognises its own entries.
 	VMIGPUNamePrefix = "gpudev-"
 
-	// LabelTemplateDevice marks a GPUDevice the webhook created from a
-	// deviceTemplate entry. Its value is the VMI name. Tenants cannot set it.
+	// LabelTemplateDevice, valued LabelValueTrue, marks a GPUDevice the
+	// webhook created from a deviceTemplate entry. Tenants cannot set it. The
+	// VMI is found through model.TemplateDeviceName, not the label, since a
+	// VMI name can exceed a label value's 63 characters.
 	LabelTemplateDevice = Group + "/template-device"
 
 	// LabelUsageMonitor is the reserved selector key of the controller-owned

@@ -22,8 +22,8 @@ import (
 	"github.com/cozystack/cozystack/internal/gpu"
 )
 
-// Setup is wired into cozystack-controller before any reconciler exists:
-// it must succeed and touch nothing, so it accepts a nil manager.
+// Setup may be called before any reconciler exists: it must succeed and
+// touch nothing, so it accepts a nil manager.
 func TestSetupWithoutReconcilersIsANoOp(t *testing.T) {
 	if err := Setup(nil, gpu.Config{Enabled: true}); err != nil {
 		t.Fatalf("Setup: %v", err)

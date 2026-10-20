@@ -18,7 +18,10 @@ package model
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func TestParseDeviceRefs(t *testing.T) {
@@ -41,6 +44,7 @@ func TestParseDeviceRefs(t *testing.T) {
 		{name: "template without class", in: `[{"deviceTemplate":{"count":1}}]`, wantErr: true},
 		{name: "unknown field", in: `[{"name":"nvidia.com/gpu"}]`, wantErr: true},
 		{name: "same device twice", in: `[{"device":"a"},{"device":"a"}]`, wantErr: true},
+		{name: "data after the list", in: `[{"device":"a"}] x`, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,5 +74,24 @@ func TestFormatDeviceRefsRoundTrip(t *testing.T) {
 func TestTemplateDeviceName(t *testing.T) {
 	if got := TemplateDeviceName("vm-instance-trainer", 1); got != "vm-instance-trainer-gpu-1" {
 		t.Errorf("TemplateDeviceName = %q", got)
+	}
+	// Worker VMIs are named after Cluster API machines and can reach the
+	// 253 characters of a DNS subdomain.
+	long := strings.Repeat("a", 120) + "." + strings.Repeat("b", 132)
+	other := strings.Repeat("a", 120) + "." + strings.Repeat("b", 131) + "c"
+	for _, vmi := range []string{long, other, strings.Repeat("x", 245) + "-" + "yyyyyyy"} {
+		got := TemplateDeviceName(vmi, 12)
+		if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
+			t.Errorf("TemplateDeviceName(%d chars) = %q: %v", len(vmi), got, errs)
+		}
+		if !strings.HasSuffix(got, "-gpu-12") {
+			t.Errorf("TemplateDeviceName lost the index: %q", got)
+		}
+	}
+	if TemplateDeviceName(long, 0) == TemplateDeviceName(other, 0) {
+		t.Error("two long VMI names sharing a prefix map to one device")
+	}
+	if TemplateDeviceName(long, 0) != TemplateDeviceName(long, 0) {
+		t.Error("TemplateDeviceName is not deterministic")
 	}
 }

@@ -22,8 +22,8 @@ import (
 	"github.com/cozystack/cozystack/internal/gpu"
 )
 
-// Register is wired into cozystack-controller before any webhook exists:
-// it must succeed and touch nothing, so it accepts a nil manager.
+// Register may be called before any webhook exists: it must succeed and
+// touch nothing, so it accepts a nil manager.
 func TestRegisterWithoutWebhooksIsANoOp(t *testing.T) {
 	if err := Register(nil, gpu.Config{Enabled: true}); err != nil {
 		t.Fatalf("Register: %v", err)

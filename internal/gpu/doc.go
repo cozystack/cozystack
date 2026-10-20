@@ -38,6 +38,10 @@ limitations under the License.
 //     with a Result, and admits the VMI only if all of them are Succeeded
 //     and share one node.
 //
+// model.Snapshot.CheckOrder judges one order. To judge a set, such as a
+// VMI's template devices, add each admitted device to the snapshot as Bound
+// before checking the next.
+//
 // The binder, for a request whose devices all carry the same ID, either
 // places the whole set on one eligible node with room for all of it, moving
 // or binding devices as needed, and writes Result Succeeded on each; or

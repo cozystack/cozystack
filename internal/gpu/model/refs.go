@@ -18,10 +18,15 @@ package model
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // DeviceRef is one entry of the gpu.AnnotationDevices list on a VMI:
@@ -46,6 +51,9 @@ func ParseDeviceRefs(s string) ([]DeviceRef, error) {
 	var refs []DeviceRef
 	if err := dec.Decode(&refs); err != nil {
 		return nil, fmt.Errorf("parse device references: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("parse device references: data after the list")
 	}
 	if len(refs) == 0 {
 		return nil, errors.New("device references: empty list")
@@ -80,7 +88,15 @@ func FormatDeviceRefs(refs []DeviceRef) (string, error) {
 
 // TemplateDeviceName names the GPUDevice created for the deviceTemplate
 // entry at index of a VMI's references, so a repeated admission or a
-// recreated VMI finds the same device.
+// recreated VMI finds the same device. A VMI name too long to take the
+// suffix is shortened and made unique by a hash of the full name.
 func TemplateDeviceName(vmi string, index int) string {
-	return vmi + "-gpu-" + strconv.Itoa(index)
+	suffix := "-gpu-" + strconv.Itoa(index)
+	if len(vmi)+len(suffix) <= validation.DNS1123SubdomainMaxLength {
+		return vmi + suffix
+	}
+	sum := sha256.Sum256([]byte(vmi))
+	hash := hex.EncodeToString(sum[:])[:10]
+	keep := validation.DNS1123SubdomainMaxLength - len(suffix) - len(hash) - 1
+	return strings.TrimRight(vmi[:keep], "-.") + "-" + hash + suffix
 }

@@ -31,6 +31,8 @@ type Config struct {
 	// set adds class and agent-reported names (model.ResourceNames).
 	ResourceNames []string
 
+	// RawResourceNames is the hoster's gpu.rawResourceNames; empty means
+	// RawNamesAllowed.
 	RawResourceNames RawNamesPolicy
 
 	// LostCapacityGrace is how long a device stays missing or unhealthy, or
