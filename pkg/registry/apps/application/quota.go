@@ -32,6 +32,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/cozystack/cozystack/internal/gpu/model"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 )
@@ -59,6 +60,12 @@ type tenantValues struct {
 // `cozy-lib.resources.flatten` expansion into limits.*/requests.* is a
 // downstream rendering concern of the tenant chart and is intentionally not
 // applied here.
+//
+// GPU budget keys (gpu.cozystack.io/*) are dropped: they cap the declaring
+// tenant's whole subtree on their own rule, which the GPUDevice admission and
+// the binder enforce rather than this gate, so they neither make a tenant
+// bounded nor take part in the carve-out arithmetic, and a child's key may
+// overlap its siblings'.
 func parseDeclaredQuotas(raw []byte) (map[string]resource.Quantity, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -66,6 +73,11 @@ func parseDeclaredQuotas(raw []byte) (map[string]resource.Quantity, error) {
 	var values tenantValues
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, fmt.Errorf("decode tenant values: %w", err)
+	}
+	for k := range values.ResourceQuotas {
+		if model.IsGPUQuotaKey(corev1.ResourceName(k)) {
+			delete(values.ResourceQuotas, k)
+		}
 	}
 	return values.ResourceQuotas, nil
 }
