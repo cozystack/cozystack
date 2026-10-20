@@ -399,3 +399,45 @@ func TestParentTenantHelmReleaseRef(t *testing.T) {
 		})
 	}
 }
+
+// GPU budget keys cap a tenant's whole subtree on their own rule, so they take
+// no part in the declaration gate or in deciding whether a tenant is bounded.
+func TestValidateTenantResourceQuotas_GPUKeys(t *testing.T) {
+	const total = "gpu.cozystack.io/total"
+	const class = "gpu.cozystack.io/l40s"
+
+	t.Run("a GPU-only child is allowed whatever its parent and siblings declare", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10", total: "4", class: "2"})
+		sibling := tenantHelmRelease(t, "baz", "tenant-foo", map[string]string{total: "4", class: "2"})
+		r := newTenantREST(t, parent, sibling)
+
+		app := childApplication(t, "bar", "tenant-foo", map[string]string{total: "8", class: "3"})
+		if errs := r.validateTenantResourceQuotas(context.Background(), app); len(errs) > 0 {
+			t.Fatalf("GPU keys must not be checked against parent or siblings, got: %v", errs)
+		}
+	})
+
+	t.Run("a child with cpu and GPU keys is checked for cpu only", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10", total: "2"})
+		r := newTenantREST(t, parent)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "4", total: "5"})); len(errs) > 0 {
+			t.Fatalf("cpu within budget must be allowed whatever the GPU keys, got: %v", errs)
+		}
+		errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "11", total: "1"}))
+		if len(errs) != 1 || errs[0].Field != "spec.resourceQuotas[cpu]" {
+			t.Fatalf("want exactly the cpu key refused, got: %v", errs)
+		}
+	})
+
+	t.Run("a GPU-only sibling shares the parent pool", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+		sibling := tenantHelmRelease(t, "baz", "tenant-foo", map[string]string{total: "1"})
+		siblingUsed := usageQuota(t, "tenant-foo-baz", "compute", map[string]string{"limits.cpu": "8"})
+		r := newTenantREST(t, parent, sibling, siblingUsed)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "5"})); len(errs) == 0 {
+			t.Fatalf("usage of a GPU-only sibling must count against the parent pool")
+		}
+	})
+}
