@@ -1,0 +1,115 @@
+suite: bundles.iaas vmDefaultImages → vm-default-images wiring
+# The golden image collection is opt-in and, by default, the kubevirt variant
+# with no components block. vmDefaultImages.substrate: proxmox switches the
+# Package to the proxmox variant, which needs cozystack.proxmox-vm, and the
+# map is forwarded as the component's values so an operator can replace the
+# images list with entries that name a Proxmox volume.
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits the default variant without a components block when the key is unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+  - it: switches to the proxmox variant and forwards the values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+          - cozystack.proxmox-vm
+      vmDefaultImages:
+        substrate: proxmox
+        images:
+          - name: ubuntu-24.04
+            storage: 20Gi
+            proxmox:
+              volume: local-zfs:base-9001-disk-0
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variant
+          value: proxmox
+      - equal:
+          path: spec.components.vm-default-images.values.images[0].proxmox.volume
+          value: local-zfs:base-9001-disk-0
+  - it: keeps the default variant for a kubevirt override of the images
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+      vmDefaultImages:
+        storageClass: local
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+      - equal:
+          path: spec.components.vm-default-images.values.storageClass
+          value: local
+  - it: refuses the proxmox variant without the proxmox-vm package
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+      vmDefaultImages:
+        substrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: "vmDefaultImages.substrate is proxmox, so cozystack.vm-default-images needs cozystack.proxmox-vm"
+  - it: does not emit the package when the values are set but the package is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.proxmox-vm
+      vmDefaultImages:
+        substrate: proxmox
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vm-default-images
+          any: true
+        not: true
