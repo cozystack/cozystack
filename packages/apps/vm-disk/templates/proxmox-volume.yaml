@@ -1,0 +1,63 @@
+{{- if eq (include "vm-disk.substrate" .) "proxmox" }}
+{{- $catalog := include "vm-disk.proxmoxCatalog" . | fromJson }}
+{{- $node := .Values.proxmox.node | default $catalog.defaultNode }}
+{{- if not $node }}
+{{-   fail "proxmox.node is empty and the platform's catalog has no defaultNode" }}
+{{- end }}
+{{- $allowed := $catalog.allowedNodes | default list }}
+{{- if and .Values.proxmox.node (ne .Values.proxmox.node $catalog.defaultNode) (not (has .Values.proxmox.node $allowed)) }}
+{{-   fail (printf "proxmox.node %q is not one of the nodes the platform allows (%s)" .Values.proxmox.node (join ", " (append $allowed $catalog.defaultNode))) }}
+{{- end }}
+{{- $classes := $catalog.storageClasses | default dict }}
+{{- $class := index $classes (.Values.storageClass | toString) }}
+{{- if not $class }}
+{{-   fail (printf "storageClass %q is not in the platform's Proxmox catalog (known: %s). On this substrate a storage class is an entry the platform maps to a Proxmox storage, not a Kubernetes StorageClass." (.Values.storageClass | toString) (join ", " (keys $classes | sortAlpha))) }}
+{{- end }}
+{{- /* Exactly one source, the same rule as the DataVolume side. */}}
+{{- $source := .Values.source | default dict }}
+{{- if gt (len $source) 1 }}
+{{-   fail "Exactly one type of source is expected!" }}
+{{- end }}
+{{- if .Values.optical }}
+{{-   fail "optical disks are not available on the proxmox substrate yet: an ISO on Proxmox is storage content, not a volume, and the download path that fetches it (StorageDownloadURL with the import content type) is still in review" }}
+{{- end }}
+{{- $volumeSource := dict }}
+{{- if hasKey $source "image" }}
+{{-   $name := required "A valid .Values.source.image.name entry required!" $source.image.name }}
+{{-   $images := $catalog.images | default dict }}
+{{-   $volid := index $images $name }}
+{{-   if not $volid }}
+{{-     fail (printf "image %q is not in the platform's Proxmox catalog (known: %s). On this substrate an image is a Proxmox volume the platform lists: a file on a storage with the import content type, or the disk of a template." $name (join ", " (keys $images | sortAlpha))) }}
+{{-   end }}
+{{-   $volumeSource = dict "volume" $volid }}
+{{- else if hasKey $source "disk" }}
+{{-   $volumeSource = dict "disk" (dict "name" (printf "vm-disk-%s" (required "A valid .Values.source.disk.name entry required!" $source.disk.name))) }}
+{{- else if hasKey $source "http" }}
+{{-   fail "source.http is not available on the proxmox substrate yet: the hypervisor would fetch the URL itself, which needs the platform's allow-list and the import content type on a storage; until then ask the platform to add the image to its catalog and use source.image" }}
+{{- else if hasKey $source "upload" }}
+{{-   fail "source.upload is not available on the proxmox substrate: there is no CDI upload proxy here. Put the image into a bucket and ask the platform to list it in the catalog, then use source.image." }}
+{{- else if gt (len $source) 0 }}
+{{-   fail (printf "Unknown source type: %s. Expected one of: image, disk." (keys $source | join ", ")) }}
+{{- end }}
+---
+apiVersion: proxmox.alperen.cloud/v1alpha1
+kind: VirtualMachineVolume
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    vm-disk.cozystack.io/storage-class: {{ .Values.storageClass | toString | quote }}
+spec:
+  connectionRef:
+    name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
+  nodeName: {{ $node | quote }}
+  storage: {{ $class.storage | quote }}
+  size: {{ include "vm-disk.gib" .Values.storage }}
+  {{- with $volumeSource }}
+  source:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  deletionProtection: false
+{{- end }}

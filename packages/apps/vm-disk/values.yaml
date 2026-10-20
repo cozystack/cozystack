@@ -37,3 +37,16 @@ storageClass: replicated
 
 ## @param {bool} bindImmediately - Provision the volume at disk creation instead of waiting for a consumer.
 bindImmediately: true
+
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which hypervisor holds the disk. `kubevirt` makes it a CDI DataVolume inside this cluster. `proxmox` makes it a volume on the external Proxmox VE cluster the platform's proxmox-vm package points at, kept on a per-namespace holder VM between uses, so that it outlives the VM it is attached to. A disk cannot move between substrates: the chart reads the live object and refuses to switch. On proxmox, `storageClass` names an entry of the platform's catalog rather than a Kubernetes StorageClass, `source.image.name` one of the catalog's images, and `source.http`, `source.upload` and `optical` are not available yet.
+## @immutable
+substrate: kubevirt
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
+## @field {string} [node] - Proxmox node the volume is created on. A VM can only attach disks that live on its own node. Empty takes the catalog's default node.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  node: ""

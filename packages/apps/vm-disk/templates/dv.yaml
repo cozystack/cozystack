@@ -1,3 +1,4 @@
+{{- if ne (include "vm-disk.substrate" .) "proxmox" }}
 {{- $existingDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace .Release.Name }}
 {{- $sourceAnnotation := "vm-disk.cozystack.io/source" }}
 {{- $storageClassAnnotation := "vm-disk.cozystack.io/storage-class" }}
@@ -274,3 +275,4 @@ spec:
     storageClassName: {{ . }}
     {{- end }}
   {{- end }}
+{{- end }}
