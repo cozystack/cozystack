@@ -6,7 +6,7 @@
 {{- end }}
 {{- $allowed := $catalog.allowedNodes | default list }}
 {{- if and .Values.proxmox.node (ne .Values.proxmox.node $catalog.defaultNode) (not (has .Values.proxmox.node $allowed)) }}
-{{-   fail (printf "proxmox.node %q is not one of the nodes the platform allows (%s)" .Values.proxmox.node (join ", " (append $allowed $catalog.defaultNode))) }}
+{{-   fail (printf "proxmox.node %q is not one of the nodes the platform allows (%s)" .Values.proxmox.node (join ", " (append $allowed $catalog.defaultNode | uniq))) }}
 {{- end }}
 {{- $classes := $catalog.storageClasses | default dict }}
 {{- $class := index $classes (.Values.storageClass | toString) }}
