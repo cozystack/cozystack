@@ -1,6 +1,11 @@
 global:
   target: cozy-monitoring
 
+# Scrapes the GPU binder's metrics in cozystack-controller, which serves
+# them only with GPU enabled.
+gpu:
+  enabled: false
+
 kube-state-metrics:
   # Sized from a measured 14d peak of 307Mi working set on a 3-node cluster with
   # 322 pods and roughly 25.6k series, which is the smallest cluster we run. The
