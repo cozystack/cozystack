@@ -1,0 +1,179 @@
+suite: vm-default-images on the proxmox substrate publishes cloneable volumes
+
+# With substrate proxmox every image becomes a cloneable VirtualMachineVolume
+# in cozy-public, one per node, copied from the Proxmox volume the image
+# names. The catalog ConfigMap is what the chart reads with lookup;
+# helm-unittest mocks it here.
+release:
+  name: vm-default-images
+  namespace: cozy-system
+templates:
+  - templates/proxmox-volume.yaml
+  - templates/dv.yaml
+set:
+  substrate: proxmox
+  storageClass: replicated
+  images:
+    - name: ubuntu-24.04
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      storage: 20Gi
+      os:
+        family: Linux
+        name: Ubuntu
+        version: "24.04"
+      architecture: amd64
+      description: "Ubuntu 24.04 LTS (Noble Numbat) cloud image"
+      proxmox:
+        volume: local-zfs:base-9001-disk-0
+        nodes: [pve1, pve2]
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr: {group: "", version: v1, resource: configmaps}
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        allowedNodes: |
+          - pve1
+          - pve2
+        storageClasses: |
+          replicated:
+            storage: local-zfs
+          fast:
+            storage: nvme-pool
+tests:
+  - it: publishes one cloneable volume per node, named and labelled after the image
+    template: templates/proxmox-volume.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: VirtualMachineVolume
+      - equal:
+          path: metadata.namespace
+          value: cozy-public
+      - equal:
+          path: metadata.labels["vm-default-images.cozystack.io/name"]
+          value: ubuntu-24.04
+      - equal:
+          path: spec.cloneable
+          value: true
+      - equal:
+          path: spec.source.volume
+          value: local-zfs:base-9001-disk-0
+      - equal:
+          path: spec.connectionRef.name
+          value: pve
+      - equal:
+          path: spec.storage
+          value: local-zfs
+      - equal:
+          path: spec.size
+          value: 20
+      - equal:
+          path: metadata.name
+          value: vm-default-images-ubuntu-24.04-pve1
+        documentIndex: 0
+      - equal:
+          path: spec.nodeName
+          value: pve1
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: vm-default-images-ubuntu-24.04-pve2
+        documentIndex: 1
+      - equal:
+          path: spec.nodeName
+          value: pve2
+        documentIndex: 1
+  - it: carries the image metadata as annotations like the DataVolume does
+    template: templates/proxmox-volume.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-default-images.cozystack.io/os-name"]
+          value: Ubuntu
+      - equal:
+          path: metadata.annotations["vm-default-images.cozystack.io/os-version"]
+          value: "24.04"
+      - equal:
+          path: metadata.annotations["vm-default-images.cozystack.io/architecture"]
+          value: amd64
+      - equal:
+          path: metadata.annotations["vm-default-images.cozystack.io/storage-class"]
+          value: replicated
+  - it: renders no DataVolume on the proxmox substrate
+    template: templates/dv.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: defaults the nodes to the catalog's default node and the size to 5Gi, rounding up
+    template: templates/proxmox-volume.yaml
+    set:
+      images:
+        - name: tiny
+          storage: 1500Mi
+          proxmox:
+            volume: local:import/tiny.qcow2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.nodeName
+          value: pve1
+      - equal:
+          path: spec.size
+          value: 2
+  - it: maps a per-image storageClass through the catalog
+    template: templates/proxmox-volume.yaml
+    set:
+      images:
+        - name: fastimg
+          storageClass: fast
+          proxmox:
+            volume: local:import/fast.qcow2
+    asserts:
+      - equal:
+          path: spec.storage
+          value: nvme-pool
+      - equal:
+          path: metadata.annotations["vm-default-images.cozystack.io/storage-class"]
+          value: fast
+  - it: refuses an image without a Proxmox volume to copy from
+    template: templates/proxmox-volume.yaml
+    set:
+      images:
+        - name: debian-13
+          url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+    asserts:
+      - failedTemplate:
+          errorPattern: "image \"debian-13\" has no proxmox.volume"
+  - it: refuses a storage class the catalog does not map
+    template: templates/proxmox-volume.yaml
+    set:
+      images:
+        - name: x
+          storageClass: local
+          proxmox:
+            volume: local:import/x.qcow2
+    asserts:
+      - failedTemplate:
+          errorPattern: "storageClass \"local\" is not in the platform's Proxmox catalog"
+  - it: refuses a node the platform does not allow
+    template: templates/proxmox-volume.yaml
+    set:
+      images:
+        - name: x
+          proxmox:
+            volume: local:import/x.qcow2
+            nodes: [pve9]
+    asserts:
+      - failedTemplate:
+          errorPattern: "proxmox.nodes names \"pve9\", which is not one of the nodes the platform allows"
