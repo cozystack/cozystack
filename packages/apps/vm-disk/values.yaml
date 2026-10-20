@@ -40,7 +40,7 @@ bindImmediately: true
 
 ## @section Substrate
 
-## @param {string} substrate="kubevirt" - Which hypervisor holds the disk. `kubevirt` makes it a CDI DataVolume inside this cluster. `proxmox` makes it a volume on the external Proxmox VE cluster the platform's proxmox-vm package points at, kept on a per-namespace holder VM between uses, so that it outlives the VM it is attached to. A disk cannot move between substrates: the chart reads the live object and refuses to switch. On proxmox, `storageClass` names an entry of the platform's catalog rather than a Kubernetes StorageClass, `source.image.name` one of the catalog's images, and `source.http`, `source.upload` and `optical` are not available yet.
+## @param {string} substrate="kubevirt" - Which hypervisor holds the disk. `kubevirt` makes it a CDI DataVolume inside this cluster. `proxmox` makes it a volume on the external Proxmox VE cluster the platform's proxmox-vm package points at, kept on a per-namespace holder VM between uses, so that it outlives the VM it is attached to. A disk cannot move between substrates: the chart reads the live object and refuses to switch. On proxmox, `storageClass` names an entry of the platform's catalog rather than a Kubernetes StorageClass; `source.image.name` is one of the catalog's images or an image published in cozy-public as a cloneable VirtualMachineVolume (the vm-default-images package with substrate proxmox, or a disk the platform made cloneable), which has to live on the node of this disk; `source.disk.name` copies another vm-disk of this namespace on the same node; `source.http`, `source.upload` and `optical` are not available yet.
 ## @immutable
 substrate: kubevirt
 

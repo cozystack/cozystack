@@ -1,0 +1,237 @@
+suite: vm-disk on the proxmox substrate resolves source.image
+
+# An image on this substrate is either a volume id in the catalog's `images`
+# map or a cloneable VirtualMachineVolume published in cozy-public under the
+# label vm-default-images.cozystack.io/name (what the vm-default-images
+# package renders with substrate proxmox, or a disk the platform promoted to
+# an image). These tests pin the order of the two, the per-node match, and
+# the refusals for an image nobody can copy.
+release:
+  name: vm-disk-data
+  namespace: tenant-test
+templates:
+  - templates/proxmox-volume.yaml
+set:
+  substrate: proxmox
+  storage: 20Gi
+  storageClass: replicated
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr: {group: "", version: v1, resource: configmaps}
+      namespaced: true
+    "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume":
+      gvr: {group: proxmox.alperen.cloud, version: v1alpha1, resource: virtualmachinevolumes}
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        allowedNodes: |
+          - pve1
+          - pve2
+        storageClasses: |
+          replicated:
+            storage: local-zfs
+        images: |
+          ubuntu-24.04: local:import/noble-server-cloudimg-amd64.img
+    # The package's rendering of a golden image, one object per node.
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-default-images-debian-13-pve1
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: debian-13
+      spec:
+        nodeName: pve1
+        cloneable: true
+      status:
+        phase: Ready
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-default-images-debian-13-pve2
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: debian-13
+      spec:
+        nodeName: pve2
+        cloneable: true
+      status:
+        phase: Ready
+    # A tenant's disk the platform promoted by hand: any name, the label is
+    # what counts. Published on pve2 only.
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: sourcevm-image
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: sourcevm
+      spec:
+        nodeName: pve2
+        cloneable: true
+      status:
+        phase: Ready
+    # The catalog also maps ubuntu-24.04: the catalog has to win.
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-default-images-ubuntu-24.04-pve1
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: ubuntu-24.04
+      spec:
+        nodeName: pve1
+        cloneable: true
+      status:
+        phase: Ready
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-default-images-kept-pve1
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: kept
+      spec:
+        nodeName: pve1
+        cloneable: false
+      status:
+        phase: Ready
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-default-images-broken-pve1
+        namespace: cozy-public
+        labels:
+          vm-default-images.cozystack.io/name: broken
+      spec:
+        nodeName: pve1
+        cloneable: true
+      status:
+        phase: Failed
+tests:
+  - it: copies a published image of the disk's node through source.disk
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: debian-13
+    asserts:
+      - equal:
+          path: spec.source.disk.name
+          value: vm-default-images-debian-13-pve1
+      - equal:
+          path: spec.source.disk.namespace
+          value: cozy-public
+      - notExists:
+          path: spec.source.volume
+  - it: picks the published image on the node the tenant chose
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: debian-13
+      proxmox:
+        node: pve2
+    asserts:
+      - equal:
+          path: spec.source.disk.name
+          value: vm-default-images-debian-13-pve2
+      - equal:
+          path: spec.nodeName
+          value: pve2
+  - it: finds a promoted disk by its label whatever its name
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: sourcevm
+      proxmox:
+        node: pve2
+    asserts:
+      - equal:
+          path: spec.source.disk.name
+          value: sourcevm-image
+  - it: lets the catalog win over a published image of the same name
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: ubuntu-24.04
+    asserts:
+      - equal:
+          path: spec.source.volume
+          value: local:import/noble-server-cloudimg-amd64.img
+      - notExists:
+          path: spec.source.disk
+  - it: names the nodes an image is published on when the disk is elsewhere
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: sourcevm
+    asserts:
+      - failedTemplate:
+          errorPattern: "image \"sourcevm\" is published in cozy-public on node pve2, and this disk is created on node pve1"
+  - it: refuses a published image that is not cloneable
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: kept
+    asserts:
+      - failedTemplate:
+          errorPattern: "not marked cloneable"
+  - it: refuses a published image that failed
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: broken
+    asserts:
+      - failedTemplate:
+          errorPattern: "vm-default-images-broken-pve1 in cozy-public is Failed"
+  - it: names both places an image can come from when neither has it
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    set:
+      source:
+        image:
+          name: windows
+    asserts:
+      - failedTemplate:
+          errorPattern: "image \"windows\" is not in the platform's Proxmox catalog \\(known: ubuntu-24.04\\) and no cloneable image of that name is published in cozy-public"
+  - it: skips the cozy-public lookup on a cluster that does not serve kubemox
+    # Nothing to find without the API, and no failed render either: the
+    # refusal is the plain catalog one.
+    capabilities:
+      apiVersions: []
+    set:
+      source:
+        image:
+          name: debian-13
+    asserts:
+      - failedTemplate:
+          errorPattern: "image \"debian-13\" is not in the platform's Proxmox catalog"

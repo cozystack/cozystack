@@ -24,12 +24,7 @@
 {{- $volumeSource := dict }}
 {{- if hasKey $source "image" }}
 {{-   $name := required "A valid .Values.source.image.name entry required!" $source.image.name }}
-{{-   $images := $catalog.images | default dict }}
-{{-   $volid := index $images $name }}
-{{-   if not $volid }}
-{{-     fail (printf "image %q is not in the platform's Proxmox catalog (known: %s). On this substrate an image is a Proxmox volume the platform lists: a file on a storage with the import content type, or the disk of a template." $name (join ", " (keys $images | sortAlpha))) }}
-{{-   end }}
-{{-   $volumeSource = dict "volume" $volid }}
+{{-   $volumeSource = include "vm-disk.proxmoxImageSource" (list $catalog . $name $node) | fromJson }}
 {{- else if hasKey $source "disk" }}
 {{-   $volumeSource = dict "disk" (dict "name" (printf "vm-disk-%s" (required "A valid .Values.source.disk.name entry required!" $source.disk.name))) }}
 {{- else if hasKey $source "http" }}
