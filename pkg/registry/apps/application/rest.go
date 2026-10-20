@@ -50,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
+	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
@@ -57,7 +58,6 @@ import (
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
-	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 
@@ -110,26 +110,7 @@ type REST struct {
 // errors — callers can decide whether to log-and-continue (NewREST does)
 // or fail hard (tests do).
 func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var v1js apiextv1.JSONSchemaProps
-	if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
-		return nil, fmt.Errorf("unmarshal v1 OpenAPI schema: %w", err)
-	}
-	scheme := runtime.NewScheme()
-	_ = internalapiext.AddToScheme(scheme)
-	_ = apiextv1.AddToScheme(scheme)
-	var ijs internalapiext.JSONSchemaProps
-	if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
-		return nil, fmt.Errorf("convert v1->internal JSONSchemaProps: %w", err)
-	}
-	s, err := structuralschema.NewStructural(&ijs)
-	if err != nil {
-		return nil, fmt.Errorf("build structural schema: %w", err)
-	}
-	return s, nil
+	return defaulting.BuildSchema(raw)
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
