@@ -1,0 +1,17 @@
+suite: cozystack-basics GPU policies are gated on the ValidatingAdmissionPolicy API
+templates:
+  - templates/gpu-class-policy.yaml
+  - templates/gpu-claim-tamper-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+capabilities:
+  apiVersions: []
+tests:
+  - it: renders no GPU policy when the API is unavailable
+    set:
+      gpu:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
