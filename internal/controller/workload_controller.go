@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 )
 
@@ -37,6 +38,13 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	// A GPU usage record has no monitor: its GPUClaim owns it, deletes it
+	// when the claim stops holding GPUs, and garbage collection removes it
+	// with the claim.
+	if ownedByGPUClaim(w) {
+		return ctrl.Result{}, nil
+	}
+
 	// If my monitor is gone, delete me.
 	monName, has := w.Labels["workloads.cozystack.io/monitor"]
 	if !has {
@@ -53,6 +61,15 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func ownedByGPUClaim(w *cozyv1alpha1.Workload) bool {
+	for _, ref := range w.OwnerReferences {
+		if ref.APIVersion == gpuv1alpha1.GroupVersion.String() && ref.Kind == "GPUClaim" {
+			return true
+		}
+	}
+	return false
 }
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
