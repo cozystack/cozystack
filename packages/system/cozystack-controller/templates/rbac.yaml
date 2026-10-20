@@ -67,9 +67,78 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# The GPU binder adds finalizers and places claims. The create right is for
+# the template claims made for a VMI's claimTemplate entries, which the
+# controller deletes with their VMI.
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses", "gpuclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclaims"]
+  verbs: ["create", "delete"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses/status", "gpuclaims/status", "gpunodes/status"]
+  verbs: ["get", "update", "patch"]
+# The GPU controller releases a gated virt-launcher pod by pinning it to the
+# node of its claims and removing the gate in one update, and deletes a
+# pinned launcher pod its node refuses, since a pin cannot be undone. The
+# grant is cluster-wide, like the Secret writes above: tenant namespaces
+# appear at runtime and nothing binds controller roles per tenant, and RBAC
+# cannot narrow it to launcher pods. The reads come from the rule below.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["update", "delete"]
+# The GPU controller reports on a VMI why its launcher pod stays gated.
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# The GPU controller deletes the unscheduled VMI of a claim that has to
+# leave its node once the VMI's pod is pinned, so the claim becomes
+# unattached and can move; a VMI whose pod is still gated is left alone.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["delete"]
+# --metrics-secure authenticates and authorizes each scrape through the API
+# server.
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
 # Leader election (--leader-elect) is granted by a namespaced Role in cozy-system
 # (see leader-election-role.yaml): the Lease lives in the controller's own
 # namespace, so the write does not need to reach every namespace.
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]
+---
+# The GPU controller writes one ConfigMap, the GPU settings in cozy-system.
+# create cannot be scoped by name, so it is scoped by namespace instead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-controller-gpu-settings
+  namespace: cozy-system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["cozystack-gpu-settings"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-controller-gpu-settings
+  namespace: cozy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-controller-gpu-settings
+subjects:
+- kind: ServiceAccount
+  name: cozystack-controller
+  namespace: cozy-system
