@@ -1,0 +1,62 @@
+suite: tenant quota render with GPU budget keys
+# gpu.cozystack.io/* keys are GPU budgets checked against GPUDevice orders,
+# not pod resources, so they never reach the namespace ResourceQuota, and a
+# tenant whose only keys are GPU budgets gets neither a ResourceQuota nor the
+# default LimitRange that comes with it.
+templates:
+  - templates/quota.yaml
+release:
+  name: tenant-acme
+  namespace: tenant-root
+tests:
+  - it: renders nothing for a tenant with only GPU budget keys
+    set:
+      resourceQuotas:
+        gpu.cozystack.io/l40s-24c: 2
+        gpu.cozystack.io/total: 4
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: keeps the GPU budget keys out of a ResourceQuota rendered for other keys
+    set:
+      resourceQuotas:
+        cpu: "4"
+        gpu.cozystack.io/total: 4
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentSelector:
+          path: kind
+          value: ResourceQuota
+        equal:
+          path: spec.hard
+          value:
+            limits.cpu: "4"
+            requests.cpu: "0.4"
+      - documentSelector:
+          path: kind
+          value: LimitRange
+        equal:
+          path: metadata.name
+          value: tenant-range-limits
+
+  # A raw resource-name key is a pod quota and stays one.
+  - it: renders a tenant with a raw GPU resource-name key a ResourceQuota
+    set:
+      resourceQuotas:
+        nvidia.com/AD102GL_L40S: 1
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentSelector:
+          path: kind
+          value: ResourceQuota
+        matchRegex:
+          path: metadata.name
+          pattern: ^tenant-quota$
+
+  - it: renders nothing without resourceQuotas
+    asserts:
+      - hasDocuments:
+          count: 0

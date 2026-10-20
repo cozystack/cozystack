@@ -49,4 +49,13 @@ type ConfigSpec struct {
 	// Define resource quotas for the tenant.
 	// +kubebuilder:default:={}
 	ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas,omitempty"`
+	// GPU settings of the tenant.
+	// +kubebuilder:default:={}
+	Gpu GPU `json:"gpu"`
+}
+
+type GPU struct {
+	// Entitle the tenant to order vGPU devices. Takes effect only when the parent tenant is entitled too; the root tenant takes its value from the platform's `gpu.vgpu`.
+	// +kubebuilder:default:=false
+	Vgpu bool `json:"vgpu,omitempty"`
 }
