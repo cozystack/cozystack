@@ -348,3 +348,30 @@ tests:
                 matchLabels:
                   app.kubernetes.io/name: vmstorage
                   app.kubernetes.io/instance: shortterm
+
+  - it: keeps a selector the platform policy sets itself
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
