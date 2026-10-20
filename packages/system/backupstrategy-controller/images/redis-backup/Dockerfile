@@ -8,7 +8,7 @@
 # an RDB written by the redis 8.4 / valkey 8 apps — "Can't handle RDB format
 # version 12"). Restore fidelity depends on the loader being at least as new as
 # the source engine.
-FROM redis:8-alpine@sha256:ba6e394f6acc2a695ef1b6944f161b9ca813711739be68319fa0db3470673f1d
+FROM redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
 
 RUN apk add --no-cache curl ca-certificates
 

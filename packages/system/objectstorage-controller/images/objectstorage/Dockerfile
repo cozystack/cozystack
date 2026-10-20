@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.2@sha256:e2a8561e419ab1ba6b2fe6cbdf49fd92b95912df1cf7d313c3e2230a333fdbcc
+# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 
 FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS source
 ARG COMMIT_REF=v0.2.2
@@ -11,7 +11,7 @@ RUN curl -sSL https://github.com/kubernetes-sigs/container-object-storage-interf
 COPY patches /patches
 RUN git apply /patches/*.diff
 
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602 AS builder
 ARG GOPROXY
 ARG TARGETOS
 ARG TARGETARCH
