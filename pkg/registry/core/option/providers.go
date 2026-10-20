@@ -69,6 +69,8 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 	return map[string]providerFunc{
 		"gpu":             rawGPUProvider(dyn),
 		"instancetype":    instancetypeProvider(dyn),
+		"gpuclass":        gpuClassProvider(dyn),
+		"gpudevice":       nameListNamespacedProvider(dyn, gvrGPUDevices),
 		"instanceprofile": nameListProvider(dyn, gvrPreference),
 		"network":         nameListNamespacedProvider(dyn, gvrNADs),
 		"image":           imageProvider(dyn),
