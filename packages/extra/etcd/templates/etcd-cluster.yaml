@@ -69,7 +69,8 @@ spec:
   topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: "kubernetes.io/hostname"
-    whenUnsatisfiable: ScheduleAnyway
+    whenUnsatisfiable: DoNotSchedule
+    nodeTaintsPolicy: Ignore
     labelSelector:
       matchLabels:
         app.kubernetes.io/instance: etcd
