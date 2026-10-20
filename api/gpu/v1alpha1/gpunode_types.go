@@ -74,8 +74,11 @@ type GPUNodeDevice struct {
 
 	// Allocatable is the number of this function's device-plugin devices
 	// that kubelet reports as allocatable for ResourceName: 1 for a VF or a
-	// function passed through whole, N for an mdev parent. Absent when the
-	// agent mapped no device-plugin device to this function.
+	// function passed through whole, N for an mdev parent. A device that
+	// names a whole IOMMU group counts once, on the group's GPU function
+	// with the lowest PCI address, and 0 on its other GPU functions.
+	// Absent when the agent mapped no device-plugin device to this
+	// function.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	Allocatable *int32 `json:"allocatable,omitempty"`
