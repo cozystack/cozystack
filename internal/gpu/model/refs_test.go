@@ -82,8 +82,15 @@ func TestTemplateDeviceName(t *testing.T) {
 	// 253 characters of a DNS subdomain.
 	long := strings.Repeat("a", 120) + "." + strings.Repeat("b", 132)
 	other := strings.Repeat("a", 120) + "." + strings.Repeat("b", 131) + "c"
-	for _, vmi := range []string{long, other, strings.Repeat("x", 245) + "-" + "yyyyyyy"} {
+	// The cut falls on character 235 with a two-digit index; a dot or dash
+	// there must not end up next to the dash before the hash.
+	cutAtDot := strings.Repeat("a", 234) + "." + strings.Repeat("b", 18)
+	cutAtDash := strings.Repeat("a", 234) + "-" + strings.Repeat("b", 18)
+	for _, vmi := range []string{long, other, cutAtDot, cutAtDash} {
 		got := TemplateDeviceName(vmi, 12)
+		if strings.Contains(got, ".-") || strings.Contains(got, "--") {
+			t.Errorf("TemplateDeviceName(%d chars) = %q joins the cut to the hash badly", len(vmi), got)
+		}
 		if errs := validation.IsDNS1123Subdomain(got); len(errs) > 0 {
 			t.Errorf("TemplateDeviceName(%d chars) = %q: %v", len(vmi), got, errs)
 		}

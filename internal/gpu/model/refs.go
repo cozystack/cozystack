@@ -45,7 +45,9 @@ type DeviceTemplate struct {
 	Count     int32  `json:"count"`
 }
 
-// ParseDeviceRefs reads and validates the gpu.AnnotationDevices value.
+// ParseDeviceRefs reads the gpu.AnnotationDevices value and checks its
+// shape. Device and class names are not checked here; a malformed one is
+// refused when the webhook looks it up.
 func ParseDeviceRefs(s string) ([]DeviceRef, error) {
 	dec := json.NewDecoder(bytes.NewReader([]byte(s)))
 	dec.DisallowUnknownFields()
