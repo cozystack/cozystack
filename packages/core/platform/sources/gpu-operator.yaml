@@ -23,6 +23,12 @@ spec:
         privileged: true
         namespace: cozy-gpu-operator
         releaseName: gpu-operator
+    - name: gpu-node-agent
+      path: system/gpu-node-agent
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-node-agent
   - name: vgpu
     dependsOn:
     - cozystack.networking
@@ -36,6 +42,12 @@ spec:
         privileged: true
         namespace: cozy-gpu-operator
         releaseName: gpu-operator
+    - name: gpu-node-agent
+      path: system/gpu-node-agent
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-node-agent
   - name: container
     dependsOn:
     - cozystack.networking
@@ -49,3 +61,9 @@ spec:
         privileged: true
         namespace: cozy-gpu-operator
         releaseName: gpu-operator
+    - name: gpu-node-agent
+      path: system/gpu-node-agent
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-node-agent
