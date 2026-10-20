@@ -1,0 +1,76 @@
+# A GPU host's sysfs, materialised by writeSysfs: "file <path> [content]"
+# or "link <path> <target>". Kept as text because git cannot check out the
+# colons of PCI addresses on every platform.
+#
+# 0000:41:00.0  L40S PF with VFs 0000:41:00.4 and 0000:41:00.5
+# 0000:61:00.0  H100 on vfio-pci, served whole; 0000:61:00.1 is its audio function,
+#               both in IOMMU group 61
+# 0000:81:00.0  A100 on the nvidia driver carrying mdevs 6f2a3c1e-... and
+#               9d8e7f6a-..., alone in IOMMU group 44
+# 0000:a1:00.0  A10 on vfio-pci, alone in IOMMU group 42
+# 0000:c1:00.0  unknown NVIDIA device carrying mdev 7a1b2c3d-..., which
+#               is IOMMU group 43
+# 0000:02:00.0  BMC VGA of another vendor; 0000:03:00.0 a NIC in group 7,
+#               carrying mdev 5c4f...
+file devices/pci0000:00/0000:00:02.0/0000:03:00.0/5c4f8e2a-1b3d-4f6a-8e9c-0d1e2f3a4b5c/uevent
+file devices/pci0000:00/0000:00:02.0/0000:03:00.0/class 0x020000
+file devices/pci0000:00/0000:00:02.0/0000:03:00.0/device 0x101e
+file devices/pci0000:00/0000:00:02.0/0000:03:00.0/vendor 0x15b3
+file devices/pci0000:00/0000:00:1f.0/0000:02:00.0/class 0x030000
+file devices/pci0000:00/0000:00:1f.0/0000:02:00.0/device 0x2000
+file devices/pci0000:00/0000:00:1f.0/0000:02:00.0/vendor 0x1a03
+file devices/pci0000:40/0000:40:01.1/0000:41:00.0/class 0x030200
+file devices/pci0000:40/0000:40:01.1/0000:41:00.0/device 0x26b9
+file devices/pci0000:40/0000:40:01.1/0000:41:00.0/sriov_numvfs 2
+file devices/pci0000:40/0000:40:01.1/0000:41:00.0/vendor 0x10de
+file devices/pci0000:40/0000:40:01.1/0000:41:00.4/class 0x030200
+file devices/pci0000:40/0000:40:01.1/0000:41:00.4/device 0x26b9
+file devices/pci0000:40/0000:40:01.1/0000:41:00.4/vendor 0x10de
+file devices/pci0000:40/0000:40:01.1/0000:41:00.5/class 0x030200
+file devices/pci0000:40/0000:40:01.1/0000:41:00.5/device 0x26b9
+file devices/pci0000:40/0000:40:01.1/0000:41:00.5/vendor 0x10de
+file devices/pci0000:60/0000:60:01.1/0000:61:00.0/class 0x030200
+file devices/pci0000:60/0000:60:01.1/0000:61:00.0/device 0x2330
+file devices/pci0000:60/0000:60:01.1/0000:61:00.0/sriov_numvfs 0
+file devices/pci0000:60/0000:60:01.1/0000:61:00.0/vendor 0x10de
+file devices/pci0000:60/0000:60:01.1/0000:61:00.1/class 0x040300
+file devices/pci0000:60/0000:60:01.1/0000:61:00.1/device 0x22a3
+file devices/pci0000:60/0000:60:01.1/0000:61:00.1/vendor 0x10de
+file devices/pci0000:80/0000:80:01.1/0000:81:00.0/6f2a3c1e-0b1d-4c8e-9a51-2d4f0e7b8a01/uevent
+file devices/pci0000:80/0000:80:01.1/0000:81:00.0/9d8e7f6a-5b4c-4d3e-8f2a-1b0c9d8e7f6a/uevent
+file devices/pci0000:80/0000:80:01.1/0000:81:00.0/class 0x030200
+file devices/pci0000:80/0000:80:01.1/0000:81:00.0/device 0x20b5
+file devices/pci0000:80/0000:80:01.1/0000:81:00.0/vendor 0x10de
+file devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0/class 0x030200
+file devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0/device 0x2236
+file devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0/vendor 0x10de
+file devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/uevent
+file devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/class 0x030200
+file devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/device 0x9999
+file devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/vendor 0x10de
+link bus/mdev/devices/5c4f8e2a-1b3d-4f6a-8e9c-0d1e2f3a4b5c ../../../devices/pci0000:00/0000:00:02.0/0000:03:00.0/5c4f8e2a-1b3d-4f6a-8e9c-0d1e2f3a4b5c
+link bus/mdev/devices/6f2a3c1e-0b1d-4c8e-9a51-2d4f0e7b8a01 ../../../devices/pci0000:80/0000:80:01.1/0000:81:00.0/6f2a3c1e-0b1d-4c8e-9a51-2d4f0e7b8a01
+link bus/mdev/devices/7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d ../../../devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+link bus/mdev/devices/9d8e7f6a-5b4c-4d3e-8f2a-1b0c9d8e7f6a ../../../devices/pci0000:80/0000:80:01.1/0000:81:00.0/9d8e7f6a-5b4c-4d3e-8f2a-1b0c9d8e7f6a
+link bus/pci/devices/0000:02:00.0 ../../../devices/pci0000:00/0000:00:1f.0/0000:02:00.0
+link bus/pci/devices/0000:03:00.0 ../../../devices/pci0000:00/0000:00:02.0/0000:03:00.0
+link bus/pci/devices/0000:41:00.0 ../../../devices/pci0000:40/0000:40:01.1/0000:41:00.0
+link bus/pci/devices/0000:41:00.4 ../../../devices/pci0000:40/0000:40:01.1/0000:41:00.4
+link bus/pci/devices/0000:41:00.5 ../../../devices/pci0000:40/0000:40:01.1/0000:41:00.5
+link bus/pci/devices/0000:61:00.0 ../../../devices/pci0000:60/0000:60:01.1/0000:61:00.0
+link bus/pci/devices/0000:61:00.1 ../../../devices/pci0000:60/0000:60:01.1/0000:61:00.1
+link bus/pci/devices/0000:81:00.0 ../../../devices/pci0000:80/0000:80:01.1/0000:81:00.0
+link bus/pci/devices/0000:a1:00.0 ../../../devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0
+link bus/pci/devices/0000:c1:00.0 ../../../devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0
+link devices/pci0000:40/0000:40:01.1/0000:41:00.4/physfn ../0000:41:00.0
+link devices/pci0000:40/0000:40:01.1/0000:41:00.5/physfn ../0000:41:00.0
+link kernel/iommu_groups/42/devices/0000:a1:00.0 ../../../../devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0
+link kernel/iommu_groups/43/devices/7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d ../../../../devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+link kernel/iommu_groups/61/devices/0000:61:00.0 ../../../../devices/pci0000:60/0000:60:01.1/0000:61:00.0
+link kernel/iommu_groups/61/devices/0000:61:00.1 ../../../../devices/pci0000:60/0000:60:01.1/0000:61:00.1
+link kernel/iommu_groups/7/devices/0000:03:00.0 ../../../../devices/pci0000:00/0000:00:02.0/0000:03:00.0
+link devices/pci0000:60/0000:60:01.1/0000:61:00.0/driver ../../../../bus/pci/drivers/vfio-pci
+link devices/pci0000:80/0000:80:01.1/0000:81:00.0/driver ../../../../bus/pci/drivers/nvidia
+link devices/pci0000:a0/0000:a0:01.1/0000:a1:00.0/driver ../../../../bus/pci/drivers/vfio-pci
+link devices/pci0000:c0/0000:c0:01.1/0000:c1:00.0/driver ../../../../bus/pci/drivers/nvidia
+link kernel/iommu_groups/44/devices/0000:81:00.0 ../../../../devices/pci0000:80/0000:80:01.1/0000:81:00.0
