@@ -1,3 +1,4 @@
+{{- $gpu := .Values.cozystackController.gpu | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +6,11 @@ metadata:
   labels:
     app: cozystack-controller
 spec:
+  {{- if $gpu.enabled }}
+  replicas: {{ max 2 .Values.cozystackController.replicas }}
+  {{- else }}
   replicas: {{ .Values.cozystackController.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app: cozystack-controller
@@ -31,7 +36,39 @@ spec:
         {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
         - --seaweedfs-metrics-endpoint={{ . }}
         {{- end }}
+        {{- if $gpu.enabled }}
+        - --enable-gpu
+        {{- with $gpu.resourceNames }}
+        - --gpu-resource-names={{ join "," . }}
+        {{- end }}
+        - --gpu-raw-resource-names={{ $gpu.rawResourceNames | default "allowed" }}
+        - --metrics-bind-address=:8443
+        ports:
+        - name: webhook
+          containerPort: 9443
+        - name: metrics
+          containerPort: 8443
+        - name: health
+          containerPort: 8081
+        # readyz waits for the caches the webhooks read, so a replica takes
+        # admissions only once it can answer them.
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+        {{- end }}
         {{- with .Values.cozystackController.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      {{- if $gpu.enabled }}
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: cozystack-controller-webhook-cert
+          defaultMode: 0400
+      {{- end }}
