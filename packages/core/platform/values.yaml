@@ -743,6 +743,16 @@ backupStrategyController: {}
 # `replicated` must move the golden onto their class). Empty (the default)
 # forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
+# Values forwarded into the cozystack.vm-default-images Package's
+# components.vm-default-images.values the same way (the package is opt-in
+# through bundles.enabledPackages; this key alone enables nothing).
+# `substrate: proxmox` selects the package's proxmox variant, which publishes
+# every image as a cloneable VirtualMachineVolume on the external Proxmox
+# cluster of cozystack.proxmox-vm (required then); the `images` list has to be
+# overridden with entries that name a Proxmox volume in `proxmox.volume`, since
+# the defaults only carry a URL. Empty (the default) forwards nothing and keeps
+# the kubevirt collection.
+vmDefaultImages: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

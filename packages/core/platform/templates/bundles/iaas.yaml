@@ -163,7 +163,31 @@
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.kubevirt" "default" $ $kubevirtComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
+{{- /*
+  The golden image collection follows the substrate the platform runs VMs on.
+  vmDefaultImages.substrate: proxmox selects the variant that publishes every
+  image as a cloneable VirtualMachineVolume on the external Proxmox cluster,
+  which needs cozystack.proxmox-vm; the rest of the map is forwarded to the
+  chart like kubernetesWorkerImage below, which is how an operator overrides
+  the images list with entries that name a Proxmox volume.
+*/ -}}
+{{- $goldenVariant := "default" -}}
+{{- $goldenComponents := dict -}}
+{{- with .Values.vmDefaultImages -}}
+{{- if eq (.substrate | default "kubevirt" | toString) "proxmox" -}}
+{{- $goldenVariant = "proxmox" -}}
+{{- end -}}
+{{- $_ := set $goldenComponents "vm-default-images" (dict "values" .) -}}
+{{- end -}}
+{{- if eq $goldenVariant "proxmox" -}}
+{{- $golden := "cozystack.vm-default-images" -}}
+{{- $goldenEnabled := default (list) .Values.bundles.enabledPackages -}}
+{{- $goldenDisabled := default (list) .Values.bundles.disabledPackages -}}
+{{- if and (has $golden $goldenEnabled) (not (has $golden $goldenDisabled)) (not (and (has "cozystack.proxmox-vm" $goldenEnabled) (not (has "cozystack.proxmox-vm" $goldenDisabled)))) -}}
+{{- fail (printf "vmDefaultImages.substrate is proxmox, so %s needs cozystack.proxmox-vm in bundles.enabledPackages: the images are published through kubemox and the catalog that package installs" $golden) -}}
+{{- end -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional" (list "cozystack.vm-default-images" $goldenVariant $ $goldenComponents) }}
 {{- /*
   Forward the platform-level worker image catalog overrides into the emitted
   cozystack.kubernetes-worker-image Package CR's
