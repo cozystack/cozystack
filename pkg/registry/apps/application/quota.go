@@ -28,10 +28,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/cozystack/cozystack/internal/gpu"
 	"github.com/cozystack/cozystack/internal/gpu/model"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
@@ -204,6 +206,9 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 	if err != nil {
 		return append(allErrs, field.Invalid(fldPath, "", err.Error()))
 	}
+	if errs := r.forbiddenRawGPUKeys(ctx, childQuota, fldPath); len(errs) > 0 {
+		return errs
+	}
 	if len(childQuota) == 0 {
 		// Unbounded child: shares the parent pool, allowed at declaration time.
 		return allErrs
@@ -255,6 +260,46 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 	}
 	return allErrs
+}
+
+// forbiddenRawGPUKeys refuses quota keys on a GPU resource name, in any form a
+// ResourceQuota accepts for an extended resource, once the hoster has set
+// gpu.rawResourceNames to forbidden. The setting and the effective GPU
+// resource-name set come from the controller-written settings ConfigMap; while
+// it is absent raw names are allowed.
+func (r *REST) forbiddenRawGPUKeys(ctx context.Context, quotas map[string]resource.Quantity, fldPath *field.Path) field.ErrorList {
+	var candidates []string
+	for _, k := range sortedQuotaKeys(quotas) {
+		if strings.Contains(k, "/") {
+			candidates = append(candidates, k)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	cm := &corev1.ConfigMap{}
+	// Uncached read, like the pool usage: no cluster-wide ConfigMap informer.
+	if err := r.w.Get(ctx, client.ObjectKey{Namespace: gpu.SettingsNamespace, Name: gpu.SettingsConfigMap}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return field.ErrorList{field.InternalError(fldPath, fmt.Errorf("read GPU settings: %w", err))}
+	}
+	if gpu.RawNamesPolicy(cm.Data[gpu.SettingsKeyRawResourceNames]) != gpu.RawNamesForbidden {
+		return nil
+	}
+	names := sets.New(model.ParseResourceNames(cm.Data[gpu.SettingsKeyResourceNames])...)
+
+	var errs field.ErrorList
+	for _, k := range candidates {
+		name := strings.TrimPrefix(strings.TrimPrefix(k, "requests."), "limits.")
+		if names.Has(name) {
+			errs = append(errs, field.Forbidden(fldPath.Key(k),
+				fmt.Sprintf("%s is a GPU resource name and raw GPU names are forbidden on this platform; budget GPUs with %s<class> or %s instead", name, gpu.QuotaKeyPrefix, gpu.QuotaKeyTotal)))
+		}
+	}
+	return errs
 }
 
 // addQuotas adds src into dst in place, per resource key.
