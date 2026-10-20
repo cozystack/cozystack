@@ -371,7 +371,7 @@ type Talos struct {
 	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 	// +kubebuilder:default:="factory.talos.dev/installer"
 	InstallerRepository string `json:"installerRepository"`
-	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
+	// Registry mirrors for worker nodes. Not read by this chart: the workers of a cluster are KubernetesNodes pools, which take their mirrors from their own `talos.registryMirrors`, or from the platform-wide `kubernetesRegistries` when that is empty.
 	// +kubebuilder:default:={}
 	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.

@@ -178,9 +178,13 @@
   operator cannot apply. Unset (the default) emits no components block and keeps
   the Package identical to the historical render.
 */ -}}
+{{- /* installerRepository is not a catalog knob: it is the installer prefix new
+       worker pools get, carried to cozystack-api through _cluster (apps.yaml), so
+       it is kept out of the values the catalog chart receives. */ -}}
 {{- $workerImageComponents := dict -}}
-{{- if .Values.kubernetesWorkerImage -}}
-{{- $_ := set $workerImageComponents "kubernetes-worker-image" (dict "values" .Values.kubernetesWorkerImage) -}}
+{{- $workerImageValues := omit (.Values.kubernetesWorkerImage | default dict) "installerRepository" -}}
+{{- if $workerImageValues -}}
+{{- $_ := set $workerImageComponents "kubernetes-worker-image" (dict "values" $workerImageValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kubernetes-worker-image" $ $workerImageComponents) }}
 {{- /*

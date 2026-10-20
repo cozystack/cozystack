@@ -1,0 +1,264 @@
+suite: apps.yaml kubernetesWorkerImage → _cluster.worker-image wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# cozystack-api reads _cluster.worker-image when a KubernetesNodes is created and
+# writes what the spec leaves out: osImage.builtin when the catalog is on, the
+# factory URL, and the installer prefix. Only keys that are set are written, because
+# every release in every tenant reads this Secret and a key appearing would upgrade
+# all of them.
+
+tests:
+  - it: writes no worker-image key when nothing is set
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-image'
+
+  - it: flags the catalog when its package is enabled on the iaas bundle
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^  worker-image:\n    catalog: "true"\n'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'factory-url|installer-repository'
+
+  - it: does not flag the catalog when the package is enabled but iaas is not
+    set:
+      bundles:
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-image'
+
+  - it: does not flag the catalog when iaas is on and the package is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-image'
+
+  - it: does not flag the catalog when the package is also disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.kubernetes-worker-image
+        disabledPackages:
+          - cozystack.kubernetes-worker-image
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-image'
+
+  - it: carries the factory URL and leaves the installer prefix alone
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.internal.example.com/
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    factory-url: "https://factory\.internal\.example\.com"$'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'installer-repository|catalog:'
+
+  # A factory URL says where the OS image is fetched from. A file server or a caching
+  # mirror serves it and no installer, so a prefix derived from it would break the
+  # upgrade of every new pool for such a setup.
+  - it: does not derive an installer prefix from a path or a port
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: http://10.0.0.5:8080/talos
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    factory-url: "http://10\.0\.0\.5:8080/talos"$'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'installer-repository'
+
+  - it: carries the installer prefix next to the factory URL, without a trailing slash
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.internal.example.com
+        installerRepository: registry.internal.example.com/talos-installer/
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    factory-url: "https://factory\.internal\.example\.com"$'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "registry\.internal\.example\.com/talos-installer"$'
+
+  - it: an installer prefix alone is carried without a factory URL
+    set:
+      kubernetesWorkerImage:
+        installerRepository: registry.internal.example.com/installer
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "registry\.internal\.example\.com/installer"$'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'factory-url'
+
+  - it: knobs of the catalog chart alone write nothing for new pools
+    set:
+      kubernetesWorkerImage:
+        storageClass: local
+        storage: 8Gi
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-image'
+
+  - it: refuses a factory URL that is not a plain http(s) URL
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: "factory.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesWorkerImage\.imageFactoryURL "factory\.example\.com" is not a plain http\(s\) URL'
+
+  - it: refuses an installer prefix that is not a registry path
+    set:
+      kubernetesWorkerImage:
+        installerRepository: "registry.example.com/a b"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubernetesWorkerImage\.installerRepository "registry\.example\.com/a b" is not a registry path'
+
+  - it: refuses a factory URL that carries a user name and password
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://user:s3cret@factory.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name or password'
+
+  - it: refuses a factory URL with another scheme in front of a URL
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: ftp://files.example.com/https://factory.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
+
+  - it: carries an installer prefix with a port and a path
+    set:
+      kubernetesWorkerImage:
+        installerRepository: registry.example.org:5000/talos/installer
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "registry\.example\.org:5000/talos/installer"$'
+
+  - it: refuses an installer prefix that is written as a URL
+    set:
+      kubernetesWorkerImage:
+        installerRepository: https://registry.example.org/installer
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a registry path'
+
+  - it: refuses an installer prefix with an upper-case repository path
+    set:
+      kubernetesWorkerImage:
+        installerRepository: registry.example.org/Installer
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a registry path'
+
+  - it: refuses a factory URL with a user name and no password
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://TOKEN@factory.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name or password'
+
+  - it: refuses a plain http factory URL that carries credentials
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: http://u:p@factory.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name or password'
+
+  - it: refuses a factory URL that carries a token in the query
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.example.com?token=SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name, password, query or fragment'
+
+  - it: refuses a factory URL that carries a token in the fragment
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: https://factory.example.com/#SECRET
+    asserts:
+      - failedTemplate:
+          errorPattern: 'imageFactoryURL must not carry a user name, password, query or fragment'
+
+  - it: refuses whitespace in a factory URL
+    set:
+      kubernetesWorkerImage:
+        imageFactoryURL: "https://factory.example.com/a b"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not a plain http\(s\) URL'
+
+  - it: carries a host-only installer prefix
+    set:
+      kubernetesWorkerImage:
+        installerRepository: registry.example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "registry\.example\.org"$'
+
+  - it: carries an installer prefix whose path has doubled separators
+    set:
+      kubernetesWorkerImage:
+        installerRepository: harbor.local/my--project/a__b/installer
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "harbor\.local/my--project/a__b/installer"$'
+
+  - it: carries an installer prefix on an IPv6 registry
+    set:
+      kubernetesWorkerImage:
+        installerRepository: "[fd00::1]:5000/talos"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^    installer-repository: "\[fd00::1\]:5000/talos"$'
