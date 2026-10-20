@@ -233,7 +233,7 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 		parentLimit := parentQuota[res]
 		allocated := siblings[res] // zero value when no sibling bounds this resource
-		used := poolUsed[renderedLimitKey(res)]
+		used := poolUsed[usageKey(res)]
 		remaining := parentLimit.DeepCopy()
 		remaining.Sub(allocated)
 		remaining.Sub(used)
@@ -285,25 +285,45 @@ var rawQuotaKeys = map[string]struct{}{
 	"resourcequotas":         {},
 }
 
-// renderedLimitKey maps a shorthand resourceQuotas key (the vocabulary admission
-// works in) to the rendered ResourceQuota key that carries its limit-side
-// budget, mirroring cozy-lib.resources.flatten. The mapping is allocation-ratio
-// independent: ratios only scale the requests.* side that flatten derives from
-// the same shorthand value, so the limit-side key always holds the operator's
-// declared amount. This lets admission read a tenant's current usage from its
-// rendered ResourceQuota.status.used without replicating the chart's ratio math.
+// limitCountedKeys are the shorthand keys whose usage the ResourceQuota pod
+// evaluator reports under limits.*. For every other resource it counts only
+// requests.*, so limits.<extended resource> or limits.hugepages-* never carries
+// usage even though the chart renders it.
+var limitCountedKeys = map[string]struct{}{
+	"cpu":               {},
+	"memory":            {},
+	"ephemeral-storage": {},
+}
+
+// usageKey maps a shorthand resourceQuotas key (the vocabulary admission works
+// in) to the rendered ResourceQuota key whose status.used carries its usage.
+// cozy-lib.resources.flatten renders a shorthand key both as limits.<key> and as
+// requests.<key>; usage is read from whichever of the two the quota controller
+// counts. For cpu, memory and ephemeral-storage that is the limit side, which
+// holds the operator's declared amount whatever allocation ratio scales the
+// request side. Every other resource is counted only on the request side, where
+// flatten applies no ratio, so requests.<key> holds the declared amount too.
+// This lets admission read a tenant's current usage from its rendered
+// ResourceQuota.status.used without replicating the chart's ratio math.
 //
-//	cpu, memory, ephemeral-storage, custom resources -> "limits.<key>"
+//	cpu, memory, ephemeral-storage                   -> "limits.<key>"
 //	storage                                          -> "requests.storage" (no hard limits.storage)
 //	pods, services, services.loadbalancers, ...      -> "<key>" (verbatim)
-func renderedLimitKey(raw string) string {
-	if raw == "storage" {
-		return "requests.storage"
-	}
+//	extended resources, hugepages-<size>, ...        -> "requests.<key>"
+//	requests.<r>, limits.<r>, count/<r>              -> "<key>" (already a usage key)
+func usageKey(raw string) string {
 	if _, ok := rawQuotaKeys[raw]; ok {
 		return raw
 	}
-	return "limits." + raw
+	for _, prefix := range []string{"requests.", "limits.", "count/"} {
+		if strings.HasPrefix(raw, prefix) {
+			return raw
+		}
+	}
+	if _, ok := limitCountedKeys[raw]; ok {
+		return "limits." + raw
+	}
+	return "requests." + raw
 }
 
 // parentNamespaceOf returns the namespace owned by the parent of the tenant that
@@ -341,7 +361,7 @@ func (r *REST) poolRootOf(ns string, bounded map[string]bool) string {
 // created/updated). Usage is read from each member's ResourceQuota.status.used,
 // taking a per-resource max within a namespace to avoid double-counting the
 // chart-rendered and controller-allocated quotas, and is keyed in the rendered
-// quota key space (see renderedLimitKey). Boundedness is decided by declared
+// quota key space (see usageKey). Boundedness is decided by declared
 // resourceQuotas so the result does not depend on whether Flux has rendered a
 // freshly-created tenant's quota yet.
 func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) (map[string]resource.Quantity, error) {
