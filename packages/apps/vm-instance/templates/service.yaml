@@ -1,3 +1,4 @@
+{{- if ne (include "virtual-machine.substrate" .) "proxmox" }}
 ---
 apiVersion: v1
 kind: Service
@@ -39,4 +40,5 @@ spec:
     {{- end }}
 {{- else }}
     - port: 65535
+{{- end }}
 {{- end }}

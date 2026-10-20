@@ -3,6 +3,15 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}-dashboard-resources
 rules:
+{{- if eq (include "virtual-machine.substrate" .) "proxmox" }}
+- apiGroups:
+  - proxmox.alperen.cloud
+  resources:
+  - virtualmachines
+  resourceNames:
+  - {{ include "virtual-machine.fullname" . }}
+  verbs: ["get", "list", "watch"]
+{{- else }}
 - apiGroups:
   - ""
   resources:
@@ -10,6 +19,7 @@ rules:
   resourceNames:
   - {{ include "virtual-machine.fullname" . }}
   verbs: ["get", "list", "watch"]
+{{- end }}
 - apiGroups:
   - cozystack.io
   resources:

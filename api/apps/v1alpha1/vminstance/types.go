@@ -71,6 +71,13 @@ type ConfigSpec struct {
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
+	// Which hypervisor runs the machine. `kubevirt` runs it as a pod inside this cluster. `proxmox` runs it on the external Proxmox VE cluster the platform's proxmox-vm package points at: the disks are vm-disk objects of the same substrate, `networks` name entries of the platform's catalog (each port gets an address from the catalog's IP pool), `instanceType` and `instanceProfile` are mapped through the catalog, and `cloudInit` plus `sshKeys` reach the guest as a NoCloud ISO. Not available there, and refused at render time rather than ignored: `external`, `gpus`, `cpuModel`, `netplanDhcp`, the `rt1` instance types, and `runStrategy` values other than Always, Halted and Manual. A machine cannot move between substrates: the chart reads the live object and refuses to switch.
+	// +kubebuilder:default:="kubevirt"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="substrate is immutable"
+	Substrate string `json:"substrate"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox ProxmoxInstance `json:"proxmox"`
 }
 
 type Disk struct {
@@ -97,6 +104,12 @@ type GPU struct {
 type Network struct {
 	// Network attachment name.
 	Name string `json:"name,omitempty"`
+}
+
+type ProxmoxInstance struct {
+	// Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be.
+	// +kubebuilder:default:=""
+	Node string `json:"node,omitempty"`
 }
 
 type Resources struct {

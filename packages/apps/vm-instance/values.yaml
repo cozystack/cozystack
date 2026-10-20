@@ -122,3 +122,16 @@ netplanDhcp: false
 cloudInitSeed: ""
 ## Example:
 ## cloudInitSeed: "upd1"
+
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which hypervisor runs the machine. `kubevirt` runs it as a pod inside this cluster. `proxmox` runs it on the external Proxmox VE cluster the platform's proxmox-vm package points at: the disks are vm-disk objects of the same substrate, `networks` name entries of the platform's catalog (each port gets an address from the catalog's IP pool), `instanceType` and `instanceProfile` are mapped through the catalog, and `cloudInit` plus `sshKeys` reach the guest as a NoCloud ISO. Not available there, and refused at render time rather than ignored: `external`, `gpus`, `cpuModel`, `netplanDhcp`, the `rt1` instance types, and `runStrategy` values other than Always, Halted and Manual. A machine cannot move between substrates: the chart reads the live object and refuses to switch.
+## @immutable
+substrate: kubevirt
+
+## @typedef {struct} ProxmoxInstance - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
+## @field {string} [node] - Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be.
+
+## @param {ProxmoxInstance} proxmox - Proxmox substrate settings.
+proxmox:
+  node: ""
