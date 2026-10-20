@@ -105,14 +105,7 @@ func PodFrom(p *corev1.Pod, gpuNames sets.Set[corev1.ResourceName], covered map[
 	}
 	units := map[corev1.ResourceName]int64{}
 	for name := range gpuNames {
-		var sum, initMax int64
-		for i := range p.Spec.Containers {
-			sum += containerUnits(&p.Spec.Containers[i], name)
-		}
-		for i := range p.Spec.InitContainers {
-			initMax = max(initMax, containerUnits(&p.Spec.InitContainers[i], name))
-		}
-		if left := max(sum, initMax) - covered[name]; left > 0 {
+		if left := podUnits(p, name) - covered[name]; left > 0 {
 			units[name] = left
 		}
 	}
@@ -120,6 +113,27 @@ func PodFrom(p *corev1.Pod, gpuNames sets.Set[corev1.ResourceName], covered map[
 		return Pod{}, false
 	}
 	return Pod{Namespace: p.Namespace, NodeName: p.Spec.NodeName, Units: units}, true
+}
+
+// podUnits is the pod's effective request of name, as the scheduler
+// computes it: sidecars (init containers that always restart) run beside
+// the later init containers and the main ones.
+func podUnits(p *corev1.Pod, name corev1.ResourceName) int64 {
+	var sum, sidecars, initPeak int64
+	for i := range p.Spec.Containers {
+		sum += containerUnits(&p.Spec.Containers[i], name)
+	}
+	for i := range p.Spec.InitContainers {
+		c := &p.Spec.InitContainers[i]
+		u := containerUnits(c, name)
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			sidecars += u
+			initPeak = max(initPeak, sidecars)
+			continue
+		}
+		initPeak = max(initPeak, sidecars+u)
+	}
+	return max(sum+sidecars, initPeak)
 }
 
 // containerUnits reads the limit first: an extended resource may be given

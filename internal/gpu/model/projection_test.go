@@ -32,6 +32,13 @@ func gpuContainer(limits, requests corev1.ResourceList) corev1.Container {
 	return corev1.Container{Resources: corev1.ResourceRequirements{Limits: limits, Requests: requests}}
 }
 
+func sidecar(limits corev1.ResourceList) corev1.Container {
+	c := gpuContainer(limits, nil)
+	always := corev1.ContainerRestartPolicyAlways
+	c.RestartPolicy = &always
+	return c
+}
+
 func TestPodFrom(t *testing.T) {
 	names := sets.New(h100Name, l40sName)
 	one := resource.MustParse("1")
@@ -80,6 +87,27 @@ func TestPodFrom(t *testing.T) {
 				Containers:     []corev1.Container{gpuContainer(corev1.ResourceList{h100Name: one}, nil)},
 			}},
 			want:   map[corev1.ResourceName]int64{h100Name: 2},
+			wantOK: true,
+		},
+		{
+			name: "sidecar adds to the main containers",
+			pod: corev1.Pod{Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{sidecar(corev1.ResourceList{h100Name: one})},
+				Containers:     []corev1.Container{gpuContainer(corev1.ResourceList{h100Name: one}, nil)},
+			}},
+			want:   map[corev1.ResourceName]int64{h100Name: 2},
+			wantOK: true,
+		},
+		{
+			name: "init container runs beside an earlier sidecar",
+			pod: corev1.Pod{Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{
+					sidecar(corev1.ResourceList{h100Name: one}),
+					gpuContainer(corev1.ResourceList{h100Name: two}, nil),
+				},
+				Containers: []corev1.Container{gpuContainer(corev1.ResourceList{h100Name: one}, nil)},
+			}},
+			want:   map[corev1.ResourceName]int64{h100Name: 3},
 			wantOK: true,
 		},
 		{

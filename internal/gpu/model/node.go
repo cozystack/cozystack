@@ -45,7 +45,9 @@ func Ready(n *corev1.Node) bool {
 }
 
 // UntoleratedTaint returns the first NoSchedule or NoExecute taint outside
-// node.kubernetes.io/ that tolerations do not tolerate, or nil.
+// node.kubernetes.io/ that tolerations do not tolerate, or nil. Gt and Lt
+// tolerations never match: where their feature gate is off the scheduler
+// does not honour them, and a node is better skipped than bound to in vain.
 func UntoleratedTaint(n *corev1.Node, tolerations []corev1.Toleration) *corev1.Taint {
 	for i := range n.Spec.Taints {
 		taint := &n.Spec.Taints[i]
@@ -57,7 +59,7 @@ func UntoleratedTaint(n *corev1.Node, tolerations []corev1.Toleration) *corev1.T
 		}
 		tolerated := false
 		for j := range tolerations {
-			if tolerations[j].ToleratesTaint(logr.Discard(), taint, true) {
+			if tolerations[j].ToleratesTaint(logr.Discard(), taint, false) {
 				tolerated = true
 				break
 			}

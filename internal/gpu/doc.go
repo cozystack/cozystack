@@ -26,8 +26,10 @@ limitations under the License.
 // and budget that decides a bind runs again in its single loop, so two
 // admissions racing on one unit cannot both win.
 //
-// The VMI admission webhook runs in every replica and never binds. On a dry
-// run it writes nothing. Otherwise, for a VMI, it:
+// The VMI admission webhook runs in every replica and never binds. It first
+// runs every refusal check, including budget and entitlement of the
+// template devices; on a dry run it stops there and writes nothing.
+// Otherwise, for a VMI, it:
 //
 //  1. creates the template devices,
 //  2. writes status.attachedTo on every device of the VMI's set, held and
