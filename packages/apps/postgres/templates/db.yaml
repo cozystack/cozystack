@@ -260,6 +260,25 @@ spec:
           # cluster's name — which would read the wrong S3 prefix on restore.
           barmanObjectName: {{ .Release.Name }}-recovery
           serverName: {{ .Values.bootstrap.serverName | default .Values.bootstrap.oldName }}
+  {{- else if hasKey (.Values.users | default dict) "app" }}
+  {{- /*
+    "app" is the owner CNPG bootstraps, and users.app adopts that role. CNPG's
+    instance manager re-applies the owner's password from the bootstrap secret
+    on every reconcile whose secret version it has not seen, so on every pod
+    restart: left on CNPG's own <release>-app, with its generated password, the
+    role silently loses the password the init-job set from <release>-credentials.
+    Point the bootstrap at the chart-rendered <release>-app-owner, which holds that
+    same password. It goes on the method the live Cluster was bootstrapped with,
+    because CNPG rejects a second one, and a restored Cluster keeps its recovery
+    block. Changing bootstrap on an existing Cluster is accepted, and the
+    remaining fields come from the live object or CNPG's defaults (app/app).
+  */}}
+  {{- $live := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace .Release.Name }}
+  {{- $liveBootstrap := dig "spec" "bootstrap" dict ($live | default dict) }}
+  bootstrap:
+    {{ ternary "recovery" "initdb" (hasKey $liveBootstrap "recovery") }}:
+      secret:
+        name: {{ .Release.Name }}-app-owner
   {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
