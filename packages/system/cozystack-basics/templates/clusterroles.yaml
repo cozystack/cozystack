@@ -138,6 +138,9 @@ rules:
   - options
   - taps
   verbs: ["get", "list", "watch"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpudevices"]
+  verbs: ["get", "list", "watch"]
 {{/* Read-only visibility into the objects that govern read-replica autoscaling of a
      tenant's own databases: the KEDA ScaledObject the chart renders into the tenant
      namespace and the keda-hpa-<release> HorizontalPodAutoscaler KEDA creates beside
@@ -320,3 +323,27 @@ rules:
   - '*'
   verbs:
   - '*'
+---
+# GPUClass is the hoster's catalog and is cluster-scoped, so tenant roles,
+# bound per namespace, cannot grant its read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:gpuclasses:view
+rules:
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozy:gpuclasses:view:authenticated
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozy:gpuclasses:view
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated

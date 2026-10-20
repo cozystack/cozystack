@@ -1,0 +1,99 @@
+suite: cozystack-basics GPU access for tenants
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# Tenant roles read GPUDevice orders in their namespaces; no tenant role writes
+# them yet, since nothing checks an order's budget or entitlement here.
+# GPUClass is cluster-scoped, and tenant roles are bound per namespace, so its
+# read goes to every authenticated user through a ClusterRoleBinding. GPUNode,
+# which names physical devices, is granted to no tenant role.
+tests:
+  # The filter returns the rule itself when exactly one rule names the group
+  # and a list otherwise, so equal pins both the rule and that it is the only
+  # one: a resource or verb added anywhere in the group fails here.
+  - it: cozy:tenant:view:base grants only read on gpudevices
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+          value:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpudevices"]
+            verbs: ["get", "list", "watch"]
+
+  - it: cozy:tenant:admin:base grants nothing in gpu.cozystack.io
+    set:
+      gpu:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+
+  - it: cozy:tenant:base grants nothing in gpu.cozystack.io
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:base
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+
+  - it: cozy:tenant:use:base grants nothing in gpu.cozystack.io
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+
+  - it: cozy:tenant:super-admin:base grants nothing in gpu.cozystack.io
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:super-admin:base
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+
+  - it: renders a read-only GPUClass role
+    documentSelector:
+      path: metadata.name
+      value: cozy:gpuclasses:view
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+          - apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpuclasses"]
+            verbs: ["get", "list", "watch"]
+
+  - it: binds the GPUClass role to every authenticated user
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozy:gpuclasses:view:authenticated
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cozy:gpuclasses:view
+      - equal:
+          path: subjects
+          value:
+          - apiGroup: rbac.authorization.k8s.io
+            kind: Group
+            name: system:authenticated
