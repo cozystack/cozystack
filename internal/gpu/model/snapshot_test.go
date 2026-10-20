@@ -132,7 +132,7 @@ func TestCheckOrderBudgets(t *testing.T) {
 			ns:      "tenant-acme", class: "h100", count: 3,
 		},
 		{
-			name:    "an ancestor GPU key caps a child with its own cpu quota",
+			name:    "an ancestor GPU key caps its whole subtree",
 			quotas:  map[string]corev1.ResourceList{"tenant-acme": quota("gpu.cozystack.io/total", "1"), "tenant-acme-dev": quota("cpu", "8")},
 			devices: []Device{dev("tenant-acme", "h100", 1, gpuv1alpha1.GPUDeviceBound, "n1")},
 			ns:      "tenant-acme-dev", class: "h100", count: 1,
