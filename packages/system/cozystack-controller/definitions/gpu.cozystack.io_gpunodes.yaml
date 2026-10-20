@@ -1,0 +1,185 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    helm.sh/resource-policy: keep
+  name: gpunodes.gpu.cozystack.io
+spec:
+  group: gpu.cozystack.io
+  names:
+    kind: GPUNode
+    listKind: GPUNodeList
+    plural: gpunodes
+    singular: gpunode
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GPUNode is the GPU inventory of the node of the same name. It is owned by
+          that Node and goes away with it.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: GPUNodeStatus is the GPU inventory of one node, written by
+              the node agent.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              devices:
+                items:
+                  description: GPUNodeDevice is one PCI function of a GPU.
+                  properties:
+                    allocatable:
+                      description: |-
+                        Allocatable is the number of this function's device-plugin devices
+                        that kubelet reports as allocatable for ResourceName: 1 for a VF or a
+                        function passed through whole, N for an mdev parent. Absent when the
+                        agent mapped no device-plugin device to this function.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    function:
+                      description: PCIFunction is the role of a PCI function in GPU
+                        virtualization.
+                      enum:
+                      - pf
+                      - vf
+                      - whole
+                      type: string
+                    healthy:
+                      description: |-
+                        Healthy is the device plugin's health of the function. Absent for a
+                        function no device plugin advertises.
+                      type: boolean
+                    model:
+                      type: string
+                    pciAddress:
+                      pattern: ^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$
+                      type: string
+                    profile:
+                      description: Profile is the vGPU profile written to a VF.
+                      type: string
+                    resourceName:
+                      description: |-
+                        ResourceName is the device-plugin resource that advertises this
+                        function, as kubelet's pod-resources API reports it.
+                      type: string
+                    usedBy:
+                      description: GPUPodReference names the pod that uses a device.
+                      properties:
+                        namespace:
+                          type: string
+                        pod:
+                          type: string
+                      required:
+                      - namespace
+                      - pod
+                      type: object
+                    vfs:
+                      description: VFs is the number of VFs a physical function carries.
+                      format: int32
+                      type: integer
+                  required:
+                  - function
+                  - pciAddress
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - pciAddress
+                x-kubernetes-list-type: map
+              resourceNames:
+                description: |-
+                  ResourceNames are the device-plugin resource names on this node whose
+                  devices are GPU PCI functions. They join the cluster's GPU
+                  resource-name set.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
