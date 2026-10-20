@@ -42,7 +42,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/gpu"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 )
 
@@ -839,6 +841,25 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		}
 	}
 
+	if pod.Labels[gpu.LabelDeviceReference] == gpu.LabelValueTrue {
+		covered, err := r.gpuUnitsCoveredByDevices(ctx, &pod)
+		if err != nil {
+			return err
+		}
+		for name, units := range covered {
+			q, ok := totalResources[name]
+			if !ok {
+				continue
+			}
+			left := q.Value() - units
+			if left <= 0 {
+				delete(totalResources, name)
+				continue
+			}
+			totalResources[name] = *resource.NewQuantity(left, q.Format)
+		}
+	}
+
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pod-%s", pod.Name),
@@ -878,6 +899,45 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 	}
 
 	return nil
+}
+
+// gpuUnitsCoveredByDevices sums, per resource name, the GPU units of the
+// devices attached to the pod's VMI. The device decides whether those GPUs
+// are in the usage records: its own record covers them while it is Bound or
+// Attached, and the phase table leaves them out of the usage records while
+// it is Lost, so the pod must not report them in either case.
+func (r *WorkloadMonitorReconciler) gpuUnitsCoveredByDevices(ctx context.Context, pod *corev1.Pod) (map[string]int64, error) {
+	vmi := ""
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "VirtualMachineInstance" {
+			vmi = ref.Name
+		}
+	}
+	if vmi == "" {
+		return nil, nil
+	}
+	devices := &gpuv1alpha1.GPUDeviceList{}
+	if err := r.List(ctx, devices, client.InNamespace(pod.Namespace)); err != nil {
+		return nil, fmt.Errorf("list GPUDevices: %w", err)
+	}
+	covered := map[string]int64{}
+	for i := range devices.Items {
+		d := &devices.Items[i]
+		if d.Status.AttachedTo == nil || d.Status.AttachedTo.VMI != vmi {
+			continue
+		}
+		class := &gpuv1alpha1.GPUClass{}
+		if err := r.Get(ctx, client.ObjectKey{Name: d.Spec.ClassName}, class); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("get GPUClass %s: %w", d.Spec.ClassName, err)
+		}
+		if dp := class.Spec.Source.DevicePlugin; dp != nil {
+			covered[dp.ResourceName] += int64(d.Spec.Count)
+		}
+	}
+	return covered, nil
 }
 
 // Reconcile is the main reconcile loop.
