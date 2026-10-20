@@ -1,0 +1,95 @@
+suite: bundles.iaas proxmox-vm wiring
+# Tenant virtual machines on Proxmox are opt-in like capmox, and like capmox
+# they need the IPAM provider: every port of such a machine gets its address
+# from an InClusterIPPool. Pinned here: nothing ships by default, opting in
+# brings IPAM along, and disabling IPAM while opting in stops the render with
+# the two list entries named.
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: ships nothing by default
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.proxmox-vm
+          any: true
+        not: true
+  - it: emits the package and the IPAM provider when enabled on its own
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.proxmox-vm
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.proxmox-vm
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-ipam-in-cluster
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+          any: true
+        not: true
+  - it: emits the IPAM provider once when capmox is enabled too
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.proxmox-vm
+          - cozystack.capi-provider-infra-proxmox
+    asserts:
+      # documentSelector without matchMany fails when more than one document matches,
+      # so this pins "exactly one" IPAM package.
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.capi-provider-ipam-in-cluster
+        equal:
+          path: kind
+          value: Package
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.capi-provider-infra-proxmox
+          any: true
+  - it: refuses the package with IPAM disabled, naming both entries
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.proxmox-vm
+        disabledPackages:
+          - cozystack.capi-provider-ipam-in-cluster
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.proxmox-vm requires cozystack.capi-provider-ipam-in-cluster, which is listed in bundles.disabledPackages"
