@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: gpu-node-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gpu-node-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gpu-node-agent
+    spec:
+      serviceAccountName: gpu-node-agent
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+      - operator: Exists
+      # Root, for kubelet's pod-resources socket, which only root may connect to.
+      securityContext:
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: agent
+        image: {{ .Values.image }}
+        args:
+        - --sysfs=/host/sys
+        - --interval={{ .Values.interval }}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        ports:
+        - name: probes
+          containerPort: 8081
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: probes
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: probes
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: pod-resources
+          mountPath: /var/lib/kubelet/pod-resources
+          readOnly: true
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      - name: pod-resources
+        hostPath:
+          path: /var/lib/kubelet/pod-resources
+          type: Directory
