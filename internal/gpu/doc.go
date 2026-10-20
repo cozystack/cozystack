@@ -48,9 +48,15 @@ limitations under the License.
 // places the whole set on one eligible node with room for all of it, moving
 // or binding devices as needed, and writes Result Succeeded on each; or
 // changes no placement and writes Result Refused with a Message that names
-// each device and its node. A partial request, where some device of
-// Devices lacks the ID, is not acted on. A move that has started finishes
-// even if the webhook stops waiting.
+// each device and its node. Two exceptions answer Succeeded with the set
+// left where it is, both for a set without template devices held entirely
+// on one cordoned node: under Move when the cordon is the node's only
+// problem and no other node has room for the set, and whenever a device of
+// a Stay class is among it, unless a member has lost capacity there or the
+// node is gone or no longer serves a member's class. The VMI is pinned
+// there and waits for the cordon to lift. A partial request, where some
+// device of Devices lacks the ID, is not acted on. A move that has started
+// finishes even if the webhook stops waiting.
 //
 // The webhook can be called more than once for one VMI, so every step is
 // idempotent: a repeated call finds its template devices and its
