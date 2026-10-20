@@ -1,0 +1,810 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: virtualmachines.proxmox.alperen.cloud
+spec:
+  group: proxmox.alperen.cloud
+  names:
+    kind: VirtualMachine
+    listKind: VirtualMachineList
+    plural: virtualmachines
+    shortNames:
+    - vm
+    singular: virtualmachine
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The node name
+      jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - description: The ID of the VM
+      jsonPath: .status.status.id
+      name: ID
+      type: integer
+    - description: The state of the VM
+      jsonPath: .status.status.state
+      name: State
+      type: string
+    - description: The uptime of the VM
+      jsonPath: .status.status.uptime
+      name: Uptime
+      type: string
+    - description: The IP address of the VM
+      jsonPath: .status.status.IPAddress
+      name: IP Address
+      type: string
+    - description: The OS information of the VM
+      jsonPath: .status.status.OSInfo
+      name: OS Info
+      type: string
+    - description: The last time the VM state was observed from Proxmox
+      jsonPath: .status.lastObserved
+      name: Last Observed
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VirtualMachine is the Schema for the virtualmachines API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              additionalConfig:
+                additionalProperties:
+                  type: string
+                description: AdditionalConfig is the additional configuration of the
+                  VM
+                type: object
+              cloneMode:
+                default: Full
+                description: |-
+                  CloneMode selects how the template's disks are cloned. Full copies them,
+                  which costs the size of the template per VM. Linked keeps a reference to
+                  the template's base snapshot, which costs almost nothing at creation but
+                  pins the template: it cannot be removed or rotated while a linked clone
+                  still references it. Proxmox places a linked clone on the template's own
+                  storage, so it cannot be moved elsewhere at creation time.
+                enum:
+                - Full
+                - Linked
+                type: string
+              connectionRef:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deletionProtection:
+                default: false
+                description: |-
+                  DeletionProtection is a flag that indicates whether the VM should be protected from deletion.
+                  If true, the VM will not be deleted when the Kubernetes resource is deleted.
+                  If not set, it defaults to false.
+                type: boolean
+              enableAutoStart:
+                default: true
+                description: |-
+                  EnableAutoStart is a flag that indicates whether the VM should automatically start when it's powered off.
+                  If true, the VM will start automatically when it's powered off.
+                  If not set, it defaults to true. PowerState, when set, takes precedence.
+                type: boolean
+              name:
+                description: Name is the name of the VM
+                type: string
+              nodeName:
+                description: NodeName is the name of the target node of Proxmox
+                type: string
+              pool:
+                description: |-
+                  Pool is the Proxmox resource pool the machine is created in. It is
+                  applied at creation; a change afterwards is not applied.
+                type: string
+              powerState:
+                description: |-
+                  PowerState is what the operator does about the machine's power.
+                  Running starts it whenever it is found stopped, Stopped stops it whenever
+                  it is found running, Manual leaves the power alone and only keeps the
+                  configuration. Unset keeps the EnableAutoStart behaviour.
+                enum:
+                - Running
+                - Stopped
+                - Manual
+                type: string
+              tags:
+                description: |-
+                  Tags are Proxmox tags kept on the machine next to the operator's own
+                  tag. Tags present on the machine but not listed here are left alone.
+                items:
+                  type: string
+                type: array
+              template:
+                description: TemplateSpec of the source VM
+                properties:
+                  cores:
+                    description: Cores is the number of CPU cores
+                    minimum: 1
+                    type: integer
+                  disk:
+                    description: Disks is the list of disks
+                    items:
+                      description: |-
+                        VirtualMachineDisk is one drive of a VM: either a new disk the VM owns,
+                        given by storage and size, or a VirtualMachineVolume from the same
+                        namespace attached at the device by volumeRef.
+                      properties:
+                        device:
+                          description: Device is the name of the device
+                          type: string
+                        size:
+                          description: Size is the size of the disk in GB. Required
+                            unless volumeRef is set.
+                          minimum: 1
+                          type: integer
+                        storage:
+                          description: Storage is the name of the storage. Required
+                            unless volumeRef is set.
+                          type: string
+                        volumeRef:
+                          description: |-
+                            VolumeRef attaches an existing VirtualMachineVolume from this namespace
+                            at Device instead of allocating a new disk. The volume has to be Ready
+                            and on the VM's node. It is given back to its holder when the ref is
+                            removed or the VirtualMachine is deleted, so its data survives the VM.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      required:
+                      - device
+                      type: object
+                      x-kubernetes-validations:
+                      - message: a disk is either a volumeRef, or a storage and a
+                          size
+                        rule: 'has(self.volumeRef) ? (!has(self.storage) && !has(self.size))
+                          : (has(self.storage) && has(self.size))'
+                    type: array
+                  memory:
+                    description: Memory is the amount of memory in MB
+                    minimum: 16
+                    type: integer
+                  name:
+                    description: Name of the template
+                    type: string
+                  network:
+                    description: Networks is the list of networks
+                    items:
+                      properties:
+                        bridge:
+                          description: Bridge is the name of the bridge
+                          type: string
+                        ipAddressClaimRef:
+                          description: |-
+                            IPAddressClaimRef names an IPAddressClaim (ipam.cluster.x-k8s.io) in
+                            this namespace. Once the claim holds an IPAddress, its address, prefix
+                            and gateway are written into the matching ipconfigN of the machine for
+                            cloud-init to apply; until then the machine is not started.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        model:
+                          description: Model is the model of the network card
+                          type: string
+                        vlan:
+                          description: VLAN is the 802.1Q tag of the port on the bridge.
+                            Zero leaves the port untagged.
+                          maximum: 4094
+                          minimum: 1
+                          type: integer
+                      required:
+                      - bridge
+                      - model
+                      type: object
+                    type: array
+                  pciDevices:
+                    description: PCI is the list of PCI devices
+                    items:
+                      properties:
+                        deviceID:
+                          description: DeviceID is the ID hex id of the device
+                          type: string
+                        pcie:
+                          default: false
+                          description: PCIE is the flag that indicates whether the
+                            device is a PCIE device ==> pcie=1
+                          type: boolean
+                        primaryGPU:
+                          default: false
+                          description: PrimaryGPU is the flag that indicates whether
+                            the device is the primary GPU ==> x-vga=1
+                          type: boolean
+                        type:
+                          description: Type is the type of the PCI device either raw
+                            or mapped
+                          enum:
+                          - raw
+                          - mapped
+                          type: string
+                      required:
+                      - type
+                      type: object
+                      x-kubernetes-validations:
+                      - message: pcie cannot be true when device type is mapped
+                        rule: self.type != 'mapped' || self.pcie == false
+                    type: array
+                  socket:
+                    description: Socket is the number of CPU sockets
+                    minimum: 1
+                    type: integer
+                type: object
+              vmSpec:
+                description: This field should be modified further
+                properties:
+                  cloudInit:
+                    description: |-
+                      CloudInit feeds the guest a NoCloud datasource built from a Secret:
+                      an ISO with the Secret's user-data, meta-data, network-config and
+                      vendor-data, uploaded through the Proxmox API and attached at Device.
+                      Unlike cloudInitConfig it carries arbitrary user-data without a
+                      snippet file on the node. A change to the Secret rebuilds the ISO with
+                      a new instance id; the guest applies it on its next boot.
+                    properties:
+                      device:
+                        default: ide2
+                        description: Device the ISO is attached at.
+                        type: string
+                      nameservers:
+                        description: |-
+                          Nameservers written into the generated network-config. Ignored when
+                          the Secret carries its own network-config.
+                        items:
+                          type: string
+                        type: array
+                      secretRef:
+                        description: |-
+                          SecretRef names a Secret in this namespace. Keys: user-data (required),
+                          and optionally meta-data, network-config and vendor-data. A missing
+                          meta-data is generated with an instance id derived from the content
+                          and the machine's name as hostname; a missing network-config is
+                          generated from the ports that got an address through an
+                          IPAddressClaim, matched by MAC, when there are any.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - secretRef
+                    type: object
+                  cloudInitConfig:
+                    description: Cloud Init Config
+                    properties:
+                      custom:
+                        description: Custom fields for cloud-init
+                        properties:
+                          metaData:
+                            type: string
+                          networkData:
+                            type: string
+                          userData:
+                            type: string
+                          vendorData:
+                            type: string
+                        type: object
+                      dnsDomain:
+                        description: DNS Domain
+                        type: string
+                      dnsServers:
+                        description: DNS Servers
+                        items:
+                          type: string
+                        type: array
+                      ipConfig:
+                        description: IPConfig is the IP configuration for the VM
+                        properties:
+                          cidr:
+                            description: Subnet Mask
+                            type: string
+                          gateway:
+                            description: Gateway
+                            type: string
+                          gatewayIPv6:
+                            description: GatewayIPv6
+                            type: string
+                          ip:
+                            description: IP Address
+                            type: string
+                          ipv6:
+                            description: IPv6 Address
+                            type: string
+                        type: object
+                      password:
+                        description: |-
+                          Password is the password for the template.
+                          Use this field to specify the password directly.
+                        type: string
+                      passwordFrom:
+                        description: |-
+                          PasswordFrom is a reference to a key in a Secret that contains the password.
+                          Use this field to specify the password via a Secret.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      sshKeys:
+                        description: SSH Keys -- suppose to be on openSSH format
+                        items:
+                          type: string
+                        type: array
+                      upgradePackages:
+                        default: true
+                        description: Upgrade Packages
+                        type: boolean
+                      user:
+                        description: User is the user name for the template
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: Specify either password or passwordFrom, but not both
+                      rule: (has(self.password) && !has(self.passwordFrom)) || (!has(self.password)
+                        && has(self.passwordFrom)) || (!has(self.password) && !has(self.passwordFrom))
+                  cores:
+                    description: Cores is the number of CPU cores
+                    minimum: 1
+                    type: integer
+                  disk:
+                    description: Disks is the list of disks
+                    items:
+                      description: |-
+                        VirtualMachineDisk is one drive of a VM: either a new disk the VM owns,
+                        given by storage and size, or a VirtualMachineVolume from the same
+                        namespace attached at the device by volumeRef.
+                      properties:
+                        device:
+                          description: Device is the name of the device
+                          type: string
+                        size:
+                          description: Size is the size of the disk in GB. Required
+                            unless volumeRef is set.
+                          minimum: 1
+                          type: integer
+                        storage:
+                          description: Storage is the name of the storage. Required
+                            unless volumeRef is set.
+                          type: string
+                        volumeRef:
+                          description: |-
+                            VolumeRef attaches an existing VirtualMachineVolume from this namespace
+                            at Device instead of allocating a new disk. The volume has to be Ready
+                            and on the VM's node. It is given back to its holder when the ref is
+                            removed or the VirtualMachine is deleted, so its data survives the VM.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      required:
+                      - device
+                      type: object
+                      x-kubernetes-validations:
+                      - message: a disk is either a volumeRef, or a storage and a
+                          size
+                        rule: 'has(self.volumeRef) ? (!has(self.storage) && !has(self.size))
+                          : (has(self.storage) && has(self.size))'
+                    type: array
+                  firmware:
+                    description: Firmware selects BIOS or UEFI, the EFI vars disk,
+                      a TPM and the machine type.
+                    properties:
+                      bios:
+                        description: Bios is seabios (the Proxmox default) or ovmf
+                          for UEFI.
+                        enum:
+                        - seabios
+                        - ovmf
+                        type: string
+                      efiDisk:
+                        description: |-
+                          EFIDisk is the EFI vars disk ovmf needs. It is created with the machine
+                          and left alone afterwards.
+                        properties:
+                          preEnrolledKeys:
+                            default: false
+                            description: |-
+                              PreEnrolledKeys enrolls the Microsoft Secure Boot keys, which is what a
+                              Secure Boot guest expects. Off leaves Secure Boot disabled.
+                            type: boolean
+                          storage:
+                            description: Storage the EFI vars disk is allocated on.
+                            minLength: 1
+                            type: string
+                        required:
+                        - storage
+                        type: object
+                      machine:
+                        description: Machine is the QEMU machine type, such as q35.
+                          Empty keeps the Proxmox default (i440fx).
+                        type: string
+                      scsiController:
+                        description: |-
+                          SCSIController is the SCSI controller model (scsihw): virtio-scsi-single,
+                          virtio-scsi-pci, lsi, lsi53c810, megasas or pvscsi. Empty keeps the
+                          Proxmox default (lsi), which a cloud image built for virtio-scsi, such
+                          as Ubuntu's, cannot boot from.
+                        enum:
+                        - virtio-scsi-single
+                        - virtio-scsi-pci
+                        - lsi
+                        - lsi53c810
+                        - megasas
+                        - pvscsi
+                        type: string
+                      tpm:
+                        description: TPM is a TPM state disk. It is created with the
+                          machine and left alone afterwards.
+                        properties:
+                          storage:
+                            description: Storage the TPM state disk is allocated on.
+                            minLength: 1
+                            type: string
+                          version:
+                            default: v2.0
+                            description: 'Version is the TPM version: v2.0 (default)
+                              or v1.2.'
+                            enum:
+                            - v1.2
+                            - v2.0
+                            type: string
+                        required:
+                        - storage
+                        type: object
+                    type: object
+                  guestAgent:
+                    default: false
+                    description: |-
+                      GuestAgent enables the QEMU guest agent channel (agent=1). Without it
+                      Proxmox cannot ask the guest for its addresses or run commands in it,
+                      and the operator's status shows no IP. A clone inherits the template's
+                      setting; a machine built from scratch has it off unless set here.
+                    type: boolean
+                  memory:
+                    description: Memory is the amount of memory in MB
+                    minimum: 16
+                    type: integer
+                  network:
+                    description: Networks is the list of networks
+                    items:
+                      properties:
+                        bridge:
+                          description: Bridge is the name of the bridge
+                          type: string
+                        ipAddressClaimRef:
+                          description: |-
+                            IPAddressClaimRef names an IPAddressClaim (ipam.cluster.x-k8s.io) in
+                            this namespace. Once the claim holds an IPAddress, its address, prefix
+                            and gateway are written into the matching ipconfigN of the machine for
+                            cloud-init to apply; until then the machine is not started.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        model:
+                          description: Model is the model of the network card
+                          type: string
+                        vlan:
+                          description: VLAN is the 802.1Q tag of the port on the bridge.
+                            Zero leaves the port untagged.
+                          maximum: 4094
+                          minimum: 1
+                          type: integer
+                      required:
+                      - bridge
+                      - model
+                      type: object
+                    type: array
+                  osImage:
+                    description: OS Image
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                    type: object
+                  pciDevices:
+                    description: PCI is the list of PCI devices
+                    items:
+                      properties:
+                        deviceID:
+                          description: DeviceID is the ID hex id of the device
+                          type: string
+                        pcie:
+                          default: false
+                          description: PCIE is the flag that indicates whether the
+                            device is a PCIE device ==> pcie=1
+                          type: boolean
+                        primaryGPU:
+                          default: false
+                          description: PrimaryGPU is the flag that indicates whether
+                            the device is the primary GPU ==> x-vga=1
+                          type: boolean
+                        type:
+                          description: Type is the type of the PCI device either raw
+                            or mapped
+                          enum:
+                          - raw
+                          - mapped
+                          type: string
+                      required:
+                      - type
+                      type: object
+                      x-kubernetes-validations:
+                      - message: pcie cannot be true when device type is mapped
+                        rule: self.type != 'mapped' || self.pcie == false
+                    type: array
+                  smbiosUUID:
+                    description: |-
+                      SMBIOSUUID sets the UUID in smbios1. Cloud-init takes it as the
+                      instance identity, so a new value makes it run again on the next boot.
+                    pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                    type: string
+                  socket:
+                    default: 1
+                    description: Socket is the number of CPU sockets
+                    minimum: 1
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: cloudInit (a NoCloud ISO from a Secret) and cloudInitConfig
+                    (Proxmox's own cloud-init drive) are two datasources; set one
+                  rule: '!(has(self.cloudInit) && has(self.cloudInitConfig))'
+            required:
+            - connectionRef
+            - name
+            - nodeName
+            type: object
+            x-kubernetes-validations:
+            - message: ConnectionRef is required once set
+              rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
+            - message: One of template or vmSpec must be specified
+              rule: has(self.template) || has(self.vmSpec)
+            - message: template and vmSpec are mutually exclusive
+              rule: '!has(self.template) || !has(self.vmSpec)'
+          status:
+            description: VirtualMachineStatus defines the observed state of VirtualMachine
+            properties:
+              cloudInit:
+                description: CloudInit is the NoCloud datasource attached from spec.vmSpec.cloudInit.
+                properties:
+                  device:
+                    description: Device the ISO is attached at.
+                    type: string
+                  hash:
+                    description: Hash of the content the attached ISO was built from.
+                    type: string
+                  instanceID:
+                    description: InstanceID in the meta-data of the attached ISO.
+                    type: string
+                type: object
+              conditions:
+                description: Conditions is the metav1.Condition of the Virtual Machine
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastObserved:
+                description: |-
+                  LastObserved is the timestamp of the last successful observation of the VM
+                  state from Proxmox. A stale value relative to wall-clock time indicates the
+                  operator has lost the ability to verify .status.status against Proxmox.
+                format: date-time
+                type: string
+              networks:
+                description: |-
+                  Networks is one entry per network port: its MAC and, for a port with
+                  an IPAddressClaimRef, the address written into ipconfigN.
+                items:
+                  description: |-
+                    VirtualMachineNetworkStatus is what the operator knows about one network
+                    port of the machine.
+                  properties:
+                    address:
+                      description: |-
+                        Address is the address with prefix (10.0.0.5/24) written into ipconfigN
+                        from the IPAddressClaim.
+                      type: string
+                    gateway:
+                      description: Gateway is the gateway written into ipconfigN.
+                      type: string
+                    index:
+                      description: Index is the N of netN and ipconfigN.
+                      type: integer
+                    ipAddressClaim:
+                      description: IPAddressClaim is the claim the address came from.
+                      type: string
+                    macAddress:
+                      description: MACAddress is the port's MAC as Proxmox reports
+                        it.
+                      type: string
+                  required:
+                  - index
+                  type: object
+                type: array
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation that the controller last
+                  reconciled successfully.
+                format: int64
+                type: integer
+              status:
+                description: Status is the QEMU status of the Virtual Machine (state,
+                  node, uptime, id, IP address, os info)
+                properties:
+                  IPAddress:
+                    description: IPAddress is the IP address of the VM (or LXC). Optional
+                      so status subresources can be patched incrementally.
+                    type: string
+                  OSInfo:
+                    description: OSInfo is the OS information of the VM (or LXC, often
+                      config ostype).
+                    type: string
+                  id:
+                    description: ID is the ID of the VM
+                    type: integer
+                  node:
+                    description: Node is the name of the node
+                    type: string
+                  state:
+                    description: State is the state of the VM
+                    type: string
+                  uptime:
+                    description: Uptime is the uptime of the VM
+                    type: string
+                required:
+                - id
+                - node
+                - state
+                - uptime
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

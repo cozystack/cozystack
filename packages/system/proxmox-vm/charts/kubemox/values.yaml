@@ -1,0 +1,144 @@
+# Default values for kubemox.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+# -- Define how many replicas of the Kubemox to run
+replicaCount: 1
+# Deprecated: Use ProxmoxConnection instead
+# proxmox:
+#   # -- Proxmox VE endpoint
+#   endpoint: "10.0.0.99" 
+#   # -- Proxmox VE skip hostname verification for SSL
+#   insecureSkipTLSVerify: true
+#   # Either tokenID/secret or username/password must be set
+#   # -- Proxmox VE token ID
+#   tokenID: ""
+#   # -- Proxmox VE token secret
+#   secret: ""
+#   # Both username and password must be set if tokenID/secret is not set
+#   # -- Proxmox VE username
+#   username: "root@pam"
+#   # -- Proxmox VE password
+#   password: "PROXMOX_PASSWORD"
+
+# # Existing secret containing credentials
+# existingSecret:
+# # Key in the secret containing the Proxmox token id
+# tokenIdKey: tokenID
+# # Key in the secret containing the Proxmox token secret
+# secretKey: secret
+# # Key in the secret containing the Proxmox username
+# usernameKey: username
+# # Key in the secret containing the Proxmox password
+# passwordKey: password
+image:
+  # -- Kubemox image repository
+  repository: ghcr.io/themoriarti/kubemox
+  # -- Image pull policy for Kubemox
+  pullPolicy: Always
+  # -- Kubemox image tag, see https://github.com/alperencelik/kubemox/releases for the tags
+  tag: "pskep-9e0381c"
+metrics:
+  serviceMonitor:
+    # -- Prometheus ServiceMonitor enabled
+    enabled: false
+    # -- Prometheus ServiceMonitor interval
+    interval: 30s
+    # -- Prometheus [MetricRelabelConfigs] to apply to samples before ingestion
+    relabelings: []
+    # -- Prometheus [MetricRelabelConfigs] to apply to samples before ingestion
+    metricRelabelings: []
+    # -- Prometheus ServiceMonitor selector
+    selector: {}
+    # prometheus: kube-prometheus
+
+    # -- Prometheus ServiceMonitor scheme
+    scheme: ""
+    # -- Prometheus ServiceMonitor tlsConfig
+    tlsConfig: {}
+    # -- Prometheus ServiceMonitor namespace
+    namespace: "" # "monitoring"
+    # -- Prometheus ServiceMonitor labels
+    additionalLabels: {}
+    # -- Prometheus ServiceMonitor annotations
+    annotations: {}
+tracing:
+  # -- Enable distributed tracing via OpenTelemetry
+  enabled: false
+  # -- OTLP HTTP endpoint for trace export
+  otlpEndpoint: "otel-collector.tracing.svc.cluster.local:4318"
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use.
+  # -- If not set and create is true, a name is generated using the fullname template
+  name: ""
+podAnnotations: {}
+# Labels added to the operator pod, next to the selector labels. A platform
+# that admits traffic to its API server by pod label, or routes metrics by
+# one, sets it here instead of patching the Deployment after every upgrade.
+podLabels: {}
+podSecurityContext: {}
+# fsGroup: 2000
+
+securityContext: {}
+# capabilities:
+#   drop:
+#   - ALL
+# readOnlyRootFilesystem: true
+# runAsNonRoot: true
+# runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  portName: http
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # kubernetes.io/ingress.class: nginx
+  # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: chart-example.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# Any additional manifests:
+extraObjects: []
+# - apiVersion: "external-secrets.io/v1beta1"
+#   kind: ExternalSecret
+#   metadata:
+#     name: kubemox-secrets
+#   spec:
+#     secretStoreRef: secret-store
+#     target:
+#       name: kubemox-secrets
+#     dataFrom:
+#       - extract:
+#           key: /prod/kubemox

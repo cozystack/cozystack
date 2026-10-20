@@ -1,0 +1,8 @@
+apiVersion: v2
+name: cozy-proxmox-vm
+description: Virtual machines on an external Proxmox VE cluster for the vm-disk and vm-instance applications (substrate proxmox)
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+dependencies:
+  - name: kubemox
+    version: "*"
+    repository: ""

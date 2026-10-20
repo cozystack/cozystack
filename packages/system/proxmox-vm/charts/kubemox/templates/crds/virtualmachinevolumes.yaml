@@ -1,0 +1,288 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: virtualmachinevolumes.proxmox.alperen.cloud
+spec:
+  group: proxmox.alperen.cloud
+  names:
+    kind: VirtualMachineVolume
+    listKind: VirtualMachineVolumeList
+    plural: virtualmachinevolumes
+    shortNames:
+    - vmvol
+    singular: virtualmachinevolume
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The Proxmox node
+      jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - description: The Proxmox storage
+      jsonPath: .spec.storage
+      name: Storage
+      type: string
+    - description: The size in GiB
+      jsonPath: .spec.size
+      name: Size
+      type: integer
+    - description: Where the disk is
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: The current Proxmox volume id
+      jsonPath: .status.volume
+      name: Volume
+      type: string
+    - description: The VirtualMachine using the disk
+      jsonPath: .status.attachedTo
+      name: Attached To
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VirtualMachineVolume is the Schema for the virtualmachinevolumes
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VirtualMachineVolumeSpec defines the desired state of VirtualMachineVolume.
+
+              A VirtualMachineVolume is a Proxmox volume that outlives the virtual machine
+              it is attached to. Proxmox has no standalone volume: every volume belongs
+              to a VMID, and destroying a VM destroys the volumes still attached to it.
+              So the disk lives on a holder, a VM per namespace and node that never
+              starts, and moves between the holder and a VirtualMachine with Proxmox's
+              disk reassignment. Reassignment only works between VMs on the same node,
+              which is why the node is part of the spec and immutable.
+            properties:
+              connectionRef:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deletionProtection:
+                default: false
+                description: |-
+                  DeletionProtection keeps the volume on the holder when this object is
+                  deleted, so the data survives the object. Defaults to false: deleting
+                  the object frees the volume.
+                type: boolean
+              nodeName:
+                description: |-
+                  NodeName is the Proxmox node the volume is created on. A VirtualMachine
+                  can only attach disks that live on its own node.
+                minLength: 1
+                type: string
+              size:
+                description: |-
+                  Size is the size of the disk in GiB. It can be raised later, which
+                  grows the volume in place; it cannot be lowered.
+                minimum: 1
+                type: integer
+              source:
+                description: |-
+                  Source populates the disk when it is created. Leave it empty for a
+                  blank disk.
+                properties:
+                  disk:
+                    description: |-
+                      Disk is another VirtualMachineVolume in the same namespace to copy from.
+                      It has to be Ready, on the same node, and not attached to a running
+                      VirtualMachine while the copy is made.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  volume:
+                    description: |-
+                      Volume is a Proxmox volume id to copy from, such as
+                      "local:import/debian-12.qcow2" (a file on a storage with the import
+                      content type) or "main-pool:base-9001-disk-0" (the disk of a template).
+                      The copy is made by Proxmox with import-from, and the new disk is
+                      grown to Size afterwards when the source is smaller.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of volume or disk must be set
+                  rule: has(self.volume) != has(self.disk)
+              storage:
+                description: |-
+                  Storage is the Proxmox storage the volume is allocated on, as it
+                  appears in `pvesm status`.
+                minLength: 1
+                type: string
+            required:
+            - connectionRef
+            - nodeName
+            - size
+            - storage
+            type: object
+            x-kubernetes-validations:
+            - message: 'nodeName is immutable: a volume cannot move to another node'
+              rule: self.nodeName == oldSelf.nodeName
+            - message: 'storage is immutable: a volume cannot move to another storage'
+              rule: self.storage == oldSelf.storage
+            - message: 'source is immutable: it only populates the disk at creation'
+              rule: has(self.source) == has(oldSelf.source) && (!has(self.source)
+                || self.source == oldSelf.source)
+            - message: 'size can only grow: Proxmox does not shrink a volume'
+              rule: self.size >= oldSelf.size
+            - message: ConnectionRef is required once set
+              rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
+          status:
+            description: VirtualMachineVolumeStatus defines the observed state of
+              VirtualMachineVolume.
+            properties:
+              attachedTo:
+                description: |-
+                  AttachedTo is the VirtualMachine in this namespace that currently has
+                  the disk. Empty while the disk sits on the holder.
+                type: string
+              conditions:
+                description: Conditions is the metav1.Condition list of the VirtualMachineVolume.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              holder:
+                description: Holder is the VM that keeps the volume while no VirtualMachine
+                  uses it.
+                properties:
+                  name:
+                    description: Name is the Proxmox VM name of the holder.
+                    type: string
+                  vmid:
+                    description: VMID is the Proxmox VMID of the holder.
+                    type: integer
+                required:
+                - name
+                - vmid
+                type: object
+              lastObserved:
+                description: LastObserved is when the volume was last seen on Proxmox.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation that the controller last
+                  reconciled successfully.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase is a one-word summary of where the disk is: Pending while the
+                  volume is being created or populated, Ready when it sits on the holder,
+                  Attached when a VirtualMachine has it, Failed when Proxmox refused.
+                type: string
+              size:
+                description: Size is the size of the volume in GiB as Proxmox reports
+                  it.
+                type: integer
+              slot:
+                description: |-
+                  Slot is the device the volume is attached as, such as "scsi3": on the
+                  holder while the disk is free, on the VirtualMachine named in
+                  AttachedTo otherwise.
+                type: string
+              volume:
+                description: |-
+                  Volume is the current Proxmox volume id. It changes whenever the disk
+                  moves between VMs, because Proxmox renames a volume after its owner.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

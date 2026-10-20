@@ -1,0 +1,337 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: virtualmachinetemplates.proxmox.alperen.cloud
+spec:
+  group: proxmox.alperen.cloud
+  names:
+    kind: VirtualMachineTemplate
+    listKind: VirtualMachineTemplateList
+    plural: virtualmachinetemplates
+    shortNames:
+    - vmt
+    singular: virtualmachinetemplate
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The node name
+      jsonPath: .spec.node
+      name: Node
+      type: string
+    - description: The number of cores
+      jsonPath: .spec.virtualMachineConfig.cores
+      name: Cores
+      type: string
+    - description: The amount of memory
+      jsonPath: .spec.virtualMachineConfig.memory
+      name: Memory
+      type: string
+    - description: The name of the image
+      jsonPath: .spec.imageConfig.filename
+      name: Image
+      type: string
+    - description: The username
+      jsonPath: .spec.cloudInitConfig.user
+      name: Username
+      type: string
+    - description: The password
+      jsonPath: .spec.cloudInitConfig.password
+      name: Password
+      type: string
+    - description: The status of the VM
+      jsonPath: .status.conditions[0].type
+      name: Status
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VirtualMachineTemplate is the Schema for the virtualmachinetemplates
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VirtualMachineTemplateSpec defines the desired state of VirtualMachineTemplate
+            properties:
+              additionalConfig:
+                additionalProperties:
+                  type: string
+                description: AdditionalConfig is the additional configuration of the
+                  VM
+                type: object
+              cloudInitConfig:
+                description: Cloud Init Config
+                properties:
+                  custom:
+                    description: Custom fields for cloud-init
+                    properties:
+                      metaData:
+                        type: string
+                      networkData:
+                        type: string
+                      userData:
+                        type: string
+                      vendorData:
+                        type: string
+                    type: object
+                  dnsDomain:
+                    description: DNS Domain
+                    type: string
+                  dnsServers:
+                    description: DNS Servers
+                    items:
+                      type: string
+                    type: array
+                  ipConfig:
+                    description: IPConfig is the IP configuration for the VM
+                    properties:
+                      cidr:
+                        description: Subnet Mask
+                        type: string
+                      gateway:
+                        description: Gateway
+                        type: string
+                      gatewayIPv6:
+                        description: GatewayIPv6
+                        type: string
+                      ip:
+                        description: IP Address
+                        type: string
+                      ipv6:
+                        description: IPv6 Address
+                        type: string
+                    type: object
+                  password:
+                    description: |-
+                      Password is the password for the template.
+                      Use this field to specify the password directly.
+                    type: string
+                  passwordFrom:
+                    description: |-
+                      PasswordFrom is a reference to a key in a Secret that contains the password.
+                      Use this field to specify the password via a Secret.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  sshKeys:
+                    description: SSH Keys -- suppose to be on openSSH format
+                    items:
+                      type: string
+                    type: array
+                  upgradePackages:
+                    default: true
+                    description: Upgrade Packages
+                    type: boolean
+                  user:
+                    description: User is the user name for the template
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: Specify either password or passwordFrom, but not both
+                  rule: (has(self.password) && !has(self.passwordFrom)) || (!has(self.password)
+                    && has(self.passwordFrom)) || (!has(self.password) && !has(self.passwordFrom))
+              connectionRef:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deletionProtection:
+                default: false
+                type: boolean
+              imageConfig:
+                description: Image config
+                properties:
+                  checksum:
+                    description: Optional fields
+                    type: string
+                  checksumAlgorithm:
+                    type: string
+                  compression:
+                    type: string
+                  content:
+                    pattern: \b(iso|vztmpl)\b
+                    type: string
+                  filename:
+                    type: string
+                  node:
+                    type: string
+                  storage:
+                    default: local
+                    type: string
+                  url:
+                    type: string
+                  verifyCertificate:
+                    type: boolean
+                required:
+                - content
+                - filename
+                - node
+                - url
+                type: object
+              name:
+                description: Name is the name of the VM
+                type: string
+              node:
+                description: NodeName is the node name
+                type: string
+              virtualMachineConfig:
+                description: VirtualMachineConfig is the configuration of the VM
+                properties:
+                  cores:
+                    default: 2
+                    description: Cores
+                    minimum: 1
+                    type: integer
+                  memory:
+                    default: 2048
+                    description: Memory as MB
+                    minimum: 16
+                    type: integer
+                  network:
+                    properties:
+                      bridge:
+                        default: vmbr0
+                        type: string
+                      model:
+                        default: virtio
+                        type: string
+                    type: object
+                  sockets:
+                    default: 1
+                    description: Sockets
+                    minimum: 1
+                    type: integer
+                  storage:
+                    default: local-lvm
+                    description: Storage is the name of storage where the VM will
+                      be created
+                    type: string
+                type: object
+            required:
+            - connectionRef
+            - imageConfig
+            - name
+            - node
+            type: object
+            x-kubernetes-validations:
+            - message: ConnectionRef is required once set
+              rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
+          status:
+            description: VirtualMachineTemplateStatus defines the observed state of
+              VirtualMachineTemplate
+            properties:
+              conditions:
+                description: |-
+                  INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                  Important: Run "make" to regenerate code after modifying this file
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              status:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
