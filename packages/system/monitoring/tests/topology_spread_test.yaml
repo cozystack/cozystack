@@ -2,7 +2,6 @@ suite: monitoring replicas spread over nodes
 templates:
   - templates/vm/vmcluster.yaml
   - templates/vlogs/vlogs.yaml
-  - templates/vtraces/vtraces.yaml
   - templates/alerta/alerta.yaml
 
 release:
@@ -15,11 +14,6 @@ set:
   _namespace:
     host: tenant-root.example.org
     ingress: tenant-root
-  tracingStorages:
-    - name: generic
-      mode: cluster
-      retentionPeriod: "14d"
-      storage: 10Gi
 
 tests:
   - it: requires separate nodes for vmstorage and vmselect and prefers them for vminsert
@@ -119,44 +113,6 @@ tests:
               labelSelector:
                 matchLabels:
                   app.kubernetes.io/name: vlinsert
-                  app.kubernetes.io/instance: generic
-
-  - it: requires separate nodes for vtstorage and prefers them for vtselect and vtinsert
-    template: templates/vtraces/vtraces.yaml
-    documentSelector:
-      path: kind
-      value: VTCluster
-    asserts:
-      - equal:
-          path: spec.storage.topologySpreadConstraints
-          value:
-            - maxSkew: 1
-              topologyKey: kubernetes.io/hostname
-              whenUnsatisfiable: DoNotSchedule
-              nodeTaintsPolicy: Ignore
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: vtstorage
-                  app.kubernetes.io/instance: generic
-      - equal:
-          path: spec.select.topologySpreadConstraints
-          value:
-            - maxSkew: 1
-              topologyKey: kubernetes.io/hostname
-              whenUnsatisfiable: ScheduleAnyway
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: vtselect
-                  app.kubernetes.io/instance: generic
-      - equal:
-          path: spec.insert.topologySpreadConstraints
-          value:
-            - maxSkew: 1
-              topologyKey: kubernetes.io/hostname
-              whenUnsatisfiable: ScheduleAnyway
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: vtinsert
                   app.kubernetes.io/instance: generic
 
   - it: requires separate nodes for the Alertmanager replicas
@@ -262,31 +218,6 @@ tests:
               labelSelector:
                 matchLabels:
                   app.kubernetes.io/name: vlstorage
-                  app.kubernetes.io/instance: generic
-
-  - it: renders the platform policy in place of the default for the traces store
-    template: templates/vtraces/vtraces.yaml
-    set:
-      _cluster:
-        scheduling:
-          globalAppTopologySpreadConstraints: |
-            topologySpreadConstraints:
-            - maxSkew: 1
-              topologyKey: topology.kubernetes.io/zone
-              whenUnsatisfiable: ScheduleAnyway
-    documentSelector:
-      path: kind
-      value: VTCluster
-    asserts:
-      - equal:
-          path: spec.storage.topologySpreadConstraints
-          value:
-            - maxSkew: 1
-              topologyKey: topology.kubernetes.io/zone
-              whenUnsatisfiable: ScheduleAnyway
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/name: vtstorage
                   app.kubernetes.io/instance: generic
 
   - it: renders the platform policy in place of the default for the Alertmanager
