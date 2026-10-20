@@ -1,0 +1,67 @@
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+---
+# Whoever orders GPUDevice objects must not touch two parts of a device. The
+# finalizer keeps a released device, its binding and its usage record until
+# no VMI uses it; without it a held device could leave the usage records.
+# The template mark names the devices the VMI webhook created from a
+# deviceTemplate, which the controller deletes with their VMI; on a tenant's
+# own order it would let the controller delete that order. The API server
+# and the garbage collector own the orphan and foregroundDeletion
+# finalizers, so those stay free.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-device-tamper
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gpu.cozystack.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["gpudevices"]
+  variables:
+  - name: trusted
+    expression: >-
+      request.userInfo.username == "system:kube-controller-manager" ||
+      (has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:kube-system"))
+  - name: finalizers
+    expression: >-
+      object.metadata.?finalizers.orValue([]).filter(f, f != "orphan" && f != "foregroundDeletion")
+  - name: oldFinalizers
+    expression: >-
+      oldObject == null ? [] :
+      oldObject.metadata.?finalizers.orValue([]).filter(f, f != "orphan" && f != "foregroundDeletion")
+  - name: mark
+    expression: object.metadata.?labels[?"gpu.cozystack.io/template-device"]
+  - name: oldMark
+    expression: >-
+      oldObject == null ? optional.none() : oldObject.metadata.?labels[?"gpu.cozystack.io/template-device"]
+  validations:
+  - expression: >-
+      variables.trusted || (
+        variables.finalizers.all(f, f in variables.oldFinalizers) &&
+        variables.oldFinalizers.all(f, f in variables.finalizers))
+    messageExpression: >-
+      "GPUDevice " + object.metadata.name + ": finalizers are managed by the GPU controller and cannot be added or removed. Delete the device to release it."
+    reason: Forbidden
+  - expression: variables.trusted || variables.mark == variables.oldMark
+    messageExpression: >-
+      "GPUDevice " + object.metadata.name + ": the label gpu.cozystack.io/template-device is set only by the GPU webhook on devices it creates from a deviceTemplate."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-device-tamper
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-device-tamper
+  validationActions: [Deny]
+{{- end }}
