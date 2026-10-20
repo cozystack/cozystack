@@ -1,0 +1,15 @@
+image: ghcr.io/cozystack/cozystack/gpu-node-agent:latest
+# Go duration between inventory syncs, such as 30s or 1m. kubelet's
+# pod-resources API has no watch.
+interval: 30s
+# The label gpu-operator's node-feature-discovery puts on nodes with an
+# NVIDIA PCI device: elsewhere the agent has nothing to report and its
+# token, which may list every pod, has no business being.
+nodeSelector:
+  feature.node.kubernetes.io/pci-10de.present: "true"
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
