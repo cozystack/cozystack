@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -52,7 +53,7 @@ func ParseDeviceRefs(s string) ([]DeviceRef, error) {
 	if err := dec.Decode(&refs); err != nil {
 		return nil, fmt.Errorf("parse device references: %w", err)
 	}
-	if dec.More() {
+	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("parse device references: data after the list")
 	}
 	if len(refs) == 0 {
@@ -89,7 +90,7 @@ func FormatDeviceRefs(refs []DeviceRef) (string, error) {
 // TemplateDeviceName names the GPUDevice created for the deviceTemplate
 // entry at index of a VMI's references, so a repeated admission or a
 // recreated VMI finds the same device. A VMI name too long to take the
-// suffix is shortened and made unique by a hash of the full name.
+// suffix is cut short and followed by a hash of the full name.
 func TemplateDeviceName(vmi string, index int) string {
 	suffix := "-gpu-" + strconv.Itoa(index)
 	if len(vmi)+len(suffix) <= validation.DNS1123SubdomainMaxLength {

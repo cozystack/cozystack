@@ -58,7 +58,9 @@ limitations under the License.
 // When the webhook refuses or times out, it clears what it wrote. When it
 // cannot (it crashed, or the VMI was refused by a later admission step),
 // the controller clears an attachment and a request whose VMI has not
-// appeared after Config.AttachmentGrace, and deletes such template devices.
+// appeared after Config.AttachmentGrace, and deletes such template devices,
+// as well as a template device that has no attachment and is older than
+// Config.AttachmentGrace.
 //
 // Status is a subresource that no tenant role grants, so a tenant cannot
 // forge an attachment or a request.

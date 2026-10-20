@@ -45,6 +45,9 @@ func TestParseDeviceRefs(t *testing.T) {
 		{name: "unknown field", in: `[{"name":"nvidia.com/gpu"}]`, wantErr: true},
 		{name: "same device twice", in: `[{"device":"a"},{"device":"a"}]`, wantErr: true},
 		{name: "data after the list", in: `[{"device":"a"}] x`, wantErr: true},
+		{name: "bracket after the list", in: `[{"device":"a"}]]`, wantErr: true},
+		{name: "brace after the list", in: `[{"device":"a"}]}`, wantErr: true},
+		{name: "trailing whitespace", in: "[{\"device\":\"a\"}]\n", want: []DeviceRef{{Device: "a"}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
