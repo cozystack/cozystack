@@ -305,17 +305,17 @@ func TestCompile(t *testing.T) {
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")
+	catalog := shippedInstancetypes(t)
 	var wg sync.WaitGroup
 	for _, it := range []string{"u1.small", "cx1.2xlarge", "o1.large", "u1.medium"} {
+		want, err := ClassifyInstancetype(findInstancetype(t, catalog, it), InstancetypeOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
 		for range 8 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				want, err := ClassifyInstancetype(findInstancetype(t, it), InstancetypeOptions{})
-				if err != nil {
-					t.Error(err)
-					return
-				}
 				got, err := vm.EvaluateJSON([]byte(`{"instanceType": "`+it+`"}`), env)
 				if err != nil {
 					t.Error(err)
@@ -328,8 +328,9 @@ func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	wg.Wait()
 }
 
-func findInstancetype(t *testing.T, name string) map[string]any {
-	for _, obj := range shippedInstancetypes(t) {
+func findInstancetype(t *testing.T, catalog []map[string]any, name string) map[string]any {
+	t.Helper()
+	for _, obj := range catalog {
 		if obj["metadata"].(map[string]any)["name"] == name {
 			return obj
 		}
