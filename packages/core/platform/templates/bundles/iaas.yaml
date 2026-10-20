@@ -253,6 +253,21 @@
 {{- if or $proxmoxEnabled (has $ipamName $pkgEnabled) }}
 {{include "cozystack.platform.package.default" (list $ipamName $) }}
 {{- end }}
+{{- /*
+  Virtual machines for tenants on Proxmox (vm-disk and vm-instance with
+  substrate proxmox). Opt-in like capmox, and like capmox it needs the IPAM
+  provider, which the PackageSource declares; the same conflict as above is
+  worth naming at render time.
+*/ -}}
+{{- $proxmoxVMName := "cozystack.proxmox-vm" -}}
+{{- $proxmoxVMEnabled := and (has $proxmoxVMName $pkgEnabled) (not (has $proxmoxVMName $pkgDisabled)) -}}
+{{- if and $proxmoxVMEnabled (has $ipamName $pkgDisabled) -}}
+{{- fail (printf "%s requires %s, which is listed in bundles.disabledPackages: every port of a Proxmox tenant VM gets its address from an InClusterIPPool through an IPAddressClaim" $proxmoxVMName $ipamName) -}}
+{{- end -}}
+{{- if and $proxmoxVMEnabled (not (or $proxmoxEnabled (has $ipamName $pkgEnabled))) }}
+{{include "cozystack.platform.package.default" (list $ipamName $) }}
+{{- end }}
+{{include "cozystack.platform.package.optional.default" (list $proxmoxVMName $) }}
 {{- if $proxmoxEnabled }}
 {{include "cozystack.platform.package.default" (list $proxmoxName $) }}
 {{- end }}
