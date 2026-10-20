@@ -23,6 +23,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
@@ -278,6 +279,9 @@ func TestGPUClassCreate(t *testing.T) {
 		},
 		{name: "devicePlugin without resourceName", obj: gpuClass("x", "  vendor: nvidia\n  model: H100\n  mode: passthrough\n  source:\n    devicePlugin: {}\n"), wantReject: true},
 		{name: "resourceName without a domain", obj: gpuClass("x", "  vendor: nvidia\n  model: H100\n  mode: passthrough\n  source:\n    devicePlugin:\n      resourceName: gpu\n"), wantReject: true},
+		{name: "resourceName in the budget key domain", obj: gpuClass("x", "  vendor: nvidia\n  model: H100\n  mode: passthrough\n  source:\n    devicePlugin:\n      resourceName: gpu.cozystack.io/h100\n"), wantReject: true},
+		{name: "resourceName name part longer than 63", obj: gpuClass("x", "  vendor: nvidia\n  model: H100\n  mode: passthrough\n  source:\n    devicePlugin:\n      resourceName: nvidia.com/"+strings.Repeat("a", 64)+"\n"), wantReject: true},
+		{name: "resourceName name part of exactly 63", obj: gpuClass("x", "  vendor: nvidia\n  model: H100\n  mode: passthrough\n  source:\n    devicePlugin:\n      resourceName: nvidia.com/"+strings.Repeat("a", 63)+"\n")},
 		{name: "no vendor", obj: gpuClass("x", "  model: H100\n  mode: passthrough\n  source:\n    devicePlugin:\n      resourceName: nvidia.com/GH100_H100\n"), wantReject: true},
 	}
 	for _, tc := range tests {

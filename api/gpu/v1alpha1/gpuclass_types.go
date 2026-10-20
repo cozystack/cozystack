@@ -50,7 +50,8 @@ type DevicePluginSource struct {
 	// +required
 	// +kubebuilder:validation:MinLength=3
 	// +kubebuilder:validation:MaxLength=317
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('gpu.cozystack.io/')",message="resourceName must not be in gpu.cozystack.io, whose keys are GPU budgets"
 	ResourceName string `json:"resourceName"`
 }
 

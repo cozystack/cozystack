@@ -120,8 +120,12 @@ spec:
                           selectors do not overlap.
                         maxLength: 317
                         minLength: 3
-                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
                         type: string
+                        x-kubernetes-validations:
+                        - message: resourceName must not be in gpu.cozystack.io, whose
+                            keys are GPU budgets
+                          rule: '!self.startsWith(''gpu.cozystack.io/'')'
                     required:
                     - resourceName
                     type: object
