@@ -1,7 +1,14 @@
 {{- /* One image for the data pods and the Sentinels, resolved once so they cannot drift apart. */}}
 {{- $redisImage := printf "redis:%s" (include "redis.versionMap" $) }}
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
-{{- $spreadPolicy := dig "scheduling" "globalAppTopologySpreadConstraints" "" (.Values._cluster | default dict) -}}
+{{- $spreadConstraints := list -}}
+{{- with dig "scheduling" "globalAppTopologySpreadConstraints" "" (.Values._cluster | default dict) -}}
+{{-   $policy := fromYaml . -}}
+{{-   $spreadConstraints = dig "topologySpreadConstraints" (list) $policy -}}
+{{-   if or (not (kindIs "slice" $spreadConstraints)) (not $spreadConstraints) -}}
+{{-     fail (trim (printf "redis: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list. %s" (get $policy "Error"))) -}}
+{{-   end -}}
+{{- end -}}
 {{- /*
   A Sentinel holds only its configuration and failover state, so the Redis
   sizing over-provisions it. An empty sentinel block still falls back to the
@@ -67,12 +74,11 @@ spec:
     # on every start, so a chart rollback to an older engine is safe here.
     image: {{ $redisImage | quote }}
     replicas: 3
-    {{- if $spreadPolicy }}
-    {{- $spreadPolicy | fromYaml | toYaml | nindent 4 }}
-      labelSelector:
-        matchLabels:
-          app.kubernetes.io/name: {{ .Release.Name }}
-          app.kubernetes.io/component: sentinel
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "sentinel")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
     {{- else }}
     topologySpreadConstraints:
     - maxSkew: 1
@@ -91,12 +97,11 @@ spec:
     image: {{ $redisImage | quote }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
-    {{- if $spreadPolicy }}
-    {{- $spreadPolicy | fromYaml | toYaml | nindent 4 }}
-      labelSelector:
-        matchLabels:
-          app.kubernetes.io/name: {{ .Release.Name }}
-          app.kubernetes.io/component: redis
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "redis")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
     {{- else }}
     topologySpreadConstraints:
     - maxSkew: 1
