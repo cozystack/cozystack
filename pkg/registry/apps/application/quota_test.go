@@ -136,19 +136,23 @@ func usageQuota(t *testing.T, namespace, name string, used map[string]string) *c
 	}
 }
 
-func TestRenderedLimitKey(t *testing.T) {
+func TestUsageKey(t *testing.T) {
 	cases := map[string]string{
 		"cpu":                    "limits.cpu",
 		"memory":                 "limits.memory",
 		"ephemeral-storage":      "limits.ephemeral-storage",
-		"devices.com/nvidia":     "limits.devices.com/nvidia",
+		"devices.com/nvidia":     "requests.devices.com/nvidia",
+		"hugepages-2Mi":          "requests.hugepages-2Mi",
+		"requests.storage":       "requests.storage",
+		"limits.cpu":             "limits.cpu",
+		"count/services":         "count/services",
 		"storage":                "requests.storage",
 		"pods":                   "pods",
 		"services.loadbalancers": "services.loadbalancers",
 	}
 	for raw, want := range cases {
-		if got := renderedLimitKey(raw); got != want {
-			t.Errorf("renderedLimitKey(%q) = %q, want %q", raw, got, want)
+		if got := usageKey(raw); got != want {
+			t.Errorf("usageKey(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -336,6 +340,28 @@ func TestValidateTenantResourceQuotas_PoolUsage(t *testing.T) {
 		// pool, and as the tenant being updated it is excluded anyway.
 		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "9"})); len(errs) > 0 {
 			t.Fatalf("raising own quota within budget must be allowed, got: %v", errs)
+		}
+	})
+
+	// The quota controller counts extended resources only under requests.*;
+	// limits.<name> of one never carries usage.
+	t.Run("parent usage of an extended resource shrinks remaining", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"nvidia.com/gpu": "2"})
+		used := usageQuota(t, "tenant-foo", "tenant-quota", map[string]string{"requests.nvidia.com/gpu": "2"})
+		r := newTenantREST(t, parent, used)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"nvidia.com/gpu": "1"})); len(errs) == 0 {
+			t.Fatalf("child nvidia.com/gpu=1 should be denied when the parent pool already uses 2 of 2")
+		}
+	})
+
+	t.Run("parent usage of a prefixed key shrinks remaining", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"requests.storage": "10Gi"})
+		used := usageQuota(t, "tenant-foo", "tenant-quota", map[string]string{"requests.storage": "8Gi"})
+		r := newTenantREST(t, parent, used)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"requests.storage": "5Gi"})); len(errs) == 0 {
+			t.Fatalf("child requests.storage=5Gi should be denied when the parent pool already uses 8Gi of 10Gi")
 		}
 	})
 
