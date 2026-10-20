@@ -68,7 +68,8 @@ limitations under the License.
 // cannot be split. A set held whole on a cordoned node whose only reason
 // to leave is the cordon, with no room elsewhere or pinned by a Stay
 // class, is pinned where it is. A set that cannot be placed keeps the
-// pod gated, with a condition on the claims and the VMI.
+// pod gated; its claims carry a condition and the VMI gets a Warning event
+// with the same reason.
 //
 // model.Snapshot.CheckOrder judges one order. To judge a set, such as a
 // VMI's template claims, add each claim to the snapshot as Bound before

@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/gpu/model"
 )
 
 const (
@@ -35,6 +36,13 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// A GPU usage record has no monitor: its GPUClaim owns it, deletes it
+	// when the claim stops holding GPUs, and garbage collection removes it
+	// with the claim.
+	if model.OwnedByClaim(w) {
+		return ctrl.Result{}, nil
 	}
 
 	// If my monitor is gone, delete me.

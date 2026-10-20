@@ -111,3 +111,47 @@ func TestWorkloadReconciler_KeepsWhenAllExist(t *testing.T) {
 		t.Errorf("expected workload to persist, got error: %v", err)
 	}
 }
+
+// A GPU usage record carries no monitor label: its GPUClaim owns it. The
+// Workload controller leaves such a record to its owner, and still deletes
+// one without a monitor label and without that owner.
+func TestWorkloadReconciler_LeavesARecordOwnedByAGPUClaim(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = cozyv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	record := func(owners ...metav1.OwnerReference) *cozyv1alpha1.Workload {
+		return &cozyv1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: "gpu-train-0", Namespace: "default", OwnerReferences: owners},
+			Status:     cozyv1alpha1.WorkloadStatus{Kind: "gpu-claim"},
+		}
+	}
+	claim := metav1.OwnerReference{APIVersion: "gpu.cozystack.io/v1alpha1", Kind: "GPUClaim", Name: "train-0", UID: "uid-train-0"}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "gpu-train-0", Namespace: "default"}}
+
+	kept := fake.NewClientBuilder().WithScheme(scheme).WithObjects(record(claim)).Build()
+	if _, err := (&WorkloadReconciler{Client: kept}).Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := kept.Get(context.TODO(), req.NamespacedName, &cozyv1alpha1.Workload{}); err != nil {
+		t.Errorf("a record owned by a GPUClaim was deleted: %v", err)
+	}
+
+	for name, owner := range map[string]metav1.OwnerReference{
+		"no owner":                    {},
+		"another kind":                {APIVersion: "gpu.cozystack.io/v1alpha1", Kind: "GPUClass", Name: "l40s", UID: "uid-l40s"},
+		"a GPUClaim of another group": {APIVersion: "example.com/v1", Kind: "GPUClaim", Name: "train-0", UID: "uid-train-0"},
+	} {
+		var owners []metav1.OwnerReference
+		if owner.Kind != "" {
+			owners = append(owners, owner)
+		}
+		orphaned := fake.NewClientBuilder().WithScheme(scheme).WithObjects(record(owners...)).Build()
+		if _, err := (&WorkloadReconciler{Client: orphaned}).Reconcile(context.TODO(), req); err != nil {
+			t.Fatalf("%s: Reconcile: %v", name, err)
+		}
+		if err := orphaned.Get(context.TODO(), req.NamespacedName, &cozyv1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+			t.Errorf("%s: a record without a monitor label or a GPUClaim owner was kept: %v", name, err)
+		}
+	}
+}
