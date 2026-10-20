@@ -1,0 +1,17 @@
+{{- if (.Values.cozystackController.gpu).enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozystack-controller-metrics
+  labels:
+    app.kubernetes.io/name: cozystack-controller
+spec:
+  type: ClusterIP
+  ports:
+  - name: metrics
+    port: 8443
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: cozystack-controller
+{{- end }}
