@@ -101,7 +101,7 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 	switch effType {
 	case "object":
 		mv, isMap := v.(map[string]any)
-		if !isMap || v == nil {
+		if !isMap || mv == nil {
 			if s.Default.Object != nil && !top {
 				if dm, ok := s.Default.Object.(map[string]any); ok {
 					mv = cloneMap(dm)
@@ -144,7 +144,7 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 
 	case "array":
 		sl, isSlice := v.([]any)
-		if !isSlice || v == nil {
+		if !isSlice || sl == nil {
 			if s.Default.Object != nil {
 				if ds, ok := s.Default.Object.([]any); ok {
 					sl = cloneSlice(ds)
