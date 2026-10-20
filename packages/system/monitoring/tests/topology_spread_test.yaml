@@ -375,3 +375,79 @@ tests:
               labelSelector:
                 matchLabels:
                   example.org/spread: all
+
+  - it: gives the component's selector to a constraint after one that sets its own
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+
+  - it: gives the component's selector to a constraint before one that sets its own
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchExpressions:
+                  - key: example.org/spread
+                    operator: Exists
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchExpressions:
+                  - key: example.org/spread
+                    operator: Exists
