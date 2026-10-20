@@ -1,0 +1,294 @@
+suite: vm-instance on the proxmox substrate renders a kubemox VirtualMachine
+
+# The catalog and the disks are objects the chart reads with lookup; both are
+# mocked here. The tests pin the mapping of instanceType, instanceProfile,
+# disks and networks through the catalog, the claims and the NoCloud Secret,
+# and the refusals for what the substrate cannot do.
+release:
+  name: vm-instance-web
+  namespace: tenant-test
+templates:
+  - templates/proxmox-vm.yaml
+  - templates/vm.yaml
+  - templates/service.yaml
+set:
+  substrate: proxmox
+  fullnameOverride: vm-instance-web
+  disks:
+    - name: web-system
+  networks:
+    - name: lan
+  sshKeys:
+    - ssh-ed25519 AAAATEST
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        group: ""
+        version: v1
+        resource: configmaps
+      namespaced: true
+    "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume":
+      gvr:
+        group: proxmox.alperen.cloud
+        version: v1alpha1
+        resource: virtualmachinevolumes
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        allowedNodes: |
+          - pve1
+        dnsServers: |
+          - 10.0.0.1
+        networks: |
+          lan:
+            bridge: vmbr0
+            vlan: 0
+            ipPool: lan-pool
+          tenant:
+            bridge: vmbr70
+            vlan: 101
+            ipPool: tenant-pool
+        profiles: |
+          ubuntu:
+            ostype: l26
+            bios: seabios
+            machine: q35
+            scsiController: virtio-scsi-single
+          windows.11:
+            ostype: win11
+            bios: ovmf
+            machine: q35
+            scsiController: virtio-scsi-single
+            efiPreEnrolledKeys: true
+            tpm: true
+        instancetypes: |
+          u1.medium:
+            cores: 1
+            sockets: 1
+            memoryMiB: 4096
+            balloon: 0
+          cx1.large:
+            cores: 2
+            sockets: 1
+            memoryMiB: 4096
+            cpu: host
+            numa: true
+            hugepages: "2"
+            balloon: 0
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-disk-web-system
+        namespace: tenant-test
+      spec:
+        nodeName: pve1
+        storage: local-zfs
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-disk-elsewhere
+        namespace: tenant-test
+      spec:
+        nodeName: pve2
+        storage: local-zfs
+tests:
+  - it: renders the machine from the catalog with its disk, port, claim and NoCloud secret
+    template: templates/proxmox-vm.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 0
+        isKind:
+          of: IPAddressClaim
+      - documentIndex: 0
+        equal:
+          path: spec.poolRef.name
+          value: lan-pool
+      - documentIndex: 1
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        matchRegex:
+          path: stringData["user-data"]
+          pattern: "#cloud-config\n\\s*ssh_authorized_keys:\n\\s*- \"ssh-ed25519 AAAATEST\""
+      - documentIndex: 2
+        isKind:
+          of: VirtualMachine
+      - documentIndex: 2
+        equal:
+          path: spec.nodeName
+          value: pve1
+      - documentIndex: 2
+        equal:
+          path: spec.powerState
+          value: Running
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.memory
+          value: 4096
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.disk[0]
+          value:
+            device: scsi0
+            volumeRef:
+              name: vm-disk-web-system
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.network[0]
+          value:
+            model: virtio
+            bridge: vmbr0
+            ipAddressClaimRef:
+              name: vm-instance-web-net0
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.cloudInit.nameservers
+          value: ["10.0.0.1"]
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.firmware.scsiController
+          value: virtio-scsi-single
+      - documentIndex: 2
+        equal:
+          path: spec.additionalConfig.ostype
+          value: l26
+  - it: renders neither the KubeVirt VirtualMachine nor the Service on this substrate
+    templates:
+      - templates/vm.yaml
+      - templates/service.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: maps a compute-exclusive type to the host CPU, NUMA and hugepages
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceType: cx1.large
+    asserts:
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.cores
+          value: 2
+      - documentIndex: 2
+        equal:
+          path: spec.additionalConfig.cpu
+          value: host
+      - documentIndex: 2
+        equal:
+          path: spec.additionalConfig.hugepages
+          value: "2"
+  - it: sizes from resources instead of the instance type when complete
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceType: ""
+      resources:
+        cpu: 3
+        sockets: 1
+        memory: 1536Mi
+    asserts:
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.cores
+          value: 3
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.memory
+          value: 1536
+  - it: maps a Windows profile to UEFI, Secure Boot keys and a TPM on the disk's storage
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceProfile: windows.11
+    asserts:
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.firmware.bios
+          value: ovmf
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.firmware.efiDisk
+          value:
+            storage: local-zfs
+            preEnrolledKeys: true
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.firmware.tpm.storage
+          value: local-zfs
+  - it: maps Halted and Manual to the power state and tags a VLAN port
+    template: templates/proxmox-vm.yaml
+    set:
+      runStrategy: Halted
+      networks:
+        - name: tenant
+    asserts:
+      - documentIndex: 2
+        equal:
+          path: spec.powerState
+          value: Stopped
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.network[0].vlan
+          value: 101
+  - it: refuses a realtime instance type with the reason
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceType: rt1.small
+    asserts:
+      - failedTemplate:
+          errorPattern: "realtime type, which the proxmox substrate does not offer"
+  - it: refuses a disk on another node
+    template: templates/proxmox-vm.yaml
+    set:
+      disks:
+        - name: web-system
+        - name: elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: "lives on Proxmox node \"pve2\" while an earlier disk lives on \"pve1\""
+  - it: refuses a machine without networks
+    template: templates/proxmox-vm.yaml
+    set:
+      networks: []
+    asserts:
+      - failedTemplate:
+          errorPattern: "a Proxmox VM has no pod network"
+  - it: refuses external access, gpus and a RerunOnFailure strategy with pointers
+    template: templates/proxmox-vm.yaml
+    set:
+      external: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "external access is not available on the proxmox substrate yet"
+  - it: refuses gpus
+    template: templates/proxmox-vm.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus are not available on the proxmox substrate yet"
+  - it: refuses an unsupported runStrategy
+    template: templates/proxmox-vm.yaml
+    set:
+      runStrategy: RerunOnFailure
+    asserts:
+      - failedTemplate:
+          errorPattern: "runStrategy \"RerunOnFailure\" is not available on the proxmox substrate"
+  - it: refuses a disk that does not exist on this substrate
+    template: templates/proxmox-vm.yaml
+    set:
+      disks:
+        - name: missing
+    asserts:
+      - failedTemplate:
+          errorPattern: "Specified disk not exists in cluster: missing"

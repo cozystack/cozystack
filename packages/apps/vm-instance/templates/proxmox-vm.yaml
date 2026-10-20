@@ -1,0 +1,183 @@
+{{- if eq (include "virtual-machine.substrate" .) "proxmox" }}
+{{- $catalog := include "virtual-machine.proxmoxCatalog" . | fromJson }}
+{{- $name := include "virtual-machine.fullname" . }}
+{{- /* What this substrate cannot do is refused here, not ignored: a silently
+       dropped field is how a machine without network looks healthy. */}}
+{{- if .Values.external }}
+{{-   fail "external access is not available on the proxmox substrate yet: a Proxmox VM is not a pod, so the Service and cozy-proxy path does not reach it. Publishing a VM here goes through the VPC NAT gateway, which is still in review. Set external: false." }}
+{{- end }}
+{{- if .Values.gpus }}
+{{-   fail "gpus are not available on the proxmox substrate yet: a GPU there is a PCI device mapping the platform has to list first. Remove gpus." }}
+{{- end }}
+{{- if .Values.cpuModel }}
+{{-   fail "cpuModel is not available on the proxmox substrate yet; the CPU model comes from the instance type (cx1 and d1 use the host CPU). Remove cpuModel." }}
+{{- end }}
+{{- if .Values.netplanDhcp }}
+{{-   fail "netplanDhcp is not needed on the proxmox substrate: every network gets a static address from the platform's pool, written into the guest's network configuration. Remove netplanDhcp." }}
+{{- end }}
+{{- if .Values.subnets }}
+{{-   fail "subnets is deprecated; use networks" }}
+{{- end }}
+{{- $networks := .Values.networks | default list }}
+{{- if not $networks }}
+{{-   fail "a Proxmox VM has no pod network; attach at least one of the platform's networks in networks (see the catalog's networks)" }}
+{{- end }}
+{{- $powerState := dict "Always" "Running" "Halted" "Stopped" "Manual" "Manual" }}
+{{- $runStrategy := .Values.runStrategy | default "Always" }}
+{{- if not (hasKey $powerState $runStrategy) }}
+{{-   fail (printf "runStrategy %q is not available on the proxmox substrate; use Always, Halted or Manual" $runStrategy) }}
+{{- end }}
+{{- $sizing := include "virtual-machine.proxmoxSizing" (list $catalog .) | fromJson }}
+{{- $profile := include "virtual-machine.proxmoxProfile" (list $catalog .) | fromJson }}
+{{- $disks := include "virtual-machine.proxmoxDisks" . | fromJson }}
+{{- $node := .Values.proxmox.node | default $disks.node | default $catalog.defaultNode }}
+{{- if not $node }}
+{{-   fail "the machine has no node: give it a disk (it runs where its disks live), or set proxmox.node" }}
+{{- end }}
+{{- if and $disks.node (ne $node $disks.node) }}
+{{-   fail (printf "proxmox.node %q differs from the node of the machine's disks (%q); a machine can only attach disks of its own node" $node $disks.node) }}
+{{- end }}
+{{- /* Firmware: the user's choice first, the profile's default otherwise. */}}
+{{- $fw := .Values.firmware | default dict }}
+{{- $bios := $profile.bios | default "seabios" }}
+{{- if eq (toString $fw.bootloader) "uefi" }}{{ $bios = "ovmf" }}{{ else if eq (toString $fw.bootloader) "bios" }}{{ $bios = "seabios" }}{{ end }}
+{{- $firstDisk := first $disks.disks }}
+{{- $efiStorage := "" }}
+{{- if eq $bios "ovmf" }}
+{{-   if not $firstDisk }}{{ fail "a UEFI machine needs a disk: its EFI vars disk is created on the storage of the first one" }}{{ end }}
+{{-   $vol := lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace $firstDisk.volume }}
+{{-   $efiStorage = dig "spec" "storage" "" $vol }}
+{{- end }}
+{{- $secureBoot := $fw.secureBoot | default ($profile.efiPreEnrolledKeys | default false) }}
+{{- $catalogNetworks := $catalog.networks | default dict }}
+{{- $ports := list }}
+{{- range $i, $net := $networks }}
+{{-   $entry := index $catalogNetworks (toString $net.name) }}
+{{-   if not $entry }}
+{{-     fail (printf "network %q is not one of the platform's Proxmox networks (known: %s)" (toString $net.name) (join ", " (keys $catalogNetworks | sortAlpha))) }}
+{{-   end }}
+{{-   if not $entry.ipPool }}
+{{-     fail (printf "network %q has no ipPool in the platform's catalog; every port on this substrate gets a static address from a pool" (toString $net.name)) }}
+{{-   end }}
+{{-   $ports = append $ports (dict "index" $i "name" (toString $net.name) "bridge" $entry.bridge "vlan" ($entry.vlan | default 0) "ipPool" $entry.ipPool "claim" (printf "%s-net%d" $name $i)) }}
+{{- end }}
+{{- $hasCloudInit := or .Values.cloudInit .Values.sshKeys }}
+{{- range $ports }}
+---
+# One claim per port; the IPAM provider binds it to an address of the pool
+# the platform mapped the network to, and kubemox writes it into the port.
+apiVersion: ipam.cluster.x-k8s.io/v1beta1
+kind: IPAddressClaim
+metadata:
+  name: {{ .claim }}
+  labels:
+    {{- include "virtual-machine.labels" $ | nindent 4 }}
+spec:
+  poolRef:
+    apiGroup: ipam.cluster.x-k8s.io
+    kind: InClusterIPPool
+    name: {{ .ipPool | quote }}
+{{- end }}
+{{- if $hasCloudInit }}
+---
+# The NoCloud datasource: cloudInit as given, with sshKeys appended as
+# ssh_authorized_keys for the image's default user, the way the kubevirt
+# substrate injects them into the cloud-init disk.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-nocloud
+  labels:
+    {{- include "virtual-machine.labels" . | nindent 4 }}
+stringData:
+  user-data: |
+    {{- if .Values.cloudInit }}
+    {{- .Values.cloudInit | nindent 4 }}
+    {{- else }}
+    #cloud-config
+    {{- end }}
+    {{- if .Values.sshKeys }}
+    ssh_authorized_keys:
+      {{- range .Values.sshKeys }}
+      - {{ quote . }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: proxmox.alperen.cloud/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "virtual-machine.labels" . | nindent 4 }}
+spec:
+  name: {{ $name }}
+  nodeName: {{ $node | quote }}
+  connectionRef:
+    name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
+  deletionProtection: false
+  enableAutoStart: {{ eq $runStrategy "Always" }}
+  powerState: {{ index $powerState $runStrategy }}
+  tags:
+    - cozystack
+    - {{ .Release.Namespace }}
+  vmSpec:
+    cores: {{ $sizing.cores }}
+    socket: {{ $sizing.sockets }}
+    memory: {{ $sizing.memoryMiB }}
+    guestAgent: true
+    smbiosUUID: {{ include "virtual-machine.stableUuid" . | quote }}
+    firmware:
+      bios: {{ $bios }}
+      machine: {{ $profile.machine | default "q35" }}
+      scsiController: {{ $profile.scsiController | default "virtio-scsi-single" }}
+      {{- if eq $bios "ovmf" }}
+      efiDisk:
+        storage: {{ $efiStorage | quote }}
+        preEnrolledKeys: {{ $secureBoot }}
+      {{- end }}
+      {{- if and $profile.tpm $firstDisk }}
+      tpm:
+        storage: {{ $efiStorage | default (dig "spec" "storage" "" (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace $firstDisk.volume)) | quote }}
+        version: v2.0
+      {{- end }}
+    {{- with $disks.disks }}
+    disk:
+      {{- range . }}
+      - device: {{ .device }}
+        volumeRef:
+          name: {{ .volume }}
+      {{- end }}
+    {{- end }}
+    network:
+      {{- range $ports }}
+      - model: virtio
+        bridge: {{ .bridge | quote }}
+        {{- if .vlan }}
+        vlan: {{ .vlan }}
+        {{- end }}
+        ipAddressClaimRef:
+          name: {{ .claim }}
+      {{- end }}
+    {{- if $hasCloudInit }}
+    cloudInit:
+      secretRef:
+        name: {{ $name }}-nocloud
+      {{- with $catalog.dnsServers }}
+      nameservers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  {{- $extra := $sizing.extra | default dict }}
+  {{- $profileExtra := dict }}
+  {{- if $profile.ostype }}{{ $_ := set $profileExtra "ostype" $profile.ostype }}{{ end }}
+  {{- $additional := merge $profileExtra $extra }}
+  {{- with $additional }}
+  # qm options the API has no field for: the OS type of the profile, and the
+  # instance type's CPU model, NUMA, hugepages and balloon.
+  additionalConfig:
+    {{- range $k, $v := . }}
+    {{ $k }}: {{ $v | toString | quote }}
+    {{- end }}
+  {{- end }}
+{{- end }}
