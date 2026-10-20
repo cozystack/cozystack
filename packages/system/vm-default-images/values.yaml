@@ -19,9 +19,14 @@ storageClass: "replicated"
 ## @field {string} [name] - OS distribution name (e.g. "Ubuntu", "Fedora").
 ## @field {string} [version] - OS version (e.g. "24.04", "40").
 
+## @typedef {struct} ImageProxmox - Where the image comes from on the proxmox substrate. Ignored on kubevirt.
+## @field {string} volume - Proxmox volume id the image is copied from: the disk of a template (e.g. "local-zfs:base-9001-disk-0") or a file on a storage with the import content type (e.g. "local:import/noble.qcow2"). Required on the proxmox substrate.
+## @field {[]string} [nodes] - Proxmox nodes the image is published on, one VirtualMachineVolume each; a tenant disk on a node copies the image published there. Each has to be a node the platform's catalog allows. Defaults to the catalog's defaultNode.
+
 ## @typedef {struct} GlobalImage - A global Golden Image entry.
 ## @field {string} name - Unique image name used to reference this image in vm-disk (e.g. "ubuntu").
-## @field {string} url - HTTP(S) URL to download the image from.
+## @field {string} url - HTTP(S) URL to download the image from. Used on the kubevirt substrate.
+## @field {ImageProxmox} [proxmox] - Where the image comes from on the proxmox substrate.
 ## @field {quantity} storage - Storage size to allocate for this image.
 ## @field {string} storageClass - StorageClass used to store the image (overrides global default).
 ## @field {ImageOS} [os] - Operating system metadata.
@@ -174,3 +179,8 @@ images:
       version: "3.21"
     architecture: amd64
     description: "Alpine Linux 3.21 cloud image (cloud-init)"
+
+## @section Substrate
+
+## @param {string} substrate="kubevirt" - Which hypervisor holds the collection. `kubevirt` imports every image from its `url` into a CDI DataVolume in cozy-public. `proxmox` publishes every image as a cloneable VirtualMachineVolume in cozy-public on the external Proxmox VE cluster the platform's proxmox-vm package points at, one per node in the image's `proxmox.nodes`, copied from the Proxmox volume its `proxmox.volume` names; downloading from `url` is not available there yet, so on this substrate `images` has to be overridden with entries that carry `proxmox.volume`. `storageClass` then names an entry of the platform's catalog. A tenant's vm-disk references an image of either kind through `source.image.name`.
+substrate: kubevirt
