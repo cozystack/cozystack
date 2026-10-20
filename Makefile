@@ -19,6 +19,7 @@ build: build-deps
 	make -C packages/system/backup-controller image
 	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
+	make -C packages/system/gpu-node-agent image
 	make -C packages/system/migration-controller image
 	make -C packages/system/flux-shard-operator image
 	make -C packages/system/flux-plunger image
