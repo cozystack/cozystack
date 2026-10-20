@@ -5,7 +5,9 @@
   machine under the same name on the other hypervisor while the first keeps
   running. The `## @immutable` marker is dashboard-only, which is why this
   reads the live object of the other substrate and refuses when it exists.
-  Inert offline, like the other lookup guards in this chart.
+  Each lookup is gated on its API being served (a lookup of a kind the
+  cluster does not know fails the render), and inert offline like the other
+  lookup guards in this chart.
 */}}
 {{- define "virtual-machine.substrate" -}}
 {{- $substrate := .Values.substrate | default "kubevirt" -}}
@@ -14,11 +16,11 @@
 {{- end -}}
 {{- $name := include "virtual-machine.fullname" . -}}
 {{- if eq $substrate "proxmox" -}}
-{{- if lookup "kubevirt.io/v1" "VirtualMachine" .Release.Namespace $name -}}
+{{- if and (.Capabilities.APIVersions.Has "kubevirt.io/v1/VirtualMachine") (lookup "kubevirt.io/v1" "VirtualMachine" .Release.Namespace $name) -}}
 {{- fail (printf "vm-instance: %s already runs on KubeVirt (substrate kubevirt) and substrate is now \"proxmox\". A machine cannot move between hypervisors; create a new instance on the other substrate." $name) -}}
 {{- end -}}
 {{- else -}}
-{{- if lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachine" .Release.Namespace $name -}}
+{{- if and (.Capabilities.APIVersions.Has "proxmox.alperen.cloud/v1alpha1/VirtualMachine") (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachine" .Release.Namespace $name) -}}
 {{- fail (printf "vm-instance: %s already runs on Proxmox (substrate proxmox) and substrate is now %q. A machine cannot move between hypervisors; create a new instance on the other substrate." $name $substrate) -}}
 {{- end -}}
 {{- end -}}
@@ -119,7 +121,7 @@
 {{- $volName := printf "vm-disk-%s" $disk.name -}}
 {{- $vol := lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" $root.Release.Namespace $volName -}}
 {{- if not $vol -}}
-{{- if lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $root.Release.Namespace $volName -}}
+{{- if and ($root.Capabilities.APIVersions.Has "cdi.kubevirt.io/v1beta1/DataVolume") (lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $root.Release.Namespace $volName) -}}
 {{- fail (printf "disk %q is a KubeVirt disk (substrate kubevirt); a machine on the proxmox substrate can only attach vm-disk objects of the same substrate" $disk.name) -}}
 {{- end -}}
 {{- fail (printf "Specified disk not exists in cluster: %s" $disk.name) -}}
@@ -138,4 +140,26 @@
 {{- $disks = append $disks (dict "device" (printf "%s%d" $bus $n) "volume" $volName "name" $disk.name) -}}
 {{- end -}}
 {{- dict "disks" $disks "node" $node | toJson -}}
+{{- end -}}
+
+{{- /*
+  The SMBIOS UUID of the machine: the same hash of namespace, name and
+  cloudInitSeed the KubeVirt path uses, so a seed change re-runs cloud-init
+  on both substrates. With no seed, the UUID the existing kubemox machine
+  already carries wins, so that dropping the seed does not re-run cloud-init
+  either. The lookup is gated on the kubemox API being served and is inert
+  offline, like the KubeVirt helper it mirrors.
+*/}}
+{{- define "virtual-machine.proxmoxStableUuid" -}}
+{{- $name := include "virtual-machine.fullname" . -}}
+{{- $hash := sha256sum (printf "%s-%s-%s" .Release.Namespace $name .Values.cloudInitSeed) -}}
+{{- $uuid := printf "%s-%s-4%s-9%s-%s" (substr 0 8 $hash) (substr 8 12 $hash) (substr 13 16 $hash) (substr 17 20 $hash) (substr 20 32 $hash) -}}
+{{- if and (eq .Values.cloudInitSeed "") (.Capabilities.APIVersions.Has "proxmox.alperen.cloud/v1alpha1/VirtualMachine") -}}
+{{- with lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachine" .Release.Namespace $name -}}
+{{- with dig "spec" "vmSpec" "smbiosUUID" "" . -}}
+{{- $uuid = . -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $uuid -}}
 {{- end -}}
