@@ -1,0 +1,153 @@
+suite: vm-disk on the proxmox substrate renders a VirtualMachineVolume
+
+# The platform's catalog is a ConfigMap the chart reads with lookup; helm-unittest
+# mocks it here, so these tests pin the mapping of storageClass and image names
+# through the catalog and the refusals for what the substrate cannot do.
+release:
+  name: vm-disk-data
+  namespace: tenant-test
+templates:
+  - templates/proxmox-volume.yaml
+  - templates/dv.yaml
+set:
+  substrate: proxmox
+  storage: 20Gi
+  storageClass: replicated
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        group: ""
+        version: v1
+        resource: configmaps
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        allowedNodes: |
+          - pve1
+          - pve2
+        storageClasses: |
+          replicated:
+            storage: local-zfs
+        images: |
+          ubuntu-24.04: local:import/noble-server-cloudimg-amd64.img
+tests:
+  - it: renders a blank volume on the catalog's storage and default node
+    template: templates/proxmox-volume.yaml
+    asserts:
+      - isKind:
+          of: VirtualMachineVolume
+      - equal:
+          path: spec.connectionRef.name
+          value: pve
+      - equal:
+          path: spec.nodeName
+          value: pve1
+      - equal:
+          path: spec.storage
+          value: local-zfs
+      - equal:
+          path: spec.size
+          value: 20
+      - notExists:
+          path: spec.source
+  - it: renders no DataVolume on the proxmox substrate
+    template: templates/dv.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: rounds the size up to whole GiB and takes a tenant-chosen allowed node
+    template: templates/proxmox-volume.yaml
+    set:
+      storage: 1500Mi
+      proxmox:
+        node: pve2
+    asserts:
+      - equal:
+          path: spec.size
+          value: 2
+      - equal:
+          path: spec.nodeName
+          value: pve2
+  - it: maps an image name to the catalog's volume id
+    template: templates/proxmox-volume.yaml
+    set:
+      source:
+        image:
+          name: ubuntu-24.04
+    asserts:
+      - equal:
+          path: spec.source.volume
+          value: local:import/noble-server-cloudimg-amd64.img
+  - it: maps a disk source to the vm-disk object of the same namespace
+    template: templates/proxmox-volume.yaml
+    set:
+      source:
+        disk:
+          name: base
+    asserts:
+      - equal:
+          path: spec.source.disk.name
+          value: vm-disk-base
+  - it: refuses a node the platform does not allow
+    template: templates/proxmox-volume.yaml
+    set:
+      proxmox:
+        node: pve9
+    asserts:
+      - failedTemplate:
+          errorPattern: "proxmox.node \"pve9\" is not one of the nodes the platform allows"
+  - it: refuses a storage class the catalog does not map
+    template: templates/proxmox-volume.yaml
+    set:
+      storageClass: local
+    asserts:
+      - failedTemplate:
+          errorPattern: "storageClass \"local\" is not in the platform's Proxmox catalog"
+  - it: refuses an image the catalog does not list
+    template: templates/proxmox-volume.yaml
+    set:
+      source:
+        image:
+          name: windows
+    asserts:
+      - failedTemplate:
+          errorPattern: "image \"windows\" is not in the platform's Proxmox catalog"
+  - it: refuses upload, http and optical with a pointer to what to do instead
+    template: templates/proxmox-volume.yaml
+    set:
+      source:
+        upload: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "source.upload is not available on the proxmox substrate"
+  - it: refuses an http source
+    template: templates/proxmox-volume.yaml
+    set:
+      source:
+        http:
+          url: https://example.org/x.qcow2
+    asserts:
+      - failedTemplate:
+          errorPattern: "source.http is not available on the proxmox substrate yet"
+  - it: refuses an optical disk
+    template: templates/proxmox-volume.yaml
+    set:
+      optical: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "optical disks are not available on the proxmox substrate yet"
+  - it: refuses an unknown substrate
+    template: templates/proxmox-volume.yaml
+    set:
+      substrate: vsphere
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate must be \"kubevirt\" or \"proxmox\""

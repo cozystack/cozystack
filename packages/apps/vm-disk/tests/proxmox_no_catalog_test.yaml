@@ -1,0 +1,13 @@
+suite: vm-disk on the proxmox substrate needs the platform package
+release:
+  name: vm-disk-data
+  namespace: tenant-test
+templates:
+  - templates/proxmox-volume.yaml
+set:
+  substrate: proxmox
+tests:
+  - it: fails with the name of the package when the catalog is absent
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate proxmox needs the platform's proxmox-vm package"
