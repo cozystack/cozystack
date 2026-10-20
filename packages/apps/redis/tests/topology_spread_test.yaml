@@ -1,0 +1,99 @@
+suite: Sentinels and Redis pods spread over nodes
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: requires one sentinel and one Redis pod per node by default
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              matchLabelKeys:
+                - pod-template-hash
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: my-redis
+                  app.kubernetes.io/component: sentinel
+      - equal:
+          path: spec.redis.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: my-redis
+                  app.kubernetes.io/component: redis
+      - notExists:
+          path: spec.sentinel.affinity
+      - notExists:
+          path: spec.redis.affinity
+
+  - it: keeps the default when the cluster-wide policy is empty
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: ""
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+      - equal:
+          path: spec.redis.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+
+  - it: renders a cluster-wide spread policy as written
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: my-redis
+                  app.kubernetes.io/component: sentinel
+      - equal:
+          path: spec.redis.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: my-redis
+                  app.kubernetes.io/component: redis
