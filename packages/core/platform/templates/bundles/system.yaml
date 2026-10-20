@@ -310,7 +310,11 @@
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-application" "default" $) }}
 {{- end }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.etcd-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
+{{- $basicsComponents := dict -}}
+{{- if eq (include "cozystack.platform.gpu.vmEnabled" $) "true" -}}
+{{- $_ := set $basicsComponents "cozystack-basics" (dict "values" (dict "gpu" (dict "enabled" true))) -}}
+{{- end }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-basics" "default" $ $basicsComponents) }}
 {{- /*
   Forward admin backupStorage overrides (endpoint, region, systemSecretName, …)
   into the emitted cozystack.backupstrategy-controller Package CR's
