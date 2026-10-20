@@ -1,0 +1,106 @@
+## @section Proxmox VM substrate
+##
+## Runs the vm-disk and vm-instance applications on an external Proxmox VE
+## cluster instead of KubeVirt. The applications keep their API; with
+## `substrate: proxmox` they render kubemox objects — VirtualMachineVolume for
+## a disk, VirtualMachine for an instance — and kubemox, installed by this
+## package, drives the hypervisor over its API. Nothing of the hypervisor's
+## credentials reaches a tenant namespace: the connection objects below are
+## cluster-scoped and point at Secrets in this package's namespace.
+##
+## The catalog is what the tenant charts read: which connection and node to
+## use, what a storage class or an image name means on Proxmox, which
+## networks a tenant may attach, and the sizing behind each instance type.
+## It is rendered into the ConfigMap cozy-public/proxmox-vm-catalog.
+
+kubemox:
+  # The operator lives in a tenant-like namespace of the platform and has to
+  # reach the API server through the policy that admits pods by this label.
+  podLabels:
+    policy.cozystack.io/allow-to-apiserver: "true"
+  imagePullSecrets: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+## @param {[]Connection} connections - Proxmox clusters kubemox may talk to. Each becomes a cluster-scoped ProxmoxConnection whose token is read from a Secret in this package's namespace.
+## @typedef {struct} Connection - One Proxmox VE API endpoint.
+## @field {string} name - Name of the ProxmoxConnection; the catalog's `connection` names one of these.
+## @field {string} endpoint - Host or host:port of the Proxmox API.
+## @field {string} tokenID - API token id, such as `kubemox@pve!cozystack`.
+## @field {string} secretName - Secret in this namespace with the token secret under `key`.
+## @field {string} [secretKey] - Key of the Secret holding the token secret. Defaults to `token`.
+## @field {bool} [insecureSkipVerify] - Skip verification of the API server certificate.
+connections: []
+# Example:
+# connections:
+#   - name: pve
+#     endpoint: 192.0.2.10
+#     tokenID: kubemox@pve!cozystack
+#     secretName: proxmox-vm-credentials
+#     insecureSkipVerify: true
+
+catalog:
+  ## @param {string} catalog.connection - The ProxmoxConnection tenant objects reference.
+  connection: ""
+  ## @param {string} catalog.defaultNode - Proxmox node a disk is created on when the tenant names none.
+  defaultNode: ""
+  ## @param {[]string} catalog.allowedNodes - Nodes a tenant may pick. Empty allows only defaultNode.
+  allowedNodes: []
+  ## @param {[]string} catalog.dnsServers - Resolvers written into the cloud-init network configuration of a machine.
+  dnsServers: []
+  ## @param {map} catalog.storageClasses - What a vm-disk `storageClass` means on Proxmox: `{<class>: {storage: <proxmox storage id>}}`.
+  storageClasses: {}
+  ## @param {map} catalog.images - What a vm-disk `source.image.name` means on Proxmox: `{<name>: <volume id>}`, either a file on a storage with the import content type (`local:import/debian-13.qcow2`) or the disk of a template (`local-zfs:base-9001-disk-0`).
+  images: {}
+  ## @param {map} catalog.networks - What a vm-instance `networks[].name` means on Proxmox: `{<name>: {bridge: <bridge>, vlan: <tag or 0>, ipPool: <InClusterIPPool in the tenant namespace>}}`. The pool gives each port its address through an IPAddressClaim.
+  networks: {}
+  ## @param {map} catalog.profiles - What a vm-instance `instanceProfile` means on Proxmox. The defaults below cover the KubeVirt preference names; override an entry to change it.
+  profiles:
+    _linux: &linux
+      ostype: l26
+      bios: seabios
+      machine: q35
+      scsiController: virtio-scsi-single
+    _windows-uefi: &windowsUefi
+      ostype: win11
+      bios: ovmf
+      machine: q35
+      scsiController: virtio-scsi-single
+      efiPreEnrolledKeys: true
+      tpm: true
+    _windows-legacy: &windowsLegacy
+      ostype: win10
+      bios: ovmf
+      machine: q35
+      scsiController: virtio-scsi-single
+      efiPreEnrolledKeys: true
+      tpm: false
+    ubuntu: *linux
+    debian: *linux
+    fedora: *linux
+    alpine: *linux
+    cirros: *linux
+    centos.stream9: *linux
+    centos.stream10: *linux
+    rhel.8: *linux
+    rhel.9: *linux
+    rhel.10: *linux
+    opensuse.leap: *linux
+    opensuse.tumbleweed: *linux
+    sles: *linux
+    windows.11: *windowsUefi
+    windows.11.virtio: *windowsUefi
+    windows.2k22: *windowsUefi
+    windows.2k22.virtio: *windowsUefi
+    windows.2k25: *windowsUefi
+    windows.2k25.virtio: *windowsUefi
+    windows.10: *windowsLegacy
+    windows.10.virtio: *windowsLegacy
+    windows.2k16: *windowsLegacy
+    windows.2k16.virtio: *windowsLegacy
+    windows.2k19: *windowsLegacy
+    windows.2k19.virtio: *windowsLegacy

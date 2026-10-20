@@ -1,0 +1,19 @@
+{{- range .Values.connections }}
+---
+# Cluster-scoped, so a VirtualMachine in any namespace can name it; the
+# token stays in this namespace, read by kubemox alone (C025).
+apiVersion: proxmox.alperen.cloud/v1alpha1
+kind: ProxmoxConnection
+metadata:
+  name: {{ .name | quote }}
+  labels:
+    app.kubernetes.io/part-of: proxmox-vm
+spec:
+  endpoint: {{ .endpoint | quote }}
+  tokenID: {{ .tokenID | quote }}
+  secretFrom:
+    name: {{ .secretName | quote }}
+    namespace: {{ $.Release.Namespace | quote }}
+    key: {{ .secretKey | default "token" | quote }}
+  insecureSkipVerify: {{ .insecureSkipVerify | default false }}
+{{- end }}

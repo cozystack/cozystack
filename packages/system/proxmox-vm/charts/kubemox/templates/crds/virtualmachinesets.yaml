@@ -1,0 +1,374 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: virtualmachinesets.proxmox.alperen.cloud
+spec:
+  group: proxmox.alperen.cloud
+  names:
+    kind: VirtualMachineSet
+    listKind: VirtualMachineSetList
+    plural: virtualmachinesets
+    shortNames:
+    - vmset
+    singular: virtualmachineset
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The number of VMs
+      jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - description: The name of the target node of Proxmox
+      jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - description: The number of CPU cores
+      jsonPath: .spec.template.cores
+      name: Cores
+      type: string
+    - description: The amount of memory in MB
+      jsonPath: .spec.template.memory
+      name: Memory
+      type: string
+    - description: The status of the VM
+      jsonPath: .status.conditions[0].type
+      name: Status
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VirtualMachineSet is the Schema for the virtualmachinesets API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VirtualMachineSetSpec defines the desired state of VirtualMachineSet
+            properties:
+              additionalConfig:
+                additionalProperties:
+                  type: string
+                description: AdditionalConfig is the additional configuration of the
+                  VM
+                type: object
+              cloneMode:
+                default: Full
+                description: |-
+                  CloneMode is passed to every VirtualMachine this set owns. Linked clones
+                  of one template share its base snapshot, so a set of them costs about as
+                  much disk as a single full clone.
+                enum:
+                - Full
+                - Linked
+                type: string
+              connectionRef:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deletionProtection:
+                default: false
+                description: |-
+                  DeletionProtection is a flag that indicates whether the VM should be protected from deletion.
+                  If true, the VM will not be deleted when the Kubernetes resource is deleted.
+                  If not set, it defaults to false.
+                type: boolean
+              enableAutoStart:
+                default: true
+                description: |-
+                  EnableAutoStart is a flag that indicates whether the VM should automatically start when it's powered off.
+                  If true, the VM will start automatically when it's powered off.
+                  If not set, it defaults to true.
+                type: boolean
+              nodeName:
+                description: NodeName is the name of the target node of Proxmox
+                type: string
+              pciDevices:
+                description: PCIDevices is the PCI devices configuration
+                properties:
+                  devices:
+                    description: Devices is the list of PCI devices
+                    items:
+                      properties:
+                        deviceID:
+                          description: DeviceID is the ID hex id of the device
+                          type: string
+                        pcie:
+                          default: false
+                          description: PCIE is the flag that indicates whether the
+                            device is a PCIE device ==> pcie=1
+                          type: boolean
+                        primaryGPU:
+                          default: false
+                          description: PrimaryGPU is the flag that indicates whether
+                            the device is the primary GPU ==> x-vga=1
+                          type: boolean
+                        type:
+                          description: Type is the type of the PCI device either raw
+                            or mapped
+                          enum:
+                          - raw
+                          - mapped
+                          type: string
+                      required:
+                      - type
+                      type: object
+                      x-kubernetes-validations:
+                      - message: pcie cannot be true when device type is mapped
+                        rule: self.type != 'mapped' || self.pcie == false
+                    type: array
+                  mode:
+                    description: Mode is the mode of the PCI devices, either shared
+                      or per-machine
+                    enum:
+                    - shared
+                    - dedicated
+                    type: string
+                required:
+                - devices
+                - mode
+                type: object
+              replicas:
+                description: Replicas is the number of VMs
+                minimum: 0
+                type: integer
+              template:
+                description: Template is the name of the source VM template
+                properties:
+                  cores:
+                    description: Cores is the number of CPU cores
+                    minimum: 1
+                    type: integer
+                  disk:
+                    description: Disks is the list of disks
+                    items:
+                      description: |-
+                        VirtualMachineDisk is one drive of a VM: either a new disk the VM owns,
+                        given by storage and size, or a VirtualMachineVolume from the same
+                        namespace attached at the device by volumeRef.
+                      properties:
+                        device:
+                          description: Device is the name of the device
+                          type: string
+                        size:
+                          description: Size is the size of the disk in GB. Required
+                            unless volumeRef is set.
+                          minimum: 1
+                          type: integer
+                        storage:
+                          description: Storage is the name of the storage. Required
+                            unless volumeRef is set.
+                          type: string
+                        volumeRef:
+                          description: |-
+                            VolumeRef attaches an existing VirtualMachineVolume from this namespace
+                            at Device instead of allocating a new disk. The volume has to be Ready
+                            and on the VM's node. It is given back to its holder when the ref is
+                            removed or the VirtualMachine is deleted, so its data survives the VM.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      required:
+                      - device
+                      type: object
+                      x-kubernetes-validations:
+                      - message: a disk is either a volumeRef, or a storage and a
+                          size
+                        rule: 'has(self.volumeRef) ? (!has(self.storage) && !has(self.size))
+                          : (has(self.storage) && has(self.size))'
+                    type: array
+                  memory:
+                    description: Memory is the amount of memory in MB
+                    minimum: 16
+                    type: integer
+                  name:
+                    description: Name of the template
+                    type: string
+                  network:
+                    description: Networks is the list of networks
+                    items:
+                      properties:
+                        bridge:
+                          description: Bridge is the name of the bridge
+                          type: string
+                        ipAddressClaimRef:
+                          description: |-
+                            IPAddressClaimRef names an IPAddressClaim (ipam.cluster.x-k8s.io) in
+                            this namespace. Once the claim holds an IPAddress, its address, prefix
+                            and gateway are written into the matching ipconfigN of the machine for
+                            cloud-init to apply; until then the machine is not started.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        model:
+                          description: Model is the model of the network card
+                          type: string
+                        vlan:
+                          description: VLAN is the 802.1Q tag of the port on the bridge.
+                            Zero leaves the port untagged.
+                          maximum: 4094
+                          minimum: 1
+                          type: integer
+                      required:
+                      - bridge
+                      - model
+                      type: object
+                    type: array
+                  pciDevices:
+                    description: PCI is the list of PCI devices
+                    items:
+                      properties:
+                        deviceID:
+                          description: DeviceID is the ID hex id of the device
+                          type: string
+                        pcie:
+                          default: false
+                          description: PCIE is the flag that indicates whether the
+                            device is a PCIE device ==> pcie=1
+                          type: boolean
+                        primaryGPU:
+                          default: false
+                          description: PrimaryGPU is the flag that indicates whether
+                            the device is the primary GPU ==> x-vga=1
+                          type: boolean
+                        type:
+                          description: Type is the type of the PCI device either raw
+                            or mapped
+                          enum:
+                          - raw
+                          - mapped
+                          type: string
+                      required:
+                      - type
+                      type: object
+                      x-kubernetes-validations:
+                      - message: pcie cannot be true when device type is mapped
+                        rule: self.type != 'mapped' || self.pcie == false
+                    type: array
+                  socket:
+                    description: Socket is the number of CPU sockets
+                    minimum: 1
+                    type: integer
+                type: object
+            required:
+            - connectionRef
+            - nodeName
+            - replicas
+            type: object
+            x-kubernetes-validations:
+            - message: ConnectionRef is required once set
+              rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
+          status:
+            description: VirtualMachineSetStatus defines the observed state of VirtualMachineSet
+            properties:
+              conditions:
+                description: |-
+                  INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                  Important: Run "make" to regenerate code after modifying this file
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

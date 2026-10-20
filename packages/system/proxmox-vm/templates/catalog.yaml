@@ -1,0 +1,33 @@
+{{- /*
+The tenant charts read this ConfigMap with `lookup` at render time. Each key
+is a YAML document, so a chart does `fromYaml (index $cm.data "networks")`.
+cozy-public is the namespace every tenant may read from (golden images live
+there too); helm-controller renders with cluster-wide rights either way.
+
+Profiles are stored without the anchor templates (keys starting with "_"),
+which only exist so the defaults above can be written once.
+*/ -}}
+{{- $profiles := dict -}}
+{{- range $name, $p := .Values.catalog.profiles -}}
+{{- if not (hasPrefix "_" $name) -}}
+{{- $_ := set $profiles $name $p -}}
+{{- end -}}
+{{- end -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proxmox-vm-catalog
+  namespace: cozy-public
+  labels:
+    app.kubernetes.io/part-of: proxmox-vm
+data:
+  connection: {{ .Values.catalog.connection | quote }}
+  defaultNode: {{ .Values.catalog.defaultNode | quote }}
+  allowedNodes: {{ .Values.catalog.allowedNodes | toYaml | quote }}
+  dnsServers: {{ .Values.catalog.dnsServers | toYaml | quote }}
+  storageClasses: {{ .Values.catalog.storageClasses | toYaml | quote }}
+  images: {{ .Values.catalog.images | toYaml | quote }}
+  networks: {{ .Values.catalog.networks | toYaml | quote }}
+  profiles: {{ $profiles | toYaml | quote }}
+  instancetypes: {{ .Files.Get "files/instancetypes.yaml" | quote }}

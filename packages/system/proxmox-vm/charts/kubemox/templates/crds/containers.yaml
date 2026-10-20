@@ -1,0 +1,318 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: containers.proxmox.alperen.cloud
+spec:
+  group: proxmox.alperen.cloud
+  names:
+    kind: Container
+    listKind: ContainerList
+    plural: containers
+    shortNames:
+    - lxc
+    singular: container
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The name of the target node of Proxmox
+      jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - description: The ID of the container
+      jsonPath: .status.status.id
+      name: ID
+      type: string
+    - description: The number of CPU cores
+      jsonPath: .spec.template.cores
+      name: Cores
+      type: string
+    - description: The amount of memory in MB
+      jsonPath: .spec.template.memory
+      name: Memory
+      type: string
+    - description: The state of the VM
+      jsonPath: .status.status.state
+      name: State
+      type: string
+    - description: The uptime of the VM
+      jsonPath: .status.status.uptime
+      name: Uptime
+      type: string
+    - description: The last time the Container state was observed from Proxmox
+      jsonPath: .status.lastObserved
+      name: Last Observed
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Container is the Schema for the containers API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ContainerSpec defines the desired state of Container
+            properties:
+              cloneMode:
+                default: Full
+                description: |-
+                  CloneMode selects how the template container is cloned: Full copies it,
+                  Linked references the template's base snapshot and pins the template for
+                  as long as the clone exists.
+                enum:
+                - Full
+                - Linked
+                type: string
+              connectionRef:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              deletionProtection:
+                default: false
+                description: |-
+                  DeletionProtection is a flag that indicates whether the resource should be protected from deletion.
+                  If true, the resource will not be deleted when the Kubernetes resource is deleted.
+                  If not set, it defaults to false.
+                type: boolean
+              enableAutoStart:
+                default: true
+                description: |-
+                  EnableAutoStart is a flag that indicates whether the resource should automatically start when it's powered off.
+                  If true, the resource will start automatically when it's powered off.
+                  If not set, it defaults to true.
+                type: boolean
+              name:
+                description: Name is the name of the Container
+                type: string
+              nodeName:
+                description: NodeName is the name of the target node of Proxmox
+                type: string
+              template:
+                description: TemplateSpec of the source Container
+                properties:
+                  cores:
+                    description: Cores is the number of CPU cores
+                    minimum: 1
+                    type: integer
+                  disk:
+                    description: Disks is the list of disks
+                    items:
+                      properties:
+                        size:
+                          description: Size is the size of the disk
+                          minimum: 1
+                          type: integer
+                        storage:
+                          description: Storage is the name of the storage
+                          type: string
+                        type:
+                          description: Type is the type of the disk
+                          type: string
+                      type: object
+                    type: array
+                  image:
+                    description: |-
+                      Image pulls an OCI image into Proxmox storage and clones from the resulting template CT.
+                      Mutually exclusive with Name.
+                    properties:
+                      reference:
+                        description: Reference is the OCI image (for example nginx:alpine).
+                        minLength: 1
+                        type: string
+                      storage:
+                        description: |-
+                          Storage is the Proxmox storage ID where the image is pulled and stored. It must be file-based
+                          (dir, nfs, zfs, ...); lvmthin cannot store OCI blobs. template.disk[0].storage is only for rootfs.
+                        minLength: 1
+                        type: string
+                    required:
+                    - reference
+                    - storage
+                    type: object
+                  memory:
+                    description: Memory is the amount of memory in MB
+                    minimum: 16
+                    type: integer
+                  name:
+                    description: Name of the template container on Proxmox to clone
+                      from (mutually exclusive with Image)
+                    type: string
+                  network:
+                    description: Networks is the list of networks
+                    items:
+                      properties:
+                        bridge:
+                          description: Bridge is the name of the bridge
+                          type: string
+                        model:
+                          description: Name is the name of the network
+                          type: string
+                      type: object
+                    type: array
+                type: object
+            required:
+            - connectionRef
+            - name
+            - nodeName
+            type: object
+            x-kubernetes-validations:
+            - message: ConnectionRef is required once set
+              rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
+            - message: Set exactly one of template.name or template.image
+              rule: (has(self.template.name) && self.template.name != "") != has(self.template.image)
+            - message: template.disk is required when template.image is set (rootfs
+                volume)
+              rule: '!has(self.template.image) || (size(self.template.disk) > 0)'
+            - message: template.image.reference and template.image.storage are required
+                when template.image is set
+              rule: '!has(self.template.image) || (has(self.template.image.reference)
+                && self.template.image.reference != "" && has(self.template.image.storage)
+                && self.template.image.storage != "")'
+          status:
+            description: ContainerStatus defines the observed state of Container
+            properties:
+              appliedImageReference:
+                description: |-
+                  AppliedImageReference is the OCI reference the running Proxmox CT was created from (template.image only).
+                  If spec.template.image.reference (or storage) diverges, the controller replaces the CT.
+                type: string
+              appliedImageStorage:
+                description: AppliedImageStorage is the OCI blob storage ID used when
+                  the CT was created (template.image only).
+                type: string
+              conditions:
+                description: |-
+                  INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+                  Important: Run "make" to regenerate code after modifying this file
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastObserved:
+                description: |-
+                  LastObserved is the timestamp of the last successful observation of the
+                  Container state from Proxmox. A stale value relative to wall-clock time
+                  indicates the operator has lost the ability to verify .status.status
+                  against Proxmox.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation that the controller last
+                  reconciled successfully.
+                format: int64
+                type: integer
+              status:
+                properties:
+                  IPAddress:
+                    description: IPAddress is the IP address of the VM (or LXC). Optional
+                      so status subresources can be patched incrementally.
+                    type: string
+                  OSInfo:
+                    description: OSInfo is the OS information of the VM (or LXC, often
+                      config ostype).
+                    type: string
+                  id:
+                    description: ID is the ID of the VM
+                    type: integer
+                  node:
+                    description: Node is the name of the node
+                    type: string
+                  state:
+                    description: State is the state of the VM
+                    type: string
+                  uptime:
+                    description: Uptime is the uptime of the VM
+                    type: string
+                required:
+                - id
+                - node
+                - state
+                - uptime
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
