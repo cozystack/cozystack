@@ -1,0 +1,59 @@
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+# The GPU controller writes the usage records of held devices under a
+# WorkloadMonitor whose selector is this label key, so the monitor must match
+# no object: an object carrying the key would be reported against the GPU
+# monitor, and a tenant could shape GPU usage records. The key is refused on
+# every object in a tenant namespace, whoever writes it, including the
+# virt-launcher pods and DataVolumes that copy a VM template's labels.
+#
+# It renders whether or not GPUs are on, so a tenant cannot label objects
+# ahead of the hoster turning them on. It ratchets: only a write that adds the
+# key is refused, so an object that already carries it, from before this
+# policy, can still be updated, have its finalizers removed, and drop the key.
+#
+# This matches every write in every tenant namespace, so the expression only
+# reads metadata and guards every step.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-usage-monitor-label
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["*"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["*/*"]
+      scope: Namespaced
+  matchConditions:
+  - name: tenant-namespace
+    expression: request.namespace.startsWith("tenant-")
+  variables:
+  - name: labelled
+    expression: >-
+      has(object.metadata) && has(object.metadata.labels) &&
+      "gpu.cozystack.io/usage-monitor" in object.metadata.labels
+  - name: wasLabelled
+    expression: >-
+      oldObject != null && has(oldObject.metadata) && has(oldObject.metadata.labels) &&
+      "gpu.cozystack.io/usage-monitor" in oldObject.metadata.labels
+  validations:
+  - expression: "!variables.labelled || variables.wasLabelled"
+    message: >-
+      The label gpu.cozystack.io/usage-monitor is reserved for the GPU usage records and cannot be set on objects in tenant namespaces.
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-usage-monitor-label
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-usage-monitor-label
+  validationActions: [Deny]
+{{- end }}
