@@ -4,7 +4,11 @@
 {{- $global := list -}}
 {{- with ($root.Values._cluster | default dict).scheduling -}}
 {{-   with get . "globalAppTopologySpreadConstraints" -}}
-{{-     $global = dig "topologySpreadConstraints" (list) (fromYaml .) -}}
+{{-     $parsed := fromYaml . -}}
+{{-     $global = dig "topologySpreadConstraints" (list) $parsed -}}
+{{-     if or (not (kindIs "slice" $global)) (not $global) -}}
+{{-       fail (trim (printf "monitoring: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list. %s" (get $parsed "Error"))) -}}
+{{-     end -}}
 {{-   end -}}
 {{- end -}}
 {{- $constraints := list -}}
