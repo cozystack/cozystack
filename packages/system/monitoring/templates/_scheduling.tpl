@@ -13,7 +13,7 @@
 {{- end -}}
 {{- $constraints := list -}}
 {{- range $global -}}
-{{-   $constraints = append $constraints (ternary . (merge (dict "labelSelector" $selector) .) (hasKey . "labelSelector")) -}}
+{{-   $constraints = append $constraints (ternary . (merge (deepCopy .) (dict "labelSelector" $selector)) (hasKey . "labelSelector")) -}}
 {{- end -}}
 {{- if not $constraints -}}
 {{-   $default := dict "maxSkew" 1 "topologyKey" "kubernetes.io/hostname" "whenUnsatisfiable" (index . 3) "labelSelector" $selector -}}
