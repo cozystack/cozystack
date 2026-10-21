@@ -923,7 +923,9 @@ gpu:
   vgpu: false
   # Resource names that count as GPUs besides those of GPUClass objects and
   # those the node agent reports, such as nvidia.com/gpu of the container
-  # variant. GPU entries in VMs and the raw-name policy match on this set.
+  # variant. Under forbidden, the raw-name policy refuses every gpus entry of
+  # a VM whatever its name, and matches hostDevices device names and resource
+  # keys of VMs and pods against this set.
   resourceNames: []
   # allowed or forbidden. Under forbidden, a VM takes a GPU only through a
   # GPUDevice reference, and a pod in a tenant namespace requests a GPU
