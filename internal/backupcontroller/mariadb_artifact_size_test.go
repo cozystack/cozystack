@@ -106,6 +106,24 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		}
 	})
 
+	t.Run("reads the session token from its Secret", func(t *testing.T) {
+		stsS3 := newRenderedMariaDBTemplate().Storage.S3
+		stsS3.Prefix = "tenant/db"
+		stsS3.SessionTokenSecretKeyRef = &strategyv1alpha1.MariaDBSecretKeySelector{Name: "sts", Key: "token"}
+		sts := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "sts"},
+			Data:       map[string][]byte{"token": []byte("TOKEN")},
+		}
+		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4}}}
+		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), sts)
+		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", stsS3, mdbBackup, completed); got != 4 {
+			t.Errorf("size = %d, want 4", got)
+		}
+		if l.conn.SessionToken != "TOKEN" {
+			t.Errorf("session token = %q, want the Secret's", l.conn.SessionToken)
+		}
+	})
+
 	t.Run("pod clock skew within tolerance", func(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
 			{Key: dumpKey(prefix, created.Add(-30*time.Second), ""), Size: 9},
@@ -227,5 +245,38 @@ func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 	}
 	if artefact.Status.Artifact == nil || artefact.Status.Artifact.SizeBytes != 2048 {
 		t.Fatalf("Artifact = %#v, want SizeBytes 2048", artefact.Status.Artifact)
+	}
+}
+
+func TestCreateMariaDBBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
+	apps := mariadbapp.GroupName
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-retry"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+		},
+	}
+	existing := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-retry"},
+		Status:     backupsv1alpha1.BackupStatus{Artifact: &backupsv1alpha1.BackupArtifact{URI: "s3://bkt/src/op-bk", SizeBytes: 99}},
+	}
+	l := &fakeS3Lister{}
+	r := reconcilerWithLister(t, l, job, existing, s3CredsSecret("tenant", "creds"))
+	rendered := newRenderedMariaDBTemplate()
+	rendered.Storage.S3.Prefix = "src/"
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "mariadb-strategy-default"},
+		Parameters:  map[string]string{},
+	}
+
+	got, err := r.createMariaDBBackupArtifact(context.Background(), job, resolved, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk"}}, rendered)
+	if err != nil {
+		t.Fatalf("createMariaDBBackupArtifact: %v", err)
+	}
+	if l.calls != 0 {
+		t.Errorf("S3 listed %d times for a Backup that already exists", l.calls)
+	}
+	if got.Status.Artifact == nil || got.Status.Artifact.SizeBytes != 99 {
+		t.Errorf("Artifact = %#v, want the existing one", got.Status.Artifact)
 	}
 }
