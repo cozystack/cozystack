@@ -28,7 +28,8 @@ type Config struct {
 	Enabled bool
 
 	// ResourceNames is the hoster's gpu.resourceNames list. The effective
-	// set adds class and agent-reported names (model.ResourceNames).
+	// set adds the KubeVirt table's GPU names (model.PermittedGPUNames) and
+	// class and agent-reported names (model.ResourceNames).
 	ResourceNames []string
 
 	// RawResourceNames is the hoster's gpu.rawResourceNames; empty means

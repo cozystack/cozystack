@@ -366,8 +366,9 @@ vGPU classes need an entitlement. Set `gpu.vgpu: true` in the platform values to
 ```yaml
 gpu:
   vgpu: false
-  # Resource names that count as GPUs besides those of GPUClass objects and
-  # those the node agent reports.
+  # Resource names that count as GPUs besides those of GPUClass objects,
+  # those the node agent reports and the NVIDIA and mediated entries of the
+  # KubeVirt permittedHostDevices table.
   resourceNames: []
   # allowed | forbidden
   rawResourceNames: allowed

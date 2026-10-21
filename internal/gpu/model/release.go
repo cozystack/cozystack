@@ -94,22 +94,63 @@ func DeclaredQuotas(values []byte) (corev1.ResourceList, error) {
 // checks nothing (renderresources.go validatePermittedHostDevices in
 // v1.9.0). It reads the PCI and mediated lists, where GPUs are declared.
 func PermittedResourceNames(kv *unstructured.Unstructured) sets.Set[string] {
-	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
-	if !ok || table == nil {
+	entries, ok := permittedEntries(kv)
+	if !ok {
 		return nil
 	}
 	out := sets.New[string]()
+	for _, e := range entries {
+		out.Insert(e.resourceName)
+	}
+	return out
+}
+
+// PermittedGPUNames returns, sorted, the table's GPU names: its NVIDIA
+// (vendor 10DE) PCI entries and its mediated entries. They join the
+// effective GPU resource-name set besides the hoster's gpu.resourceNames
+// list, not in place of it; a NIC in the table, such as nvidia.com/hostdev
+// of a ConnectX VF, is not a GPU.
+func PermittedGPUNames(kv *unstructured.Unstructured) []string {
+	entries, ok := permittedEntries(kv)
+	if !ok {
+		return nil
+	}
+	out := sets.New[string]()
+	for _, e := range entries {
+		if e.mediated || strings.HasPrefix(strings.ToUpper(e.vendorSelector), "10DE:") {
+			out.Insert(e.resourceName)
+		}
+	}
+	return sets.List(out)
+}
+
+type permittedEntry struct {
+	resourceName, vendorSelector string
+	mediated                     bool
+}
+
+func permittedEntries(kv *unstructured.Unstructured) ([]permittedEntry, bool) {
+	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
+	if !ok || table == nil {
+		return nil, false
+	}
+	var out []permittedEntry
 	for _, list := range []string{"pciHostDevices", "mediatedDevices"} {
 		entries, _, _ := unstructured.NestedSlice(table, list)
 		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				if name, ok := m["resourceName"].(string); ok {
-					out.Insert(name)
-				}
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
 			}
+			name, ok := m["resourceName"].(string)
+			if !ok {
+				continue
+			}
+			selector, _ := m["pciVendorSelector"].(string)
+			out = append(out, permittedEntry{resourceName: name, vendorSelector: selector, mediated: list == "mediatedDevices"})
 		}
 	}
-	return out
+	return out, true
 }
 
 // Coverage maps a VMI to the units, per resource name, that its attached

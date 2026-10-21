@@ -17,6 +17,7 @@ limitations under the License.
 package model
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -150,5 +151,28 @@ func TestActivePods(t *testing.T) {
 	_ = unstructured.SetNestedMap(vmi.Object, map[string]any{"pod-a": "node-1", "pod-b": "node-2"}, "status", "activePods")
 	if got := ActivePods(vmi); !got.Equal(sets.New[types.UID]("pod-a", "pod-b")) {
 		t.Fatalf("ActivePods = %v", got)
+	}
+}
+
+func TestPermittedGPUNames(t *testing.T) {
+	kv := &unstructured.Unstructured{Object: map[string]any{}}
+	if got := PermittedGPUNames(kv); got != nil {
+		t.Fatalf("an unset table names no GPUs: %v", got)
+	}
+	_ = unstructured.SetNestedField(kv.Object, map[string]any{
+		"pciHostDevices": []any{
+			map[string]any{"pciVendorSelector": "10DE:2330", "resourceName": "nvidia.com/GH100_H100"},
+			map[string]any{"pciVendorSelector": "10de:26b9", "resourceName": "nvidia.com/AD102GL_L40S"},
+			map[string]any{"pciVendorSelector": "15B3:101E", "resourceName": "nvidia.com/hostdev"},
+		},
+		"mediatedDevices": []any{map[string]any{"mdevNameSelector": "NVIDIA A40-16Q", "resourceName": "nvidia.com/NVIDIA_A40-16Q"}},
+		"usb":             []any{map[string]any{"resourceName": "kubevirt.io/usb"}},
+	}, "spec", "configuration", "permittedHostDevices")
+	want := []string{"nvidia.com/AD102GL_L40S", "nvidia.com/GH100_H100", "nvidia.com/NVIDIA_A40-16Q"}
+	if got := PermittedGPUNames(kv); !slices.Equal(got, want) {
+		t.Fatalf("PermittedGPUNames = %v, want the NVIDIA PCI and the mdev names %v", got, want)
+	}
+	if got := PermittedResourceNames(kv); !got.Has("nvidia.com/hostdev") {
+		t.Fatal("the permitted table itself still holds every PCI name")
 	}
 }

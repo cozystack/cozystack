@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -174,9 +175,11 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	if err := r.kubeVirtReader().List(ctx, kvs); err != nil {
 		return nil, fmt.Errorf("list KubeVirt: %w", err)
 	}
+	var tableGPUs []string
 	for i := range kvs.Items {
 		if kvs.Items[i].GetNamespace() == model.KubeVirtNamespace && kvs.Items[i].GetName() == model.KubeVirtName {
 			w.permitted = model.PermittedResourceNames(&kvs.Items[i])
+			tableGPUs = model.PermittedGPUNames(&kvs.Items[i])
 		}
 	}
 
@@ -188,7 +191,7 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	for _, n := range w.gpuNodes {
 		nodeList = append(nodeList, *n)
 	}
-	w.resourceNames = model.ResourceNames(classList, r.Config.ResourceNames, nodeList)
+	w.resourceNames = model.ResourceNames(classList, append(slices.Clone(r.Config.ResourceNames), tableGPUs...), nodeList)
 
 	quotas, err := r.tenantQuotas(ctx)
 	if err != nil {

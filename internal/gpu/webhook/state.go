@@ -19,6 +19,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -64,8 +65,10 @@ func resourceName(c *gpuv1alpha1.GPUClass) string {
 	return ""
 }
 
-// gpuNames is the effective GPU resource-name set.
-func (h *Handler) gpuNames(ctx context.Context, classes map[string]*gpuv1alpha1.GPUClass) (sets.Set[string], error) {
+// gpuNames is the effective GPU resource-name set; tableGPUs are the GPU
+// names of the KubeVirt permittedHostDevices table, added besides the
+// hoster's list.
+func (h *Handler) gpuNames(ctx context.Context, classes map[string]*gpuv1alpha1.GPUClass, tableGPUs []string) (sets.Set[string], error) {
 	nodes := &gpuv1alpha1.GPUNodeList{}
 	if err := h.Client.List(ctx, nodes); err != nil {
 		return nil, fmt.Errorf("list GPUNodes: %w", err)
@@ -74,22 +77,22 @@ func (h *Handler) gpuNames(ctx context.Context, classes map[string]*gpuv1alpha1.
 	for _, c := range classes {
 		list = append(list, *c)
 	}
-	return sets.New(model.ResourceNames(list, h.Config.ResourceNames, nodes.Items)...), nil
+	return sets.New(model.ResourceNames(list, append(slices.Clone(h.Config.ResourceNames), tableGPUs...), nodes.Items)...), nil
 }
 
-// permitted returns the KubeVirt permittedHostDevices table, or nil when
-// it is unset and KubeVirt checks nothing.
-func (h *Handler) permitted(ctx context.Context) (sets.Set[string], error) {
+// permitted returns the KubeVirt permittedHostDevices table, nil when it
+// is unset and KubeVirt checks nothing, and the table's GPU names.
+func (h *Handler) permitted(ctx context.Context) (sets.Set[string], []string, error) {
 	kv := &unstructured.Unstructured{}
 	kv.SetGroupVersionKind(kubeVirtGVK)
 	err := h.Cache.Get(ctx, client.ObjectKey{Namespace: model.KubeVirtNamespace, Name: model.KubeVirtName}, kv)
 	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get KubeVirt %s/%s: %w", model.KubeVirtNamespace, model.KubeVirtName, err)
+		return nil, nil, fmt.Errorf("get KubeVirt %s/%s: %w", model.KubeVirtNamespace, model.KubeVirtName, err)
 	}
-	return model.PermittedResourceNames(kv), nil
+	return model.PermittedResourceNames(kv), model.PermittedGPUNames(kv), nil
 }
 
 // quotas reads the declared resourceQuotas of ns and its ancestors from

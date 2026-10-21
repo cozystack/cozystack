@@ -256,6 +256,15 @@ func TestVMIRefusals(t *testing.T) {
 			denied: []string{"GPU entries of its own", "hostDevices hd"},
 		},
 		{
+			name:  "a host device with a GPU name only the KubeVirt table carries",
+			extra: []client.Object{kubeVirt(h100RN, "nvidia.com/GA102GL_A10"), device("train-0", "h100", 1, gpuv1alpha1.GPUDeviceBound, nodeA)},
+			refs:  []model.DeviceRef{held("train-0")},
+			vmi: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedSlice(u.Object, []any{entry("hd", "nvidia.com/GA102GL_A10")}, "spec", "domain", "devices", "hostDevices")
+			},
+			denied: []string{"GPU entries of its own", "hostDevices hd"},
+		},
+		{
 			name:   "a class outside the KubeVirt permittedHostDevices table",
 			extra:  []client.Object{kubeVirt(l40sRN), device("train-0", "h100", 1, gpuv1alpha1.GPUDeviceBound, nodeA)},
 			refs:   []model.DeviceRef{held("train-0")},

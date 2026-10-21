@@ -156,7 +156,7 @@ func (h *Handler) plan(ctx context.Context, ns string, u *unstructured.Unstructu
 		seen.Insert(m.device.Name)
 	}
 
-	permitted, err := h.permitted(ctx)
+	permitted, tableGPUs, err := h.permitted(ctx)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -168,7 +168,7 @@ func (h *Handler) plan(ctx context.Context, ns string, u *unstructured.Unstructu
 		return nil, nil, problem, err
 	}
 	gpus := desiredGPUs(set)
-	names, err := h.gpuNames(ctx, classes)
+	names, err := h.gpuNames(ctx, classes, tableGPUs)
 	if err != nil {
 		return nil, nil, "", err
 	}
