@@ -65,7 +65,7 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 		matched = append(matched, obj)
 	}
 	if len(matched) != 1 {
-		logger.Debug("MariaDB backup dump not attributable to a single object; leaving size unset",
+		logger.Info("MariaDB backup dump not attributable to a single object; leaving size unset",
 			"backup", mdbBackup.Name, "candidates", len(matched))
 		return 0
 	}

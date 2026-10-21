@@ -365,6 +365,9 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	mdbBackup *mariadbtypes.Backup,
 	rendered *strategyv1alpha1.MariaDBTemplate,
 ) (*backupsv1alpha1.Backup, error) {
+	if existing, err := r.existingBackup(ctx, j.Namespace, j.Name); err != nil || existing != nil {
+		return existing, err
+	}
 	takenAt := metav1.Now()
 	if cond := apimeta.FindStatusCondition(mdbBackup.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && !cond.LastTransitionTime.IsZero() {
 		takenAt = cond.LastTransitionTime

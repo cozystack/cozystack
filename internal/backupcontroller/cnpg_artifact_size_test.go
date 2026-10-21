@@ -248,7 +248,7 @@ func TestCreateCNPGBackupArtifact_SizeBytes(t *testing.T) {
 	}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
 	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "tenant/pg/srv/base/20261021T100000/data.tar.gz", Size: 777}}}
-	r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"))
+	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
 
 	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
@@ -260,5 +260,28 @@ func TestCreateCNPGBackupArtifact_SizeBytes(t *testing.T) {
 	}
 	if l.prefix != "tenant/pg/srv/base/20261021T100000/" {
 		t.Errorf("listed prefix %q does not use the effective serverName", l.prefix)
+	}
+}
+
+func TestCreateCNPGBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-retry"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	existing := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-retry"}}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "x", Size: 1}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, existing, s3CredsSecret("tenant", "creds"))
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
+
+	if _, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant")); err != nil {
+		t.Fatalf("createCNPGBackupArtifact: %v", err)
+	}
+	if l.calls != 0 {
+		t.Errorf("S3 listed %d times for a Backup that already exists", l.calls)
 	}
 }

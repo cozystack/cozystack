@@ -3,7 +3,10 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,9 +20,11 @@ type fakeS3Lister struct {
 	conn           s3Connection
 	bucket, prefix string
 	recursive      bool
+	calls          int
 }
 
 func (f *fakeS3Lister) ListObjects(_ context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
+	f.calls++
 	f.bucket, f.prefix, f.recursive = bucket, prefix, recursive
 	return f.objects, f.err
 }
@@ -46,5 +51,32 @@ func reconcilerWithLister(t *testing.T, l *fakeS3Lister, objs ...client.Object) 
 			l.conn = conn
 			return l, nil
 		},
+	}
+}
+
+func TestCollectObjects(t *testing.T) {
+	listing := func() <-chan minio.ObjectInfo {
+		ch := make(chan minio.ObjectInfo, 1)
+		ch <- minio.ObjectInfo{Key: "a", Size: 1}
+		close(ch)
+		return ch
+	}
+
+	got, err := collectObjects(context.Background(), listing())
+	if err != nil || len(got) != 1 || got[0].Size != 1 {
+		t.Fatalf("collectObjects = %v, %v; want one object", got, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got, err := collectObjects(ctx, listing()); !errors.Is(err, context.Canceled) {
+		t.Errorf("listing closed after cancellation: got %v, %v; want context.Canceled", got, err)
+	}
+
+	errCh := make(chan minio.ObjectInfo, 1)
+	errCh <- minio.ObjectInfo{Err: errors.New("AccessDenied")}
+	close(errCh)
+	if _, err := collectObjects(context.Background(), errCh); err == nil {
+		t.Error("listing error was not returned")
 	}
 }
