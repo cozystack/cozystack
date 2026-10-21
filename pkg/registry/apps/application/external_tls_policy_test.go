@@ -41,14 +41,14 @@ import (
 // expressions a cluster actually receives rather than a copy of them.
 const externalTLSPolicyPath = "../../../../packages/system/cozystack-basics/templates/database-external-tls-policy.yaml"
 
-// loadExternalTLSPolicy returns the policy and its binding from the chart
-// template. The template's only directives are the capability guard lines
-// around the manifests; any other directive would mean the test is no longer
-// looking at what renders, so it fails instead of guessing.
-func loadExternalTLSPolicy(t *testing.T) (*admissionregistrationv1.ValidatingAdmissionPolicy, *admissionregistrationv1.ValidatingAdmissionPolicyBinding) {
+// loadPolicy returns the policy and its binding from a chart template. The
+// template's only directives are the capability guard lines around the
+// manifests; any other directive would mean the test is no longer looking at
+// what renders, so it fails instead of guessing.
+func loadPolicy(t *testing.T, path string) (*admissionregistrationv1.ValidatingAdmissionPolicy, *admissionregistrationv1.ValidatingAdmissionPolicyBinding) {
 	t.Helper()
 
-	raw, err := os.ReadFile(externalTLSPolicyPath)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read policy template: %v", err)
 	}
@@ -92,11 +92,11 @@ func loadExternalTLSPolicy(t *testing.T) (*admissionregistrationv1.ValidatingAdm
 	return policy, binding
 }
 
-// compileExternalTLSPolicy mirrors compilePolicy in
+// compilePolicy mirrors compilePolicy in
 // k8s.io/apiserver/pkg/admission/plugin/policy/validating, which is
 // unexported: the same composition environment, the same variable, match
 // condition, validation and message compilers.
-func compileExternalTLSPolicy(t *testing.T, policy *admissionregistrationv1.ValidatingAdmissionPolicy) validating.Validator {
+func compilePolicy(t *testing.T, policy *admissionregistrationv1.ValidatingAdmissionPolicy) validating.Validator {
 	t.Helper()
 
 	compiler, err := plugincel.NewCompositedCompiler(environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion()))
@@ -139,7 +139,7 @@ func compileExternalTLSPolicy(t *testing.T, policy *admissionregistrationv1.Vali
 }
 
 func TestDatabaseExternalTLSPolicy_Binding(t *testing.T) {
-	policy, binding := loadExternalTLSPolicy(t)
+	policy, binding := loadPolicy(t, externalTLSPolicyPath)
 
 	if binding.Spec.PolicyName != policy.Name {
 		t.Errorf("binding names policy %q, want %q", binding.Spec.PolicyName, policy.Name)
@@ -171,8 +171,8 @@ func TestDatabaseExternalTLSPolicy_Binding(t *testing.T) {
 }
 
 func TestDatabaseExternalTLSPolicy_Decisions(t *testing.T) {
-	policy, _ := loadExternalTLSPolicy(t)
-	validator := compileExternalTLSPolicy(t, policy)
+	policy, _ := loadPolicy(t, externalTLSPolicyPath)
+	validator := compilePolicy(t, policy)
 
 	tlsOn := map[string]any{"enabled": true}
 	tlsOff := map[string]any{"enabled": false}
