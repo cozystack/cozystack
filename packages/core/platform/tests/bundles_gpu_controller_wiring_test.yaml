@@ -326,3 +326,34 @@ tests:
             enabled: true
             resourceNames: []
             rawResourceNames: allowed
+
+  # Without GPUs for VMs neither the controller nor the raw-name policy runs,
+  # so forbidden would promise a guarantee nothing keeps.
+  - it: refuses forbidden without GPUs for VMs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs'
+
+  - it: refuses forbidden under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        rawResourceNames: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs'

@@ -306,13 +306,17 @@ true
 {{/*
 Validated gpu.resourceNames and gpu.rawResourceNames, as YAML. The controller
 publishes the names comma-joined in its settings ConfigMap, so a name carrying
-a comma would arrive as two names.
+a comma would arrive as two names. forbidden is enforced only by the raw-name
+policy, which renders only where GPUs serve VMs, so elsewhere it is refused.
 */}}
 {{- define "cozystack.platform.gpu.settings" -}}
 {{- $gpu := .Values.gpu | default dict -}}
 {{- $raw := $gpu.rawResourceNames | default "allowed" -}}
 {{- if not (and (kindIs "string" $raw) (has $raw (list "allowed" "forbidden"))) -}}
 {{- fail (printf "gpu.rawResourceNames must be \"allowed\" or \"forbidden\", got %v" $raw) -}}
+{{- end -}}
+{{- if and (eq $raw "forbidden") (ne (include "cozystack.platform.gpu.vmEnabled" .) "true") -}}
+{{- fail "gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs (iaas bundle, default or vgpu variant); without them nothing enforces it" -}}
 {{- end -}}
 {{- $names := $gpu.resourceNames | default (list) -}}
 {{- if not (kindIs "slice" $names) -}}

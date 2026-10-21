@@ -343,6 +343,8 @@ spec:
       resourceName: nvidia.com/NVIDIA_L40S-24C
 ```
 
+The controller binds devices only to nodes whose `NoSchedule` and `NoExecute` taints, other than the `node.kubernetes.io/*` ones Kubernetes sets itself, virt-launcher pods tolerate, and `vm-instance` renders no tolerations, so a GPU node tainted, for example, `nvidia.com/gpu:NoSchedule` serves no class.
+
 A class's `resourceName` must be listed in the KubeVirt `permittedHostDevices` table (see "KubeVirt configuration" above). KubeVirt checks the table only when it renders the virt-launcher pod, so a VM given a device whose resource name is missing from it does not fail at admission; it stays `Pending`.
 
 A VM takes devices through `gpus` entries of `vm-instance`: `device` names a held device, and `deviceTemplate` orders a device of a class when the VM starts and releases it when the VM stops. A list holds either only raw `name` entries or only `device` and `deviceTemplate` entries.
@@ -371,7 +373,7 @@ gpu:
   rawResourceNames: allowed
 ```
 
-Raw resource names in `gpus` keep working while `gpu.rawResourceNames` is `allowed`, the default, but a VM that names a resource directly can take a unit a device holds. Under `forbidden`, a VM gets a GPU only through a device, and a pod in a tenant namespace requests a GPU resource name only as the virt-launcher pod of such a VM. Set it only once nothing uses raw GPU names: no Talos GPU worker pools, no GPU instance types in use and no raw GPU quota keys. The policy behind it fails closed: until the GPU controller has published `cozy-system/cozystack-gpu-settings`, every pod creation in every tenant namespace is refused, GPU or not, so turn it on only on a cluster where GPUs for VMs are already on.
+Raw resource names in `gpus` keep working while `gpu.rawResourceNames` is `allowed`, the default, but a VM that names a resource directly can take a unit a device holds. Under `forbidden`, a VM gets a GPU only through a device, and a pod in a tenant namespace requests a GPU resource name only as a virt-launcher or migration target pod that KubeVirt creates for a VMI; `forbidden` is accepted only where gpu-operator serves GPUs to VMs. Set it only once nothing uses raw GPU names: no Talos GPU worker pools, no GPU instance types in use and no raw GPU quota keys. The policy behind it fails closed: until the GPU controller has published `cozy-system/cozystack-gpu-settings`, every pod creation in every tenant namespace is refused, GPU or not, so turn GPUs for VMs on before `forbidden`.
 
 ## Sample VirtualMachine
 
