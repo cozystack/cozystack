@@ -52,8 +52,9 @@ func (r *BackupJobReconciler) redisArtifact(ctx context.Context, namespace, obje
 }
 
 // projectedS3Connection reads the backup credentials Secret the controller
-// projects into the application namespace. The projector always stores the
-// endpoint as a bare host, which the strategy scripts reach over https.
+// projects into the application namespace. The projector stores the endpoint
+// without a scheme, and the strategy scripts reach it over https. It can
+// still carry a path, which minio-go refuses.
 func (r *BackupJobReconciler) projectedS3Connection(ctx context.Context, namespace string) (string, s3Connection, error) {
 	var conn s3Connection
 	name := r.CredentialsConfig.TargetSecretName
@@ -85,12 +86,15 @@ const (
 // endpoint: it trusts ca.crt, then tls.crt, from the Secret mounted as the
 // s3-ca volume, and only when neither exists does it honour
 // S3_INSECURE_SKIP_VERIFY=true. Both are read from the pod spec the backup
-// Job ran with. A missing CA Secret is not an error, because the script
-// mounts it optionally.
+// Job ran with, but the Secret is read now, so a CA Secret the pod mounts
+// and that is gone by now never lets the probe skip verification: the Job
+// may have verified against it. Without skip-verify a missing CA Secret
+// leaves the system roots, as in the script, which mounts it optionally.
 func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string, podSpec *corev1.PodSpec) ([]byte, bool, error) {
 	if podSpec == nil {
 		return nil, false, nil
 	}
+	caMissing := false
 	for _, v := range podSpec.Volumes {
 		if v.Name != redisS3CAVolume || v.Secret == nil {
 			continue
@@ -98,6 +102,7 @@ func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string
 		secret := &corev1.Secret{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: v.Secret.SecretName}, secret)
 		if apierrors.IsNotFound(err) {
+			caMissing = true
 			break
 		}
 		if err != nil {
@@ -112,6 +117,9 @@ func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string
 	for _, c := range podSpec.Containers {
 		for _, e := range c.Env {
 			if e.Name == redisS3InsecureSkipEnv && e.Value == "true" {
+				if caMissing {
+					return nil, false, fmt.Errorf("CA Secret of the %s volume is gone; not skipping TLS verification in its place", redisS3CAVolume)
+				}
 				return nil, true, nil
 			}
 		}
