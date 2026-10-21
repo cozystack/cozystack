@@ -18,15 +18,12 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -42,15 +39,9 @@ var (
 )
 
 const (
-	// The KubeVirt CR the platform renders permittedHostDevices into.
-	kubeVirtNamespace = "cozy-kubevirt"
-	kubeVirtName      = "kubevirt"
-
 	// labelMode is the GPU mode a Kairos pool's chart sets on its worker
 	// VMI template.
 	labelMode = "gpu.cozystack.io/mode"
-
-	rootTenantNamespace = "tenant-root"
 )
 
 func (h *Handler) classes(ctx context.Context) (map[string]*gpuv1alpha1.GPUClass, error) {
@@ -85,53 +76,19 @@ func (h *Handler) gpuNames(ctx context.Context, classes map[string]*gpuv1alpha1.
 	return sets.New(model.ResourceNames(list, h.Config.ResourceNames, nodes.Items)...), nil
 }
 
-// permitted returns the resource names of the KubeVirt permittedHostDevices
-// table, or nil when the table is unset and KubeVirt checks nothing
-// (renderresources.go validatePermittedHostDevices in v1.9.0). It reads
-// the lists the controller's NotInPermittedHostDevices condition reads, so
-// the class condition and this refusal agree.
+// permitted returns the KubeVirt permittedHostDevices table, or nil when
+// it is unset and KubeVirt checks nothing.
 func (h *Handler) permitted(ctx context.Context) (sets.Set[string], error) {
 	kv := &unstructured.Unstructured{}
 	kv.SetGroupVersionKind(kubeVirtGVK)
-	err := h.Cache.Get(ctx, client.ObjectKey{Namespace: kubeVirtNamespace, Name: kubeVirtName}, kv)
+	err := h.Cache.Get(ctx, client.ObjectKey{Namespace: model.KubeVirtNamespace, Name: model.KubeVirtName}, kv)
 	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get KubeVirt %s/%s: %w", kubeVirtNamespace, kubeVirtName, err)
+		return nil, fmt.Errorf("get KubeVirt %s/%s: %w", model.KubeVirtNamespace, model.KubeVirtName, err)
 	}
-	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
-	if !ok || table == nil {
-		return nil, nil
-	}
-	out := sets.New[string]()
-	for _, list := range []string{"pciHostDevices", "mediatedDevices"} {
-		entries, _, _ := unstructured.NestedSlice(table, list)
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				if name, ok := m["resourceName"].(string); ok {
-					out.Insert(name)
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-// tenantReleaseKey returns the HelmRelease of the tenant that owns ns,
-// the inverse of the tenant namespace naming in cozystack-api
-// (computeTenantNamespace), or "" for a namespace no tenant owns.
-func tenantReleaseKey(ns string) (namespace, name string) {
-	switch parent := model.ParentNamespace(ns); {
-	case ns == rootTenantNamespace:
-		return rootTenantNamespace, rootTenantNamespace
-	case parent == "":
-		return "", ""
-	case parent == rootTenantNamespace:
-		return rootTenantNamespace, ns
-	default:
-		return parent, "tenant-" + strings.TrimPrefix(ns, parent+"-")
-	}
+	return model.PermittedResourceNames(kv), nil
 }
 
 // quotas reads the declared resourceQuotas of ns and its ancestors from
@@ -141,8 +98,8 @@ func tenantReleaseKey(ns string) (namespace, name string) {
 func (h *Handler) quotas(ctx context.Context, ns string) (map[string]corev1.ResourceList, error) {
 	out := map[string]corev1.ResourceList{}
 	for _, a := range model.Ancestors(ns) {
-		hrNamespace, hrName := tenantReleaseKey(a)
-		if hrName == "" {
+		hrName, hrNamespace, ok := model.TenantReleaseRef(a, model.TenantPrefix)
+		if !ok {
 			continue
 		}
 		hr := &helmv2.HelmRelease{}
@@ -156,15 +113,9 @@ func (h *Handler) quotas(ctx context.Context, ns string) (map[string]corev1.Reso
 		if hr.Spec.Values == nil {
 			continue
 		}
-		var values struct {
-			ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas"`
-		}
-		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
-			return nil, fmt.Errorf("decode values of tenant %s/%s: %w", hrNamespace, hrName, err)
-		}
-		rl := corev1.ResourceList{}
-		for k, v := range values.ResourceQuotas {
-			rl[corev1.ResourceName(k)] = v
+		rl, err := model.DeclaredQuotas(hr.Spec.Values.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("tenant %s/%s: %w", hrNamespace, hrName, err)
 		}
 		out[a] = rl
 	}
@@ -234,19 +185,11 @@ func (h *Handler) rawPods(ctx context.Context, s *model.Snapshot, devices []gpuv
 	if err := h.Client.List(ctx, namespaces); err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
 	}
-	covered := map[client.ObjectKey]map[corev1.ResourceName]int64{}
+	ptrs := make([]*gpuv1alpha1.GPUDevice, len(devices))
 	for i := range devices {
-		d := &devices[i]
-		c, ok := s.Classes[d.Spec.ClassName]
-		if d.Status.AttachedTo == nil || !ok {
-			continue
-		}
-		k := client.ObjectKey{Namespace: d.Namespace, Name: d.Status.AttachedTo.VMI}
-		if covered[k] == nil {
-			covered[k] = map[corev1.ResourceName]int64{}
-		}
-		covered[k][c.ResourceName] += int64(d.Spec.Count)
+		ptrs[i] = &devices[i]
 	}
+	covered := model.CoveredForBudget(ptrs, s.Classes)
 	var out []model.Pod
 	for _, n := range namespaces.Items {
 		inSubtree := false
@@ -262,13 +205,8 @@ func (h *Handler) rawPods(ctx context.Context, s *model.Snapshot, devices []gpuv
 		}
 		for i := range pods.Items {
 			p := &pods.Items[i]
-			var cov map[corev1.ResourceName]int64
-			for _, ref := range p.OwnerReferences {
-				if ref.Kind == vmiGVK.Kind {
-					cov = covered[client.ObjectKey{Namespace: p.Namespace, Name: ref.Name}]
-				}
-			}
-			if mp, ok := model.PodFrom(p, names, cov); ok {
+			vmi, _ := model.LauncherVMI(p)
+			if mp, ok := model.PodFrom(p, names, covered[vmi]); ok {
 				out = append(out, mp)
 			}
 		}

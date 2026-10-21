@@ -135,6 +135,19 @@ func TestValidateDevice(t *testing.T) {
 			order: order("h100", 1),
 		},
 		{
+			// A Lost device still counts against the budget itself, so the
+			// pod of its VMI must not count its units a second time.
+			name: "a raw key does not count GPUs a Lost device covers",
+			objs: []client.Object{
+				class("h100", gpuv1alpha1.GPUModePassthrough, h100RN),
+				tenantRelease(t, tenantNS, map[string]string{h100RN: "2", "gpu.cozystack.io/total": "4"}),
+				namespace(tenantNS, false),
+				attached(device("lost", "h100", 1, gpuv1alpha1.GPUDeviceLost, nodeA), "vm-a"),
+				launcherOf(rawPod("virt-launcher-vm-a", tenantNS, h100RN, 1), "vm-a"),
+			},
+			order: order("h100", 1),
+		},
+		{
 			name:   "a vGPU class needs the entitlement",
 			objs:   []client.Object{class("l40s", gpuv1alpha1.GPUModeVGPU, l40sRN), namespace(tenantNS, false)},
 			order:  order("l40s", 1),
@@ -178,17 +191,4 @@ func rawPod(name, ns, rn string, units int64) *corev1.Pod {
 func launcherOf(p *corev1.Pod, vmi string) *corev1.Pod {
 	p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: vmi, UID: "uid"}}
 	return p
-}
-
-func TestTenantReleaseKey(t *testing.T) {
-	for ns, want := range map[string][2]string{
-		"tenant-root":    {"tenant-root", "tenant-root"},
-		"tenant-acme":    {"tenant-root", "tenant-acme"},
-		"tenant-acme-ml": {"tenant-acme", "tenant-ml"},
-		"cozy-system":    {"", ""},
-	} {
-		if gotNS, gotName := tenantReleaseKey(ns); gotNS != want[0] || gotName != want[1] {
-			t.Errorf("tenantReleaseKey(%s) = %s/%s, want %s/%s", ns, gotNS, gotName, want[0], want[1])
-		}
-	}
 }

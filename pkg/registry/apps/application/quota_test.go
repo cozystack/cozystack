@@ -381,30 +381,6 @@ func TestValidateTenantResourceQuotas_PoolUsage(t *testing.T) {
 	})
 }
 
-func TestParentTenantHelmReleaseRef(t *testing.T) {
-	tests := []struct {
-		owned    string
-		wantName string
-		wantNS   string
-		wantOK   bool
-	}{
-		{"tenant-root", "tenant-root", "tenant-root", true},
-		{"tenant-foo", "tenant-foo", "tenant-root", true},
-		{"tenant-foo-bar", "tenant-bar", "tenant-foo", true},
-		{"tenant-foo-bar-baz", "tenant-baz", "tenant-foo-bar", true},
-		{"not-a-tenant", "", "", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.owned, func(t *testing.T) {
-			name, ns, ok := parentTenantHelmReleaseRef(tc.owned, testTenantPrefix)
-			if name != tc.wantName || ns != tc.wantNS || ok != tc.wantOK {
-				t.Fatalf("parentTenantHelmReleaseRef(%q) = (%q, %q, %v), want (%q, %q, %v)",
-					tc.owned, name, ns, ok, tc.wantName, tc.wantNS, tc.wantOK)
-			}
-		})
-	}
-}
-
 // GPU budget keys cap a tenant's whole subtree on their own rule, so they take
 // no part in the declaration gate or in deciding whether a tenant is bounded.
 func TestValidateTenantResourceQuotas_GPUKeys(t *testing.T) {

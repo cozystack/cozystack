@@ -94,42 +94,12 @@ func declaredQuotasFromHelmRelease(hr *helmv2.HelmRelease) (map[string]resource.
 	return parseDeclaredQuotas(hr.Spec.Values.Raw)
 }
 
-// parentTenantHelmReleaseRef maps the namespace owned by a tenant to the
-// name/namespace of that tenant's own HelmRelease. It is the inverse of
-// REST.computeTenantNamespace: a tenant created as Application "<name>" in
-// namespace C owns the workload namespace computeTenantNamespace(C, name), so
-// given the owned namespace we recover (release name, release namespace).
-//
-// Examples (prefix "tenant-"):
-//
-//	"tenant-root"        -> ("tenant-root", "tenant-root")  // root is its own parent
-//	"tenant-foo"         -> ("tenant-foo",  "tenant-root")  // foo lives in root
-//	"tenant-foo-bar"     -> ("tenant-bar",  "tenant-foo")   // bar lives in foo
-//	"tenant-foo-bar-baz" -> ("tenant-baz",  "tenant-foo-bar")
-func parentTenantHelmReleaseRef(ownedNamespace, prefix string) (name, namespace string, ok bool) {
-	if ownedNamespace == rootTenantNamespace {
-		return prefix + "root", rootTenantNamespace, true
-	}
-	if !strings.HasPrefix(ownedNamespace, prefix) {
-		return "", "", false
-	}
-	segments := strings.Split(ownedNamespace, "-")
-	last := segments[len(segments)-1]
-	// Exactly "tenant-<name>" (two segments) is a direct child of root, so its
-	// HelmRelease lives in the root namespace. Deeper names live in the
-	// namespace formed by stripping the trailing "-<name>".
-	if len(segments) == 2 {
-		return prefix + last, rootTenantNamespace, true
-	}
-	return prefix + last, strings.Join(segments[:len(segments)-1], "-"), true
-}
-
 // parentTenantDeclaredQuotas returns the declared resourceQuotas of the tenant
 // that owns childNamespace (the namespace a child Tenant CR is created in). An
 // empty result means the parent declares no quota and therefore does not
 // directly constrain the child at declaration time.
 func (r *REST) parentTenantDeclaredQuotas(ctx context.Context, childNamespace string) (map[string]resource.Quantity, error) {
-	hrName, hrNamespace, ok := parentTenantHelmReleaseRef(childNamespace, r.releaseConfig.Prefix)
+	hrName, hrNamespace, ok := model.TenantReleaseRef(childNamespace, r.releaseConfig.Prefix)
 	if !ok {
 		return nil, nil
 	}

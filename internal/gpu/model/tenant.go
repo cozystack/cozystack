@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	rootTenantNamespace   = "tenant-root"
-	tenantNamespacePrefix = "tenant-"
+	rootTenantNamespace = "tenant-root"
+	TenantPrefix        = "tenant-"
 )
 
 // ParentNamespace returns the namespace of the parent of the tenant that
@@ -33,7 +33,7 @@ const (
 // P-x, or tenant-x directly under root), so the parent is ns without its
 // last "-" segment.
 func ParentNamespace(ns string) string {
-	if ns == rootTenantNamespace || !strings.HasPrefix(ns, tenantNamespacePrefix) {
+	if ns == rootTenantNamespace || !strings.HasPrefix(ns, TenantPrefix) {
 		return ""
 	}
 	segments := strings.Split(ns, "-")

@@ -362,7 +362,7 @@ func launcherPod(name, vmi, nodeName string, units map[string]int64) *corev1.Pod
 func tenant(name string, quotas map[string]string) *helmv2.HelmRelease {
 	b, _ := json.Marshal(map[string]any{"resourceQuotas": quotas})
 	return &helmv2.HelmRelease{
-		ObjectMeta: metav1.ObjectMeta{Name: "tenant-" + name, Namespace: rootTenantNamespace,
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-" + name, Namespace: "tenant-root",
 			Labels: map[string]string{appsv1alpha1.ApplicationKindLabel: tenantKind}},
 		Spec: helmv2.HelmReleaseSpec{Values: &apiextensionsv1.JSON{Raw: b}},
 	}

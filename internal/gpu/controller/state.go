@@ -18,15 +18,12 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -39,9 +36,7 @@ import (
 )
 
 const (
-	rootTenantNamespace   = "tenant-root"
-	tenantNamespacePrefix = "tenant-"
-	tenantKind            = "Tenant"
+	tenantKind = "Tenant"
 )
 
 // world is one pass's view of everything placement and lifecycle read.
@@ -180,8 +175,8 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 		return nil, fmt.Errorf("list KubeVirt: %w", err)
 	}
 	for i := range kvs.Items {
-		if kvs.Items[i].GetNamespace() == kubeVirtNamespace && kvs.Items[i].GetName() == kubeVirtName {
-			w.permitted = permittedResourceNames(&kvs.Items[i])
+		if kvs.Items[i].GetNamespace() == model.KubeVirtNamespace && kvs.Items[i].GetName() == model.KubeVirtName {
+			w.permitted = model.PermittedResourceNames(&kvs.Items[i])
 		}
 	}
 
@@ -231,31 +226,13 @@ func (r *Reconciler) tenantQuotas(ctx context.Context) (map[string]corev1.Resour
 		if hr.Spec.Values == nil {
 			continue
 		}
-		var values struct {
-			ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas"`
+		rl, err := model.DeclaredQuotas(hr.Spec.Values.Raw)
+		if err != nil {
+			return nil, fmt.Errorf("tenant %s/%s: %w", hr.Namespace, hr.Name, err)
 		}
-		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
-			return nil, fmt.Errorf("decode values of tenant %s/%s: %w", hr.Namespace, hr.Name, err)
-		}
-		rl := corev1.ResourceList{}
-		for k, v := range values.ResourceQuotas {
-			rl[corev1.ResourceName(k)] = v
-		}
-		out[tenantNamespace(hr.Namespace, strings.TrimPrefix(hr.Name, tenantNamespacePrefix))] = rl
+		out[model.TenantNamespaceOf(hr.Namespace, hr.Name, model.TenantPrefix)] = rl
 	}
 	return out, nil
-}
-
-// tenantNamespace mirrors REST.computeTenantNamespace in cozystack-api.
-func tenantNamespace(hrNamespace, app string) string {
-	switch {
-	case hrNamespace == rootTenantNamespace && app == "root":
-		return rootTenantNamespace
-	case hrNamespace == rootTenantNamespace:
-		return tenantNamespacePrefix + app
-	default:
-		return hrNamespace + "-" + app
-	}
 }
 
 // detectLostCapacity marks nodes that have been NotReady, or that serve
@@ -263,14 +240,10 @@ func tenantNamespace(hrNamespace, app string) string {
 // LostCapacityGrace; the grace outlasts a kubelet restart, after which
 // kubelet reports zero until the plugin registers again.
 //
-// The units a node serves come from the agent's functions that carry the
-// resource name, as kubelet's allocatable count for them: kubelet lists
-// only the plugin devices that are healthy, so one bad mdev slot does not
-// take its parent's other slots with it. A held name no function carries,
-// because the node has no GPUNode, because the agent sees its devices only
-// by NVML UUID, or because kubelet dropped it when its last device went
-// bad, is judged by the node's allocatable count instead, which also caps
-// the agent's count.
+// model.ServedUnits counts what a node serves. A held name no agent
+// function carries, because the node has no GPUNode, because the agent sees
+// its devices only by NVML UUID, or because kubelet dropped it when its
+// last device went bad, is judged by the node's allocatable count.
 func (r *Reconciler) detectLostCapacity(w *world) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -289,21 +262,6 @@ func (r *Reconciler) detectLostCapacity(w *world) {
 		if gn := w.gpuNodes[name]; gn != nil {
 			devices = gn.Status.Devices
 		}
-		serves := map[corev1.ResourceName]int64{}
-		mapped := sets.New[corev1.ResourceName]()
-		for _, d := range devices {
-			if d.ResourceName == "" {
-				continue
-			}
-			rn := corev1.ResourceName(d.ResourceName)
-			mapped.Insert(rn)
-			switch {
-			case d.Allocatable != nil:
-				serves[rn] += int64(*d.Allocatable)
-			case d.Healthy != nil && *d.Healthy:
-				serves[rn]++
-			}
-		}
 		held := map[corev1.ResourceName]int64{}
 		for _, d := range w.devices {
 			if d.Status.NodeName == name && model.HoldsGPUs(d.Status.Phase) {
@@ -313,13 +271,8 @@ func (r *Reconciler) detectLostCapacity(w *world) {
 			}
 		}
 		for rn, units := range held {
-			// kubelet's count caps the agent's: a plugin that names a device
-			// by IOMMU group reports it on every GPU function of the group.
-			q := n.Status.Allocatable[rn]
-			if !mapped.Has(rn) || q.Value() < serves[rn] {
-				serves[rn] = q.Value()
-			}
-			if units <= serves[rn] {
+			served := model.ServedUnits(n, devices, rn)
+			if units <= served {
 				continue
 			}
 			k := rn.String() + "@" + name
@@ -333,7 +286,7 @@ func (r *Reconciler) detectLostCapacity(w *world) {
 				if w.lost[name] == nil {
 					w.lost[name] = &nodeLoss{healthy: map[corev1.ResourceName]int64{}}
 				}
-				w.lost[name].healthy[rn] = serves[rn]
+				w.lost[name].healthy[rn] = served
 			}
 		}
 	}
@@ -372,33 +325,11 @@ func (w *world) buildSnapshot(quotas map[string]corev1.ResourceList, pods []core
 	// A Lost device covers its VMI's pod for budgets, which already count
 	// the device, but not for node capacity: it holds no units, so the pod
 	// still running on its node holds them itself.
-	coveredForBudget := map[types.NamespacedName]map[corev1.ResourceName]int64{}
-	coveredForCapacity := map[types.NamespacedName]map[corev1.ResourceName]int64{}
-	add := func(m map[types.NamespacedName]map[corev1.ResourceName]int64, k types.NamespacedName, rn corev1.ResourceName, n int64) {
-		if m[k] == nil {
-			m[k] = map[corev1.ResourceName]int64{}
-		}
-		m[k][rn] += n
-	}
-	for _, d := range w.devices {
-		rn := w.resourceName(d.Spec.ClassName)
-		if d.Status.AttachedTo == nil || rn == "" {
-			continue
-		}
-		k := key(d.Namespace, d.Status.AttachedTo.VMI)
-		add(coveredForBudget, k, rn, int64(d.Spec.Count))
-		if holds(d) {
-			add(coveredForCapacity, k, rn, int64(d.Spec.Count))
-		}
-	}
+	coveredForBudget := model.CoveredForBudget(w.devices, s.Classes)
+	coveredForCapacity := model.CoveredForCapacity(w.devices, s.Classes)
 	for i := range pods {
 		p := &pods[i]
-		var vmi types.NamespacedName
-		for _, ref := range p.OwnerReferences {
-			if ref.Kind == vmiGVK.Kind {
-				vmi = key(p.Namespace, ref.Name)
-			}
-		}
+		vmi, _ := model.LauncherVMI(p)
 		budget, okBudget := model.PodFrom(p, names, coveredForBudget[vmi])
 		if okBudget {
 			s.Pods = append(s.Pods, budget)

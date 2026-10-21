@@ -72,8 +72,8 @@ func testScheme(t *testing.T) *runtime.Scheme {
 func kubeVirt(names ...string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(kubeVirtGVK)
-	u.SetNamespace(kubeVirtNamespace)
-	u.SetName(kubeVirtName)
+	u.SetNamespace(model.KubeVirtNamespace)
+	u.SetName(model.KubeVirtName)
 	if names != nil {
 		var pci []any
 		for _, n := range names {
@@ -176,7 +176,7 @@ func tenantRelease(t *testing.T, ns string, quotas map[string]string) *helmv2.He
 	if err != nil {
 		t.Fatal(err)
 	}
-	hrNamespace, hrName := tenantReleaseKey(ns)
+	hrName, hrNamespace, _ := model.TenantReleaseRef(ns, model.TenantPrefix)
 	return &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{Name: hrName, Namespace: hrNamespace,
 			Labels: map[string]string{appsv1alpha1.ApplicationKindLabel: "Tenant"}},

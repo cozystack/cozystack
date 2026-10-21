@@ -193,6 +193,12 @@ func TestVMIRefusals(t *testing.T) {
 			denied: []string{"GPUDevice train-0", "node gpu-a", "lost capacity"},
 		},
 		{
+			name:   "a device its node's allocatable no longer covers",
+			extra:  []client.Object{servedBy(1, true), device("train-0", "h100", 2, gpuv1alpha1.GPUDeviceBound, nodeA)},
+			refs:   []model.DeviceRef{held("train-0")},
+			denied: []string{"GPUDevice train-0", "node gpu-a", "lost capacity"},
+		},
+		{
 			name: "vGPU devices of two classes",
 			extra: []client.Object{
 				device("v1", "l40s", 1, gpuv1alpha1.GPUDeviceBound, "gpu-v"),
@@ -344,6 +350,16 @@ func fine() *gpuv1alpha1.GPUDevice {
 	return device("fine", "h100", 1, gpuv1alpha1.GPUDeviceBound, nodeA)
 }
 
+// servedBy is nodeA's GPUNode, lost capacity set, with one h100 function
+// whose plugin serves n units.
+func servedBy(n int32, healthy bool) *gpuv1alpha1.GPUNode {
+	gn := gpuNode(nodeA, metav1.Condition{Type: gpu.ConditionLostCapacity, Status: metav1.ConditionTrue, Reason: "NodeLostCapacity", LastTransitionTime: metav1.Now()})
+	gn.Status.Devices = []gpuv1alpha1.GPUNodeDevice{
+		{PCIAddress: "0000:41:00.0", Function: gpuv1alpha1.PCIFunctionPF, ResourceName: h100RN, Allocatable: &n, Healthy: &healthy},
+	}
+	return gn
+}
+
 func setGPUs(entries ...map[string]any) func(*unstructured.Unstructured) {
 	return func(u *unstructured.Unstructured) {
 		list := make([]any, 0, len(entries))
@@ -375,6 +391,12 @@ func TestVMIPasses(t *testing.T) {
 		refs  []model.DeviceRef
 		vmi   func(*unstructured.Unstructured)
 	}{
+		{
+			// An mdev parent serves kubelet's count of its slots, not one.
+			name:  "a device an mdev parent's allocatable still covers",
+			extra: []client.Object{servedBy(4, true), device("train-0", "h100", 2, gpuv1alpha1.GPUDeviceBound, nodeA)},
+			refs:  []model.DeviceRef{held("train-0")},
+		},
 		{
 			// A Lost device already counts against budgets; reusing it is
 			// not a new order.

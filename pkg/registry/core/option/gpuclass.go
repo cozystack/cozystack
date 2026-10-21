@@ -4,17 +4,16 @@ package option
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 
@@ -28,11 +27,6 @@ var (
 	gvrGPUDevices = gpuv1alpha1.GroupVersion.WithResource("gpudevices")
 	gvrNamespaces = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	gvrPods       = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-)
-
-const (
-	rootTenantNamespace = "tenant-root"
-	tenantPrefix        = "tenant-"
 )
 
 // gpuClassProvider is the GPU catalog: every class that takes orders, with
@@ -109,10 +103,8 @@ func int64Ptr(v *int32) *int64 {
 // their attached devices cover.
 func budgetSnapshot(ctx context.Context, dyn dynamic.Interface, namespace string, classes []gpuv1alpha1.GPUClass) (*model.Snapshot, error) {
 	snap := &model.Snapshot{Classes: map[string]model.Class{}, Quotas: map[string]corev1.ResourceList{}}
-	byName := map[string]*gpuv1alpha1.GPUClass{}
 	for i := range classes {
 		snap.Classes[classes[i].Name] = model.ClassFrom(&classes[i])
-		byName[classes[i].Name] = &classes[i]
 	}
 
 	ancestors := model.Ancestors(namespace)
@@ -155,16 +147,15 @@ func budgetSnapshot(ctx context.Context, dyn dynamic.Interface, namespace string
 	if err != nil {
 		return nil, err
 	}
-	covered := coveredByVMI(devices, byName)
+	ptrs := make([]*gpuv1alpha1.GPUDevice, len(devices))
+	for i := range devices {
+		ptrs[i] = &devices[i]
+	}
+	covered := model.CoveredForBudget(ptrs, snap.Classes)
 	for i := range pods {
 		p := &pods[i]
-		var cov map[corev1.ResourceName]int64
-		for _, ref := range p.OwnerReferences {
-			if ref.Kind == "VirtualMachineInstance" {
-				cov = covered[types.NamespacedName{Namespace: p.Namespace, Name: ref.Name}]
-			}
-		}
-		if mp, ok := model.PodFrom(p, rawNames, cov); ok {
+		vmi, _ := model.LauncherVMI(p)
+		if mp, ok := model.PodFrom(p, rawNames, covered[vmi]); ok {
 			snap.Pods = append(snap.Pods, mp)
 		}
 	}
@@ -192,43 +183,12 @@ func subtreePods(ctx context.Context, dyn dynamic.Interface, root string) ([]cor
 	return out, nil
 }
 
-// coveredByVMI sums, per VMI, the units its attached devices account for
-// under each resource name, so its virt-launcher pod does not count them a
-// second time against a budget. Every attached device covers, in any phase, as
-// in the order admission: a Lost device still counts against budgets, unlike
-// against a node's capacity.
-func coveredByVMI(devices []gpuv1alpha1.GPUDevice, classes map[string]*gpuv1alpha1.GPUClass) map[types.NamespacedName]map[corev1.ResourceName]int64 {
-	out := map[types.NamespacedName]map[corev1.ResourceName]int64{}
-	for i := range devices {
-		d := &devices[i]
-		if d.Status.AttachedTo == nil {
-			continue
-		}
-		c := classes[d.Spec.ClassName]
-		if c == nil || c.Spec.Source.DevicePlugin == nil {
-			continue
-		}
-		k := types.NamespacedName{Namespace: d.Namespace, Name: d.Status.AttachedTo.VMI}
-		if out[k] == nil {
-			out[k] = map[corev1.ResourceName]int64{}
-		}
-		out[k][corev1.ResourceName(c.Spec.Source.DevicePlugin.ResourceName)] += int64(d.Spec.Count)
-	}
-	return out
-}
-
-// declaredQuotas reads the resourceQuotas of the tenant that owns ns from its
-// HelmRelease, all keys as written. A tenant x of namespace P owns P-x, or
-// tenant-x directly under root, and its release is tenant-x in P.
+// declaredQuotas reads the resourceQuotas of the tenant that owns ns from
+// its HelmRelease, all keys as written.
 func declaredQuotas(ctx context.Context, dyn dynamic.Interface, ns string) (corev1.ResourceList, error) {
-	if ns != rootTenantNamespace && !strings.HasPrefix(ns, tenantPrefix) {
+	name, releaseNS, ok := model.TenantReleaseRef(ns, model.TenantPrefix)
+	if !ok {
 		return nil, nil
-	}
-	name, releaseNS := rootTenantNamespace, rootTenantNamespace
-	if ns != rootTenantNamespace {
-		segments := strings.Split(ns, "-")
-		name = tenantPrefix + segments[len(segments)-1]
-		releaseNS = model.ParentNamespace(ns)
 	}
 	hr, err := dyn.Resource(gvrHelmReleases).Namespace(releaseNS).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -237,16 +197,16 @@ func declaredQuotas(ctx context.Context, dyn dynamic.Interface, ns string) (core
 		}
 		return nil, err
 	}
-	raw, _, _ := unstructured.NestedMap(hr.Object, "spec", "values", "resourceQuotas")
-	out := corev1.ResourceList{}
-	for k, v := range raw {
-		q, err := resource.ParseQuantity(fmt.Sprint(v))
-		if err != nil {
-			continue
-		}
-		out[corev1.ResourceName(k)] = q
+	values, _, _ := unstructured.NestedMap(hr.Object, "spec", "values")
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("tenant %s/%s: %w", releaseNS, name, err)
 	}
-	return out, nil
+	q, err := model.DeclaredQuotas(raw)
+	if err != nil {
+		return nil, fmt.Errorf("tenant %s/%s: %w", releaseNS, name, err)
+	}
+	return q, nil
 }
 
 func namespaceEntitled(ctx context.Context, dyn dynamic.Interface, ns string) (bool, error) {

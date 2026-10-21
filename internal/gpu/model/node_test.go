@@ -20,6 +20,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 )
 
 func readyNode(mutate func(*corev1.Node)) *corev1.Node {
@@ -112,6 +115,35 @@ func TestEligible(t *testing.T) {
 	for _, tc := range tests {
 		if got := Eligible(tc.node, tc.tolerations); got != tc.want {
 			t.Errorf("%s: Eligible = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestServedUnits(t *testing.T) {
+	alloc := func(n int32) *int32 { return &n }
+	yes, no := true, false
+	node := &corev1.Node{Status: corev1.NodeStatus{Allocatable: corev1.ResourceList{
+		h100Name: resource.MustParse("8"), l40sName: resource.MustParse("3"),
+	}}}
+	tests := []struct {
+		name    string
+		devices []gpuv1alpha1.GPUNodeDevice
+		rn      corev1.ResourceName
+		want    int64
+	}{
+		{name: "an mdev parent serves its allocatable, not one unit", rn: l40sName,
+			devices: []gpuv1alpha1.GPUNodeDevice{{ResourceName: string(l40sName), Allocatable: alloc(3), Healthy: &yes}}, want: 3},
+		{name: "a parent with one bad slot still serves its other slots", rn: l40sName,
+			devices: []gpuv1alpha1.GPUNodeDevice{{ResourceName: string(l40sName), Allocatable: alloc(2), Healthy: &no}}, want: 2},
+		{name: "without allocatable a healthy function serves one", rn: h100Name,
+			devices: []gpuv1alpha1.GPUNodeDevice{{ResourceName: string(h100Name), Healthy: &yes}, {ResourceName: string(h100Name), Healthy: &no}}, want: 1},
+		{name: "kubelet's count caps the agent's", rn: l40sName,
+			devices: []gpuv1alpha1.GPUNodeDevice{{ResourceName: string(l40sName), Allocatable: alloc(4)}, {ResourceName: string(l40sName), Allocatable: alloc(4)}}, want: 3},
+		{name: "a name no function carries is judged by the node", rn: h100Name, want: 8},
+	}
+	for _, tt := range tests {
+		if got := ServedUnits(node, tt.devices, tt.rn); got != tt.want {
+			t.Errorf("%s: ServedUnits = %d, want %d", tt.name, got, tt.want)
 		}
 	}
 }

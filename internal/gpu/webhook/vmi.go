@@ -255,25 +255,16 @@ func (h *Handler) nodeProblem(ctx context.Context, d *gpuv1alpha1.GPUDevice, c *
 	if !model.Ready(n) {
 		return lost, nil
 	}
-	rn := resourceName(c)
-	if !slices.Contains(gn.Status.ResourceNames, rn) && !slices.ContainsFunc(gn.Status.Devices, func(dev gpuv1alpha1.GPUNodeDevice) bool {
-		return dev.ResourceName == rn
-	}) {
-		return "", nil
-	}
-	var healthy, held int64
-	for _, dev := range gn.Status.Devices {
-		if dev.ResourceName == rn && dev.Healthy != nil && *dev.Healthy {
-			healthy++
-		}
-	}
+	rn := corev1.ResourceName(resourceName(c))
+	var held int64
 	for i := range all {
 		o := &all[i]
-		if o.Status.NodeName == n.Name && model.HoldsGPUs(o.Status.Phase) && classes[o.Spec.ClassName] != nil && resourceName(classes[o.Spec.ClassName]) == rn {
+		if o.Status.NodeName == n.Name && model.HoldsGPUs(o.Status.Phase) && classes[o.Spec.ClassName] != nil &&
+			corev1.ResourceName(resourceName(classes[o.Spec.ClassName])) == rn {
 			held += int64(o.Spec.Count)
 		}
 	}
-	if held > healthy {
+	if held > model.ServedUnits(n, gn.Status.Devices, rn) {
 		return lost, nil
 	}
 	return "", nil
