@@ -59,6 +59,16 @@ catalog:
   ## @param {map} catalog.networks - What a vm-instance `networks[].name` means on Proxmox: `{<name>: {bridge: <bridge>, vlan: <tag or 0>, ipPool: <InClusterIPPool in the tenant namespace>}}`. The pool gives each port its address through an IPAddressClaim.
   networks: {}
   ## @param {map} catalog.profiles - What a vm-instance `instanceProfile` means on Proxmox. The defaults below cover the KubeVirt preference names; override an entry to change it.
+  # GPU and other PCI passthrough. A tenant's `gpus[].name` is looked up here
+  # and becomes `hostpciN: mapping=<mapping>` on the machine: the mapping is a
+  # cluster-wide PCI mapping of the PVE cluster (Datacenter → Resource Mappings,
+  # /cluster/mapping/pci) that the platform creates and grants the kubemox
+  # token Mapping.Use on. primaryGPU marks the device as the VM's display
+  # (x-vga=1). A name that is not listed here is refused at render time.
+  gpuMappings: {}
+  #  nvidia.com/GA102GL_A10:
+  #    mapping: a10
+  #    primaryGPU: false
   profiles:
     _linux: &linux
       ostype: l26

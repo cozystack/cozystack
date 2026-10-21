@@ -163,3 +163,32 @@
 {{- end -}}
 {{- $uuid -}}
 {{- end -}}
+
+{{- /*
+  The GPUs of the machine, as JSON: each `gpus[].name` resolved through the
+  catalog's gpuMappings to a PCI mapping of the PVE cluster. A name the
+  platform has not mapped is refused with the names it has, since a wrong
+  hostpci entry would only fail at the hypervisor, after the render.
+*/}}
+{{- define "virtual-machine.proxmoxGPUs" -}}
+{{- $catalog := index . 0 -}}
+{{- $root := index . 1 -}}
+{{- $mappings := index $catalog "gpuMappings" | default dict -}}
+{{- $gpus := list -}}
+{{- range $gpu := $root.Values.gpus -}}
+{{- $name := toString $gpu.name -}}
+{{- $entry := index $mappings $name -}}
+{{- if not $entry -}}
+{{- if $mappings -}}
+{{- fail (printf "gpu %q is not one of the GPUs the platform maps on Proxmox (known: %s)" $name (join ", " (keys $mappings | sortAlpha))) -}}
+{{- else -}}
+{{- fail (printf "gpu %q: the platform's Proxmox catalog lists no GPU mappings; ask the platform to map the device (gpuMappings in the proxmox-vm package)" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $entry.mapping -}}
+{{- fail (printf "gpu %q: the catalog entry has no mapping name" $name) -}}
+{{- end -}}
+{{- $gpus = append $gpus (dict "name" $name "mapping" (toString $entry.mapping) "primaryGPU" (eq (toString ($entry.primaryGPU | default false)) "true")) -}}
+{{- end -}}
+{{- $gpus | toJson -}}
+{{- end -}}
