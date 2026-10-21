@@ -311,7 +311,12 @@ policy, which renders only where GPUs serve VMs, so elsewhere it is refused.
 */}}
 {{- define "cozystack.platform.gpu.settings" -}}
 {{- $gpu := .Values.gpu | default dict -}}
-{{- $raw := $gpu.rawResourceNames | default "allowed" -}}
+{{- /* Defaulted only when unset: `default` would also turn false, 0 and ""
+       into allowed, the opposite of what someone writing false meant. */ -}}
+{{- $raw := $gpu.rawResourceNames -}}
+{{- if kindIs "invalid" $raw -}}
+{{- $raw = "allowed" -}}
+{{- end -}}
 {{- if not (and (kindIs "string" $raw) (has $raw (list "allowed" "forbidden"))) -}}
 {{- fail (printf "gpu.rawResourceNames must be \"allowed\" or \"forbidden\", got %v" $raw) -}}
 {{- end -}}
@@ -328,6 +333,12 @@ policy, which renders only where GPUs serve VMs, so elsewhere it is refused.
 {{- end -}}
 {{- if contains "," . -}}
 {{- fail (printf "gpu.resourceNames entry %q contains a comma; the set travels comma-joined and the name would be split" .) -}}
+{{- end -}}
+{{- /* An extended resource always has a domain prefix; a name without one,
+       or under kubernetes.io, is a standard resource such as memory, which
+       the raw-name policy would then refuse on every tenant pod. */ -}}
+{{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$" .)) (regexMatch "(^|\\.)kubernetes\\.io/" .) -}}
+{{- fail (printf "gpu.resourceNames entry %q is not a resource name, such as nvidia.com/gpu" .) -}}
 {{- end -}}
 {{- end -}}
 {{- dict "resourceNames" $names "rawResourceNames" $raw | toYaml -}}

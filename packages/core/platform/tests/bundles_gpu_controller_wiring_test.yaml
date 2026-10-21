@@ -357,3 +357,97 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs'
+
+  - it: refuses a false raw-name policy instead of reading it as allowed
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames must be "allowed" or "forbidden"'
+
+  - it: refuses an empty raw-name policy
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames must be "allowed" or "forbidden"'
+
+  - it: refuses an empty resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+  - it: refuses a resource name with spaces
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - "nvidia.com/a b"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+  # Every extended resource has a domain prefix; names without one, and the
+  # kubernetes.io ones, are standard resources and never a GPU.
+  - it: refuses a resource name without a domain
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - gpu
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+
+  - it: refuses a standard resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - memory
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+
+  - it: refuses a kubernetes.io resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - kubernetes.io/batch
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+

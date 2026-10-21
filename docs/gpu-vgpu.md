@@ -343,7 +343,7 @@ spec:
       resourceName: nvidia.com/NVIDIA_L40S-24C
 ```
 
-The controller binds devices only to nodes whose `NoSchedule` and `NoExecute` taints, other than the `node.kubernetes.io/*` ones Kubernetes sets itself, virt-launcher pods tolerate, and `vm-instance` renders no tolerations, so a GPU node tainted, for example, `nvidia.com/gpu:NoSchedule` serves no class.
+A node serves a class only if virt-launcher pods tolerate all its `NoSchedule` and `NoExecute` taints, not counting the `node.kubernetes.io/*` ones Kubernetes sets itself. `vm-instance` renders no tolerations, so a GPU node tainted, for example, `nvidia.com/gpu:NoSchedule` serves no class.
 
 A class's `resourceName` must be listed in the KubeVirt `permittedHostDevices` table (see "KubeVirt configuration" above). KubeVirt checks the table only when it renders the virt-launcher pod, so a VM given a device whose resource name is missing from it does not fail at admission; it stays `Pending`.
 
