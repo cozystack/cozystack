@@ -14,7 +14,7 @@
   on the target they are unmanaged (no KafkaTopic CR) — and for a topic that IS
   owned by a KafkaTopic CR, the Strimzi Topic Operator reconciles its configs
   from the CR, so an in-place config restore of such a topic is transient. See
-  docs/operations/backup-classes.md and the example README.
+  https://cozystack.io/docs/v1/operations/services/backup-classes/ and the example README.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "kafkas.strategy.backups.cozystack.io") -}}

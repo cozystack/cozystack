@@ -6,7 +6,7 @@
 > `backup.enabled: true` and `backup.useSystemBucket: true` on the
 > ClickHouse release; tenants do not provision a Bucket or supply S3
 > credentials. See
-> [Backup Classes](../../../docs/operations/backup-classes.md)
+> [Backup Classes](https://cozystack.io/docs/v1/operations/services/backup-classes/)
 > for the supported BackupJob / Plan flow against `cozy-default`. The
 > walk-through below covers the **legacy** path that wires a per-app
 > Bucket, custom strategy CR, and bespoke BackupClass — useful when an

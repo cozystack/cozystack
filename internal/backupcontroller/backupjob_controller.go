@@ -101,7 +101,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// so the tenant sees the misbinding instead of an infinite
 		// requeue loop with no status signal.
 		if errors.Is(err, ErrNoMatchingStrategy) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see docs/operations/backup-classes.md", j.Spec.BackupClassName, normalizedAppRef.Kind))
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see https://cozystack.io/docs/v1/operations/services/backup-classes/", j.Spec.BackupClassName, normalizedAppRef.Kind))
 		}
 		// BackupClass not found yet is transient on a fresh install:
 		// during the bootstrap window the cozy-default BackupClass is
@@ -290,7 +290,7 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 	// Tenant-side projection failures must be visible in the same
 	// Prometheus counter as system-side failures so the
 	// "rate(failures_total) > 0 or absent_over_time(successes_total[10m])"
-	// alert in docs/operations/backup-classes.md catches them. The system
+	// alert in https://cozystack.io/docs/v1/operations/services/backup-classes/ catches them. The system
 	// projector reports against system namespaces (cozy-velero etc.);
 	// here we attribute against the BackupJob's tenant namespace.
 	credentialsProjectionFailures.WithLabelValues(j.Namespace, classifyReason(err)).Inc()

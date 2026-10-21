@@ -1,6 +1,6 @@
 # Managed OpenSearch Service
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## TLS and client verification
 

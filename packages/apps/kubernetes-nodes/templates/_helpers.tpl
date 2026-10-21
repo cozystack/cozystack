@@ -231,7 +231,7 @@ it reconciles.
        name several (.Values.cluster, pool) splits reconstruct the SAME object
        name kubernetes-<cluster>-<pool>, so an operator who edits spec.cluster to
        another such value (its immutability is enforced only by the dashboard,
-       not the aggregated apiserver, see docs/storage-immutability.md) does not
+       not the aggregated apiserver, see https://cozystack.io/docs/v1/operations/storage-class-immutability/) does not
        prune or delete a single worker VM, but silently flips spec.clusterName
        and the pool WorkloadMonitor selector. CAPI rejects the immutable
        MachineDeployment.spec.clusterName Update loudly; the WorkloadMonitor

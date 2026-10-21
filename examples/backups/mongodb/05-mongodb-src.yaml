@@ -8,7 +8,7 @@
 # flow, where the application owns the storage and the driver does not inject it
 # — so, unlike MariaDB, the application must opt into backups. (Set
 # backup.useSystemBucket: true instead to have the driver inject the platform
-# system-bucket storage; see docs/operations/backup-classes.md.)
+# system-bucket storage; see https://cozystack.io/docs/v1/operations/services/backup-classes/.)
 #
 # The bucket coordinates (destinationPath / endpointURL / s3AccessKey /
 # s3SecretKey) point the storage at the Bucket provisioned in 00-bucket.yaml.
