@@ -21,19 +21,24 @@ package controller
 import (
 	"context"
 	"strings"
+	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -68,13 +73,13 @@ func Setup(mgr manager.Manager, cfg gpu.Config) error {
 		Watches(&cozyv1alpha1.WorkloadMonitor{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 			return o.GetName() == gpu.UsageMonitorName
 		})))
+	vmi := &unstructured.Unstructured{}
+	vmi.SetGroupVersionKind(vmiGVK)
+	vm := &unstructured.Unstructured{}
+	vm.SetGroupVersionKind(vmGVK)
+	kv := &unstructured.Unstructured{}
+	kv.SetGroupVersionKind(kubeVirtGVK)
 	if cfg.Enabled {
-		vmi := &unstructured.Unstructured{}
-		vmi.SetGroupVersionKind(vmiGVK)
-		vm := &unstructured.Unstructured{}
-		vm.SetGroupVersionKind(vmGVK)
-		kv := &unstructured.Unstructured{}
-		kv.SetGroupVersionKind(kubeVirtGVK)
 		b = b.
 			Watches(&gpuv1alpha1.GPUNode{}, all).
 			Watches(&corev1.Node{}, all, builder.WithPredicates(nodePlacementChanged)).
@@ -82,12 +87,45 @@ func Setup(mgr manager.Manager, cfg gpu.Config) error {
 			Watches(&helmv2.HelmRelease{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 				return o.GetLabels()[appsv1alpha1.ApplicationKindLabel] == tenantKind
 			}))).
-			Watches(&corev1.Pod{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(requestsExtendedResource))).
-			Watches(vmi, all).
-			Watches(vm, all).
-			Watches(kv, all)
+			Watches(&corev1.Pod{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(requestsExtendedResource)))
 	}
-	return b.Complete(r)
+	c, err := b.Build(r)
+	if err != nil || !cfg.Enabled {
+		return err
+	}
+	srcs := make([]source.TypedSource[reconcile.Request], 0, 3)
+	for _, obj := range []client.Object{vmi, vm, kv} {
+		srcs = append(srcs, source.Kind(mgr.GetCache(), obj, all))
+	}
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return watchWhenServed(ctx, mgr.GetRESTMapper(), kubeVirtPoll, c, srcs)
+	}))
+}
+
+// kubeVirtPoll is how often the binder looks again for the KubeVirt kinds.
+const kubeVirtPoll = 5 * time.Second
+
+// watchWhenServed adds the KubeVirt watches to the binder once KubeVirt
+// serves their kinds: a watch on a kind no CRD serves fails the
+// controller's start, and on a fresh install GPUs are enabled before
+// KubeVirt's operator installs its CRDs. Until then a pass reads no
+// KubeVirt object (listKubeVirt).
+func watchWhenServed(ctx context.Context, mapper meta.RESTMapper, interval time.Duration,
+	c interface {
+		Watch(source.TypedSource[reconcile.Request]) error
+	}, srcs []source.TypedSource[reconcile.Request]) error {
+	err := gpu.WaitForKinds(ctx, mapper, interval, func(k schema.GroupVersionKind, err error) {
+		log.FromContext(ctx).Info("waiting for a KubeVirt kind the GPU binder watches", "kind", k.String(), "reason", err.Error())
+	}, vmiGVK, vmGVK, kubeVirtGVK)
+	if err != nil {
+		return nil
+	}
+	for _, src := range srcs {
+		if err := c.Watch(src); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // nodePlacementChanged drops node updates that cannot change placement,

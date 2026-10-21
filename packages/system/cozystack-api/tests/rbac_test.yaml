@@ -15,9 +15,9 @@ release:
 # the API group string exactly.
 #
 # The last two tests bound the role from two directions, and neither covers the
-# other. The count bound pins the list at exactly twenty-one: templates/rbac.yaml
-# carries no template directives, so anything appended makes rules[21] exist and
-# anything dropped takes rules[20] away, whatever the rule is called. It says
+# other. The count bound pins the list at exactly twenty-four: templates/rbac.yaml
+# carries no template directives, so anything appended makes rules[24] exist and
+# anything dropped takes rules[23] away, whatever the rule is called. It says
 # nothing about a grant swapped in for an existing one, because the count does
 # not move under a swap. The spelling assert catches that case for the one rule
 # it names, and misses every other wording of it, because helm-unittest compares
@@ -76,6 +76,37 @@ tests:
             resources: ["datavolumes"]
             verbs: ["get", "watch", "list"]
 
+  - it: grants read on gpu.cozystack.io gpuclasses and gpudevices for the gpuclass/gpudevice providers
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpuclasses", "gpudevices"]
+            verbs: ["get", "watch", "list"]
+
+  # The gpuclass provider reads pods only to count raw-name GPU usage under a
+  # raw quota key, one list per namespace; it never watches them.
+  - it: grants get and list, and no watch, on pods
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list"]
+
+  # It reads the VMI a pod names, to tell its launcher pod from a pod that
+  # only claims the VMI as owner.
+  - it: grants get, and no list or watch, on virtualmachineinstances
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubevirt.io"]
+            resources: ["virtualmachineinstances"]
+            verbs: ["get"]
+
   - it: does not grant objectstorage.k8s.io bucketclasses (no provider reads it)
     asserts:
       - notContains:
@@ -85,11 +116,11 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: ships exactly the twenty-one rules this role is pinned to
+  - it: ships exactly the twenty-four rules this role is pinned to
     asserts:
       # Both directions. A dropped grant is the failure this suite is about:
       # the apiserver returns forbidden and List silently drops the dropdown.
       - exists:
-          path: rules[20]
+          path: rules[23]
       - notExists:
-          path: rules[21]
+          path: rules[24]

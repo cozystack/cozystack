@@ -3,6 +3,7 @@ templates:
   - templates/gpu-class-policy.yaml
   - templates/gpu-device-tamper-policy.yaml
   - templates/gpu-usage-monitor-label-policy.yaml
+  - templates/gpu-raw-names-policy.yaml
 release:
   name: cozystack-basics
   namespace: cozy-system
@@ -13,6 +14,7 @@ tests:
     set:
       gpu:
         enabled: true
+        rawResourceNames: forbidden
     asserts:
       - hasDocuments:
           count: 0

@@ -40,3 +40,42 @@ tests:
       - notMatchRegex:
           path: stringData["values.yaml"]
           pattern: gpu-vgpu
+
+  # Apps read the GPU switch from _cluster: vm-instance refuses device
+  # references where no webhook would resolve them.
+  - it: writes gpu-vm-enabled where gpu-operator serves GPUs to VMs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^_cluster:\n(  .*\n)*  gpu-vm-enabled: "true"$'
+
+  - it: leaves gpu-vm-enabled out under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled
+
+  - it: leaves gpu-vm-enabled out by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled

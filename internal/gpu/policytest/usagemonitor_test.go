@@ -57,6 +57,7 @@ func TestUsageMonitorLabelMatch(t *testing.T) {
 	if r.Scope == nil || *r.Scope != admissionregistrationv1.NamespacedScope {
 		t.Errorf("scope must be Namespaced, got %v", r.Scope)
 	}
+	requireTenantNamespaceBindings(t, get(t, labelPolicyFile, usageMonitor))
 }
 
 func TestUsageMonitorLabel(t *testing.T) {
@@ -102,10 +103,11 @@ func TestUsageMonitorLabel(t *testing.T) {
 		user      user.Info
 		denied    bool
 	}{
-		// A VM template's labels reach the VMI, and from there the
-		// virt-launcher pod and the DataVolume; none of them may carry the key.
+		// A VM template's labels reach the VMI and its virt-launcher pod,
+		// and the DataVolumes created from the VM's dataVolumeTemplates carry
+		// those templates' labels; none of them may carry the key.
 		{name: "virt-launcher pod inheriting the label", gvk: podGVK, resource: "pods", new: labelled(pod, reserved), user: kubevirtSA, denied: true},
-		{name: "DataVolume inheriting the label", gvk: dvGVK, resource: "datavolumes", new: labelled(dataVolume, reserved), user: kubevirtSA, denied: true},
+		{name: "DataVolume created with the label", gvk: dvGVK, resource: "datavolumes", new: labelled(dataVolume, reserved), user: kubevirtSA, denied: true},
 		{name: "tenant ConfigMap with the label", gvk: cmGVK, resource: "configmaps", new: labelled(configMap, reserved), user: tenantUser, denied: true},
 		{name: "tenant labels an existing ConfigMap", gvk: cmGVK, resource: "configmaps", old: configMap, new: labelled(configMap, reserved), user: tenantUser, denied: true},
 		{name: "GPUDevice with the label", gvk: deviceGVK, resource: "gpudevices", new: labelled(gpuDevice, reserved), user: tenantUser, denied: true},
@@ -120,11 +122,12 @@ func TestUsageMonitorLabel(t *testing.T) {
 		{name: "status write on a pod that already carries the label", gvk: podGVK, resource: "pods", sub: "status", old: labelled(pod, reserved), new: labelled(pod, reserved), user: kubevirtOtherSA},
 		{name: "finalizer removal on an object that already carries the label", gvk: cmGVK, resource: "configmaps", old: withFinalizers(labelled(configMap, reserved), "kubernetes.io/pvc-protection"), new: labelled(configMap, reserved), user: kcmUser},
 		{name: "update dropping the label", gvk: cmGVK, resource: "configmaps", old: labelled(configMap, reserved), new: configMap, user: tenantUser},
-		{name: "update changing the label's value", gvk: cmGVK, resource: "configmaps", old: labelled(configMap, reserved), new: labelled(configMap, map[string]string{gpu.LabelUsageMonitor: "other"}), user: tenantUser},
+		// Changing the value could make an object labelled before the policy
+		// start matching the monitor.
+		{name: "update changing the label's value", gvk: cmGVK, resource: "configmaps", old: labelled(configMap, reserved), new: labelled(configMap, map[string]string{gpu.LabelUsageMonitor: "other"}), user: tenantUser, denied: true},
 		{name: "pod without labels", gvk: podGVK, resource: "pods", new: pod, user: kubevirtSA},
 		{name: "pod with other labels", gvk: podGVK, resource: "pods", new: labelled(pod, map[string]string{"kubevirt.io": "virt-launcher", gpu.LabelDeviceReference: "true"}), user: kubevirtSA},
 		{name: "update dropping other labels", gvk: cmGVK, resource: "configmaps", old: labelled(configMap, map[string]string{"a": "b"}), new: configMap, user: tenantUser},
-		{name: "object outside tenant namespaces", gvk: cmGVK, resource: "configmaps", namespace: "cozy-system", new: labelled(configMap, reserved), user: clusterAdmin},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

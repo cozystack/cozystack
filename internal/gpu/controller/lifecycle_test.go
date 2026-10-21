@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -299,5 +301,65 @@ func TestAFailedDeviceReleaseKeepsItsClassFinalizer(t *testing.T) {
 	_, _ = e.r.Reconcile(t.Context(), ctrl.Request{NamespacedName: passKey})
 	if e.gone(&gpuv1alpha1.GPUClass{ObjectMeta: c.ObjectMeta}) {
 		t.Fatal("the class went although its device's release failed")
+	}
+}
+
+// With the feature enabled before KubeVirt serves its kinds, as on a fresh
+// install, there is no VMI to read: passes still run, so usage records,
+// finalizers and placement do not wait for KubeVirt.
+func TestEnabledFeatureRunsBeforeKubeVirtServesItsKinds(t *testing.T) {
+	c := class("l40s", rnL40S)
+	d := device("a", "l40s", 1, bound("n1"))
+	o := device("order", "l40s", 1)
+	e := newEnvWith(t, false, c, d, o, node("n1", map[string]int64{rnL40S: 2}))
+	e.r.Config.Enabled = true
+	// The manager's cache answers a kind no CRD serves with NoKindMatch.
+	e.r.Cache = interceptor.NewClient(e.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if u, ok := list.(*unstructured.UnstructuredList); ok {
+				gvk := u.GroupVersionKind()
+				return &meta.NoKindMatchError{GroupKind: gvk.GroupKind(), SearchedVersions: []string{gvk.Version}}
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	e.pass()
+	if !e.recordExists("a") {
+		t.Fatal("usage record missing before KubeVirt serves its kinds")
+	}
+	if got := e.device("order"); got.Status.Phase != gpuv1alpha1.GPUDeviceBound {
+		t.Fatalf("an order was not placed before KubeVirt serves its kinds: %+v", got.Status)
+	}
+	e.delete(d)
+	e.delete(c)
+	e.pass()
+	if !e.gone(d) {
+		t.Fatal("a deletion hung until KubeVirt serves its kinds")
+	}
+}
+
+// A kind KubeVirt served a moment ago can read as not served, such as
+// while an API server's discovery refills after its restart. A device
+// attached to a running VMI must not read that as a VMI that is gone.
+func TestUnservedKubeVirtKindsDoNotDetachAttachedDevices(t *testing.T) {
+	d := device("a", "l40s", 1, bound("n1"), attached("vm1"))
+	d.Status.Phase = gpuv1alpha1.GPUDeviceAttached
+	e := newEnvWith(t, false, class("l40s", rnL40S), d, node("n1", map[string]int64{rnL40S: 2}))
+	e.r.Config.Enabled = true
+	e.r.Cache = interceptor.NewClient(e.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if u, ok := list.(*unstructured.UnstructuredList); ok {
+				gvk := u.GroupVersionKind()
+				return &meta.NoKindMatchError{GroupKind: gvk.GroupKind(), SearchedVersions: []string{gvk.Version}}
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	_, err := e.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: passKey})
+	if err == nil || !strings.Contains(err.Error(), "GPUDevice "+ns+"/a is attached") {
+		t.Fatalf("the pass must fail naming the attached device, got %v", err)
+	}
+	if got := e.device("a"); got.Status.AttachedTo == nil || got.Status.Phase != gpuv1alpha1.GPUDeviceAttached {
+		t.Fatalf("an unserved KubeVirt kind detached a device: %+v", got.Status)
 	}
 }

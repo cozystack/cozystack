@@ -319,6 +319,63 @@ If the guest reports `Unlicensed (Unrestricted)` for more than a couple of minut
 
 Operators upgrading from the previous Cozystack release (gpu-operator chart v25.3.0) should also note that the upstream chart deprecated `driver.licensingConfig.configMapName` in favour of `driver.licensingConfig.secretName`. The old key still works but emits a deprecation warning at render time. If your existing `Package` CR set the licensing reference via `configMapName`, switch it to `secretName` on this upgrade — the Secret content (`gridd.conf` and the ClientConfigToken) does not need to change. This applies to passthrough deployments that drove host-side licensing through the gpu-operator chart; SR-IOV vGPU does not consume the host-side licensing knob at all (see "Licensing (DLS)" above).
 
+## GPU classes, devices and budgets
+
+With `cozystack.gpu-operator` enabled in the `default` or `vgpu` variant, the platform also serves a GPU catalog and per-tenant GPU reservations. The hoster publishes one cluster-scoped `GPUClass` per offer, and every authenticated user can read the catalog. A tenant administrator orders a `GPUDevice` of a class in the tenant namespace; the device is bound to one node with free units of the class and holds them until the tenant deletes it.
+
+```yaml
+apiVersion: gpu.cozystack.io/v1alpha1
+kind: GPUClass
+metadata:
+  name: l40s-24c
+spec:
+  displayName: "NVIDIA L40S, 24 GB vGPU (compute)"
+  vendor: nvidia
+  model: L40S
+  mode: vgpu              # passthrough | vgpu
+  profile: L40S-24C
+  memory: 24Gi
+  maxCount: 2             # GPUs of this class per VM
+  nodeSelector:
+    gpu.cozystack.io/10de-26b9: L40S-24C
+  source:
+    devicePlugin:
+      resourceName: nvidia.com/NVIDIA_L40S-24C
+```
+
+A node serves a class only if virt-launcher pods tolerate all its `NoSchedule` and `NoExecute` taints, not counting `node.kubernetes.io/unschedulable`, `node.kubernetes.io/not-ready` and `node.kubernetes.io/unreachable`, which Kubernetes sets for a cordon or a node that is not `Ready`. Other `node.kubernetes.io/*` taints, such as `memory-pressure`, do count. `vm-instance` renders no tolerations, so a GPU node tainted, for example, `nvidia.com/gpu:NoSchedule` serves no class.
+
+A class's `resourceName` must be listed in the KubeVirt `permittedHostDevices` table (see "KubeVirt configuration" above). While the table is set, a class missing from it carries the `ResourceNameNotPermitted` condition, and a VM that references a device of that class is refused at admission. KubeVirt itself checks the table only when it renders the virt-launcher pod, so a VM with a raw `name` entry missing from the table does not fail at admission; it stays `Pending`.
+
+A VM takes devices through `gpus` entries of `vm-instance`: `device` names a held device, and `deviceTemplate` orders a device of a class when the VM starts and releases it when the VM stops. A list holds either only raw `name` entries or only `device` and `deviceTemplate` entries.
+
+```yaml
+gpus:
+- device: train-0
+- deviceTemplate:
+    className: l40s-24c
+    count: 1
+```
+
+Once the GPU controller has picked up a class, its `vendor`, `model`, `mode`, `profile`, `memory`, `maxCount` and the kind of its `source` cannot change; `resourceName` and `nodeSelector` can. Publish a changed offer as a new class. A deleted class waits for its last holding device and takes no new orders.
+
+GPU budgets go into a tenant's `resourceQuotas`: `gpu.cozystack.io/<class>: <count>` per class and `gpu.cozystack.io/total: <count>` across classes. They limit the devices of the tenant's whole subtree, and they are not rendered into the namespace `ResourceQuota`, so a tenant with only GPU budgets gets no `ResourceQuota` or `LimitRange`.
+
+vGPU classes need an entitlement. Set `gpu.vgpu: true` in the platform values to entitle the root tenant, then `gpu.vgpu: true` on each Tenant below it that may order vGPU: a tenant is entitled only when its parent is. The effective value is the `namespace.cozystack.io/vgpu` label on the tenant namespace.
+
+```yaml
+gpu:
+  vgpu: false
+  # Resource names that count as GPUs besides those of GPUClass objects,
+  # those the node agent reports and the NVIDIA and mediated entries of the
+  # KubeVirt permittedHostDevices table.
+  resourceNames: []
+  # allowed | forbidden
+  rawResourceNames: allowed
+```
+
+Raw resource names in `gpus` keep working while `gpu.rawResourceNames` is `allowed`, the default, but a VM that names a resource directly can take a unit a device holds. Under `forbidden`, a VM gets a GPU only through a device, and a pod in a tenant namespace requests a GPU resource name only as a virt-launcher or migration target pod that KubeVirt creates for a VMI; `forbidden` is accepted only where gpu-operator serves GPUs to VMs. Set it only once nothing uses raw GPU names: no Talos GPU worker pools, no GPU instance types in use and no raw GPU quota keys. The policy behind it fails closed: until the GPU controller has published `cozy-system/cozystack-gpu-settings`, every pod creation in every tenant namespace is refused, GPU or not, so turn GPUs for VMs on before `forbidden`.
+
 ## Sample VirtualMachine
 
 Either `hostDevices` or `gpus` accepts the resource (the upstream KubeVirt API resolves both PCI and mediated-device pools), but the convention is to use `hostDevices` for VF-style PCI passthrough:

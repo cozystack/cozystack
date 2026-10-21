@@ -1,0 +1,91 @@
+{{- if (.Values.cozystackController.gpu).enabled }}
+{{- $namespaceSelector := dict "matchExpressions" (list
+  (dict "key" "cozystack.io/system" "operator" "NotIn" "values" (list "true"))
+  (dict "key" "kubernetes.io/metadata.name" "operator" "NotIn" "values" (list "kube-system" "default"))) }}
+# Both mutating webhooks select only objects carrying the device-reference
+# label, so of VMIs and pods an outage of the controller blocks only the
+# start of VMs with device references; the validating webhook below also
+# blocks new GPUDevice orders. The name sorts before virt-api-mutator, so
+# KubeVirt's own mutator sees the gpus entries too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: cozystack-gpu
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+webhooks:
+- name: vmi.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  # Creates template devices and attaches devices, but not on a dry run.
+  sideEffects: NoneOnDryRun
+  # The handler waits at most 10s for the binder; the API server calls it
+  # again after virt-api's mutator, within one 60s request deadline.
+  timeoutSeconds: 15
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/mutate-vmi
+  rules:
+  - operations: [CREATE]
+    apiGroups: [kubevirt.io]
+    apiVersions: [v1]
+    resources: [virtualmachineinstances]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  objectSelector:
+    matchLabels:
+      gpu.cozystack.io/device-reference: "true"
+- name: virt-launcher.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  # A later mutator may rewrite the affinity; the pin is added again.
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/pin-virt-launcher
+  rules:
+  - operations: [CREATE]
+    apiGroups: [""]
+    apiVersions: [v1]
+    resources: [pods]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  # Both labels, so only virt-launcher pods with device references wait on
+  # this webhook during a networking disruption.
+  objectSelector:
+    matchLabels:
+      gpu.cozystack.io/device-reference: "true"
+      kubevirt.io: virt-launcher
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: cozystack-gpu
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+webhooks:
+- name: gpudevice.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/validate-gpudevice
+  rules:
+  - operations: [CREATE]
+    apiGroups: [gpu.cozystack.io]
+    apiVersions: [v1alpha1]
+    resources: [gpudevices]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+{{- end }}

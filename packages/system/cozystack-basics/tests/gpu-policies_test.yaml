@@ -3,6 +3,7 @@ templates:
   - templates/gpu-class-policy.yaml
   - templates/gpu-device-tamper-policy.yaml
   - templates/gpu-usage-monitor-label-policy.yaml
+  - templates/gpu-raw-names-policy.yaml
 release:
   name: cozystack-basics
   namespace: cozy-system
@@ -13,10 +14,15 @@ capabilities:
 # reads these templates. This suite pins when they render: the class and
 # device policies only where the platform switched GPUs for VMs on, the
 # usage-monitor label reservation always, so a tenant cannot set the label
-# before GPUs are on.
+# before GPUs are on, and the raw-name policy only where the hoster forbade
+# raw names, since its binding refuses everything it matches until the
+# controller publishes the GPU resource names.
 tests:
   - it: renders only the usage-monitor label reservation by default
     asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-raw-names-policy.yaml
       - hasDocuments:
           count: 0
         template: templates/gpu-class-policy.yaml
@@ -24,10 +30,10 @@ tests:
           count: 0
         template: templates/gpu-device-tamper-policy.yaml
       - hasDocuments:
-          count: 2
+          count: 3
         template: templates/gpu-usage-monitor-label-policy.yaml
 
-  - it: renders every GPU policy when GPUs are on
+  - it: renders the class, device and label policies when GPUs are on
     set:
       gpu:
         enabled: true
@@ -39,7 +45,7 @@ tests:
           count: 2
         template: templates/gpu-device-tamper-policy.yaml
       - hasDocuments:
-          count: 2
+          count: 3
         template: templates/gpu-usage-monitor-label-policy.yaml
 
   - it: accepts the switch as a string
@@ -71,5 +77,33 @@ tests:
           count: 0
         template: templates/gpu-class-policy.yaml
       - hasDocuments:
-          count: 2
+          count: 3
         template: templates/gpu-usage-monitor-label-policy.yaml
+
+  - it: renders the raw-name policy when raw names are forbidden
+    set:
+      gpu:
+        enabled: true
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders no raw-name policy while raw names are allowed
+    set:
+      gpu:
+        enabled: true
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no raw-name policy while GPUs are off
+    set:
+      gpu:
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

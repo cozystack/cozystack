@@ -17,15 +17,37 @@ limitations under the License.
 package webhook
 
 import (
+	"net/http/httptest"
 	"testing"
+
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cozystack/cozystack/internal/gpu"
 )
 
-// Register may be called before any webhook exists: it must succeed and
-// touch nothing, so it accepts a nil manager.
-func TestRegisterWithoutWebhooksIsANoOp(t *testing.T) {
-	if err := Register(nil, gpu.Config{Enabled: true}); err != nil {
+// fakeManager provides what Register uses; any other method panics.
+type fakeManager struct {
+	manager.Manager
+	server webhook.Server
+	c      client.Client
+}
+
+func (m *fakeManager) GetWebhookServer() webhook.Server { return m.server }
+func (m *fakeManager) GetClient() client.Client         { return m.c }
+func (m *fakeManager) GetAPIReader() client.Reader      { return m.c }
+func (m *fakeManager) GetCache() cache.Cache            { return nil }
+
+func TestRegisterServesEveryPath(t *testing.T) {
+	m := &fakeManager{server: webhook.NewServer(webhook.Options{}), c: newClient(t)}
+	if err := Register(m, gpu.Config{Enabled: true}); err != nil {
 		t.Fatalf("Register: %v", err)
+	}
+	for _, path := range []string{PathValidateDevice, PathMutateVMI, PathPinPod} {
+		if _, pattern := m.server.WebhookMux().Handler(httptest.NewRequest("POST", path, nil)); pattern != path {
+			t.Errorf("%s is not served (matched %q)", path, pattern)
+		}
 	}
 }

@@ -16,6 +16,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/gpu"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2445,7 +2446,12 @@ func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
 		refLabel bool
 		attached []int32
 		phase    gpuv1alpha1.GPUDevicePhase
-		want     string
+		// vmi is how the pod's VMI lists it: "" for an active pod,
+		// "inactive" for a VMI whose activePods lacks it, "missing" for none.
+		vmi string
+		// getErr fails reading the VMI.
+		getErr error
+		want   string
 	}{
 		{name: "all units covered", refLabel: true, attached: []int32{1, 1}, want: ""},
 		{name: "partly covered", refLabel: true, attached: []int32{1}, want: "1"},
@@ -2453,6 +2459,16 @@ func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
 		// The phase table leaves a Lost device out of the usage records, and
 		// the pod must not bring its GPUs back in.
 		{name: "devices Lost", refLabel: true, attached: []int32{1, 1}, phase: gpuv1alpha1.GPUDeviceLost, want: ""},
+		// The label and the owner reference are no proof: any pod can carry
+		// them. Only the VMI's own list of its pods is.
+		{name: "pod not among the VMI's active pods", refLabel: true, attached: []int32{1, 1}, vmi: "inactive", want: "2"},
+		{name: "no such VMI", refLabel: true, attached: []int32{1, 1}, vmi: "missing", want: "2"},
+		// Without KubeVirt there is no VMI to list the pod.
+		{name: "no VMI kind served", refLabel: true, attached: []int32{1, 1},
+			getErr: &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "kubevirt.io", Kind: "VirtualMachineInstance"}}, want: "2"},
+		// A failed read leaves the pod's record for the next pass rather than
+		// reporting the GPUs its devices may cover.
+		{name: "VMI unreadable", refLabel: true, attached: []int32{1, 1}, getErr: errors.New("simulated API outage"), want: "no record"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2461,6 +2477,9 @@ func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
 			_ = corev1.AddToScheme(s)
 			_ = cosiv1alpha1.AddToScheme(s)
 			_ = gpuv1alpha1.AddToScheme(s)
+			vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
+			s.AddKnownTypeWithName(vmiGVK, &unstructured.Unstructured{})
+			s.AddKnownTypeWithName(vmiGVK.GroupVersion().WithKind("VirtualMachineInstanceList"), &unstructured.UnstructuredList{})
 
 			selector := map[string]string{"app": "vm"}
 			monitor := &cozyv1alpha1.WorkloadMonitor{
@@ -2478,7 +2497,7 @@ func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
 			}
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "virt-launcher-vm1-x", Namespace: "default", Labels: podLabels,
+					Name: "virt-launcher-vm1-x", Namespace: "default", Labels: podLabels, UID: "pod-uid",
 					Annotations: map[string]string{"workload.cozystack.io/resources": `{"` + rn + `":"2"}`},
 					OwnerReferences: []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance",
 						Name: "vm1", UID: "vmi-uid", Controller: ptr.To(true)}},
@@ -2503,19 +2522,50 @@ func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
 						AttachedTo: &gpuv1alpha1.GPUDeviceAttachment{VMI: "vm1"}},
 				})
 			}
+			if tc.vmi != "missing" {
+				vmi := &unstructured.Unstructured{}
+				vmi.SetGroupVersionKind(vmiGVK)
+				vmi.SetNamespace("default")
+				vmi.SetName("vm1")
+				vmi.SetUID("vmi-uid")
+				active := map[string]any{"another-pod-uid": "node-a"}
+				if tc.vmi != "inactive" {
+					active["pod-uid"] = "node-a"
+				}
+				_ = unstructured.SetNestedMap(vmi.Object, active, "status", "activePods")
+				objs = append(objs, vmi)
+			}
 			objs = append(objs, &gpuv1alpha1.GPUDevice{
 				ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "default"},
 				Spec:       gpuv1alpha1.GPUDeviceSpec{ClassName: "l40s", Count: 1},
 				Status: gpuv1alpha1.GPUDeviceStatus{Phase: gpuv1alpha1.GPUDeviceAttached,
 					AttachedTo: &gpuv1alpha1.GPUDeviceAttachment{VMI: "vm2"}},
 			})
-			c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(monitor).Build()
+			builder := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(monitor)
+			if tc.getErr != nil {
+				builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == vmiGVK.Kind {
+							return tc.getErr
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				})
+			}
+			c := builder.Build()
 			r := &WorkloadMonitorReconciler{Client: c, Scheme: s}
 			if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "vm", Namespace: "default"}}); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
 			w := &cozyv1alpha1.Workload{}
-			if err := c.Get(context.TODO(), types.NamespacedName{Name: "pod-virt-launcher-vm1-x", Namespace: "default"}, w); err != nil {
+			err := c.Get(context.TODO(), types.NamespacedName{Name: "pod-virt-launcher-vm1-x", Namespace: "default"}, w)
+			if tc.want == "no record" {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("want no Workload while the VMI is unreadable, got %v %v", err, w.Status.Resources)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("get Workload: %v", err)
 			}
 			got, ok := w.Status.Resources[rn]

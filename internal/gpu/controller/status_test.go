@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -159,6 +160,26 @@ func TestSettingsConfigMapHoldsTheEffectiveResourceNames(t *testing.T) {
 	_ = e.c.Get(t.Context(), key(gpu.SettingsNamespace, gpu.SettingsConfigMap), cm)
 	if got := cm.Data[gpu.SettingsKeyRawResourceNames]; got != "allowed" {
 		t.Fatalf("rawResourceNames default = %q", got)
+	}
+}
+
+// The NVIDIA and mdev names of the KubeVirt table are GPU names besides the
+// hoster's list, also when the hoster sets one: a name only the table
+// carries is a GPU name too; a NIC there is not.
+func TestSettingsConfigMapTakesTheKubeVirtTableGPUNames(t *testing.T) {
+	kv := kubeVirt("nvidia.com/GA102GL_A10")
+	entries, _, _ := unstructured.NestedSlice(kv.Object, "spec", "configuration", "permittedHostDevices", "pciHostDevices")
+	entries = append(entries, map[string]any{"resourceName": "nvidia.com/hostdev", "pciVendorSelector": "15B3:101E"})
+	_ = unstructured.SetNestedSlice(kv.Object, entries, "spec", "configuration", "permittedHostDevices", "pciHostDevices")
+	e := newEnv(t, class("l40s", rnL40S), kv)
+	e.r.Config.ResourceNames = []string{"nvidia.com/gpu"}
+	e.pass()
+	cm := &corev1.ConfigMap{}
+	if err := e.c.Get(t.Context(), key(gpu.SettingsNamespace, gpu.SettingsConfigMap), cm); err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	if got := cm.Data[gpu.SettingsKeyResourceNames]; got != "nvidia.com/GA102GL_A10,nvidia.com/L40S,nvidia.com/gpu" {
+		t.Fatalf("resourceNames = %q", got)
 	}
 }
 

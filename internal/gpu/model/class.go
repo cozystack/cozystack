@@ -36,8 +36,8 @@ func EffectiveMaxCount(spec *gpuv1alpha1.GPUClassSpec) (int32, bool) {
 }
 
 // ResourceNames is the effective GPU resource-name set, sorted: the
-// classes' resource names, the hoster's list and the names node agents
-// report.
+// classes' resource names, the configured names (the hoster's list and the
+// KubeVirt table's GPU names) and the names node agents report.
 func ResourceNames(classes []gpuv1alpha1.GPUClass, configured []string, nodes []gpuv1alpha1.GPUNode) []string {
 	set := map[string]struct{}{}
 	add := func(n string) {

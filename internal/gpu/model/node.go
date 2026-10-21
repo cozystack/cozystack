@@ -19,6 +19,8 @@ package model
 import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 )
 
 // Cordoned reports whether the node is cordoned. Only spec.unschedulable
@@ -83,4 +85,33 @@ func UntoleratedTaint(n *corev1.Node, tolerations []corev1.Toleration) *corev1.T
 // known.
 func Eligible(n *corev1.Node, tolerations []corev1.Toleration) bool {
 	return !Cordoned(n) && Ready(n) && UntoleratedTaint(n, tolerations) == nil
+}
+
+// ServedUnits is how many units of rn the node can serve. The agent's
+// functions that carry rn count with kubelet's allocatable count for them,
+// or one each when healthy and without a count: kubelet lists only healthy
+// plugin devices, so one bad mdev slot does not take its parent's other
+// slots with it. The node's allocatable caps that sum, since a plugin that
+// names a device by IOMMU group reports it on every function of the group,
+// and judges alone a name no function carries.
+func ServedUnits(n *corev1.Node, devices []gpuv1alpha1.GPUNodeDevice, rn corev1.ResourceName) int64 {
+	var served int64
+	mapped := false
+	for _, d := range devices {
+		if corev1.ResourceName(d.ResourceName) != rn {
+			continue
+		}
+		mapped = true
+		switch {
+		case d.Allocatable != nil:
+			served += int64(*d.Allocatable)
+		case d.Healthy != nil && *d.Healthy:
+			served++
+		}
+	}
+	q := n.Status.Allocatable[rn]
+	if !mapped || q.Value() < served {
+		return q.Value()
+	}
+	return served
 }

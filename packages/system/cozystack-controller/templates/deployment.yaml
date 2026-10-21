@@ -1,3 +1,4 @@
+{{- $gpu := .Values.cozystackController.gpu | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,7 +6,11 @@ metadata:
   labels:
     app: cozystack-controller
 spec:
+  {{- if $gpu.enabled }}
+  replicas: {{ max 2 .Values.cozystackController.replicas }}
+  {{- else }}
   replicas: {{ .Values.cozystackController.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app: cozystack-controller
@@ -15,6 +20,18 @@ spec:
         app: cozystack-controller
     spec:
       serviceAccountName: cozystack-controller
+      {{- if $gpu.enabled }}
+      # The webhooks fail closed; replicas on one node would go down with it.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: cozystack-controller
+      {{- end }}
       containers:
       - name: cozystack-controller
         image: "{{ .Values.cozystackController.image }}"
@@ -31,7 +48,40 @@ spec:
         {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
         - --seaweedfs-metrics-endpoint={{ . }}
         {{- end }}
+        {{- if $gpu.enabled }}
+        - --enable-gpu
+        {{- with $gpu.resourceNames }}
+        - --gpu-resource-names={{ join "," . }}
+        {{- end }}
+        - --gpu-raw-resource-names={{ $gpu.rawResourceNames | default "allowed" }}
+        - --metrics-bind-address=:8443
+        ports:
+        - name: webhook
+          containerPort: 9443
+        - name: metrics
+          containerPort: 8443
+        - name: health
+          containerPort: 8081
+        # readyz waits for the GPU, Node, ConfigMap and Namespace caches the
+        # webhooks read; the VMI and KubeVirt caches start once KubeVirt
+        # serves its kinds, which readiness does not wait for.
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+        {{- end }}
         {{- with .Values.cozystackController.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+      {{- if $gpu.enabled }}
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: cozystack-controller-webhook-cert
+          defaultMode: 0400
+      {{- end }}

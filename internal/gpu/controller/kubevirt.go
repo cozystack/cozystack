@@ -32,12 +32,6 @@ var (
 	kubeVirtGVK = schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "KubeVirt"}
 )
 
-// The KubeVirt CR the platform renders permittedHostDevices into.
-const (
-	kubeVirtNamespace = "cozy-kubevirt"
-	kubeVirtName      = "kubevirt"
-)
-
 // vmi is the part of a VirtualMachineInstance the controller reads.
 type vmi struct {
 	Name, Namespace string
@@ -46,7 +40,8 @@ type vmi struct {
 	Phase           string
 	NodeName        string
 	// VM is the controlling VirtualMachine, "" for a VMI created without one.
-	VM string
+	VM         string
+	ActivePods sets.Set[types.UID]
 }
 
 // final reports a VMI that no longer runs its domain. A deletion timestamp
@@ -61,7 +56,8 @@ func (v *vmi) unscheduled() bool {
 }
 
 func vmiFrom(u *unstructured.Unstructured) *vmi {
-	out := &vmi{Name: u.GetName(), Namespace: u.GetNamespace(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion()}
+	out := &vmi{Name: u.GetName(), Namespace: u.GetNamespace(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
+		ActivePods: model.ActivePods(u)}
 	out.Phase, _, _ = unstructured.NestedString(u.Object, "status", "phase")
 	out.NodeName, _, _ = unstructured.NestedString(u.Object, "status", "nodeName")
 	for _, ref := range u.GetOwnerReferences() {
@@ -108,29 +104,6 @@ func vmFrom(u *unstructured.Unstructured) *vm {
 	for _, r := range refs {
 		if r.Device != "" {
 			out.Devices = append(out.Devices, r.Device)
-		}
-	}
-	return out
-}
-
-// permittedResourceNames returns the resource names of the KubeVirt CR's
-// permittedHostDevices table, or nil when the table is unset: KubeVirt
-// checks GPU entries against it only when it is non-nil
-// (renderresources.go validatePermittedHostDevices in v1.9.0).
-func permittedResourceNames(kv *unstructured.Unstructured) sets.Set[string] {
-	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
-	if !ok || table == nil {
-		return nil
-	}
-	out := sets.New[string]()
-	for _, list := range []string{"pciHostDevices", "mediatedDevices"} {
-		entries, _, _ := unstructured.NestedSlice(table, list)
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				if name, ok := m["resourceName"].(string); ok {
-					out.Insert(name)
-				}
-			}
 		}
 	}
 	return out

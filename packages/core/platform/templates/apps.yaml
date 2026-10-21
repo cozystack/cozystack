@@ -259,6 +259,12 @@ stringData:
       {{- if eq (printf "%v" ((.Values.gpu).vgpu | default false)) "true" }}
       gpu-vgpu: "true"
       {{- end }}
+      {{- /* Whether GPUs serve VMs, so that vm-instance refuses device
+             references where no webhook would resolve them. Written only when
+             on, like gpu-vgpu. */}}
+      {{- if eq (include "cozystack.platform.gpu.vmEnabled" .) "true" }}
+      gpu-vm-enabled: "true"
+      {{- end }}
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
