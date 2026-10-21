@@ -179,10 +179,14 @@ spec:
   {{- $extra := $sizing.extra | default dict }}
   {{- $profileExtra := dict }}
   {{- if $profile.ostype }}{{ $_ := set $profileExtra "ostype" $profile.ostype }}{{ end }}
+  {{- /* A serial port on a socket is what the dashboard's serial console
+         attaches to through the platform's console proxy (termproxy), as it
+         attaches to the KubeVirt serial console; cloud images log in on it. */}}
+  {{- $_ := set $profileExtra "serial0" "socket" }}
   {{- $additional := merge $profileExtra $extra }}
   {{- with $additional }}
-  # qm options the API has no field for: the OS type of the profile, and the
-  # instance type's CPU model, NUMA, hugepages and balloon.
+  # qm options the API has no field for: the OS type of the profile, the
+  # serial console, and the instance type's CPU model, NUMA, hugepages and balloon.
   additionalConfig:
     {{- range $k, $v := . }}
     {{ $k }}: {{ $v | toString | quote }}

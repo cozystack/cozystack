@@ -170,6 +170,12 @@ tests:
         equal:
           path: spec.additionalConfig.ostype
           value: l26
+      # The serial console of the dashboard attaches here through the
+      # platform's console proxy (termproxy needs a serial port on a socket).
+      - documentIndex: 2
+        equal:
+          path: spec.additionalConfig.serial0
+          value: socket
   - it: renders neither the KubeVirt VirtualMachine nor the Service on this substrate
     templates:
       - templates/vm.yaml
