@@ -1,0 +1,100 @@
+suite: proxmox cluster on a Proxmox tenant network
+# With proxmox.network.name set, every worker takes its address from the
+# network's InClusterIPPool. capmox v0.7 still insists on an ipv4Config and
+# builds a cluster pool from it, so the chart gives it one that can never
+# allocate: the gateway, which the IPAM provider always excludes.
+templates:
+  - templates/cluster.yaml
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd-test
+    host: example.org
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  substrate: proxmox
+  proxmox:
+    allowedNodes: [pve1]
+    dnsServers: ["8.8.8.8"]
+    network:
+      name: workers
+# helm-unittest's fake cluster cannot deep-copy plain ints, so the numbers are
+# strings here; the helper converts with int64, and a real lookup returns int64.
+kubernetesProvider:
+  scheme:
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworkzones"
+      namespaced: false
+    "ipam.cluster.x-k8s.io/v1alpha2/InClusterIPPool":
+      gvr:
+        group: "ipam.cluster.x-k8s.io"
+        version: "v1alpha2"
+        resource: "inclusterippools"
+      namespaced: true
+  objects:
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetworkZone
+      metadata: {name: default}
+      spec:
+        bridge: vmbr70
+        networks:
+          - {namespace: tenant-test, name: workers, vlan: "201", addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+          - {namespace: other, name: workers, vlan: "202", addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: "24"}
+    - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+      kind: InClusterIPPool
+      metadata: {name: pxnet-workers, namespace: tenant-test}
+      spec: {addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+tests:
+  - it: gives capmox a cluster pool with nothing to allocate
+    documentSelector:
+      path: kind
+      value: ProxmoxCluster
+    asserts:
+      - equal:
+          path: spec.ipv4Config
+          value:
+            addresses: ["198.18.1.1"]
+            gateway: "198.18.1.1"
+            prefix: 24
+
+  - it: refuses an explicit address pool next to a network
+    set:
+      proxmox.ipv4Config.addresses: ["198.18.1.100-198.18.1.110"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox: set either network.name or ipv4Config, not both; a Proxmox tenant network brings its own IP pool"
+
+  - it: refuses a network the platform did not list for this namespace
+    set:
+      proxmox.network.name: storage
+    asserts:
+      - failedTemplate:
+          errorPattern: 'no Proxmox tenant network "storage" for namespace tenant-test'
+
+  - it: keeps the raw ipv4Config path for clusters without a network
+    set:
+      proxmox.network.name: ""
+      proxmox.ipv4Config:
+        addresses: ["10.0.0.160-10.0.0.170"]
+        gateway: "10.0.0.1"
+        prefix: 24
+    documentSelector:
+      path: kind
+      value: ProxmoxCluster
+    asserts:
+      - equal:
+          path: spec.ipv4Config.addresses
+          value: ["10.0.0.160-10.0.0.170"]
+
+  - it: still requires an address pool without a network
+    set:
+      proxmox.network.name: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires proxmox.ipv4Config.addresses, or proxmox.network.name: capmox allocates static addresses and has no DHCP mode"

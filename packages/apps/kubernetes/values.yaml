@@ -109,11 +109,15 @@ substrate: kubevirt
 ## @field {string} credentialsSecretName - Secret in THIS namespace holding the driver's Proxmox API credentials under the keys `url`, `token_id`, `token_secret` and `region`. The parent chart composes them into the controller's config file here, in the management cluster; nothing reaches the tenant, and no token is written into a rendered manifest. Distinct from the capmox credentials on purpose: the driver attaches and detaches disks, which is a different blast radius from creating VMs.
 ## @field {[]ProxmoxStorageClass} storageClasses - StorageClasses to create in the tenant.
 
+## @typedef {struct} ProxmoxClusterNetwork - A Proxmox tenant network of this namespace, from the platform's zone table.
+## @field {string} [name] - Name of the network as the platform operator listed it for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). Set it instead of `ipv4Config`: the workers of every node pool that names the same network take their addresses from the network's own IP pool, and the ProxmoxCluster's `ipv4Config` becomes a sentinel holding only the network's gateway, which capmox cannot hand out. Keep the same name on every `KubernetesNodes` pool of this cluster that should share the network. Empty keeps the `ipv4Config` path.
+
 ## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
 ## @field {[]string} allowedNodes - Proxmox nodes capmox may place VMs on. Empty means every node in the Proxmox cluster.
 ## @field {[]string} dnsServers - Nameservers written into each worker's network config. Required by the ProxmoxCluster schema.
 ## @field {bool} [insecure] - Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
-## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+## @field {ProxmoxIPv4} ipv4Config - Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required unless `network.name` is set, which brings the network's own pool.
+## @field {ProxmoxClusterNetwork} [network] - Place the cluster on a Proxmox tenant network of this namespace instead of an address pool of your own.
 ## @field {ProxmoxCCM} [ccm] - Proxmox cloud-controller-manager settings.
 ## @field {ProxmoxCSI} [csi] - Proxmox CSI driver settings.
 
@@ -132,6 +136,8 @@ proxmox:
     addresses: []
     gateway: ""
     prefix: 24
+  network:
+    name: ""
 
 ## @section Cluster Addons
 ##
