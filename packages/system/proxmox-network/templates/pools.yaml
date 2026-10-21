@@ -1,0 +1,30 @@
+{{- /* One InClusterIPPool per network, in the namespace that owns it. capmox
+      claims every worker address from it through the machine's
+      ipv4PoolRef, so a VM address never comes from a range the tenant typed.
+      The pool is named after the network: the kubernetes-nodes chart and the
+      admission policies derive the name the same way (pxnet-<name>), and
+      (namespace, name) is unique across zones (zones.yaml).
+
+      Removing a network from the table deletes its pool. The IPAM provider's
+      finalizer holds the pool while an IPAddressClaim still references it,
+      so a VM keeps its address until the machine is gone; the zone entry is
+      what frees the VLAN, and that is the admin's decision. */}}
+{{- range $zone := .Values.zones }}
+{{- range $n := $zone.networks }}
+---
+apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+kind: InClusterIPPool
+metadata:
+  name: pxnet-{{ $n.name }}
+  namespace: {{ $n.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: proxmox-network
+    proxmox.cozystack.io/zone: {{ $zone.name }}
+    proxmox.cozystack.io/network: {{ $n.name }}
+spec:
+  addresses:
+    {{- toYaml $n.addresses | nindent 4 }}
+  prefix: {{ $n.prefix }}
+  gateway: {{ $n.gateway | quote }}
+{{- end }}
+{{- end }}
