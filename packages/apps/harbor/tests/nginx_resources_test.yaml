@@ -41,6 +41,8 @@ tests:
       - equal:
           path: spec.values.harbor.portal.resources.limits.cpu
           value: 500m
+      - exists:
+          path: spec.values.harbor.portal.resources.requests.memory
 
   - it: keeps both sizes when the other components are resized
     template: templates/harbor.yaml
@@ -56,9 +58,16 @@ tests:
           memory: 1Gi
       jobservice:
         resourcesPreset: t1.medium
-      trivy:
-        resourcesPreset: t1.large
     asserts:
+      - equal:
+          path: spec.values.harbor.core.resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.values.harbor.registry.registry.resources.limits.memory
+          value: 1Gi
+      - equal:
+          path: spec.values.harbor.jobservice.resources.limits.memory
+          value: 1Gi
       - equal:
           path: spec.values.harbor.nginx.resources.limits.memory
           value: 512Mi
