@@ -17,17 +17,23 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/cozystack/cozystack/internal/gpu"
 )
@@ -96,5 +102,48 @@ func TestNodeUpdatesThatCannotChangePlacementAreDropped(t *testing.T) {
 func TestLauncherPodsWithOnlyKubeVirtDevicesDoNotTriggerAPass(t *testing.T) {
 	if requestsExtendedResource(launcherPod("virt-launcher-x", "x", "n1", map[string]int64{"devices.kubevirt.io/kvm": 1})) {
 		t.Fatal("every VM's launcher pod would trigger a pass")
+	}
+}
+
+type laterMapper struct {
+	meta.RESTMapper
+	served, calls int
+}
+
+func (m *laterMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
+	m.calls++
+	if m.calls < m.served {
+		return nil, &meta.NoKindMatchError{GroupKind: gk, SearchedVersions: versions}
+	}
+	return &meta.RESTMapping{GroupVersionKind: gk.WithVersion(versions[0])}, nil
+}
+
+type recordingWatcher struct {
+	srcs []source.TypedSource[reconcile.Request]
+}
+
+func (w *recordingWatcher) Watch(src source.TypedSource[reconcile.Request]) error {
+	w.srcs = append(w.srcs, src)
+	return nil
+}
+
+// A watch on a kind no CRD serves fails the controller's start, so the
+// KubeVirt watches join it only once KubeVirt serves them.
+func TestKubeVirtWatchesWaitForTheirKinds(t *testing.T) {
+	m := &laterMapper{served: 4}
+	w := &recordingWatcher{}
+	srcs := []source.TypedSource[reconcile.Request]{nil, nil, nil}
+	if err := watchWhenServed(context.Background(), m, time.Millisecond, w, srcs); err != nil {
+		t.Fatalf("watchWhenServed: %v", err)
+	}
+	if m.calls < 4 || len(w.srcs) != 3 {
+		t.Fatalf("looked up %d times, added %d watches; want every watch once the kinds are served", m.calls, len(w.srcs))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	w = &recordingWatcher{}
+	if err := watchWhenServed(ctx, &laterMapper{served: 1 << 30}, time.Millisecond, w, srcs); err != nil || len(w.srcs) != 0 {
+		t.Fatalf("a manager stopped before KubeVirt serves its kinds: err %v, %d watches", err, len(w.srcs))
 	}
 }

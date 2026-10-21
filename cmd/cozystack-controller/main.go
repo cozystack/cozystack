@@ -17,11 +17,8 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"crypto/tls"
-	"errors"
 	"flag"
-	"net/http"
 	"os"
 	"time"
 
@@ -396,33 +393,38 @@ func main() {
 		os.Exit(1)
 	}
 	// With GPU enabled, a replica is ready only once the GPU, Node,
-	// ConfigMap, Namespace and VMI informers have synced. They start here
-	// because a replica that is not the leader starts no controller, and GPU
+	// ConfigMap and Namespace informers have synced. Every replica starts
+	// them, because one that is not the leader starts no controller and GPU
 	// admission has to answer from a warm cache rather than LIST inside its
-	// deadline. Only these: an informer another reconciler adds lazily may
-	// never sync.
+	// deadline. Readiness does not wait for KubeVirt, whose kinds a fresh
+	// install can serve only after this controller starts: packages that
+	// depend on cozystack-controller wait for its readiness. The VMI and
+	// KubeVirt informers start once their kinds are served.
 	readyz := healthz.Ping
 	if gpuCfg.Enabled {
+		vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
+		kvGVK := vmiGVK.GroupVersion().WithKind("KubeVirt")
 		vmi := &unstructured.Unstructured{}
-		vmi.SetGroupVersionKind(schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"})
-		var synced []func() bool
-		for _, obj := range []client.Object{&gpuv1alpha1.GPUDevice{}, &gpuv1alpha1.GPUClass{}, &gpuv1alpha1.GPUNode{},
-			&corev1.Node{}, &corev1.ConfigMap{}, &corev1.Namespace{}, vmi} {
-			informer, err := mgr.GetCache().GetInformer(context.Background(), obj)
-			if err != nil {
-				setupLog.Error(err, "unable to start the GPU informers")
-				os.Exit(1)
-			}
-			synced = append(synced, informer.HasSynced)
+		vmi.SetGroupVersionKind(vmiGVK)
+		kv := &unstructured.Unstructured{}
+		kv.SetGroupVersionKind(kvGVK)
+		warmup := &gpu.Warmup{
+			Mapper:    mgr.GetRESTMapper(),
+			Informers: mgr.GetCache(),
+			Objects: []client.Object{&gpuv1alpha1.GPUDevice{}, &gpuv1alpha1.GPUClass{}, &gpuv1alpha1.GPUNode{},
+				&corev1.Node{}, &corev1.ConfigMap{}, &corev1.Namespace{}},
+			Kinds:           []schema.GroupVersionKind{vmiGVK, kvGVK},
+			KubeVirtObjects: []client.Object{vmi, kv},
+			Interval:        5 * time.Second,
+			OnWait: func(k schema.GroupVersionKind, err error) {
+				setupLog.Info("waiting for a KubeVirt kind the GPU webhooks read", "kind", k.String(), "reason", err.Error())
+			},
 		}
-		readyz = func(*http.Request) error {
-			for _, hasSynced := range synced {
-				if !hasSynced() {
-					return errors.New("the GPU caches have not synced")
-				}
-			}
-			return nil
+		if err := mgr.Add(warmup); err != nil {
+			setupLog.Error(err, "unable to add the GPU informer warm-up")
+			os.Exit(1)
 		}
+		readyz = warmup.Ready
 	}
 	if err := mgr.AddReadyzCheck("readyz", readyz); err != nil {
 		setupLog.Error(err, "unable to set up ready check")

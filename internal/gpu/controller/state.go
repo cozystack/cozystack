@@ -25,6 +25,7 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -163,7 +164,7 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	} {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(vmiGVK.GroupVersion().WithKind(gvk.kind + "List"))
-		if err := r.kubeVirtReader().List(ctx, list); err != nil {
+		if err := r.listKubeVirt(ctx, w, list); err != nil {
 			return nil, fmt.Errorf("list %s: %w", gvk.kind, err)
 		}
 		for i := range list.Items {
@@ -172,7 +173,7 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	}
 	kvs := &unstructured.UnstructuredList{}
 	kvs.SetGroupVersionKind(kubeVirtGVK.GroupVersion().WithKind(kubeVirtGVK.Kind + "List"))
-	if err := r.kubeVirtReader().List(ctx, kvs); err != nil {
+	if err := r.listKubeVirt(ctx, w, kvs); err != nil {
 		return nil, fmt.Errorf("list KubeVirt: %w", err)
 	}
 	var tableGPUs []string
@@ -206,6 +207,26 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	r.detectLostCapacity(w)
 	w.snap = w.buildSnapshot(quotas, pods.Items)
 	return w, nil
+}
+
+// listKubeVirt lists a KubeVirt kind, and none while no CRD serves it: on
+// a fresh install GPUs are enabled before KubeVirt's operator installs its
+// CRDs, and finalizers and usage records must not wait for that. Once a
+// device is attached, an unserved kind is a discovery gap, such as after an
+// API server restart, not an absent VMI, and the pass fails rather than
+// detach a running VM's device.
+func (r *Reconciler) listKubeVirt(ctx context.Context, w *world, list *unstructured.UnstructuredList) error {
+	err := r.kubeVirtReader().List(ctx, list)
+	if !meta.IsNoMatchError(err) {
+		return err
+	}
+	for _, d := range w.devices {
+		if d.Status.AttachedTo != nil {
+			return fmt.Errorf("KubeVirt kinds are not served while GPUDevice %s/%s is attached: %w", d.Namespace, d.Name, err)
+		}
+	}
+	list.Items = nil
+	return nil
 }
 
 func (r *Reconciler) kubeVirtReader() client.Reader {
