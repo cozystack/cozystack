@@ -51,6 +51,11 @@ kube-state-metrics:
           - imagepolicies
           - imageupdateautomations
         verbs: [ "list", "watch" ]
+      - apiGroups:
+          - ipam.cluster.x-k8s.io
+        resources:
+          - inclusterippools
+        verbs: [ "list", "watch" ]
   customResourceState:
     enabled: true
     config:
@@ -298,6 +303,36 @@ kube-state-metrics:
                   ready: [ status, conditions, "[type=Ready]", status ]
                   suspended: [ spec, suspend ]
                   source_name: [ spec, sourceRef, name ]
+          # Cluster API IPAM pools: capmox builds one per ProxmoxCluster, and
+          # the proxmox-network package renders one per Proxmox tenant network
+          # (pxnet-*), whose ProxmoxNetworkPoolNearlyFull alert reads these.
+          - groupVersionKind:
+              group: ipam.cluster.x-k8s.io
+              version: v1alpha2
+              kind: InClusterIPPool
+            metricNamePrefix: capi_ipam_inclusterippool
+            labelsFromPath:
+              namespace: [ metadata, namespace ]
+              name: [ metadata, name ]
+            metrics:
+              - name: "addresses_total"
+                help: "Addresses the InClusterIPPool can hand out."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [ status, ipAddresses, total ]
+              - name: "addresses_used"
+                help: "Addresses the InClusterIPPool has handed out."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [ status, ipAddresses, used ]
+              - name: "addresses_free"
+                help: "Addresses the InClusterIPPool still has."
+                each:
+                  type: Gauge
+                  gauge:
+                    path: [ status, ipAddresses, free ]
 
 vmagent:
   externalLabels:
