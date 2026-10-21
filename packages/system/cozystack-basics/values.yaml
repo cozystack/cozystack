@@ -1,5 +1,7 @@
 _cluster: {}
-# Set by the platform where gpu-operator serves GPUs to VMs. Renders the GPU
-# admission policies.
+# Set by the platform where gpu-operator serves GPUs to VMs. enabled renders
+# the GPU class and device admission policies; rawResourceNames: forbidden adds
+# the raw-name one.
 gpu:
   enabled: false
+  rawResourceNames: allowed

@@ -22,10 +22,12 @@ package policytest
 import (
 	"context"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -266,3 +268,41 @@ var (
 	kubevirtOtherSA  = &user.DefaultInfo{Name: "system:serviceaccount:cozy-kubevirt:kubevirt-handler", Groups: []string{"system:serviceaccounts", "system:serviceaccounts:cozy-kubevirt", "system:authenticated"}}
 	tenantNamespaced = &user.DefaultInfo{Name: "system:serviceaccount:tenant-acme:default", Groups: []string{"system:serviceaccounts", "system:serviceaccounts:tenant-acme", "system:authenticated"}}
 )
+
+// tenantNamespaceSelectors are the one definition of a tenant namespace the
+// GPU policies share: tenant-root by name, every other tenant by the ancestor
+// label each carries for tenant-root.
+var tenantNamespaceSelectors = []metav1.LabelSelector{
+	{MatchExpressions: []metav1.LabelSelectorRequirement{{
+		Key: "kubernetes.io/metadata.name", Operator: metav1.LabelSelectorOpIn, Values: []string{"tenant-root"},
+	}}},
+	{MatchExpressions: []metav1.LabelSelectorRequirement{{
+		Key: "tenant.cozystack.io/tenant-root", Operator: metav1.LabelSelectorOpExists,
+	}}},
+}
+
+// requireTenantNamespaceBindings fails unless the policy is bound once per
+// tenant namespace selector, and nothing in the policy narrows or widens that.
+func requireTenantNamespaceBindings(t *testing.T, s *shipped) {
+	t.Helper()
+	if len(s.bindings) != len(tenantNamespaceSelectors) {
+		t.Fatalf("%s: want %d bindings, got %d", s.policy.Name, len(tenantNamespaceSelectors), len(s.bindings))
+	}
+	for i, want := range tenantNamespaceSelectors {
+		found := false
+		for _, b := range s.bindings {
+			if mr := b.Spec.MatchResources; mr != nil && mr.NamespaceSelector != nil && reflect.DeepEqual(*mr.NamespaceSelector, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no binding selects tenant namespaces by %+v (selector %d)", s.policy.Name, want, i)
+		}
+	}
+	if ns := s.policy.Spec.MatchConstraints.NamespaceSelector; ns != nil && (len(ns.MatchLabels) > 0 || len(ns.MatchExpressions) > 0) {
+		t.Fatalf("%s: policy namespaceSelector %+v would narrow the bindings", s.policy.Name, ns)
+	}
+	if len(s.policy.Spec.MatchConditions) > 0 {
+		t.Fatalf("%s: tenant namespaces are selected by the bindings, not by match conditions", s.policy.Name)
+	}
+}
