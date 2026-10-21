@@ -26,7 +26,7 @@ A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Cha
 
 A parked `chainsaw-test.yaml.disabled` is none of these: the directory is then not a suite, is selected by nothing and cannot be allowlisted.
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`, `proxmox-network`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
 
 ## What Chainsaw buys over the BATS suite
 
@@ -46,6 +46,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 - **kuberture** — `jq` on Service annotations + external-dns split-horizon log assertions.
 - **vminstance** — a server-side dry-run eviction of the VM's launcher pod, checked against the VMI's `LiveMigratable` condition.
 - **gateway** — admission-rejection cases that need `kubectl --as` impersonation or error-message greps; the tenant apex is read from the namespace `namespace.cozystack.io/host` label at runtime so they pass on any host.
+- **proxmox-network** — renders `packages/system/proxmox-network` from `test-values.yaml` with `helm template` and applies the zone-specific objects, applies capmox's CRDs alone for server-side dry runs of ProxmoxMachine, ProxmoxMachineTemplate and ProxmoxCluster against the admission policies, and asserts an IPAddressClaim holds a pool. Needs no hypervisor.
 - **kubernetes-latest/previous** — wrap `_lib/run-kubernetes.sh` (Kamaji bringup, port-forward, LB/NFS/ouroboros). The script `cd`s to the repo root (the test dir is `hack/e2e-chainsaw/<suite>`, so repo root is `../../..`).
 
 ## Conventions / gotchas (Chainsaw v0.2.15)
@@ -63,7 +64,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`foundationdb`/`securitygroup`/`computeplane`/`kubernetes-latest`/`kubernetes-previous`/`vminstance` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`foundationdb`/`securitygroup`/`computeplane`/`kubernetes-latest`/`kubernetes-previous`/`vminstance` need `jq`; `proxmox-network` needs `helm` and `yq`, and the `cozystack.proxmox-network` package enabled (`hack/e2e-platform-packages.sh` enables it).
 
 ```bash
 # install chainsaw
