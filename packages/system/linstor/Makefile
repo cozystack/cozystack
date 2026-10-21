@@ -10,6 +10,21 @@ LINSTOR_VERSION ?= 1.33.3
 # has to be re-checked against the new one.
 LINSTOR_CSI_VERSION ?= v1.11.2
 
+# blockstor's CRDs are copied unmodified from the release its images are pinned
+# to, so the schema and the binaries that read it always come from one tag.
+# Bump the three blockstor image tags in values.yaml first, then run this.
+BLOCKSTOR_VERSION ?= $(shell yq e '.blockstorController.image.tag' values.yaml | cut -d@ -f1)
+
+update-blockstor-crds:
+	tmpdir=$$(mktemp -d) && \
+	{ curl --fail --silent --show-error --location -o "$$tmpdir/source.tar.gz" \
+		"https://github.com/cozystack/blockstor/archive/refs/tags/v$(BLOCKSTOR_VERSION).tar.gz" && \
+		mkdir "$$tmpdir/src" && tar -xzf "$$tmpdir/source.tar.gz" --strip-components=1 -C "$$tmpdir/src" && \
+		ls "$$tmpdir"/src/config/crd/bases/blockstor.cozystack.io_*.yaml >/dev/null || { rm -rf "$$tmpdir"; exit 1; }; } && \
+	rm -f definitions/blockstor.cozystack.io_*.yaml && \
+	cp "$$tmpdir"/src/config/crd/bases/blockstor.cozystack.io_*.yaml definitions/ && \
+	rm -rf "$$tmpdir"
+
 test:
 	helm unittest .
 	python3 -m unittest discover -s tests -p 'test_*.py' -v

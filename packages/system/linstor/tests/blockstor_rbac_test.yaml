@@ -1,0 +1,71 @@
+# The apiserver writes exactly one Secret, the encryption passphrase, and
+# always in its own namespace. A cluster-wide write grant would reach every
+# tenant's admin kubeconfig and every managed-service credential.
+suite: blockstor apiserver Secret access
+templates:
+  - templates/blockstor-apiserver.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  - it: grants Secrets only read access cluster-wide
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch, create, update, patch]
+
+  - it: grants Secret writes in the release namespace only
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [create, update, patch]
+
+  - it: binds the namespaced Role to the apiserver ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: blockstor-apiserver-secrets
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: blockstor-apiserver
+            namespace: cozy-linstor
+
+  - it: names the blockstor kinds instead of granting the whole group
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [blockstor.cozystack.io]
+            resources: ["*"]
+            verbs: [get, list, watch, create, update, patch, delete]

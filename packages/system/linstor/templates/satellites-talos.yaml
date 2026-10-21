@@ -1,9 +1,22 @@
 {{- if .Values.talos.enabled }}
+{{- /* Gated on the OS, never on .Values.backend: piraeus creates the
+       linstor-satellite.<node> DaemonSets under blockstor too, and on Talos
+       they wedge at Init:0/3 on the run-systemd-system hostPath without
+       this patch. On generic Linux the patch must not apply at all: it
+       drops drbd-module-loader, the only thing that loads DRBD there. */ -}}
 {{- $shutdown := .Values.talos.gracefulShutdown | default dict }}
 {{- $enabled := dig "enabled" false $shutdown }}
 {{- if kindIs "invalid" $enabled }}{{- $enabled = false }}{{- end }}
 {{- if not (kindIs "bool" $enabled) }}
 {{- fail "linstor: talos.gracefulShutdown.enabled must be a boolean" }}
+{{- end }}
+{{- /* The hook runs `drbdsetup down` on every idle Secondary resource in the
+       host kernel when the piraeus satellite stops. Under blockstor those
+       resources are blockstor-satellite's, so a rollout of the idle piraeus
+       pod would take healthy replicas down. Refused rather than dropped, so
+       the setting does not look like it took effect. */ -}}
+{{- if and $enabled (eq .Values.backend "blockstor") }}
+{{- fail "linstor: talos.gracefulShutdown.enabled is not supported with backend blockstor: its hook would tear down blockstor's DRBD resources" }}
 {{- end }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration

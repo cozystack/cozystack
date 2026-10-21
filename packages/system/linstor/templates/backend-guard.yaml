@@ -1,0 +1,9 @@
+{{- /*
+Every template here renders one backend or the other from this value, so
+an unrecognised one renders some of each and exits 0. The platform chart
+validates storage.backend before passing it on, but a value arriving here
+any other way, a hand-set component value for one, is checked here too.
+*/ -}}
+{{- if not (has .Values.backend (list "linstor" "blockstor")) }}
+{{- fail (printf "linstor: backend must be \"linstor\" or \"blockstor\", got %q" (toString .Values.backend)) }}
+{{- end }}

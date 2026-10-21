@@ -1,3 +1,12 @@
+{{- /* Rendered under both backends. piraeus-operator creates a
+       linstor-satellite pod on every node it selects for linstor-csi-node,
+       external mode included, and LinstorCluster has no switch that keeps
+       the satellites and drops nothing else. Without this configuration the
+       pod falls back to the operator's default image by tag, without TLS,
+       limits or host networking. Host networking matters most under
+       blockstor: the operator registers each node at its satellite pod's
+       address, and on the pod network that address is one DRBD peers cannot
+       reach. */ -}}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
