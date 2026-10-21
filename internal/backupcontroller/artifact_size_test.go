@@ -37,6 +37,16 @@ type fakeS3Lister struct {
 	bucket, prefix string
 	recursive      bool
 	calls          int
+
+	statSize int64
+	statErr  error
+	statKey  string
+}
+
+func (f *fakeS3Lister) StatObject(_ context.Context, bucket, key string) (int64, error) {
+	f.calls++
+	f.bucket, f.statKey = bucket, key
+	return f.statSize, f.statErr
 }
 
 func (f *fakeS3Lister) ListObjects(_ context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
@@ -165,6 +175,11 @@ type blockingLister struct{}
 func (blockingLister) ListObjects(ctx context.Context, _, _ string, _ bool) ([]s3ObjectInfo, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func (blockingLister) StatObject(ctx context.Context, _, _ string) (int64, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
 }
 
 // withShortProbeTimeout shortens the probe timeout and fails the test if fn

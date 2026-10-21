@@ -368,7 +368,7 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 		}
 		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -472,6 +472,10 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 	resolved *ResolvedBackupConfig,
 	objectKey string,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	driverMD := map[string]string{redisObjectMetaKey: objectKey}
 	for k, v := range resolved.Parameters {
 		driverMD[redisParamPrefix+k] = v
@@ -492,6 +496,9 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			Phase: backupsv1alpha1.BackupPhaseReady,
 		},
 	}
+	if probe {
+		backup.Status.Artifact = r.redisArtifact(ctx, j.Namespace, objectKey)
+	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
@@ -500,8 +507,8 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}
