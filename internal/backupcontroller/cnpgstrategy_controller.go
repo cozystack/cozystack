@@ -855,7 +855,8 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 		Status: backupsv1alpha1.BackupStatus{
 			Phase: backupsv1alpha1.BackupPhaseReady,
 			Artifact: &backupsv1alpha1.BackupArtifact{
-				URI: fmt.Sprintf("cnpg://%s/%s", serverName, cnpgBackup.Name),
+				URI:       fmt.Sprintf("cnpg://%s/%s", serverName, cnpgBackup.Name),
+				SizeBytes: r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID),
 			},
 			UnderlyingResources: underlyingResources,
 		},

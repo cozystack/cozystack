@@ -3,40 +3,18 @@ package backupcontroller
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"fmt"
-	"net/http"
 	"strings"
 	"time"
-
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 )
 
-const (
-	mariadbSizeProbeTimeout = 30 * time.Second
-
-	// Slack around the [created, completed] window of the operator Backup
-	// when matching the timestamp mariadb-operator embeds in the dump file
-	// name: that timestamp comes from the backup Job pod's clock, not the
-	// apiserver's, and is truncated to seconds.
-	mariadbSizeProbeClockSkew = time.Minute
-)
-
-type s3ObjectInfo struct {
-	Key  string
-	Size int64
-}
-
-type s3ObjectLister interface {
-	ListObjects(ctx context.Context, bucket, prefix string) ([]s3ObjectInfo, error)
-}
+// Slack around the [created, completed] window of the operator Backup when
+// matching the timestamp mariadb-operator embeds in the dump file name: that
+// timestamp comes from the backup Job pod's clock, not the apiserver's, and
+// is truncated to seconds.
+const mariadbSizeProbeClockSkew = time.Minute
 
 // mariadbArtifactSizeBytes measures the dump mariadb-operator uploaded for
 // mdbBackup. The strategy prefix is shared by every backup of the
@@ -53,14 +31,15 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 	completedAt time.Time,
 ) int64 {
 	logger := getLogger(ctx)
-	ctx, cancel := context.WithTimeout(ctx, mariadbSizeProbeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, artifactSizeProbeTimeout)
 	defer cancel()
 
-	newLister := r.newS3ObjectLister
-	if newLister == nil {
-		newLister = r.newMariaDBMinioLister
+	conn, err := r.mariadbS3Connection(ctx, namespace, s3)
+	if err != nil {
+		logger.Debug("cannot resolve S3 credentials to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
+		return 0
 	}
-	lister, err := newLister(ctx, namespace, s3)
+	lister, err := r.s3Lister(conn)
 	if err != nil {
 		logger.Debug("cannot build S3 client to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
 		return 0
@@ -88,6 +67,37 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 		return 0
 	}
 	return matched[0].Size
+}
+
+// mariadbS3Connection resolves the Secrets and TLS settings the operator
+// Backup was rendered with, so the bucket is read with the tenant's
+// credentials rather than the controller's.
+func (r *BackupJobReconciler) mariadbS3Connection(ctx context.Context, namespace string, s3 *strategyv1alpha1.MariaDBS3Template) (s3Connection, error) {
+	conn := s3Connection{
+		Endpoint: s3.Endpoint,
+		Region:   s3.Region,
+		Secure:   s3.TLS != nil && s3.TLS.Enabled,
+	}
+	var err error
+	if conn.AccessKey, err = r.secretValue(ctx, namespace, s3.AccessKeyIDSecretKeyRef.Name, s3.AccessKeyIDSecretKeyRef.Key); err != nil {
+		return conn, err
+	}
+	if conn.SecretKey, err = r.secretValue(ctx, namespace, s3.SecretAccessKeySecretKeyRef.Name, s3.SecretAccessKeySecretKeyRef.Key); err != nil {
+		return conn, err
+	}
+	if ref := s3.SessionTokenSecretKeyRef; ref != nil {
+		if conn.SessionToken, err = r.secretValue(ctx, namespace, ref.Name, ref.Key); err != nil {
+			return conn, err
+		}
+	}
+	if conn.Secure && s3.TLS.CASecretKeyRef != nil {
+		ca, err := r.secretValue(ctx, namespace, s3.TLS.CASecretKeyRef.Name, s3.TLS.CASecretKeyRef.Key)
+		if err != nil {
+			return conn, err
+		}
+		conn.CAPEM = []byte(ca)
+	}
+	return conn, nil
 }
 
 // mariadbOperatorS3Prefix mirrors how mariadb-operator normalises
@@ -118,76 +128,4 @@ func parseMariaDBLogicalBackupFile(name string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return ts, true
-}
-
-type minioObjectLister struct {
-	client *minio.Client
-}
-
-func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string) ([]s3ObjectInfo, error) {
-	var out []s3ObjectInfo
-	for obj := range l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix}) {
-		if obj.Err != nil {
-			return nil, obj.Err
-		}
-		out = append(out, s3ObjectInfo{Key: obj.Key, Size: obj.Size})
-	}
-	return out, nil
-}
-
-// newMariaDBMinioLister builds an S3 client from the same Secrets and TLS
-// settings the operator Backup was rendered with, so the controller reads
-// the bucket with the tenant's credentials rather than its own.
-func (r *BackupJobReconciler) newMariaDBMinioLister(ctx context.Context, namespace string, s3 *strategyv1alpha1.MariaDBS3Template) (s3ObjectLister, error) {
-	accessKey, err := r.mariadbSecretValue(ctx, namespace, s3.AccessKeyIDSecretKeyRef)
-	if err != nil {
-		return nil, err
-	}
-	secretKey, err := r.mariadbSecretValue(ctx, namespace, s3.SecretAccessKeySecretKeyRef)
-	if err != nil {
-		return nil, err
-	}
-	var sessionToken string
-	if s3.SessionTokenSecretKeyRef != nil {
-		if sessionToken, err = r.mariadbSecretValue(ctx, namespace, *s3.SessionTokenSecretKeyRef); err != nil {
-			return nil, err
-		}
-	}
-
-	opts := &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, sessionToken),
-		Region: s3.Region,
-		Secure: s3.TLS != nil && s3.TLS.Enabled,
-	}
-	if opts.Secure && s3.TLS.CASecretKeyRef != nil {
-		caPEM, err := r.mariadbSecretValue(ctx, namespace, *s3.TLS.CASecretKeyRef)
-		if err != nil {
-			return nil, err
-		}
-		pool, err := x509.SystemCertPool()
-		if err != nil {
-			pool = x509.NewCertPool()
-		}
-		if !pool.AppendCertsFromPEM([]byte(caPEM)) {
-			return nil, fmt.Errorf("no PEM certificates in Secret %s/%s key %q", namespace, s3.TLS.CASecretKeyRef.Name, s3.TLS.CASecretKeyRef.Key)
-		}
-		opts.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
-	}
-	client, err := minio.New(s3.Endpoint, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &minioObjectLister{client: client}, nil
-}
-
-func (r *BackupJobReconciler) mariadbSecretValue(ctx context.Context, namespace string, ref strategyv1alpha1.MariaDBSecretKeySelector) (string, error) {
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, secret); err != nil {
-		return "", err
-	}
-	v, ok := secret.Data[ref.Key]
-	if !ok {
-		return "", fmt.Errorf("Secret %s/%s has no key %q", namespace, ref.Name, ref.Key)
-	}
-	return string(v), nil
 }
