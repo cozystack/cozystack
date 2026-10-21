@@ -1,0 +1,131 @@
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (eq (toString ((.Values.gpu).rawResourceNames | default "allowed")) "forbidden") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+---
+# With gpu.rawResourceNames forbidden, a GPU reaches a VM only through a
+# GPUDevice reference, so a held device is a hard guarantee: nothing can take
+# its unit by naming the resource directly.
+#
+# A VMI is refused when it carries a GPU entry and no device reference. That
+# covers every path a VMI is created on, a VM written by a tenant super-admin,
+# a VMIReplicaSet and a worker pool included. A referencing VMI is the GPU
+# webhook's to check: it adds the entries itself and refuses one that brings
+# its own.
+#
+# A pod may request a GPU resource name only as a virt-launcher pod: created
+# by kubevirt-controller with a VMI as owner, which migration target pods are
+# too. No tenant role creates pods or VMIs, so app charts that copy free-form
+# resources into pods cannot request GPUs either.
+#
+# Both are checked in tenant namespaces, which the bindings select. The GPU
+# resource names come from the settings ConfigMap the controller publishes;
+# without it nothing can tell a GPU from another resource, so the bindings
+# fail closed.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-raw-names-forbidden
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE"]
+      resources: ["pods"]
+    - apiGroups: ["kubevirt.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE"]
+      resources: ["virtualmachineinstances"]
+  variables:
+  - name: names
+    expression: >-
+      params.?data[?"resourceNames"].orValue("").split(",").filter(n, n != "")
+  - name: isPod
+    expression: request.kind.group == "" && request.kind.kind == "Pod"
+  - name: podGPUs
+    expression: >-
+      !variables.isPod ? [] :
+      (object.spec.?containers.orValue([]) + object.spec.?initContainers.orValue([])).map(c,
+        c.?resources.?requests.orValue({}).filter(k, k in variables.names) +
+        c.?resources.?limits.orValue({}).filter(k, k in variables.names)
+      ).filter(l, size(l) > 0)
+  - name: virtLauncher
+    expression: >-
+      request.userInfo.username == "system:serviceaccount:cozy-kubevirt:kubevirt-controller" &&
+      object.metadata.?ownerReferences.orValue([]).exists(o,
+        o.kind == "VirtualMachineInstance" && o.apiVersion.startsWith("kubevirt.io/"))
+  - name: referenced
+    expression: >-
+      object.metadata.?labels[?"gpu.cozystack.io/device-reference"].orValue("") == "true"
+  - name: vmiGPUEntries
+    expression: >-
+      variables.isPod ? false :
+      size(object.spec.?domain.?devices.?gpus.orValue([])) > 0 ||
+      object.spec.?domain.?devices.?hostDevices.orValue([]).exists(d,
+        d.?deviceName.orValue("") in variables.names) ||
+      object.spec.?domain.?resources.?requests.orValue({}).exists(k, k in variables.names) ||
+      object.spec.?domain.?resources.?limits.orValue({}).exists(k, k in variables.names)
+  validations:
+  - expression: >-
+      !variables.isPod || size(variables.podGPUs) == 0 || variables.virtLauncher
+    messageExpression: >-
+      "Pod " + object.metadata.?name.orValue(object.metadata.?generateName.orValue("")) +
+      " requests the GPU resource " + variables.podGPUs[0][0] +
+      ". While gpu.rawResourceNames is forbidden, only the virt-launcher pods of virtual machines with GPUDevice references request GPUs."
+    reason: Forbidden
+  - expression: variables.isPod || variables.referenced || !variables.vmiGPUEntries
+    messageExpression: >-
+      "VirtualMachineInstance " + object.metadata.?name.orValue(object.metadata.?generateName.orValue("")) +
+      " carries GPU entries without a GPUDevice reference, and gpu.rawResourceNames is forbidden. Replace the raw gpus, hostDevices or GPU resource entries, including those of its instance type, with device or deviceTemplate entries."
+    reason: Forbidden
+---
+# The parameter is resolved before any expression runs, so a missing
+# ConfigMap denies everything a binding matches. The bindings therefore match
+# tenant namespaces only, or every pod in the cluster, the controller's
+# included, would wait for the ConfigMap the controller publishes.
+# Tenant namespaces are selected as by the usage-monitor label policy:
+# tenant-root by name, every other tenant by the ancestor label it carries for
+# tenant-root.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-raw-names-forbidden-tenant-root
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-raw-names-forbidden
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: In
+        values: ["tenant-root"]
+  paramRef:
+    name: cozystack-gpu-settings
+    namespace: cozy-system
+    parameterNotFoundAction: Deny
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-raw-names-forbidden-subtenants
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-raw-names-forbidden
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+      - key: tenant.cozystack.io/tenant-root
+        operator: Exists
+  paramRef:
+    name: cozystack-gpu-settings
+    namespace: cozy-system
+    parameterNotFoundAction: Deny
+{{- end }}

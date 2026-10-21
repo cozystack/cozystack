@@ -9,8 +9,9 @@
 #
 # It renders whether or not GPUs are on, so a tenant cannot label objects
 # ahead of the hoster turning them on. It ratchets: only a write that adds the
-# key is refused, so an object that already carries it, from before this
-# policy, can still be updated, have its finalizers removed, and drop the key.
+# key or changes its value is refused, so an object that already carries it,
+# from before this policy, can still be updated, have its finalizers removed,
+# and drop the key.
 #
 # This matches every write in every tenant namespace, so the expression only
 # reads metadata and guards every step.
@@ -29,9 +30,6 @@ spec:
       operations: ["CREATE", "UPDATE"]
       resources: ["*/*"]
       scope: Namespaced
-  matchConditions:
-  - name: tenant-namespace
-    expression: request.namespace.startsWith("tenant-")
   variables:
   - name: labelled
     expression: >-
@@ -42,18 +40,44 @@ spec:
       oldObject != null && has(oldObject.metadata) && has(oldObject.metadata.labels) &&
       "gpu.cozystack.io/usage-monitor" in oldObject.metadata.labels
   validations:
-  - expression: "!variables.labelled || variables.wasLabelled"
+  - expression: >-
+      !variables.labelled || (variables.wasLabelled &&
+        object.metadata.labels["gpu.cozystack.io/usage-monitor"] ==
+        oldObject.metadata.labels["gpu.cozystack.io/usage-monitor"])
     message: >-
       The label gpu.cozystack.io/usage-monitor is reserved for the GPU usage records and cannot be set on objects in tenant namespaces.
     reason: Forbidden
 ---
+# Tenant namespaces are tenant-root, by name, and every namespace carrying the
+# ancestor label of tenant-root; the raw-name policy binds the same way.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: cozystack-gpu-usage-monitor-label
+  name: cozystack-gpu-usage-monitor-label-tenant-root
   labels:
     internal.cozystack.io/managed-by-cozystack: ""
 spec:
   policyName: cozystack-gpu-usage-monitor-label
   validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: In
+        values: ["tenant-root"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-usage-monitor-label-subtenants
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-usage-monitor-label
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+      - key: tenant.cozystack.io/tenant-root
+        operator: Exists
 {{- end }}
