@@ -53,6 +53,9 @@ type s3Connection struct {
 	// what the writer of the backup trusted, no more.
 	CAPEM  []byte
 	CAOnly bool
+	// InsecureSkipVerify mirrors an explicit admin opt-in a strategy
+	// already applies to its own uploads; it is never a fallback.
+	InsecureSkipVerify bool
 }
 
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
@@ -72,14 +75,18 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		Region: conn.Region,
 		Secure: conn.Secure,
 	}
-	if conn.Secure && len(conn.CAPEM) > 0 {
+	if conn.Secure && (len(conn.CAPEM) > 0 || conn.InsecureSkipVerify) {
 		// Start from minio's transport to keep its proxy and timeout settings.
 		tr, err := minio.DefaultTransport(true)
 		if err != nil {
 			return nil, err
 		}
-		if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
-			return nil, err
+		if len(conn.CAPEM) > 0 {
+			if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
+				return nil, err
+			}
+		} else {
+			tr.TLSClientConfig.InsecureSkipVerify = true
 		}
 		opts.Transport = tr
 	}

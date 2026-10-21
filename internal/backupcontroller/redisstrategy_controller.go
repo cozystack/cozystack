@@ -366,7 +366,7 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey)
+		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey, &batchJob.Spec.Template.Spec)
 		if err != nil {
 			return r.failBackupArtifact(ctx, j, err)
 		}
@@ -471,6 +471,7 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
 	objectKey string,
+	podSpec *corev1.PodSpec,
 ) (*backupsv1alpha1.Backup, error) {
 	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
 	if existing != nil {
@@ -497,7 +498,7 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 		},
 	}
 	if probe {
-		backup.Status.Artifact = r.redisArtifact(ctx, j.Namespace, objectKey)
+		backup.Status.Artifact = r.redisArtifact(ctx, j.Namespace, objectKey, podSpec)
 	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
