@@ -77,7 +77,6 @@
 {{- $schedulingClass = .Values.schedulingClass }}
 {{- end }}
 
-{{/* vGPU: entitled only when set here and the parent is entitled */}}
 {{- $vgpu := and (eq (printf "%v" ($parentNamespace.vgpu | default false)) "true") (eq (printf "%v" ((.Values.gpu).vgpu | default false)) "true") }}
 ---
 apiVersion: v1
