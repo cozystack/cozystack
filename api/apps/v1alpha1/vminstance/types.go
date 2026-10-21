@@ -90,8 +90,19 @@ type Firmware struct {
 }
 
 type GPU struct {
-	// The name of the GPU resource to attach.
-	Name string `json:"name"`
+	// GPUDevice in this namespace to attach.
+	Device string `json:"device,omitempty"`
+	// GPU device to order for this VM while it runs.
+	DeviceTemplate GPUDeviceTemplate `json:"deviceTemplate,omitempty"`
+	// Resource name of the GPU to request directly.
+	Name string `json:"name,omitempty"`
+}
+
+type GPUDeviceTemplate struct {
+	// GPUClass to order the device from.
+	ClassName string `json:"className"`
+	// GPUs of the class, all on one node.
+	Count int `json:"count"`
 }
 
 type Network struct {
