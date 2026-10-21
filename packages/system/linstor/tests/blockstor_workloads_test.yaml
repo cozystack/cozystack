@@ -1,0 +1,213 @@
+suite: blockstor workloads
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  # The plain-HTTP listener authenticates nobody. On the pod network any pod
+  # that can route to the apiserver would get the whole LINSTOR API, deletes
+  # included, around the mTLS on :3371.
+  - it: binds the apiserver's plain-HTTP listener to loopback
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --rest-bind-address=127.0.0.1:3370
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content: {name: rest-debug, containerPort: 3370}
+
+  # The controller runs without leader election, so two pods side by side
+  # would both reconcile the same objects.
+  - it: never runs two controllers during a rollout
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: lets the satellite delete nothing but PhysicalDevices
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [blockstor.cozystack.io]
+            resources: [physicaldevices]
+            verbs: [create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [blockstor.cozystack.io]
+            resources: [nodes, resources, snapshots, storagepools]
+            verbs: [update, patch]
+      - lengthEqual:
+          path: rules
+          count: 6
+
+  - it: gives the satellite no Secret or Lease access at cluster scope
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [coordination.k8s.io]
+            resources: [leases]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: lets the satellite read Secrets in its own namespace only
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              verbs: [get]
+
+  - it: binds the satellite's Secret Role to its ServiceAccount
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: blockstor-satellite-secrets
+      - equal:
+          path: subjects[0].name
+          value: blockstor-satellite
+
+  - it: gives the controller no Lease access
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [coordination.k8s.io]
+            resources: [leases]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: closes the satellite's unauthenticated ports to the world
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: CiliumClusterwideNetworkPolicy
+    asserts:
+      - equal:
+          path: spec.ingressDeny[0].fromEntities
+          value: [world]
+      - equal:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          value:
+            - port: "9100"
+            - port: "9101"
+            - port: "8080"
+
+  # A kind added to the group later must not be granted by omission, so the
+  # roles are pinned whole: a wildcard or a new kind shows up as a diff here.
+  - it: pins the controller ClusterRole rule by rule
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ['']
+              resources: [events]
+              verbs: [create, patch]
+            - apiGroups: [events.k8s.io]
+              resources: [events]
+              verbs: [create, patch]
+            - apiGroups: ['']
+              resources: [nodes]
+              verbs: [get, list, watch]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [controllerconfigs]
+              verbs: [get, list, watch]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [nodes, resourcedefinitions, resourcegroups, resources, snapshots, storagepools]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [nodes/finalizers, resourcedefinitions/finalizers, resourcegroups/finalizers,
+                resources/finalizers, snapshots/finalizers, storagepools/finalizers]
+              verbs: [update]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [nodes/status, resourcedefinitions/status, resourcegroups/status, resources/status,
+                snapshots/status, storagepools/status]
+              verbs: [get, update, patch]
+
+  - it: pins the satellite ClusterRole rule by rule
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ['']
+              resources: [events]
+              verbs: [create, patch]
+            - apiGroups: ['']
+              resources: [nodes]
+              verbs: [get, list, watch]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [controllerconfigs, nodes, physicaldevices, resourcedefinitions, resourcegroups,
+                resources, snapshots, storagepools]
+              verbs: [get, list, watch]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [physicaldevices]
+              verbs: [create, update, patch, delete]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [nodes, resources, snapshots, storagepools]
+              verbs: [update, patch]
+            - apiGroups: [blockstor.cozystack.io]
+              resources: [nodes/status, physicaldevices/status, resources/status, snapshots/status,
+                storagepools/status, nodes/finalizers, physicaldevices/finalizers, resources/finalizers,
+                snapshots/finalizers, storagepools/finalizers]
+              verbs: [get, update, patch]
+
+  # global_common.conf is a subPath mount, which is never refreshed in place.
+  - it: rolls the satellites when global_common.conf changes
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/drbd-conf"]
+          pattern: '^[0-9a-f]{64}$'

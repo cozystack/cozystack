@@ -1,0 +1,762 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: resources.blockstor.cozystack.io
+spec:
+  group: blockstor.cozystack.io
+  names:
+    kind: Resource
+    listKind: ResourceList
+    plural: resources
+    singular: resource
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Resource is the Schema for the resources API.
+
+          The CEL rule above enforces the cluster-wide naming convention every
+          node-bound CRD in the project follows: `metadata.name == <rd>.<node>`.
+          Keeping the composite key encoded in the name lets operators grep for
+          `<node>.` across kinds (Resource, Snapshot, StoragePool) and find every
+          resource bound to one satellite at once.
+
+          BUG-047: the comparison is case-INSENSITIVE (.lowerAscii() on both
+          sides), mirroring StoragePool. LINSTOR identifiers are case-insensitive
+          and the k8s store's Name() helper lowercases metadata.name, while
+          spec.resourceDefinitionName preserves the caller's original case. With
+          an uppercase RD name (e.g. csi-sanity's `…BA880D4F…`) a case-SENSITIVE
+          rule rejected the Resource create with "must equal" even though the
+          names address the same object. lowerAscii() on both sides keeps the
+          `<rd>.<node>` convention intact while tolerating case differences.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Resource
+            properties:
+              drbdNodeID:
+                description: |-
+                  drbdNodeID is the DRBD-9 node-id assigned to this replica.
+                  Per-replica, allocated once and stable for the replica's life —
+                  re-numbering a live replica re-maps its DRBD bitmaps and
+                  corrupts peer-to-peer resync. Range 0..15 (drbd-9 max-peers).
+
+                  clusterIP-style allocation: nil means "controller, allocate";
+                  non-nil is authoritative and NEVER overwritten (restore-safe).
+                  Pointer distinguishes "unset" from a valid node-id 0
+                  (LowestFreeNodeID hands out 0 for the first/freed slot).
+                format: int32
+                type: integer
+                x-kubernetes-validations:
+                - message: 'drbdNodeID is settable-once: it may go from unset to a
+                    value but not be changed once set'
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              drbdOptions:
+                description: |-
+                  drbdOptions is the typed DRBD configuration applied to this
+                  specific replica. Overrides the parent RD's drbdOptions
+                  field-by-field. Rare — most config lives at RD or RG scope.
+                  Phase 10.3.
+                properties:
+                  disk:
+                    description: |-
+                      disk configures the `disk { ... }` section (on-io-error,
+                      activity-log size, resync hints).
+                    properties:
+                      alExtents:
+                        description: |-
+                          alExtents is the activity-log size (in extents). Larger values
+                          reduce metadata write amplification at the cost of longer
+                          resync windows.
+                        format: int32
+                        type: integer
+                      onIoError:
+                        description: |-
+                          onIOError is the action when the local backing device returns
+                          an I/O error. `detach` is the production-safe default — the
+                          satellite drops the local replica to Diskless and consumers
+                          keep going via the network path.
+                        enum:
+                        - detach
+                        - pass-on
+                        - call-local-io-error
+                        type: string
+                    type: object
+                  handlers:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      handlers maps event names to script paths (e.g. fence-peer,
+                      before-resync-target). Free-form for now; the rendered .res
+                      emits one line per pair under `handlers { }`.
+                    type: object
+                  net:
+                    description: |-
+                      net configures the `net { ... }` section of the rendered .res
+                      file (replication protocol, secret, dual-primary, after-sb).
+                    properties:
+                      afterSb0Pri:
+                        description: |-
+                          afterSb0Pri is the recovery action when DRBD detects split-
+                          brain and both sides were Secondary at the time.
+                        enum:
+                        - disconnect
+                        - discard-younger-primary
+                        - discard-older-primary
+                        - discard-zero-changes
+                        - discard-least-changes
+                        - discard-local
+                        - discard-remote
+                        type: string
+                      afterSb1Pri:
+                        description: afterSb1Pri is the recovery action when one side
+                          was Primary.
+                        enum:
+                        - disconnect
+                        - consensus
+                        - violently-as0p
+                        - discard-secondary
+                        - call-pri-lost-after-sb
+                        type: string
+                      afterSb2Pri:
+                        description: |-
+                          afterSb2Pri is the recovery action when both sides were Primary
+                          (only possible if allow-two-primaries was enabled).
+                        enum:
+                        - disconnect
+                        - violently-as0p
+                        - call-pri-lost-after-sb
+                        type: string
+                      allowTwoPrimaries:
+                        description: |-
+                          allowTwoPrimaries enables dual-primary mode (live-migration,
+                          shared-export NFS Ganesha). Must be paired with consumer-side
+                          fencing — DRBD does NOT serialise concurrent writes from two
+                          primaries.
+                        type: boolean
+                      maxBuffers:
+                        description: maxBuffers is the maximum number of in-flight
+                          network buffers.
+                        format: int32
+                        type: integer
+                      protocol:
+                        description: |-
+                          protocol picks the DRBD replication protocol. A=async (writer
+                          returns once data hits local disk), B=memory-sync (returns on
+                          peer ACK after kernel buffer), C=sync (returns on peer disk
+                          fsync). DRBD-9 default is C.
+                        enum:
+                        - A
+                        - B
+                        - C
+                        type: string
+                      sharedSecretRef:
+                        description: |-
+                          sharedSecretRef references a Secret containing the DRBD network
+                          authentication shared secret under the key `shared-secret`.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  peerDevice:
+                    description: |-
+                      peerDevice configures the `peer-device { ... }` block (per-peer
+                      resync rate caps and similar).
+                    properties:
+                      cMaxRate:
+                        description: |-
+                          cMaxRate caps the per-peer resync transfer rate. Format
+                          matches DRBD: integer + suffix (`100M`, `1G`).
+                        type: string
+                    type: object
+                  resource:
+                    description: |-
+                      resource configures resource-level `options { ... }` (auto-
+                      promote, quorum mode, on-no-quorum action).
+                    properties:
+                      autoPromote:
+                        description: |-
+                          autoPromote causes DRBD to promote the resource to Primary
+                          automatically when a consumer opens the device, provided no
+                          other peer is already Primary. Cluster-wide default true.
+                        type: boolean
+                      autoTieBreaker:
+                        description: |-
+                          autoTieBreaker gates auto-creation of a DISKLESS+TIE_BREAKER
+                          witness when a parent RD has an even number of diskful
+                          replicas and no operator-placed diskless replica. Replaces
+                          `Props["DrbdOptions/AutoAddQuorumTiebreaker"]`. nil inherits
+                          the cluster-wide default (true). Phase 10.3.
+                        type: boolean
+                      onNoQuorum:
+                        description: |-
+                          onNoQuorum is the action when quorum is lost. `io-error`
+                          returns EIO to the consumer (drbd-reactor's typical trigger
+                          for failover). `suspend-io` blocks I/O until quorum returns
+                          (useful for deliberate maintenance windows).
+                        enum:
+                        - io-error
+                        - suspend-io
+                        - freeze-io
+                        type: string
+                      quorum:
+                        description: |-
+                          quorum picks the quorum policy. `majority` requires more than
+                          half of all replicas (including diskless witnesses) to be
+                          connected before allowing writes. `off` allows writes from any
+                          replica regardless of partition state — split-brain risk.
+                          `all` requires every replica to be reachable, useful only for
+                          strict 2-replica configurations under deliberate operator
+                          control.
+                        enum:
+                        - "off"
+                        - majority
+                        - all
+                        type: string
+                    type: object
+                type: object
+              drbdPort:
+                description: |-
+                  drbdPort is the TCP port THIS replica listens on for the RD's
+                  DRBD replication mesh. PER-NODE (per-replica): the allocator's
+                  taken-set is the ports already used by OTHER Resources ON THE
+                  SAME NODE, so the same port number is freely reused across
+                  different nodes — this scales to 1000+ resources per node
+                  instead of exhausting a cluster-unique 20000-20999 window at
+                  ~1000 resources cluster-wide. The optional RD.Spec.DRBDPort
+                  preferred seed is tried first on each node.
+
+                  clusterIP-style allocation (Service.spec.clusterIP model): nil
+                  means "controller, allocate one for me"; non-nil is
+                  authoritative and is NEVER overwritten — that is what makes a
+                  `kubectl get -o yaml` backup + `kubectl apply` restore preserve
+                  the port with no flap. The pointer distinguishes "unset" from a
+                  valid port 0 (never allocated, but kept for type symmetry). The
+                  .res renderer puts each peer's own Spec.DRBDPort into that
+                  peer's `on <node>` block.
+                format: int32
+                type: integer
+                x-kubernetes-validations:
+                - message: 'drbdPort is settable-once: it may go from unset to a value
+                    but not be changed once set'
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              extraProps:
+                additionalProperties:
+                  type: string
+                description: |-
+                  extraProps carries upstream-LINSTOR property keys we have not
+                  yet typed into structured fields. Forward-compat shim populated
+                  only by the REST shim when golinstor sends an unknown key.
+                  Phase 10.3.
+                type: object
+              flags:
+                description: flags carries the user-controlled placement flags.
+                items:
+                  type: string
+                type: array
+              nodeName:
+                description: nodeName is the satellite hosting this replica.
+                type: string
+              props:
+                additionalProperties:
+                  type: string
+                description: props is the LINSTOR per-resource property map.
+                type: object
+              resourceDefinitionName:
+                description: resourceDefinitionName is the parent ResourceDefinition.
+                type: string
+              skipInitialSync:
+                description: |-
+                  skipInitialSync is the controller-authoritative, persisted decision
+                  of whether THIS replica may skip the DRBD initial sync (come up
+                  instantly UpToDate via the day0 `set-gi` seed) or MUST run a real
+                  SyncTarget from a data-bearing peer. Stamped ONCE at first reconcile
+                  (append-only, set-if-nil, never mutated) as
+                  `!ResourceDefinition.Spec.Initialized`:
+
+                    - true  → the replica was created while its RD was still a
+                      genuinely-fresh, never-written initial set (RD.Spec.Initialized
+                      nil/false). It is safe to seed the day0 skip → instant UpToDate,
+                      out_of_sync=0, no SyncTarget. The whole initial replica set is
+                      stamped true together, so a fresh 2-/3-replica deployment skips
+                      in lock-step (invariant 1).
+                    - false → the replica joined an RD that had ALREADY held committed
+                      data (RD.Spec.Initialized==true): relocate, migrate-disk, or an
+                      extra replica. It MUST NOT skip — it comes up Inconsistent and
+                      SyncTargets the real data from a peer (invariant 2). This holds
+                      EVEN IF the sole data-holder is offline at seed time, because
+                      the decision is read from the persisted RD latch, NOT from live
+                      kernel/peer state (offline-safety + the core fix).
+
+                  This REPLACES the satellite's live-kernel AnyConnectedPeerHasData
+                  probe as the authoritative skip decision (that probe is unsafe: it
+                  only sees CONNECTED peers, so an offline data-holder made a fresh
+                  replica skip → falsely UpToDate while EMPTY). The probe is retained
+                  only as a defense-in-depth secondary veto.
+
+                  clusterIP-style: nil means "controller, decide and stamp me"
+                  (conservative pre-upgrade / pre-stamp default in resolveVolumeSeed:
+                  do NOT skip — full sync, invariant 5). A non-nil value is
+                  authoritative and NEVER overwritten — restore-safe (invariant 3)
+                  and 3-way-merge-safe (the user never sets it → it is never in their
+                  last-applied → `kubectl apply` / golinstor REST that omit it never
+                  strip it; invariant 4).
+                type: boolean
+                x-kubernetes-validations:
+                - message: 'skipInitialSync is settable-once: it may go from unset
+                    to a value but not be changed once set'
+                  optionalOldSelf: true
+                  rule: '!oldSelf.hasValue() || self == oldSelf.value()'
+              storagePool:
+                description: |-
+                  storagePool is the LINSTOR storage pool name this replica
+                  allocates from. Replaces `Spec.Props["StorPoolName"]` (which
+                  the dispatcher's buildVolumes already prefers when set).
+                  Phase 10.3 step.
+                type: string
+              toggleDiskCancel:
+                description: |-
+                  toggleDiskCancel asks the satellite reconciler to abort an
+                  in-flight diskless→diskful conversion and roll back to the
+                  pre-toggle Diskless state. Set by the REST shim when the
+                  operator passes `?cancel=true` to PUT toggle-disk (upstream
+                  LINSTOR's `linstor r td --cancel` shape). Bug 40.
+
+                  The reconciler observes this flag in conjunction with a
+                  "partial diskful" state (storage carved, DRBD not yet Up or
+                  not yet UpToDate) and unwinds by:
+
+                    1. drbdadm down (idempotent if the kernel resource is
+                       already gone),
+                    2. DeleteVolume on the storage provider,
+                    3. re-stamping the DISKLESS flag on Spec.Flags,
+                    4. clearing this flag and Status.ToggleDiskRetries.
+
+                  Once cleared the satellite resumes normal reconcile loops
+                  against the (now diskless) Spec. A cancel issued against a
+                  Resource that's already past the partial-state window (DRBD
+                  is Up and Volumes report UpToDate) is a no-op — the operator
+                  must issue a fresh toggle-disk to demote.
+                type: boolean
+              volumes:
+                description: |-
+                  volumes carries per-volume seed configuration that the
+                  satellite applies once on first activation of this replica.
+                  Today the only field is SeedFromGI (Phase 8.1) — when set,
+                  the satellite stamps the new replica's DRBD metadata with
+                  this generation identifier before `drbdadm up` so the GI
+                  handshake sees the new device as already-in-sync with that
+                  peer, skipping the full initial-sync.
+                items:
+                  description: |-
+                    ResourceVolumeSpec is one volume's per-replica configuration knobs.
+                    Distinct from ResourceVolumeStatus: this carries one-shot seeding
+                    hints the satellite consumes during first activation, the Status
+                    counterpart carries observed runtime state.
+                  properties:
+                    seedFromGI:
+                      description: |-
+                        seedFromGI pre-seeds the DRBD-9 generation identifier of this
+                        replica's metadata block before the first `drbdadm up`. When
+                        set to the CurrentGI of an existing UpToDate peer, DRBD's GI
+                        handshake on first connect sees the match and skips the full
+                        initial-sync — turning hours of resync on multi-TiB volumes
+                        into instant. Phase 8.1.
+
+                        Consumed once on first activation; subsequent reconciles
+                        ignore it (the satellite checks `drbdmeta show-gi` before
+                        re-stamping).
+                      type: string
+                    volumeNumber:
+                      description: |-
+                        volumeNumber matches the corresponding ResourceDefinition
+                        VolumeDefinition. +required when this struct is populated.
+                      format: int32
+                      type: integer
+                  required:
+                  - volumeNumber
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - volumeNumber
+                x-kubernetes-list-type: map
+            required:
+            - nodeName
+            - resourceDefinitionName
+            type: object
+          status:
+            description: status defines the observed state of Resource
+            properties:
+              conditions:
+                description: conditions represent the current state of the Resource.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              connections:
+                description: |-
+                  connections is the per-peer DRBD connection state observed by the
+                  satellite (from `drbdsetup events2` / `drbdsetup status`). The
+                  Python `linstor r list --faulty` reads this through the REST
+                  `layer_object.drbd.connections` map — without it, the CLI cannot
+                  distinguish a healthy three-peer mesh from one with a broken
+                  connection. Keyed by peer node name.
+                items:
+                  description: |-
+                    ResourceConnectionStatus is the state of one DRBD peer connection
+                    from this replica's point of view. Maps 1:1 to upstream LINSTOR's
+                    `DrbdConnection` REST shape — the Python CLI walks the `connected`
+                    flag to color the Conns column red on `linstor r list`.
+                  properties:
+                    connected:
+                      description: |-
+                        connected is true iff DRBD reports the connection as
+                        `Connected` (handshake complete, replication active).
+                      type: boolean
+                    message:
+                      description: |-
+                        message is the human-readable DRBD connection state
+                        (`Connected`, `StandAlone`, `BrokenPipe`, `NetworkFailure`,
+                        `Connecting`, `Timeout`, etc.) as reported by `drbdsetup
+                        events2`. Populated even when Connected — useful for
+                        surfacing transitional states.
+                      type: string
+                    peerDRBDNodeID:
+                      description: |-
+                        peerDrbdNodeId is the DRBD-9 node-id assigned to the peer in
+                        this resource's connection table. Read from `drbdsetup
+                        events2` connection-frame `peer-node-id` field. Six e2e
+                        tests today parse this value out of `drbdsetup status
+                        --verbose` adjacent to the peer-name — surfacing it on
+                        Status lets them switch to a k8s-native read. The peer's
+                        own Resource CRD also carries this number under
+                        `Status.DRBDNodeID`, so callers with the atomic-view luxury
+                        can cross-check; the field is retained here for ergonomics
+                        when only the local Resource is in hand.
+                      format: int32
+                      type: integer
+                    peerNodeName:
+                      description: |-
+                        peerNodeName is the name of the peer Resource (and the node
+                        it lives on — Resource names are RD.node).
+                      type: string
+                    peerVolumes:
+                      description: |-
+                        peerVolumes is the peer's view of each volume's disk state
+                        on this connection — read from `drbdsetup events2
+                        --statistics` peer-device frames' `peer-disk:<state>` token.
+                        Important under network-partition: the local replica's
+                        `Status.Volumes[i].DiskState` (UpToDate from this node's
+                        kernel) and the peer's view of the same volume
+                        (`DUnknown` from the peer's kernel) diverge. The
+                        state-standalone-partition.sh and network-partition.sh
+                        e2e tests assert against this divergence; without
+                        peerVolumes they shell into the satellite and grep
+                        drbdsetup. Keyed by volumeNumber.
+                      items:
+                        description: |-
+                          PeerVolumeStatus is the per-volume slice of a peer's view of one
+                          connection: what the peer's kernel reports its replica's disk_state
+                          to be. Distinct from the local-side `ResourceVolumeStatus.DiskState`
+                          because under network-partition the two views diverge (local says
+                          UpToDate, peer says DUnknown / Outdated). 8 e2e partition tests
+                          parse this token out of `drbdsetup status --verbose`; the field
+                          gives them a kubectl-native substitute.
+                        properties:
+                          peerDiskState:
+                            description: |-
+                              peerDiskState is the peer's DRBD-9 disk_state for this volume
+                              — `UpToDate`, `Outdated`, `Inconsistent`, `Diskless`, or
+                              `DUnknown` (the local kernel cannot determine the peer's
+                              disk state, typical under partition). Mirrors the
+                              `peer-disk:<state>` token in `drbdsetup events2
+                              --statistics` peer-device frames.
+                            type: string
+                          volumeNumber:
+                            description: |-
+                              volumeNumber is the DRBD-9 volume number this peer-view entry
+                              describes. Matches the parent
+                              `ResourceDefinition.Spec.VolumeDefinitions[].VolumeNumber`.
+                            format: int32
+                            type: integer
+                        required:
+                        - volumeNumber
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - volumeNumber
+                      x-kubernetes-list-type: map
+                    replicationState:
+                      description: |-
+                        replicationState is the DRBD-9 replication state for this
+                        peer reported by `drbdsetup events2 --statistics` peer-
+                        device frames: Established / SyncSource / SyncTarget /
+                        PausedSync* / VerifyS / VerifyT / Ahead / Behind / Off /
+                        WFBitMap* / WFSyncUUID / StartingSyncS / StartingSyncT. The
+                        Python CLI's `linstor v l` Repl column reads this.
+                      type: string
+                  required:
+                  - peerNodeName
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - peerNodeName
+                x-kubernetes-list-type: map
+              drbdMinor:
+                description: |-
+                  drbdMinor is a read-only mirror of the volume-0 minor now
+                  living authoritatively on
+                  ResourceDefinition.Spec.VolumeDefinitions[0].DRBDMinor. Kept so
+                  the cluster-wide taken-set scan and observers that still read
+                  Status keep working during the migration window.
+                format: int32
+                type: integer
+              drbdNodeID:
+                description: |-
+                  drbdNodeID is a read-only mirror of the authoritative
+                  Spec.DRBDNodeID, kept so observers/REST/tests that still read
+                  Status during the migration window don't break. The allocator
+                  writes Spec.DRBDNodeID; the reconciler mirrors it here. nil
+                  means not yet allocated.
+                format: int32
+                type: integer
+              drbdPort:
+                description: |-
+                  drbdPort is a read-only mirror of the authoritative
+                  Spec.DRBDPort (per-node listen port), kept so the REST DTO
+                  (drbdLayerFromStatus → TCPPorts) and observers that still read
+                  Status keep working during the migration window. The allocator
+                  writes Spec.DRBDPort; the reconciler mirrors it here.
+                format: int32
+                type: integer
+              drbdState:
+                description: |-
+                  drbdState is the current resource-level DRBD state reported by
+                  `drbdsetup events2` — `UpToDate`, `Outdated`, `Connected`,
+                  `Failed`, etc. Phase 10.2: written by the satellite via the
+                  Status subresource so a concurrent Spec mutation
+                  (auto-diskful, resize) can't clobber it.
+                type: string
+              inUse:
+                description: inUse is whether DRBD reports the resource as primary
+                  anywhere.
+                type: boolean
+              role:
+                description: |-
+                  role is the kernel-reported DRBD-9 role on this node, parsed
+                  from the `role:` token in `drbdsetup events2` resource frames.
+                  Values mirror the DRBD-9 enum: `Primary` (open for write),
+                  `Secondary` (replication-only), `Unknown` (transient — kernel
+                  just attached, has not yet picked a role). Per-replica, in
+                  contrast to the cluster-wide `inUse` bool: a 3-replica RD has
+                  up to one Primary and two Secondaries, all on different nodes.
+                  ~15 e2e tests `grep role:` from `drbdsetup status`; surfacing
+                  it on Status lets them switch to a k8s-native read.
+                type: string
+              suspended:
+                description: |-
+                  suspended is the kernel-reported reason for I/O suspension on
+                  this replica, parsed from the `suspended:` token in
+                  `drbdsetup events2` resource frames. Values mirror the DRBD-9
+                  enum: `No` (I/O serves normally), `Quorum` (quorum lost,
+                  `on-no-quorum=suspend-io` blocked the I/O queue), `User`
+                  (`drbdadm suspend-io` issued by operator), `NoData` (no
+                  UpToDate replica reachable, kernel is waiting for one),
+                  `Fencing` (resource-and-stonith fencing handler running).
+                  Paired with the per-volume `quorum` field for quorum-loss
+                  recovery tests — 3 e2e tests need this to distinguish a
+                  recoverable quorum suspend from a user/fencing suspend.
+                type: string
+              toggleDiskRetries:
+                description: |-
+                  toggleDiskRetries counts how many times the satellite
+                  reconciler has failed mid-conversion while running the
+                  diskless→diskful chain (storage carve → drbdmeta create-md
+                  → drbdadm up → initial-sync). Upstream LINSTOR exposes the
+                  same counter under `Resource.toggle_disk_retries` so
+                  operators can spot a permanently-stuck conversion via
+                  `linstor r l`. Bug 39.
+
+                  Reset to 0 when the conversion succeeds (Resource reaches
+                  the diskful steady-state) or when a cancel completes via
+                  `Spec.ToggleDiskCancel`. The reconciler does NOT impose a
+                  hard cap — the bound is policy that lives in the controller
+                  layer (today the legacy backoff cap of 10 attempts) and is
+                  surfaced via a `ToggleDiskFailed` condition once exceeded.
+                format: int32
+                type: integer
+              volumes:
+                description: volumes is the per-volume runtime state reported by the
+                  satellite.
+                items:
+                  description: ResourceVolumeStatus is the runtime state of one volume
+                    of a Resource.
+                  properties:
+                    allocatedKib:
+                      format: int64
+                      type: integer
+                    currentGI:
+                      description: |-
+                        currentGi is the DRBD-9 current generation identifier reported
+                        by `drbdsetup events2` for this replica's local volume. The
+                        controller reads it when adding a new replica to skip the full
+                        initial-sync: pre-seeding the new metadata block with this GI
+                        makes DRBD's GI handshake see the new peer as already-in-sync,
+                        turning hours of resync on multi-TiB volumes into instant.
+                        Updated by the satellite-side observer; never set in Spec.
+                      type: string
+                    devicePath:
+                      type: string
+                    diskState:
+                      type: string
+                    historyGI:
+                      description: |-
+                        historyGi carries the historical GI chain (DRBD keeps 3-4
+                        previous generations). Useful for split-brain forensics and
+                        cluster-state UI; may be elided when we run tight on Status
+                        budget. Order is newest-first.
+                      items:
+                        type: string
+                      type: array
+                    outOfSyncKib:
+                      description: |-
+                        outOfSyncKib is the worst-case "how many KiB this volume is
+                        behind any peer" reported by `drbdsetup events2 --statistics`
+                        peer-device frames. Combined with RD.Spec.VolumeDefinitions
+                        SizeKib, callers compute a sync-progress percentage:
+                          progress = (1 - outOfSyncKib / sizeKib) * 100
+
+                        0 means fully in sync; sizeKib (or close to it) means fresh
+                        resync hasn't started yet. Surfaced via the REST view layer
+                        so `linstor r l` / piraeus dashboards can render a CDI-style
+                        progress bar without polling drbdsetup themselves.
+                      format: int64
+                      type: integer
+                    quorum:
+                      description: |-
+                        quorum reports the DRBD-9 kernel's per-volume quorum view
+                        from the `quorum:yes|no` field in events2 `device` frames.
+                        true means the local replica has quorum and may serve I/O;
+                        false means the kernel has marked the volume quorum-lost
+                        (writes block / fail-fast depending on `on-no-quorum`
+                        policy). Per-volume is finer-grained than the node-wide
+                        `drbd.linbit.com/lost-quorum` Kubernetes taint: a node with
+                        quorum on one RD and no-quorum on another surfaces both
+                        states correctly. The CSI plugin's quorum-aware mount path
+                        (refusing to mount a no-quorum volume) reads this signal.
+                      type: boolean
+                    storagePool:
+                      type: string
+                    usableKib:
+                      format: int64
+                      type: integer
+                    volumeNumber:
+                      format: int32
+                      type: integer
+                  required:
+                  - volumeNumber
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - volumeNumber
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must equal <spec.resourceDefinitionName>.<spec.nodeName>
+            (case-insensitive)
+          optionalOldSelf: true
+          rule: oldSelf.hasValue() || self.metadata.name.lowerAscii() == (self.spec.resourceDefinitionName
+            + '.' + self.spec.nodeName).lowerAscii()
+    served: true
+    storage: true
+    subresources:
+      status: {}
