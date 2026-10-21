@@ -76,6 +76,16 @@
 {{- if and (not $schedulingClass) .Values.schedulingClass }}
 {{- $schedulingClass = .Values.schedulingClass }}
 {{- end }}
+
+{{/*
+  Classes an application may pick in place of the tenant class. A parent that
+  constrains placement passes its list down unchanged, so a child tenant
+  cannot allow what its parent does not.
+*/}}
+{{- $allowedSchedulingClasses := .Values.allowedSchedulingClasses | default list }}
+{{- if or $parentNamespace.schedulingClass $parentNamespace.allowedSchedulingClasses }}
+{{- $allowedSchedulingClasses = $parentNamespace.allowedSchedulingClasses | default list }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -95,6 +105,10 @@ metadata:
     scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
+  {{- with $allowedSchedulingClasses }}
+  annotations:
+    namespace.cozystack.io/allowed-scheduling-classes: {{ join "," . | quote }}
+  {{- end }}
   {{- if $existingNS }}
   ownerReferences:
   - apiVersion: v1
@@ -130,5 +144,8 @@ stringData:
       {{- end }}
       {{- with $schedulingClass }}
       schedulingClass: {{ . | quote }}
+      {{- end }}
+      {{- with $allowedSchedulingClasses }}
+      allowedSchedulingClasses: {{ toJson . }}
       {{- end }}
 {{- end }}

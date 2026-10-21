@@ -108,8 +108,9 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 
 ### Images
 
-| Name             | Description                                                                                                    | Type     | Value |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `images`         | Optional image overrides for air-gapped or rate-limited registries.                                            | `object` | `{}`  |
-| `images.kubectl` | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag. | `string` | `""`  |
+| Name              | Description                                                                                                                                                                                                                                                                                   | Type     | Value |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `images`          | Optional image overrides for air-gapped or rate-limited registries.                                                                                                                                                                                                                           | `object` | `{}`  |
+| `images.kubectl`  | Image used by the talos-reconcile and pre-delete unpin Jobs (kubectl). Empty falls back to images/kubectl.tag.                                                                                                                                                                                | `string` | `""`  |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant. | `string` | `""`  |
 
