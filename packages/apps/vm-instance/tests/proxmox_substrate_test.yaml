@@ -59,6 +59,12 @@ kubernetesProvider:
             bridge: vmbr70
             vlan: 101
             ipPool: tenant-pool
+        gpuMappings: |
+          nvidia.com/GA102GL_A10:
+            mapping: a10
+          nvidia.com/display:
+            mapping: igpu
+            primaryGPU: true
         profiles: |
           ubuntu:
             ostype: l26
@@ -269,14 +275,37 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "external access is not available on the proxmox substrate yet"
-  - it: refuses gpus
+  - it: maps gpus to PCI mappings of the cluster
     template: templates/proxmox-vm.yaml
     set:
       gpus:
         - name: nvidia.com/GA102GL_A10
+        - name: nvidia.com/display
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.vmSpec.pciDevices
+          value:
+            - type: mapped
+              deviceID: a10
+              primaryGPU: false
+            - type: mapped
+              deviceID: igpu
+              primaryGPU: true
+  - it: renders no pciDevices without gpus
+    template: templates/proxmox-vm.yaml
+    documentIndex: 2
+    asserts:
+      - notExists:
+          path: spec.vmSpec.pciDevices
+  - it: refuses a gpu the platform has not mapped, naming the mapped ones
+    template: templates/proxmox-vm.yaml
+    set:
+      gpus:
+        - name: amd.com/MI300
     asserts:
       - failedTemplate:
-          errorPattern: "gpus are not available on the proxmox substrate yet"
+          errorPattern: 'gpu "amd.com/MI300" is not one of the GPUs the platform maps on Proxmox \(known: nvidia.com/GA102GL_A10, nvidia.com/display\)'
   - it: refuses an unsupported runStrategy
     template: templates/proxmox-vm.yaml
     set:

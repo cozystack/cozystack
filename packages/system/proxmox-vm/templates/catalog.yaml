@@ -30,4 +30,5 @@ data:
   images: {{ .Values.catalog.images | toYaml | quote }}
   networks: {{ .Values.catalog.networks | toYaml | quote }}
   profiles: {{ $profiles | toYaml | quote }}
+  gpuMappings: {{ .Values.catalog.gpuMappings | default dict | toYaml | quote }}
   instancetypes: {{ .Files.Get "files/instancetypes.yaml" | quote }}

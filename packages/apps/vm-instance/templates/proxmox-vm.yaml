@@ -6,9 +6,6 @@
 {{- if .Values.external }}
 {{-   fail "external access is not available on the proxmox substrate yet: a Proxmox VM is not a pod, so the Service and cozy-proxy path does not reach it. Publishing a VM here goes through the VPC NAT gateway, which is still in review. Set external: false." }}
 {{- end }}
-{{- if .Values.gpus }}
-{{-   fail "gpus are not available on the proxmox substrate yet: a GPU there is a PCI device mapping the platform has to list first. Remove gpus." }}
-{{- end }}
 {{- if .Values.cpuModel }}
 {{-   fail "cpuModel is not available on the proxmox substrate yet; the CPU model comes from the instance type (cx1 and d1 use the host CPU). Remove cpuModel." }}
 {{- end }}
@@ -29,6 +26,7 @@
 {{- end }}
 {{- $sizing := include "virtual-machine.proxmoxSizing" (list $catalog .) | fromJson }}
 {{- $profile := include "virtual-machine.proxmoxProfile" (list $catalog .) | fromJson }}
+{{- $gpus := include "virtual-machine.proxmoxGPUs" (list $catalog .) | fromJsonArray }}
 {{- $disks := include "virtual-machine.proxmoxDisks" . | fromJson }}
 {{- $node := .Values.proxmox.node | default $disks.node | default $catalog.defaultNode }}
 {{- if not $node }}
@@ -159,6 +157,16 @@ spec:
         ipAddressClaimRef:
           name: {{ .claim }}
       {{- end }}
+    {{- with $gpus }}
+    # PCI passthrough by cluster mapping (hostpciN: mapping=<name>); the
+    # mapping itself, and the token's Mapping.Use on it, are the platform's.
+    pciDevices:
+      {{- range . }}
+      - type: mapped
+        deviceID: {{ .mapping | quote }}
+        primaryGPU: {{ .primaryGPU }}
+      {{- end }}
+    {{- end }}
     {{- if $hasCloudInit }}
     cloudInit:
       secretRef:
