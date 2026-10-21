@@ -131,8 +131,10 @@ spec:
                       For example: "sha256:<hex>".
                     type: string
                   sizeBytes:
-                    description: SizeBytes is the size of the artifact in bytes, if
-                      known.
+                    description: |-
+                      SizeBytes is the size of the artifact in bytes, if known. Drivers
+                      leave it unset rather than writing 0 when they cannot measure the
+                      stored size, so an absent value means "unknown", not "empty".
                     format: int64
                     type: integer
                   uri:

@@ -37,7 +37,9 @@ type BackupArtifact struct {
 	// For example: s3://bucket/prefix/file.tar.gz
 	URI string `json:"uri"`
 
-	// SizeBytes is the size of the artifact in bytes, if known.
+	// SizeBytes is the size of the artifact in bytes, if known. Drivers
+	// leave it unset rather than writing 0 when they cannot measure the
+	// stored size, so an absent value means "unknown", not "empty".
 	// +optional
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 
