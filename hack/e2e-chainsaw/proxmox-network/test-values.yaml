@@ -1,0 +1,21 @@
+# Values the suite renders packages/system/proxmox-network with: two zones,
+# three networks, tenant A (the Test's own namespace) in both zones and tenant
+# B in one, the raw bridge/vlan path refused. Every object the chart renders
+# from these carries a zone- or network-specific name, except the policies,
+# which the suite filters or renames before it applies them
+# (chainsaw-test.yaml, render-and-apply).
+zones:
+  - name: pxnet-e2e
+    bridge: vmbr70
+    mtu: 1500
+    uplinkVLAN: 70
+    uplinkBridges: [vmbr0]
+    networks:
+      - {namespace: tenant-e2epxa, name: workers, vlan: 201, addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: 24}
+      - {namespace: tenant-e2epxb, name: workers, vlan: 202, addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: 24, mtu: 1400}
+  - name: pxnet-e2e-second
+    bridge: vmbr71
+    networks:
+      - {namespace: tenant-e2epxa, name: storage, vlan: 301, addresses: ["198.18.3.10-198.18.3.20"], gateway: 198.18.3.1, prefix: 24}
+admission:
+  rawNetworks: Deny
