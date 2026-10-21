@@ -288,9 +288,10 @@ sliced into /24s ever allowed.
 
 {{/*
 Prints "true" when gpu-operator serves GPUs to VirtualMachines: the iaas
-bundle emits it, and its variant is default or vgpu. cozystack-basics renders
-its GPU class and device admission policies on this alone, so a cluster
-without KubeVirt GPUs runs none of them.
+bundle emits it, and its variant is default or vgpu. cozystack-controller
+switches on its GPU paths that watch KubeVirt objects on this, monitoring-agents
+the scrape of their metrics, and cozystack-basics its GPU class and device
+admission policies, so a cluster without KubeVirt GPUs runs none of them.
 */}}
 {{- define "cozystack.platform.gpu.vmEnabled" -}}
 {{- $name := "cozystack.gpu-operator" -}}
@@ -300,4 +301,30 @@ without KubeVirt GPUs runs none of them.
 {{- if and $enabled (has ($bundles.iaas.gpuOperatorVariant | default "default") (list "default" "vgpu")) -}}
 true
 {{- end -}}
+{{- end }}
+
+{{/*
+Validated gpu.resourceNames and gpu.rawResourceNames, as YAML. The controller
+publishes the names comma-joined in its settings ConfigMap, so a name carrying
+a comma would arrive as two names.
+*/}}
+{{- define "cozystack.platform.gpu.settings" -}}
+{{- $gpu := .Values.gpu | default dict -}}
+{{- $raw := $gpu.rawResourceNames | default "allowed" -}}
+{{- if not (and (kindIs "string" $raw) (has $raw (list "allowed" "forbidden"))) -}}
+{{- fail (printf "gpu.rawResourceNames must be \"allowed\" or \"forbidden\", got %v" $raw) -}}
+{{- end -}}
+{{- $names := $gpu.resourceNames | default (list) -}}
+{{- if not (kindIs "slice" $names) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" $names) -}}
+{{- end -}}
+{{- range $names -}}
+{{- if not (kindIs "string" .) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" .) -}}
+{{- end -}}
+{{- if contains "," . -}}
+{{- fail (printf "gpu.resourceNames entry %q contains a comma; the set travels comma-joined and the name would be split" .) -}}
+{{- end -}}
+{{- end -}}
+{{- dict "resourceNames" $names "rawResourceNames" $raw | toYaml -}}
 {{- end }}
