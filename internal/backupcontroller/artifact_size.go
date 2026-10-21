@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -36,7 +37,7 @@ type s3ObjectLister interface {
 // s3Connection is what a driver resolves from its rendered strategy to
 // read the bucket with the same identity the backup was written with.
 type s3Connection struct {
-	// Endpoint is host[:port], without a scheme.
+	// Endpoint is host[:port], without a scheme or a path.
 	Endpoint     string
 	Secure       bool
 	Region       string
@@ -59,6 +60,12 @@ type minioObjectLister struct {
 }
 
 func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
+	// An endpoint behind a path prefix cannot be addressed: minio-go has no
+	// such option, and the SigV4 signature covers the request path, so the
+	// prefix cannot be added below the client either.
+	if strings.Contains(conn.Endpoint, "/") {
+		return nil, fmt.Errorf("endpoint %q has a path, which the S3 client cannot address", conn.Endpoint)
+	}
 	opts := &minio.Options{
 		Creds:  credentials.NewStaticV4(conn.AccessKey, conn.SecretKey, conn.SessionToken),
 		Region: conn.Region,

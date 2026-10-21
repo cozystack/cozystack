@@ -80,3 +80,12 @@ func TestCollectObjects(t *testing.T) {
 		t.Error("listing error was not returned")
 	}
 }
+
+func TestNewMinioObjectLister_RejectsEndpointPath(t *testing.T) {
+	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org/prefix", Secure: true}); err == nil {
+		t.Error("an endpoint with a path was accepted")
+	}
+	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org:9000", Secure: true}); err != nil {
+		t.Errorf("host:port endpoint rejected: %v", err)
+	}
+}

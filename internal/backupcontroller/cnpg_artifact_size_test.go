@@ -141,6 +141,14 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 			},
 			backupID: "id", lister: &fakeS3Lister{objects: []s3ObjectInfo{{Key: "x", Size: 1}}},
 		},
+		"endpointURL with a path": {
+			store: func() *strategyv1alpha1.BarmanObjectStoreTemplate {
+				s := newSizedBarmanObjectStore()
+				s.EndpointURL = "https://s3.example:8443/prefix"
+				return s
+			},
+			backupID: "20261021T100000", lister: &fakeS3Lister{objects: []s3ObjectInfo{{Key: "x", Size: 1}}},
+		},
 	}
 	for name, tc := range unset {
 		t.Run(name+" leaves size unset", func(t *testing.T) {
