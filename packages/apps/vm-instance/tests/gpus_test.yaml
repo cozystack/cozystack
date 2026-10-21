@@ -4,7 +4,9 @@ suite: vm-instance GPU entries
 # Device references are not resolved here: the chart renders only the
 # reference, on the VMI template, and the GPU webhook resolves it when the
 # VMI is created. The reference label is what selects a VMI for that webhook,
-# and the annotation carries the references as one JSON list.
+# and the annotation carries the references as one JSON list. Where the
+# platform does not serve GPUs to VMs no webhook resolves them, so the chart
+# refuses references there rather than boot the VM without its GPUs.
 
 templates:
   - templates/vm.yaml
@@ -13,7 +15,8 @@ release:
   namespace: tenant-test
 set:
   fullnameOverride: test-vm
-  _cluster: {}
+  _cluster:
+    gpu-vm-enabled: "true"
   instanceType: ""
   instanceProfile: ""
   resources:
@@ -181,3 +184,36 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'gpus\[1\]: device train-0 is listed twice'
+
+  - it: refuses a device entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - device: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: device and deviceTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: refuses a deviceTemplate entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+      - deviceTemplate:
+          className: l40s-24c
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: device and deviceTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: keeps name entries where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus[0].deviceName
+          value: nvidia.com/GA102GL_A10

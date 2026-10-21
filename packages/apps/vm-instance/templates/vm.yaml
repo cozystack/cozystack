@@ -70,6 +70,11 @@
 {{- if and $gpuNames $gpuRefs }}
 {{-   fail "gpus: list either only name entries or only device and deviceTemplate entries" }}
 {{- end }}
+{{- /* Without GPUs for VMs no webhook resolves the references, and the VM
+       would boot without its GPUs. */}}
+{{- if and $gpuRefs (ne (toString (index (.Values._cluster | default dict) "gpu-vm-enabled" | default "false")) "true") }}
+{{-   fail "gpus: device and deviceTemplate entries need GPUs for VMs, which this cluster does not serve; use name entries or ask the hoster to enable GPUs" }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
