@@ -188,8 +188,11 @@ func TestRedisS3Trust(t *testing.T) {
 			objs:   []client.Object{caSecret(map[string]string{"bundle.pem": "MAPPED", "ca.crt": "UNMAPPED"})},
 			wantCA: "MAPPED",
 		},
-		"missing CA Secret falls through to skip-verify": {
-			spec:     redisPodSpec("s3-endpoint-ca", "true"),
+		"missing CA Secret falls back to the system roots": {
+			spec: redisPodSpec("s3-endpoint-ca", ""),
+		},
+		"skip-verify without a CA volume": {
+			spec:     redisPodSpec("", "true"),
 			wantSkip: true,
 		},
 		"skip-verify only when it is exactly true": {
@@ -197,6 +200,13 @@ func TestRedisS3Trust(t *testing.T) {
 		},
 		"no pod spec": {},
 	}
+	t.Run("a mounted CA Secret that is gone never turns into skip-verify", func(t *testing.T) {
+		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t)}
+		ca, skip, err := r.redisS3Trust(context.Background(), "tenant", redisPodSpec("s3-endpoint-ca", "true"))
+		if err == nil || skip || ca != nil {
+			t.Errorf("trust = (%q, %v, %v), want an error and no skip-verify", ca, skip, err)
+		}
+	})
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			c := newMariaDBStrategyTestClient(t, tc.objs...)
