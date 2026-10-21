@@ -1,5 +1,5 @@
-# RBAC cannot name the caller's node, so every agent may write every
-# GPUNode; the agent itself writes only its own.
+# RBAC cannot name the caller's node, so this lets every agent write every
+# GPUNode; own-node-policy.yaml narrows writes to the caller's node.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
