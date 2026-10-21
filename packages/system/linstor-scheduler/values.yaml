@@ -9,6 +9,11 @@ linstor-scheduler:
   # node: this buys drain safety, not node-failure HA.
   replicaCount: 2
   linstor:
+    # The storage backend the platform runs, linstor or blockstor. Under
+    # blockstor the endpoint and client Secret come from the LinstorCluster
+    # the linstor package renders (templates/_helpers.tpl), and the two
+    # values below apply only while it runs an in-cluster controller.
+    backend: linstor
     endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
     clientSecret: "linstor-client-tls"
   admission:

@@ -90,7 +90,7 @@ spec:
             name: linstor-gui-nginx
         - name: linstor-client-tls
           secret:
-            secretName: {{ .Values.linstor.clientSecret }}
+            secretName: {{ (include "linstor-gui.apiClient" . | fromYaml).clientSecret }}
             # 0444 so nginx (UID 101) can read the mTLS client keypair;
             # the secret volume is pod-local, not a broader disclosure.
             defaultMode: 0444

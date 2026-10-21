@@ -1,0 +1,118 @@
+suite: the LINSTOR API endpoint follows the backend
+
+# Under blockstor the linstor package, not this chart or the platform, knows
+# where the API is: it writes the URL and the client Secret into the
+# LinstorCluster that points linstor-csi there. These cases feed that object
+# through lookup.
+templates:
+  - templates/configmap-nginx.yaml
+  - templates/deployment.yaml
+release:
+  name: linstor-gui
+  namespace: cozy-linstor
+tests:
+  - it: stays on the in-cluster controller under linstor
+    asserts:
+      - template: templates/configmap-nginx.yaml
+        matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_pass https://linstor-controller.cozy-linstor.svc:3371;"
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: linstor-client-tls
+            secret:
+              secretName: linstor-client-tls
+              defaultMode: 0444
+
+  - it: follows the external controller of the LinstorCluster under blockstor
+    set:
+      linstor.backend: blockstor
+    kubernetesProvider:
+      scheme: &scheme
+        "piraeus.io/v1/LinstorCluster":
+          gvr: {group: "piraeus.io", version: "v1", resource: "linstorclusters"}
+          namespaced: false
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec:
+            externalController:
+              url: https://api.example.svc:3371
+            apiTLS:
+              clientSecretName: example-client-tls
+    asserts:
+      - template: templates/configmap-nginx.yaml
+        matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_pass https://api.example.svc:3371;"
+      - template: templates/configmap-nginx.yaml
+        matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_ssl_name         api.example.svc;"
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.volumes
+          content:
+            name: linstor-client-tls
+            secret:
+              secretName: example-client-tls
+              defaultMode: 0444
+
+  - it: takes piraeus's default client Secret when the LinstorCluster names none
+    set:
+      linstor.backend: blockstor
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec:
+            externalController:
+              url: https://api.example.svc:3371
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: linstor-client-tls
+            secret:
+              secretName: linstor-client-tls
+              defaultMode: 0444
+
+  # While a LinstorCluster still runs its own controller under blockstor,
+  # that controller is the API linstor-csi uses, so this chart stays on it.
+  - it: keeps the values while the LinstorCluster runs an in-cluster controller
+    set:
+      linstor.backend: blockstor
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: LinstorCluster
+          apiVersion: piraeus.io/v1
+          metadata: {name: linstorcluster}
+          spec: {}
+    template: templates/configmap-nginx.yaml
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_pass https://linstor-controller.cozy-linstor.svc:3371;"
+
+  - it: refuses blockstor when no LinstorCluster tells it where the API is
+    set:
+      linstor.backend: blockstor
+    template: templates/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "linstor.backend is blockstor.*the cluster has 0 LinstorClusters"
+
+  - it: refuses an unknown backend
+    set:
+      linstor.backend: blockstore
+    template: templates/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor.backend must be "linstor" or "blockstor", got "blockstore"'

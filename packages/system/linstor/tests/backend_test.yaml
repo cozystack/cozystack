@@ -1,0 +1,178 @@
+suite: storage backend selection
+
+# The backend is opt-in and defaults to LINSTOR. That default is what every
+# existing cluster runs, so a change that quietly flipped it would swap the
+# storage control plane under live data on the next reconcile. These tests
+# pin the default and prove each backend renders only its own control plane.
+
+release:
+  name: linstor
+  namespace: cozy-linstor
+
+tests:
+  - it: "defaults to the LINSTOR backend"
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: LinstorCluster
+      # The operator runs its own in-cluster controller: no external URL.
+      - notExists:
+          path: spec.externalController
+
+  - it: "renders no blockstor control plane by default"
+    templates:
+      - templates/blockstor-controller.yaml
+      - templates/blockstor-apiserver.yaml
+      - templates/blockstor-satellite.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "renders no blockstor CRDs by default"
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # piraeus still runs a linstor-satellite pod per node in external mode, so
+  # what it runs is pinned the same way under either backend: cozystack's
+  # image, TLS, limits and host networking.
+  - it: "pins the piraeus satellite under the blockstor backend"
+    set:
+      backend: blockstor
+      piraeusServer.image.repository: example.org/piraeus-server
+      piraeusServer.image.tag: pinned
+    templates:
+      - templates/satellites-cozy.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.podTemplate.spec.hostNetwork
+          value: true
+      - equal:
+          path: spec.internalTLS.certManager.name
+          value: linstor-internal-ca
+      - equal:
+          path: spec.podTemplate.spec.containers[0].image
+          value: example.org/piraeus-server:pinned
+
+  - it: "issues the satellite's internal CA under the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/linstor-internal-tls.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: kind
+          value: Issuer
+        documentIndex: 1
+
+  # The plunger runs drbdadm against the node's DRBD resources on its own
+  # schedule. Under blockstor those belong to blockstor-satellite alone, so the
+  # plunger stays with the LINSTOR backend.
+  - it: "renders no plunger on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-plunger.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The Talos patch is NOT one of those. piraeus-operator still creates
+  # linstor-satellite.<node> DaemonSets in external mode, and on Talos
+  # they wedge at Init:0/3 without it — the hostPath /run/systemd/system
+  # does not exist there — which then churns linstor-csi-node and blocks
+  # every PVC attach while every HelmRelease still reports Ready.
+  - it: "patches the satellite for Talos under both backends"
+    set:
+      backend: blockstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+
+  - it: "patches the satellite for Talos on the LINSTOR backend too"
+    set:
+      backend: linstor
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: cozystack-talos
+
+  - it: "ships the blockstor CRDs on the blockstor backend"
+    set:
+      backend: blockstor
+    templates:
+      - templates/crds/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 8
+      - isKind:
+          of: CustomResourceDefinition
+
+  # A value arriving outside the platform chart's own check, a hand-set
+  # component value for one, rendered some objects of each backend and
+  # exited 0.
+  - it: fails the render on an unrecognised backend
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blokstor
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: backend must be "linstor" or "blockstor", got "blokstor"'
+
+  - it: accepts the blockstor backend
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # drbd-reactor in the piraeus satellite pod reads DRBD state from the kernel,
+  # which is the same under either control plane, so its metrics and the alerts
+  # built on them stay. The controller scrape targets the Java controller, which
+  # blockstor does not run.
+  - it: "keeps scraping the satellites under the blockstor backend"
+    set:
+      backend: blockstor
+    capabilities:
+      apiVersions:
+        - operator.victoriametrics.com/v1beta1
+    templates:
+      - templates/podscrape.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: linstor-satellite
+
+  # The guard is the only check that reaches the default value through the
+  # whole chart; every other default test renders named templates.
+  - it: accepts the default backend
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: linstor
+    asserts:
+      - hasDocuments:
+          count: 0

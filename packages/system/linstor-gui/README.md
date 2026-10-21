@@ -60,5 +60,6 @@ then open <http://localhost:3373>.
 
 | Name                    | Description                                                                                                                          | Value                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `linstor.backend`       | Storage backend the platform runs, `linstor` or `blockstor`. Under `blockstor` the endpoint and client Secret are read from the LinstorCluster the `linstor` package renders, and the two values below apply only while it runs an in-cluster controller. | `linstor`                                                |
 | `linstor.endpoint`      | In-cluster URL of the LINSTOR controller REST API (HTTPS, mTLS)                                                                      | `https://linstor-controller.cozy-linstor.svc:3371`       |
 | `linstor.clientSecret`  | Kubernetes Secret with `tls.crt`, `tls.key`, `ca.crt` used as the mTLS client certificate against the LINSTOR controller. Created by the `linstor` package. | `linstor-client-tls`                                     |

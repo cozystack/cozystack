@@ -12,8 +12,10 @@ image:
 ## @param replicas Number of linstor-gui replicas
 replicas: 1
 ## @section LINSTOR controller connection
+## @param linstor.backend Storage backend the platform runs, `linstor` or `blockstor`. Under `blockstor` the endpoint and client Secret are read from the LinstorCluster the `linstor` package renders, and the two values below apply only while it runs an in-cluster controller.
 ## @param linstor.endpoint In-cluster URL of the LINSTOR controller REST API (HTTPS, mTLS)
 ## @param linstor.clientSecret Kubernetes Secret with `tls.crt`, `tls.key`, `ca.crt` used as the mTLS client certificate against the LINSTOR controller. Created by the `linstor` package.
 linstor:
+  backend: "linstor"
   endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
   clientSecret: "linstor-client-tls"

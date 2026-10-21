@@ -1,0 +1,98 @@
+suite: storage backend change guard (lookup of the live cozystack.linstor Package)
+
+# The backends keep their state apart, so switching one under a cluster that
+# already has volumes strands them. The guard reads the live Package and is
+# inert where lookup returns nothing (helm template, dry-run, fresh install).
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+set:
+  bundles:
+    system:
+      enabled: true
+      variant: isp-full
+tests:
+  - it: refuses linstor -> blockstor on a live LINSTOR cluster and names the acknowledge value
+    set:
+      storage:
+        backend: blockstor
+    kubernetesProvider:
+      scheme: &scheme
+        "cozystack.io/v1alpha1/Package":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "packages"}
+          namespaced: false
+      objects: &liveLinstor
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.linstor}
+          spec: {variant: default}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs the "linstor" storage backend and this render would switch it to "blockstor".*storage.acknowledgeBackendChange: "blockstor"'
+
+  - it: refuses blockstor -> linstor on a live blockstor cluster
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.linstor}
+          spec:
+            variant: default
+            components:
+              linstor:
+                values: {backend: blockstor}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'runs the "blockstor" storage backend and this render would switch it to "linstor"'
+
+  - it: renders the switch once it is acknowledged
+    set:
+      storage:
+        backend: blockstor
+        acknowledgeBackendChange: blockstor
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveLinstor
+    asserts:
+      - equal:
+          path: spec.components.linstor.values.backend
+          value: blockstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
+
+  # An acknowledgement left set from an earlier switch does not cover the
+  # opposite one.
+  - it: does not take an acknowledgement for another target
+    set:
+      storage:
+        backend: blockstor
+        acknowledgeBackendChange: linstor
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveLinstor
+    asserts:
+      - failedTemplate:
+          errorPattern: 'would switch it to "blockstor"'
+
+  - it: renders an unchanged backend on a live cluster
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *liveLinstor
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: renders blockstor on a fresh install
+    set:
+      storage:
+        backend: blockstor
+    asserts:
+      - equal:
+          path: spec.components.linstor.values.backend
+          value: blockstor
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor
