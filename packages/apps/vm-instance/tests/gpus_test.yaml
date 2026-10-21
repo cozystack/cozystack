@@ -1,0 +1,219 @@
+suite: vm-instance GPU entries
+
+# A gpus entry is a raw resource name, a held GPUDevice or a deviceTemplate.
+# Device references are not resolved here: the chart renders only the
+# reference, on the VMI template, and the GPU webhook resolves it when the
+# VMI is created. The reference label is what selects a VMI for that webhook,
+# and the annotation carries the references as one JSON list. Where the
+# platform does not serve GPUs to VMs no webhook resolves them, so the chart
+# refuses references there rather than boot the VM without its GPUs.
+
+templates:
+  - templates/vm.yaml
+release:
+  name: test-vm
+  namespace: tenant-test
+set:
+  fullnameOverride: test-vm
+  _cluster:
+    gpu-vm-enabled: "true"
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 8Gi
+tests:
+  - it: renders name entries as KubeVirt gpus with no reference
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+          - name: gpu1
+            deviceName: nvidia.com/GA102GL_A10
+          - name: gpu2
+            deviceName: nvidia.com/GA102GL_A10
+      - notExists:
+          path: spec.template.metadata.labels["gpu.cozystack.io/device-reference"]
+      - notExists:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/devices"]
+
+  - it: treats a zero-valued deviceTemplate next to a name as unset
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+        deviceTemplate:
+          className: ""
+          count: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+          - name: gpu1
+            deviceName: nvidia.com/GA102GL_A10
+
+  - it: renders device entries as a reference only
+    set:
+      gpus:
+      - device: train-0
+      - device: train-1
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["gpu.cozystack.io/device-reference"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/devices"]
+          value: '[{"device":"train-0"},{"device":"train-1"}]'
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: renders a deviceTemplate entry with its class and count
+    set:
+      gpus:
+      - deviceTemplate:
+          className: l40s-24c
+          count: 2
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["gpu.cozystack.io/device-reference"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/devices"]
+          value: '[{"deviceTemplate":{"className":"l40s-24c","count":2}}]'
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: keeps the order of mixed device and deviceTemplate entries
+    set:
+      gpus:
+      - deviceTemplate:
+          className: l40s-24c
+          count: 1
+      - device: train-0
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/devices"]
+          value: '[{"deviceTemplate":{"className":"l40s-24c","count":1}},{"device":"train-0"}]'
+
+  - it: keeps the pod-template labels the chart already renders next to the reference
+    set:
+      gpus:
+      - device: train-0
+    asserts:
+      - exists:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+      - equal:
+          path: spec.template.metadata.annotations["kubevirt.io/allow-pod-bridge-network-live-migration"]
+          value: "true"
+
+  - it: renders no reference without gpus
+    asserts:
+      - notExists:
+          path: spec.template.metadata.labels["gpu.cozystack.io/device-reference"]
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: refuses an entry with both name and device
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+        device: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, device or deviceTemplate'
+
+  - it: refuses an entry with both device and deviceTemplate
+    set:
+      gpus:
+      - device: train-0
+        deviceTemplate:
+          className: l40s-24c
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, device or deviceTemplate'
+
+  - it: refuses an empty entry
+    set:
+      gpus:
+      - {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, device or deviceTemplate'
+
+  - it: refuses names next to device references
+    set:
+      gpus:
+      - device: train-0
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: list either only name entries or only device and deviceTemplate entries'
+
+  # The schema requires className and an integer count; it allows an empty
+  # name and a count below 1.
+  - it: refuses a deviceTemplate with an empty className
+    set:
+      gpus:
+      - deviceTemplate:
+          className: ""
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\].deviceTemplate needs className'
+
+  - it: refuses a deviceTemplate count of zero
+    set:
+      gpus:
+      - deviceTemplate:
+          className: l40s-24c
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\].deviceTemplate.count must be a whole number of at least 1'
+
+  - it: refuses the same device twice
+    set:
+      gpus:
+      - device: train-0
+      - device: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[1\]: device train-0 is listed twice'
+
+  - it: refuses a device entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - device: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: device and deviceTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: refuses a deviceTemplate entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+      - deviceTemplate:
+          className: l40s-24c
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: device and deviceTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: keeps name entries where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus[0].deviceName
+          value: nvidia.com/GA102GL_A10

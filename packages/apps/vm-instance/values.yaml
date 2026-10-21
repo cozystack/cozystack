@@ -15,9 +15,17 @@
 ## @field {string} [name] - Network attachment name.
 ## @x-cozystack-options {source: network}
 
-## @typedef {struct} GPU - GPU device configuration.
-## @field {string} name - The name of the GPU resource to attach.
+## @typedef {struct} GPUDeviceTemplate - A GPU device ordered when the VM starts and released when it stops.
+## @field {string} className - GPUClass to order the device from.
+## @x-cozystack-options {source: gpuclass}
+## @field {int} count - GPUs of the class, all on one node.
+
+## @typedef {struct} GPU - GPU device configuration. Set exactly one of name, device and deviceTemplate; a list holds either only name entries or only device and deviceTemplate entries.
+## @field {string} [name] - Resource name of the GPU to request directly.
 ## @x-cozystack-options {source: gpu}
+## @field {string} [device] - GPUDevice in this namespace to attach.
+## @x-cozystack-options {source: gpudevice}
+## @field {GPUDeviceTemplate} [deviceTemplate] - GPU device to order for this VM while it runs.
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
 ## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
@@ -82,7 +90,10 @@ subnets: []
 gpus: []
 ## Example:
 ## gpus:
-## - name: nvidia.com/GA102GL_A10
+## - device: train-0
+## - deviceTemplate:
+##     className: l40s-24c
+##     count: 1
 
 ## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
 cpuModel: ""
