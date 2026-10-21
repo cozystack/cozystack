@@ -21,7 +21,8 @@ load test_helper
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 # The fixture's release assets in upload order, with two cozypkg tarballs where
-# a release has one per platform.
+# a release has one per platform, and the image list and image SBOM archive
+# prepare-release writes before the upload.
 assets() {
     printf '%s\n' \
         cozystack-crds.yaml \
@@ -40,7 +41,9 @@ assets() {
         cozypkg-darwin-arm64.tar.gz \
         cozypkg-linux-amd64.tar.gz \
         cozypkg-checksums.txt \
-        openapi.json
+        openapi.json \
+        cozystack-images.txt \
+        cozystack-images-sbom.tar.gz
 }
 
 # What hack/upload-assets.sh uploads: the assets, then the three files
