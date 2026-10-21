@@ -146,12 +146,36 @@ func covered(devices []*gpuv1alpha1.GPUDevice, classes map[string]Class, keep fu
 	return out
 }
 
-// LauncherVMI returns the KubeVirt VMI that owns a pod.
-func LauncherVMI(p *corev1.Pod) (types.NamespacedName, bool) {
-	for _, ref := range p.OwnerReferences {
-		if ref.Kind == "VirtualMachineInstance" && ref.APIVersion == "kubevirt.io/v1" {
-			return types.NamespacedName{Namespace: p.Namespace, Name: ref.Name}, true
-		}
+// ActivePods is a VMI's status.activePods: the UIDs of the pods KubeVirt
+// runs it in.
+func ActivePods(vmi *unstructured.Unstructured) sets.Set[types.UID] {
+	out := sets.New[types.UID]()
+	active, _, _ := unstructured.NestedMap(vmi.Object, "status", "activePods")
+	for uid := range active {
+		out.Insert(types.UID(uid))
 	}
-	return types.NamespacedName{}, false
+	return out
+}
+
+// LauncherVMI returns the VMI a pod is the launcher of: the KubeVirt VMI
+// its owner reference names, and only when that VMI lists the pod in
+// status.activePods. Whoever creates a pod sets its owner references and
+// labels, while no tenant role can write a VMI's status. activePods returns
+// the named VMI's active pods, nil when there is no such VMI.
+func LauncherVMI(p *corev1.Pod, activePods func(types.NamespacedName) (sets.Set[types.UID], error)) (types.NamespacedName, bool, error) {
+	for _, ref := range p.OwnerReferences {
+		if ref.Kind != "VirtualMachineInstance" || ref.APIVersion != "kubevirt.io/v1" {
+			continue
+		}
+		k := types.NamespacedName{Namespace: p.Namespace, Name: ref.Name}
+		active, err := activePods(k)
+		if err != nil {
+			return types.NamespacedName{}, false, err
+		}
+		if !active.Has(p.UID) {
+			return types.NamespacedName{}, false, nil
+		}
+		return k, true, nil
+	}
+	return types.NamespacedName{}, false, nil
 }

@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/dynamic"
 
@@ -27,6 +28,7 @@ var (
 	gvrGPUDevices = gpuv1alpha1.GroupVersion.WithResource("gpudevices")
 	gvrNamespaces = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	gvrPods       = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+	gvrVMIs       = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachineinstances"}
 )
 
 // gpuClassProvider is the GPU catalog: every class that takes orders, with
@@ -154,7 +156,23 @@ func budgetSnapshot(ctx context.Context, dyn dynamic.Interface, namespace string
 	covered := model.CoveredForBudget(ptrs, snap.Classes)
 	for i := range pods {
 		p := &pods[i]
-		vmi, _ := model.LauncherVMI(p)
+		// Only a pod that requests a raw name can need its VMI read.
+		if _, ok := model.PodFrom(p, rawNames, nil); !ok {
+			continue
+		}
+		vmi, _, err := model.LauncherVMI(p, func(k types.NamespacedName) (sets.Set[types.UID], error) {
+			obj, err := dyn.Resource(gvrVMIs).Namespace(k.Namespace).Get(ctx, k.Name, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			return model.ActivePods(obj), nil
+		})
+		if err != nil {
+			return nil, err
+		}
 		if mp, ok := model.PodFrom(p, rawNames, covered[vmi]); ok {
 			snap.Pods = append(snap.Pods, mp)
 		}

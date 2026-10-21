@@ -70,6 +70,22 @@ func TestPodOfAnAttachedDeviceIsNotCountedTwice(t *testing.T) {
 	expectPlacement(t, e.device("order"), gpuv1alpha1.GPUDeviceBound, "n1")
 }
 
+// A pod that names a VMI in its owner reference, but that the VMI does not
+// list as active, is not that VMI's launcher: its GPUs count as raw-name
+// usage, not as the units the VMI's devices hold.
+func TestPodNamingAVMIItIsNotActiveInCountsAsRawUsage(t *testing.T) {
+	e := newEnv(t,
+		class("l40s", rnL40S),
+		node("n1", map[string]int64{rnL40S: 2}),
+		device("running", "l40s", 1, bound("n1"), attached("vm1")),
+		vmiObj("vm1", "Running", "n1", ""),
+		launcherPod("forged", "vm1", "n1", map[string]int64{rnL40S: 1}),
+		device("order", "l40s", 1),
+	)
+	e.pass()
+	expectPlacement(t, e.device("order"), gpuv1alpha1.GPUDevicePending, "")
+}
+
 func TestConcurrentOrdersForTheLastUnitBindOnlyOne(t *testing.T) {
 	e := newEnv(t,
 		class("l40s", rnL40S),

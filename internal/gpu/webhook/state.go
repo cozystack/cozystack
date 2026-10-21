@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -205,11 +206,32 @@ func (h *Handler) rawPods(ctx context.Context, s *model.Snapshot, devices []gpuv
 		}
 		for i := range pods.Items {
 			p := &pods.Items[i]
-			vmi, _ := model.LauncherVMI(p)
+			vmi, _, err := model.LauncherVMI(p, h.activePods(ctx))
+			if err != nil {
+				return nil, err
+			}
 			if mp, ok := model.PodFrom(p, names, covered[vmi]); ok {
 				out = append(out, mp)
 			}
 		}
 	}
 	return out, nil
+}
+
+// activePods reads a VMI's active pods through the cache, which every
+// replica warms with a VMI informer once KubeVirt serves the kind; nil for
+// a VMI that does not exist or a kind not served yet.
+func (h *Handler) activePods(ctx context.Context) func(types.NamespacedName) (sets.Set[types.UID], error) {
+	return func(k types.NamespacedName) (sets.Set[types.UID], error) {
+		vmi := &unstructured.Unstructured{}
+		vmi.SetGroupVersionKind(vmiGVK)
+		err := h.Cache.Get(ctx, k, vmi)
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get VMI %s: %w", k, err)
+		}
+		return model.ActivePods(vmi), nil
+	}
 }

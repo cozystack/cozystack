@@ -42,6 +42,7 @@ func listKinds() map[schema.GroupVersionResource]string {
 		gvrGPUClasses:   "GPUClassList",
 		gvrGPUDevices:   "GPUDeviceList",
 		gvrNamespaces:   "NamespaceList",
+		gvrVMIs:         "VirtualMachineInstanceList",
 		gvrPods:         "PodList",
 	}
 }

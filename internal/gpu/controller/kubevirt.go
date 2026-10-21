@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/cozystack/cozystack/internal/gpu"
 	"github.com/cozystack/cozystack/internal/gpu/model"
@@ -39,7 +40,8 @@ type vmi struct {
 	Phase           string
 	NodeName        string
 	// VM is the controlling VirtualMachine, "" for a VMI created without one.
-	VM string
+	VM         string
+	ActivePods sets.Set[types.UID]
 }
 
 // final reports a VMI that no longer runs its domain. A deletion timestamp
@@ -54,7 +56,8 @@ func (v *vmi) unscheduled() bool {
 }
 
 func vmiFrom(u *unstructured.Unstructured) *vmi {
-	out := &vmi{Name: u.GetName(), Namespace: u.GetNamespace(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion()}
+	out := &vmi{Name: u.GetName(), Namespace: u.GetNamespace(), UID: u.GetUID(), ResourceVersion: u.GetResourceVersion(),
+		ActivePods: model.ActivePods(u)}
 	out.Phase, _, _ = unstructured.NestedString(u.Object, "status", "phase")
 	out.NodeName, _, _ = unstructured.NestedString(u.Object, "status", "nodeName")
 	for _, ref := range u.GetOwnerReferences() {

@@ -304,8 +304,12 @@ func vmiObj(name, phase, nodeName, ownerVM string) *unstructured.Unstructured {
 	if nodeName != "" {
 		_ = unstructured.SetNestedField(u.Object, nodeName, "status", "nodeName")
 	}
+	// KubeVirt lists the launcher pod launcherPod("virt-launcher-<name>") makes.
+	_ = unstructured.SetNestedMap(u.Object, map[string]any{string(podUID("virt-launcher-" + name)): nodeName}, "status", "activePods")
 	return u
 }
+
+func podUID(name string) types.UID { return types.UID("pod-uid-" + name) }
 
 func vmObj(name, runStrategy string, devices ...string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{Object: map[string]any{}}
@@ -339,7 +343,7 @@ func kubeVirt(permitted ...string) *unstructured.Unstructured {
 
 func launcherPod(name, vmi, nodeName string, units map[string]int64) *corev1.Pod {
 	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: podUID(name)},
 		Spec: corev1.PodSpec{NodeName: nodeName, Containers: []corev1.Container{{
 			Name: "compute", Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{}, Requests: corev1.ResourceList{}},
 		}}},

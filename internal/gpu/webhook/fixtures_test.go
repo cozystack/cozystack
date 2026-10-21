@@ -64,6 +64,8 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		}
 	}
 	s.AddKnownTypeWithName(kubeVirtGVK, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(vmiGVK, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(vmiGVK.GroupVersion().WithKind(vmiGVK.Kind+"List"), &unstructured.UnstructuredList{})
 	s.AddKnownTypeWithName(kubeVirtGVK.GroupVersion().WithKind(kubeVirtGVK.Kind+"List"), &unstructured.UnstructuredList{})
 	return s
 }
@@ -408,3 +410,17 @@ func patchJSON(doc []byte, resp admission.Response) ([]byte, error) {
 }
 
 func resourceQuantity(n int64) *resource.Quantity { return resource.NewQuantity(n, resource.DecimalSI) }
+
+// activeVMI is a VMI in the tenant namespace that lists pods as active.
+func activeVMI(name string, pods ...*corev1.Pod) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{}}
+	u.SetGroupVersionKind(vmiGVK)
+	u.SetNamespace(tenantNS)
+	u.SetName(name)
+	active := map[string]any{}
+	for _, p := range pods {
+		active[string(p.UID)] = p.Spec.NodeName
+	}
+	_ = unstructured.SetNestedMap(u.Object, active, "status", "activePods")
+	return u
+}

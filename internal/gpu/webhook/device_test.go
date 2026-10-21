@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
@@ -39,6 +40,7 @@ func order(className string, count int32) *gpuv1alpha1.GPUDevice {
 func TestValidateDevice(t *testing.T) {
 	deletedClass := class("gone", gpuv1alpha1.GPUModePassthrough, h100RN)
 	deleting(deletedClass)
+	launcherVMA := launcherOf(rawPod("virt-launcher-vm-a", tenantNS, h100RN, 1), "vm-a")
 	pinned := order("h100", 1)
 	pinned.Labels = map[string]string{gpu.LabelTemplateDevice: gpu.LabelValueTrue}
 
@@ -130,7 +132,8 @@ func TestValidateDevice(t *testing.T) {
 				tenantRelease(t, tenantNS, map[string]string{h100RN: "2", "gpu.cozystack.io/total": "4"}),
 				namespace(tenantNS, false),
 				attached(device("held", "h100", 1, gpuv1alpha1.GPUDeviceAttached, nodeA), "vm-a"),
-				launcherOf(rawPod("virt-launcher-vm-a", tenantNS, h100RN, 1), "vm-a"),
+				launcherVMA,
+				activeVMI("vm-a", launcherVMA),
 			},
 			order: order("h100", 1),
 		},
@@ -143,9 +146,25 @@ func TestValidateDevice(t *testing.T) {
 				tenantRelease(t, tenantNS, map[string]string{h100RN: "2", "gpu.cozystack.io/total": "4"}),
 				namespace(tenantNS, false),
 				attached(device("lost", "h100", 1, gpuv1alpha1.GPUDeviceLost, nodeA), "vm-a"),
-				launcherOf(rawPod("virt-launcher-vm-a", tenantNS, h100RN, 1), "vm-a"),
+				launcherVMA,
+				activeVMI("vm-a", launcherVMA),
 			},
 			order: order("h100", 1),
+		},
+		{
+			// The pod names vm-a, but vm-a does not list it as active, so
+			// its units are raw-name usage the device does not cover.
+			name: "a raw key counts a pod its named VMI does not list as active",
+			objs: []client.Object{
+				class("h100", gpuv1alpha1.GPUModePassthrough, h100RN),
+				tenantRelease(t, tenantNS, map[string]string{h100RN: "2", "gpu.cozystack.io/total": "4"}),
+				namespace(tenantNS, false),
+				attached(device("held", "h100", 1, gpuv1alpha1.GPUDeviceAttached, nodeA), "vm-a"),
+				launcherVMA,
+				activeVMI("vm-a"),
+			},
+			order:  order("h100", 1),
+			denied: []string{"budget " + h100RN + " of tenant tenant-acme is 2 and 2 is in use"},
 		},
 		{
 			name:   "a vGPU class needs the entitlement",
@@ -189,6 +208,7 @@ func rawPod(name, ns, rn string, units int64) *corev1.Pod {
 }
 
 func launcherOf(p *corev1.Pod, vmi string) *corev1.Pod {
+	p.UID = types.UID("uid-" + p.Name)
 	p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: vmi, UID: "uid"}}
 	return p
 }

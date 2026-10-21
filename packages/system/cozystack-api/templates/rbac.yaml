@@ -90,6 +90,11 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list"]
+# The VMI a counted pod names: only a pod the VMI lists as active is its
+# launcher, whose GPUs the VMI's devices already cover.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["get"]
 # The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
 # storage CRUDs these objects with the cozystack-api ServiceAccount.
 - apiGroups: ["cilium.io"]

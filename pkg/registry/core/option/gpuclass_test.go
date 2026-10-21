@@ -85,7 +85,7 @@ func tenantNamespace(t *testing.T, name string, entitled bool) *unstructured.Uns
 func gpuPod(t *testing.T, namespace, name, resourceName string, units int64, vmi string) *unstructured.Unstructured {
 	t.Helper()
 	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, UID: k8stypes.UID("pod-uid-" + name)},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "compute",
 			Resources: corev1.ResourceRequirements{
@@ -99,6 +99,20 @@ func gpuPod(t *testing.T, namespace, name, resourceName string, units int64, vmi
 		p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: vmi, UID: "uid-" + k8stypes.UID(vmi)}}
 	}
 	return toUnstructured(t, gvrPods.GroupVersion().WithKind("Pod"), p)
+}
+
+// gpuVMI is a VMI that lists the gpuPod pods named launchers as active.
+func gpuVMI(namespace, name string, launchers ...string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{}}
+	u.SetGroupVersionKind(gvrVMIs.GroupVersion().WithKind("VirtualMachineInstance"))
+	u.SetNamespace(namespace)
+	u.SetName(name)
+	active := map[string]any{}
+	for _, l := range launchers {
+		active["pod-uid-"+l] = "node-a"
+	}
+	_ = unstructured.SetNestedMap(u.Object, active, "status", "activePods")
+	return u
 }
 
 func newGPUDyn(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
@@ -208,20 +222,25 @@ func TestGPUClassProviderCountsRawNameUsage(t *testing.T) {
 		// The caller's VM: its device covers both units its pod requests.
 		gpuDevice(t, "tenant-foo-baz", "train", "a100", 2, gpuv1alpha1.GPUDeviceAttached, "vm1"),
 		gpuPod(t, "tenant-foo-baz", "virt-launcher-vm1", "nvidia.com/GA100", 2, "vm1"),
+		gpuVMI("tenant-foo-baz", "vm1", "virt-launcher-vm1"),
 		// A raw-name VM of a sibling.
 		gpuPod(t, "tenant-foo-bar", "virt-launcher-raw", "nvidia.com/GA100", 1, "raw"),
 		// A Lost device still counts against budgets, so it covers its VMI's
 		// pod like any attached device.
 		gpuDevice(t, "tenant-foo-bar", "lost", "a100", 1, gpuv1alpha1.GPUDeviceLost, "vm3"),
 		gpuPod(t, "tenant-foo-bar", "virt-launcher-vm3", "nvidia.com/GA100", 1, "vm3"),
+		gpuVMI("tenant-foo-bar", "vm3", "virt-launcher-vm3"),
+		// A pod naming vm3 that vm3 does not list as active is raw-name
+		// usage, whatever its owner reference says.
+		gpuPod(t, "tenant-foo-bar", "forged", "nvidia.com/GA100", 1, "vm3"),
 		// Outside foo's subtree.
 		gpuPod(t, "tenant-other", "virt-launcher-x", "nvidia.com/GA100", 3, "x"),
 	)
 	items := gpuClassItems(t, dyn, "tenant-foo-baz")
 
-	// 10 - 3 (the devices) - 1 (the sibling's raw-name pod); the covered
-	// virt-launcher pods add nothing.
-	wantInt(t, "a100 remainingBudget", items["a100"].RemainingBudget, ptr.To[int64](6))
+	// 10 - 3 (the devices) - 1 (the sibling's raw-name pod) - 1 (the pod
+	// vm3 does not list); the covered virt-launcher pods add nothing.
+	wantInt(t, "a100 remainingBudget", items["a100"].RemainingBudget, ptr.To[int64](5))
 
 	var listed []string
 	for _, a := range dyn.Actions() {
@@ -275,6 +294,7 @@ func TestGPUClassProviderFailsWhenBudgetsAreUnreadable(t *testing.T) {
 		{"get", "namespaces"},
 		{"list", "namespaces"},
 		{"list", "pods"},
+		{"get", "virtualmachineinstances"},
 	} {
 		t.Run(tc.verb+" "+tc.resource, func(t *testing.T) {
 			dyn := newGPUDyn(
@@ -292,4 +312,21 @@ func TestGPUClassProviderFailsWhenBudgetsAreUnreadable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A pod that requests no raw GPU name cannot change a raw-key count, so its
+// VMI is never read: with a raw key on the root that would be one read per
+// virt-launcher pod of the cluster.
+func TestGPUClassProviderReadsNoVMIOfAPodWithoutRawNames(t *testing.T) {
+	dyn := newGPUDyn(
+		tenantNamespace(t, "tenant-foo", false),
+		gpuClass(t, "a100", gpuv1alpha1.GPUModePassthrough, "nvidia.com/GA100", nil),
+		tenantRelease(t, "tenant-root", "tenant-foo", map[string]any{"gpu.cozystack.io/total": int64(2), "nvidia.com/GA100": int64(2)}),
+		gpuPod(t, "tenant-foo", "virt-launcher-cpu-only", "cpu", 1, "cpu-only"),
+	)
+	dyn.PrependReactor("get", "virtualmachineinstances", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("virtualmachineinstances must not be read")
+	})
+	items := gpuClassItems(t, dyn, "tenant-foo")
+	wantInt(t, "a100 remainingBudget", items["a100"].RemainingBudget, ptr.To[int64](2))
 }

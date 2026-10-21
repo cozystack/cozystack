@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/wait"
 	toolscache "k8s.io/client-go/tools/cache"
@@ -45,6 +46,7 @@ import (
 	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/gpu"
+	"github.com/cozystack/cozystack/internal/gpu/model"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 )
 
@@ -906,16 +908,23 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 // are in the usage records: its own record covers them while it is Bound or
 // Attached, and the phase table leaves them out of the usage records while
 // it is Lost, so the pod must not report them in either case.
+// Only a pod its VMI lists as active is covered (model.LauncherVMI).
 func (r *WorkloadMonitorReconciler) gpuUnitsCoveredByDevices(ctx context.Context, pod *corev1.Pod) (map[string]int64, error) {
-	vmi := ""
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind == "VirtualMachineInstance" {
-			vmi = ref.Name
+	key, ok, err := model.LauncherVMI(pod, func(k types.NamespacedName) (sets.Set[types.UID], error) {
+		owner := &unstructured.Unstructured{}
+		owner.SetGroupVersionKind(schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"})
+		if err := r.Get(ctx, k, owner); err != nil {
+			if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("get VMI %s: %w", k, err)
 		}
+		return model.ActivePods(owner), nil
+	})
+	if err != nil || !ok {
+		return nil, err
 	}
-	if vmi == "" {
-		return nil, nil
-	}
+	vmi := key.Name
 	devices := &gpuv1alpha1.GPUDeviceList{}
 	if err := r.List(ctx, devices, client.InNamespace(pod.Namespace)); err != nil {
 		return nil, fmt.Errorf("list GPUDevices: %w", err)

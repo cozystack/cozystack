@@ -113,15 +113,42 @@ func TestCoverage(t *testing.T) {
 }
 
 func TestLauncherVMI(t *testing.T) {
-	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-a", OwnerReferences: []metav1.OwnerReference{
+	vm := types.NamespacedName{Namespace: "tenant-a", Name: "vm"}
+	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-a", UID: "pod-uid", OwnerReferences: []metav1.OwnerReference{
 		{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs"},
 		{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: "vm"},
 	}}}
-	if k, ok := LauncherVMI(p); !ok || k != (types.NamespacedName{Namespace: "tenant-a", Name: "vm"}) {
-		t.Fatalf("LauncherVMI = %v, %v", k, ok)
+	active := func(uids ...types.UID) func(types.NamespacedName) (sets.Set[types.UID], error) {
+		return func(k types.NamespacedName) (sets.Set[types.UID], error) {
+			if k != vm {
+				t.Fatalf("asked for %v", k)
+			}
+			if uids == nil {
+				return nil, nil
+			}
+			return sets.New(uids...), nil
+		}
+	}
+	if k, ok, err := LauncherVMI(p, active("pod-uid")); err != nil || !ok || k != vm {
+		t.Fatalf("an active pod: %v, %v, %v", k, ok, err)
+	}
+	// An owner reference and a label are set by whoever creates the pod.
+	if _, ok, _ := LauncherVMI(p, active("another-pod")); ok {
+		t.Fatal("a pod the VMI does not list is not its launcher")
+	}
+	if _, ok, _ := LauncherVMI(p, active()); ok {
+		t.Fatal("a missing VMI launches nothing")
 	}
 	p.OwnerReferences[1].APIVersion = "example.com/v1"
-	if _, ok := LauncherVMI(p); ok {
+	if _, ok, _ := LauncherVMI(p, active("pod-uid")); ok {
 		t.Fatal("a VirtualMachineInstance kind of another group is not KubeVirt's")
+	}
+}
+
+func TestActivePods(t *testing.T) {
+	vmi := &unstructured.Unstructured{Object: map[string]any{}}
+	_ = unstructured.SetNestedMap(vmi.Object, map[string]any{"pod-a": "node-1", "pod-b": "node-2"}, "status", "activePods")
+	if got := ActivePods(vmi); !got.Equal(sets.New[types.UID]("pod-a", "pod-b")) {
+		t.Fatalf("ActivePods = %v", got)
 	}
 }

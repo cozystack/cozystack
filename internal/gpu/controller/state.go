@@ -329,7 +329,12 @@ func (w *world) buildSnapshot(quotas map[string]corev1.ResourceList, pods []core
 	coveredForCapacity := model.CoveredForCapacity(w.devices, s.Classes)
 	for i := range pods {
 		p := &pods[i]
-		vmi, _ := model.LauncherVMI(p)
+		vmi, _, _ := model.LauncherVMI(p, func(k types.NamespacedName) (sets.Set[types.UID], error) {
+			if v := w.vmis[k]; v != nil {
+				return v.ActivePods, nil
+			}
+			return nil, nil
+		})
 		budget, okBudget := model.PodFrom(p, names, coveredForBudget[vmi])
 		if okBudget {
 			s.Pods = append(s.Pods, budget)
