@@ -50,6 +50,27 @@ function makeClient(printableStatus = "Stopped") {
   return client
 }
 
+const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+
+function makeProxmoxClient(state = "stopped") {
+  const client = new K8sClient()
+  vi.spyOn(client, "list").mockResolvedValue({
+    apiVersion: "proxmox.alperen.cloud/v1alpha1",
+    kind: "VirtualMachineList",
+    metadata: {},
+    items: [
+      {
+        apiVersion: "proxmox.alperen.cloud/v1alpha1",
+        kind: "VirtualMachine",
+        metadata: { name: "vm-instance-demo-vm" },
+        status: { status: { state } },
+      },
+    ],
+  })
+  vi.spyOn(client, "watch").mockReturnValue(() => {})
+  return client
+}
+
 function fieldSelector(client: K8sClient): string | undefined {
   const calls = (client.list as unknown as { mock: { calls: unknown[][] } }).mock.calls
   const search = calls[0]?.[4] as { fieldSelector?: string } | undefined
@@ -135,6 +156,52 @@ describe("VMPowerControls and VncTab agree on the VirtualMachine name", () => {
       <VncTab ad={makeAd("VMInstance", release)} instance={instance} />,
       { client: vncClient },
     )
+    await waitFor(() => expect(vncClient.list).toHaveBeenCalled())
+
+    expect(fieldSelector(pcClient)).toBe(fieldSelector(vncClient))
+  })
+})
+
+describe("VncTab on the Proxmox substrate", () => {
+  it("watches the kubemox VirtualMachine instead of the KubeVirt one", async () => {
+    const client = makeProxmoxClient()
+    renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client,
+    })
+
+    await waitFor(() =>
+      expect(client.list).toHaveBeenCalledWith(
+        "proxmox.alperen.cloud",
+        "v1alpha1",
+        "virtualmachines",
+        "tenant-root",
+        expect.objectContaining({ fieldSelector: "metadata.name=vm-instance-demo-vm" }),
+      ),
+    )
+  })
+
+  it("shows the hypervisor state in the not-running notice", async () => {
+    const client = makeProxmoxClient("stopped")
+    renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client,
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/not running \(status: Stopped\)/i)).toBeInTheDocument(),
+    )
+  })
+
+  it("resolves the same name as VMPowerControls there too", async () => {
+    const pcClient = makeProxmoxClient()
+    renderWithK8sProvider(<VMPowerControls ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client: pcClient,
+    })
+    await waitFor(() => expect(pcClient.list).toHaveBeenCalled())
+
+    const vncClient = makeProxmoxClient()
+    renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client: vncClient,
+    })
     await waitFor(() => expect(vncClient.list).toHaveBeenCalled())
 
     expect(fieldSelector(pcClient)).toBe(fieldSelector(vncClient))

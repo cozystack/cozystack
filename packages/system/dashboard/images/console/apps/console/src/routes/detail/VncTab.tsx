@@ -6,6 +6,13 @@ import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { planKeystrokes } from "../../lib/vnc-keymap.ts"
 import {
+  consoleSocketPath,
+  vmConsoleApi,
+  vmPowerStatus,
+  vmSubstrate,
+  type VMStatus,
+} from "../../lib/vm-substrate.ts"
+import {
   typeKeystrokes,
   DEFAULT_KEY_DELAY_MS,
   LATE_MODIFIER_WINDOW_MS,
@@ -43,26 +50,23 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
   // "<singular>-") so this resolves identically to VMPowerControls — both must
   // target the same object, so neither may hardcode the prefix.
   const vmName = `${releasePrefix(ad)}${instance.metadata.name}`
+  // The substrate the machine runs on picks the VirtualMachine object to
+  // watch and the aggregated API the console comes from; the rest is shared.
+  const substrate = vmSubstrate(instance)
+  const api = vmConsoleApi(substrate)
 
   // Don't open a VNC websocket unless the VM is actually running — there is no
   // VirtualMachineInstance to attach to otherwise, and the socket would just
   // error out. List the VirtualMachine by a metadata.name field-selector so the
   // useK8sList watch layer streams power-state transitions live — no poll.
-  const { data: vmList, isLoading: vmLoading } = useK8sList<
-    K8sResource<unknown, { printableStatus?: string }>
-  >(
-    {
-      apiGroup: "kubevirt.io",
-      apiVersion: "v1",
-      plural: "virtualmachines",
-      namespace: ns ?? "",
-    },
+  const { data: vmList, isLoading: vmLoading } = useK8sList<K8sResource<unknown, VMStatus>>(
+    { ...api.vm, namespace: ns ?? "" },
     {
       enabled: appKind === "VMInstance" && !!ns,
       fieldSelector: `metadata.name=${vmName}`,
     },
   )
-  const powerStatus = vmList?.items[0]?.status?.printableStatus
+  const powerStatus = vmPowerStatus(substrate, vmList?.items[0])
   const isRunning = powerStatus === "Running"
 
   const containerRef = useRef<HTMLDivElement>(null)
@@ -97,7 +101,7 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
     senderRef.current = null
 
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-    const wsUrl = `${wsProtocol}//${window.location.host}/k8s/apis/subresources.kubevirt.io/v1/namespaces/${ns}/virtualmachineinstances/${vmName}/vnc`
+    const wsUrl = `${wsProtocol}//${window.location.host}${consoleSocketPath(api, ns ?? "", vmName, "vnc")}`
 
     // Prevent stale import resolutions from firing after cleanup or reconnect
     let cancelled = false
@@ -178,7 +182,7 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
         rfbRef.current = null
       }
     }
-  }, [appKind, ns, vmName, isRunning, connectionKey])
+  }, [appKind, ns, vmName, api, isRunning, connectionKey])
 
   useEffect(() => {
     const handler = () => setFullscreen(!!document.fullscreenElement)

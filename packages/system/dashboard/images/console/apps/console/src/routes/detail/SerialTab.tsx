@@ -8,6 +8,7 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { openSerialStream, serialConsoleUrl, type SerialStream } from "../../lib/serial-stream.ts"
+import { vmConsoleApi, vmPowerStatus, vmSubstrate, type VMStatus } from "../../lib/vm-substrate.ts"
 
 type ConnectionPhase = "connecting" | "connected" | "closed"
 
@@ -31,22 +32,19 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
   // Same resolution as VncTab and VMPowerControls: the cozystack app name maps
   // to "<release.prefix><name>", and all three must target the same object.
   const vmName = `${releasePrefix(ad)}${instance.metadata.name}`
+  // The substrate picks the VirtualMachine object to watch and the aggregated
+  // API the console comes from (see lib/vm-substrate.ts).
+  const substrate = vmSubstrate(instance)
+  const api = vmConsoleApi(substrate)
 
-  const { data: vmList, isLoading: vmLoading } = useK8sList<
-    K8sResource<unknown, { printableStatus?: string }>
-  >(
-    {
-      apiGroup: "kubevirt.io",
-      apiVersion: "v1",
-      plural: "virtualmachines",
-      namespace: ns ?? "",
-    },
+  const { data: vmList, isLoading: vmLoading } = useK8sList<K8sResource<unknown, VMStatus>>(
+    { ...api.vm, namespace: ns ?? "" },
     {
       enabled: appKind === "VMInstance" && !!ns,
       fieldSelector: `metadata.name=${vmName}`,
     },
   )
-  const powerStatus = vmList?.items[0]?.status?.printableStatus
+  const powerStatus = vmPowerStatus(substrate, vmList?.items[0])
   const isRunning = powerStatus === "Running"
 
   const hostRef = useRef<HTMLDivElement>(null)
@@ -114,7 +112,7 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
     })
 
     stream = openSerialStream(
-      serialConsoleUrl(window.location.protocol, window.location.host, ns!, vmName),
+      serialConsoleUrl(window.location.protocol, window.location.host, ns!, vmName, api),
       {
         onOpen: () => {
           setPhase("connected")
@@ -139,7 +137,7 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
       stream?.close()
       terminal.dispose()
     }
-  }, [appKind, ns, vmName, isRunning, connectionKey])
+  }, [appKind, ns, vmName, api, isRunning, connectionKey])
 
   if (appKind !== "VMInstance") {
     return (

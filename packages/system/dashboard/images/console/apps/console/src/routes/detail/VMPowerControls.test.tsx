@@ -29,6 +29,8 @@ const instance: ApplicationInstance = {
   metadata: { name: "demo-vm", namespace: "tenant-root" },
 }
 
+const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+
 function makeClient(printableStatus?: string) {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockResolvedValue({
@@ -46,6 +48,28 @@ function makeClient(printableStatus?: string) {
   })
   // No resourceVersion above means useK8sList never upgrades to a watch, but
   // stub it anyway so a future change can't make the test hit the network.
+  vi.spyOn(client, "watch").mockReturnValue(() => {})
+  vi.spyOn(client, "subresource").mockResolvedValue(undefined)
+  return client
+}
+
+// On the Proxmox substrate the object is kubemox's VirtualMachine, whose
+// status carries what the hypervisor last reported.
+function makeProxmoxClient(state?: string) {
+  const client = new K8sClient()
+  vi.spyOn(client, "list").mockResolvedValue({
+    apiVersion: "proxmox.alperen.cloud/v1alpha1",
+    kind: "VirtualMachineList",
+    metadata: {},
+    items: [
+      {
+        apiVersion: "proxmox.alperen.cloud/v1alpha1",
+        kind: "VirtualMachine",
+        metadata: { name: "vm-instance-demo-vm" },
+        status: { status: { state } },
+      },
+    ],
+  })
   vi.spyOn(client, "watch").mockReturnValue(() => {})
   vi.spyOn(client, "subresource").mockResolvedValue(undefined)
   return client
@@ -136,6 +160,53 @@ describe("VMPowerControls actions", () => {
     expect(client.subresource).toHaveBeenCalledWith(
       "subresources.kubevirt.io",
       "v1",
+      "virtualmachines",
+      "vm-instance-demo-vm",
+      "start",
+      "tenant-root",
+      {},
+      undefined,
+    )
+  })
+})
+
+describe("VMPowerControls on the Proxmox substrate", () => {
+  it("watches the kubemox VirtualMachine of the same name", async () => {
+    const client = makeProxmoxClient("stopped")
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+
+    await waitFor(() =>
+      expect(client.list).toHaveBeenCalledWith(
+        "proxmox.alperen.cloud",
+        "v1alpha1",
+        "virtualmachines",
+        "tenant-root",
+        expect.objectContaining({ fieldSelector: "metadata.name=vm-instance-demo-vm" }),
+      ),
+    )
+  })
+
+  it("reads the hypervisor state as the power status", async () => {
+    const client = makeProxmoxClient("running")
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+
+    await waitFor(() => expect(screen.getByText("Running")).toBeInTheDocument())
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled()
+  })
+
+  it("invokes the start action against subresources.proxmox.cozystack.io", async () => {
+    const client = makeProxmoxClient("stopped")
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+
+    const user = userEvent.setup()
+    const startButton = await screen.findByRole("button", { name: "Start" })
+    await waitFor(() => expect(startButton).toBeEnabled())
+    await user.click(startButton)
+
+    expect(client.subresource).toHaveBeenCalledWith(
+      "subresources.proxmox.cozystack.io",
+      "v1alpha1",
       "virtualmachines",
       "vm-instance-demo-vm",
       "start",

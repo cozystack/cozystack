@@ -104,6 +104,27 @@ const instance: ApplicationInstance = {
   metadata: { name: "demo-vm", namespace: "tenant-root" },
 }
 
+const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+
+function makeProxmoxClient(state = "running") {
+  const client = new K8sClient()
+  vi.spyOn(client, "list").mockResolvedValue({
+    apiVersion: "proxmox.alperen.cloud/v1alpha1",
+    kind: "VirtualMachineList",
+    metadata: {},
+    items: [
+      {
+        apiVersion: "proxmox.alperen.cloud/v1alpha1",
+        kind: "VirtualMachine",
+        metadata: { name: "vm-instance-demo-vm" },
+        status: { status: { state } },
+      },
+    ],
+  })
+  vi.spyOn(client, "watch").mockReturnValue(() => {})
+  return client
+}
+
 function makeClient(printableStatus = "Running") {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockResolvedValue({
@@ -341,5 +362,41 @@ describe("SerialTab console stream", () => {
     unmount()
 
     expect(sockets[0].closed).toBe(true)
+  })
+})
+
+describe("SerialTab on the Proxmox substrate", () => {
+  it("connects to the platform's console proxy for the kubemox VirtualMachine", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    const client = makeProxmoxClient()
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client,
+    })
+
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    expect(client.list).toHaveBeenCalledWith(
+      "proxmox.alperen.cloud",
+      "v1alpha1",
+      "virtualmachines",
+      "tenant-root",
+      expect.objectContaining({ fieldSelector: "metadata.name=vm-instance-demo-vm" }),
+    )
+    expect(sockets[0].url).toBe(
+      "ws://localhost:3000/k8s/apis/subresources.proxmox.cozystack.io/v1alpha1/namespaces/tenant-root/virtualmachines/vm-instance-demo-vm/console",
+    )
+    // The same subprotocol and binary frames: the proxy speaks what virt-api does.
+    expect(sockets[0].protocols).toEqual(["plain.kubevirt.io"])
+  })
+
+  it("opens no console while the hypervisor reports the machine stopped", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket)
+    renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      client: makeProxmoxClient("stopped"),
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/not running \(status: Stopped\)/i)).toBeInTheDocument(),
+    )
+    expect(sockets).toHaveLength(0)
   })
 })
