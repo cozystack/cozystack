@@ -32,23 +32,23 @@ func (r *BackupJobReconciler) cnpgArtifactSizeBytes(
 
 	bucket, path, err := parseBarmanS3DestinationPath(store.DestinationPath)
 	if err != nil {
-		logger.Debug("cannot measure CNPG backup size", "backupID", backupID, "error", err)
+		logger.Info("cannot measure CNPG backup size", "backupID", backupID, "error", err)
 		return 0
 	}
 	conn, err := r.cnpgS3Connection(ctx, namespace, store)
 	if err != nil {
-		logger.Debug("cannot resolve S3 credentials to measure CNPG backup size", "backupID", backupID, "error", err)
+		logger.Info("cannot resolve S3 credentials to measure CNPG backup size", "backupID", backupID, "error", err)
 		return 0
 	}
 	lister, err := r.s3Lister(conn)
 	if err != nil {
-		logger.Debug("cannot build S3 client to measure CNPG backup size", "backupID", backupID, "error", err)
+		logger.Info("cannot build S3 client to measure CNPG backup size", "backupID", backupID, "error", err)
 		return 0
 	}
 	prefix := barmanBaseBackupPrefix(path, serverName, backupID)
-	objects, err := lister.ListObjects(ctx, bucket, prefix)
+	objects, err := lister.ListObjects(ctx, bucket, prefix, true)
 	if err != nil {
-		logger.Debug("cannot list CNPG base backup objects to measure size", "backupID", backupID, "error", err)
+		logger.Info("cannot list CNPG base backup objects to measure size", "backupID", backupID, "error", err)
 		return 0
 	}
 	var total int64
@@ -56,7 +56,7 @@ func (r *BackupJobReconciler) cnpgArtifactSizeBytes(
 		total += obj.Size
 	}
 	if total == 0 {
-		logger.Debug("no CNPG base backup objects found; leaving size unset", "backupID", backupID, "prefix", prefix)
+		logger.Info("no CNPG base backup objects found; leaving size unset", "backupID", backupID, "prefix", prefix)
 	}
 	return total
 }
@@ -91,7 +91,7 @@ func (r *BackupJobReconciler) cnpgS3Connection(ctx context.Context, namespace st
 	if conn.SecretKey, err = r.secretValue(ctx, namespace, creds.SecretRef.Name, secretKeyKey); err != nil {
 		return conn, err
 	}
-	if ca := store.EndpointCA; ca != nil && conn.Secure {
+	if ca := store.EndpointCA; ca != nil && ca.SecretRef.Name != "" && conn.Secure {
 		key := ca.Key
 		if key == "" {
 			key = defaultEndpointCAKey

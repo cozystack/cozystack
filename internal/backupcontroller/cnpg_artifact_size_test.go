@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -74,8 +75,8 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 		if got != 1231 {
 			t.Errorf("size = %d, want 1231", got)
 		}
-		if l.bucket != "bkt" || l.prefix != prefix {
-			t.Errorf("listed %q/%q, want bkt/%q", l.bucket, l.prefix, prefix)
+		if l.bucket != "bkt" || l.prefix != prefix || !l.recursive {
+			t.Errorf("listed %q/%q recursive=%v, want bkt/%q recursive", l.bucket, l.prefix, l.recursive, prefix)
 		}
 		if l.conn.Endpoint != "s3.example:8443" || !l.conn.Secure || l.conn.AccessKey != "AKID" || l.conn.SecretKey != "secret" {
 			t.Errorf("connection = %+v", l.conn)
@@ -161,21 +162,10 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 // and response parsing are exercised together.
 func TestCNPGArtifactSizeBytes_MinioClient(t *testing.T) {
 	const prefix = "tenant/pg/srv/base/20261021T100000/"
-	var gotPath, gotPrefix, gotAuth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if _, ok := req.URL.Query()["location"]; ok {
-			w.Header().Set("Content-Type", "application/xml")
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
-			return
-		}
+	var gotPath, gotPrefix, gotDelimiter, gotAuth string
+	srv := httptest.NewServer(cnpgListStub(prefix, func(req *http.Request) {
 		gotPath, gotPrefix, gotAuth = req.URL.Path, req.URL.Query().Get("prefix"), req.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
-<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-  <Name>bkt</Name><Prefix>%[1]s</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
-  <Contents><Key>%[1]sbackup.info</Key><Size>7</Size><ETag>"a"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
-  <Contents><Key>%[1]sdata.tar.gz</Key><Size>4096</Size><ETag>"b"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
-</ListBucketResult>`, prefix)
+		gotDelimiter = req.URL.Query().Get("delimiter")
 	}))
 	defer srv.Close()
 
@@ -187,11 +177,56 @@ func TestCNPGArtifactSizeBytes_MinioClient(t *testing.T) {
 	if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", store, "srv", "20261021T100000"); got != 4103 {
 		t.Fatalf("size = %d, want 4103", got)
 	}
-	if gotPath != "/bkt/" || gotPrefix != prefix {
-		t.Errorf("request path=%q prefix=%q, want /bkt/ and %q", gotPath, gotPrefix, prefix)
+	if gotPath != "/bkt/" || gotPrefix != prefix || gotDelimiter != "" {
+		t.Errorf("request path=%q prefix=%q delimiter=%q, want /bkt/, %q and a recursive listing", gotPath, gotPrefix, gotDelimiter, prefix)
 	}
 	if !strings.Contains(gotAuth, "Credential=AKID/") {
 		t.Errorf("request not signed with the Secret's access key: %q", gotAuth)
+	}
+}
+
+func cnpgListStub(prefix string, seen func(*http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if _, ok := req.URL.Query()["location"]; ok {
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
+			return
+		}
+		if seen != nil {
+			seen(req)
+		}
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>bkt</Name><Prefix>%[1]s</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
+  <Contents><Key>%[1]sbackup.info</Key><Size>7</Size><ETag>"a"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
+  <Contents><Key>%[1]sdata.tar.gz</Key><Size>4096</Size><ETag>"b"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
+</ListBucketResult>`, prefix)
+	}
+}
+
+// TestCNPGArtifactSizeBytes_EndpointCA serves the listing over TLS with a
+// self-signed certificate: the probe must trust it only through endpointCA.
+func TestCNPGArtifactSizeBytes_EndpointCA(t *testing.T) {
+	const prefix = "tenant/pg/srv/base/20261021T100000/"
+	srv := httptest.NewTLSServer(cnpgListStub(prefix, nil))
+	defer srv.Close()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+
+	ca := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "s3-ca"},
+		Data:       map[string][]byte{"ca.crt": caPEM},
+	}
+	c := newMariaDBStrategyTestClient(t, s3CredsSecret("tenant", "creds"), ca)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	store := newSizedBarmanObjectStore()
+	store.EndpointURL = srv.URL
+
+	if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", store, "srv", "20261021T100000"); got != 0 {
+		t.Errorf("without endpointCA: size = %d, want 0 (untrusted certificate)", got)
+	}
+	store.EndpointCA = &strategyv1alpha1.EndpointCARef{SecretRef: corev1.LocalObjectReference{Name: "s3-ca"}}
+	if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", store, "srv", "20261021T100000"); got != 4103 {
+		t.Errorf("with endpointCA: size = %d, want 4103", got)
 	}
 }
 

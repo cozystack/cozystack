@@ -16,10 +16,11 @@ type fakeS3Lister struct {
 
 	conn           s3Connection
 	bucket, prefix string
+	recursive      bool
 }
 
-func (f *fakeS3Lister) ListObjects(_ context.Context, bucket, prefix string) ([]s3ObjectInfo, error) {
-	f.bucket, f.prefix = bucket, prefix
+func (f *fakeS3Lister) ListObjects(_ context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
+	f.bucket, f.prefix, f.recursive = bucket, prefix, recursive
 	return f.objects, f.err
 }
 

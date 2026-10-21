@@ -36,18 +36,21 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 
 	conn, err := r.mariadbS3Connection(ctx, namespace, s3)
 	if err != nil {
-		logger.Debug("cannot resolve S3 credentials to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
+		logger.Info("cannot resolve S3 credentials to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
 		return 0
 	}
 	lister, err := r.s3Lister(conn)
 	if err != nil {
-		logger.Debug("cannot build S3 client to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
+		logger.Info("cannot build S3 client to measure MariaDB backup size", "backup", mdbBackup.Name, "error", err)
 		return 0
 	}
+	// Non-recursive, as mariadb-operator lists it: the default prefix is also
+	// the default CNPG destinationPath, so an app of each kind with the same
+	// name shares it and a recursive listing would walk the WAL archive.
 	prefix := mariadbOperatorS3Prefix(s3.Prefix)
-	objects, err := lister.ListObjects(ctx, s3.Bucket, prefix)
+	objects, err := lister.ListObjects(ctx, s3.Bucket, prefix, false)
 	if err != nil {
-		logger.Debug("cannot list MariaDB backup objects to measure size", "backup", mdbBackup.Name, "error", err)
+		logger.Info("cannot list MariaDB backup objects to measure size", "backup", mdbBackup.Name, "error", err)
 		return 0
 	}
 
