@@ -42,7 +42,7 @@ type BackupJobReconciler struct {
 
 	// newS3ObjectLister overrides the S3 client used to measure artifact
 	// sizes; nil means a real minio client. Set by unit tests.
-	newS3ObjectLister func(ctx context.Context, namespace string, s3 *strategyv1alpha1.MariaDBS3Template) (s3ObjectLister, error)
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
