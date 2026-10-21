@@ -73,6 +73,11 @@ func (r *BackupJobReconciler) cnpgS3Connection(ctx context.Context, namespace st
 		if err != nil || u.Host == "" {
 			return conn, fmt.Errorf("invalid endpointURL %q", store.EndpointURL)
 		}
+		// Dropping the path would probe the bucket at another location than
+		// the one barman writes to.
+		if strings.Trim(u.Path, "/") != "" {
+			return conn, fmt.Errorf("endpointURL %q has a path, which the S3 client cannot address", store.EndpointURL)
+		}
 		conn.Endpoint, conn.Secure = u.Host, u.Scheme == "https"
 	}
 
