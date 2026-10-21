@@ -1,0 +1,35 @@
+# The agent's RBAC covers every GPUNode; this narrows its writes to the
+# GPUNode of the node its pod runs on. The node name comes from the
+# pod-bound service account token. A token without it, such as a legacy
+# secret token, is refused, which stops only the agent.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozy-gpu-node-agent-own-node
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [gpu.cozystack.io]
+      apiVersions: ["*"]
+      operations: [CREATE, UPDATE]
+      resources: [gpunodes, gpunodes/status]
+  matchConditions:
+  - name: gpu-node-agent
+    expression: request.userInfo.username == "system:serviceaccount:{{ .Release.Namespace }}:gpu-node-agent"
+  validations:
+  - expression: >-
+      has(request.userInfo.extra) &&
+      'authentication.kubernetes.io/node-name' in request.userInfo.extra &&
+      size(request.userInfo.extra['authentication.kubernetes.io/node-name']) > 0 &&
+      object.metadata.name == request.userInfo.extra['authentication.kubernetes.io/node-name'][0]
+    message: the GPU node agent may write only the GPUNode of its own node
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozy-gpu-node-agent-own-node
+spec:
+  policyName: cozy-gpu-node-agent-own-node
+  validationActions: [Deny]

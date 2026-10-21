@@ -1,0 +1,23 @@
+suite: gpu-node-agent own-node policy
+templates:
+  - templates/own-node-policy.yaml
+release:
+  name: gpu-node-agent
+  namespace: cozy-gpu-operator
+tests:
+  - it: applies to the agent's service account in the release namespace
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: request.userInfo.username == "system:serviceaccount:cozy-gpu-operator:gpu-node-agent"
+  - it: is bound with Deny
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicyBinding
+    asserts:
+      - equal:
+          path: spec.validationActions
+          value: [Deny]
