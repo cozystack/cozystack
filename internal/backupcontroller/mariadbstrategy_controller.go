@@ -392,7 +392,10 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	// operator's PVC ID), so an Artifact{URI: ""} is a worse signal than
 	// no Artifact at all - leave it nil instead.
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
-		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
+		status.Artifact = &backupsv1alpha1.BackupArtifact{
+			URI:       uri,
+			SizeBytes: r.mariadbArtifactSizeBytes(ctx, j.Namespace, rendered.Storage.S3, mdbBackup, takenAt.Time),
+		}
 	}
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
