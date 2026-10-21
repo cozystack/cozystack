@@ -91,7 +91,7 @@ spec:
     # foundationdb operator pod itself (cozy-foundationdb-operator). That
     # operator deployment does not yet mount cozy-backups-creds, so a
     # platform-default FDB restore would silently fail. See DESIGN.md /
-    # backup-classes.md for the open gap and follow-up work.
+    # https://cozystack.io/docs/v1/operations/services/backup-classes/ for the open gap and follow-up work.
     - application:
         apiGroup: apps.cozystack.io
         kind: VMInstance

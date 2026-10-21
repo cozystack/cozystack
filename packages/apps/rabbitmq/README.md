@@ -9,11 +9,11 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 - Github: https://github.com/rabbitmq/cluster-operator/
 - Docs: https://www.rabbitmq.com/kubernetes/operator/operator-overview.html
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## Backups
 
-RabbitMQ is bound out-of-the-box by the platform `cozy-default` BackupClass, so a `Plan` or an ad-hoc `BackupJob` referencing `cozy-default` backs the instance up with no per-release wiring — see [Backup Classes](../../../docs/operations/backup-classes.md).
+RabbitMQ is bound out-of-the-box by the platform `cozy-default` BackupClass, so a `Plan` or an ad-hoc `BackupJob` referencing `cozy-default` backs the instance up with no per-release wiring — see [Backup Classes](https://cozystack.io/docs/v1/operations/services/backup-classes/).
 
 The scope is **definitions only** — vhosts, users, permissions, queues, exchanges, bindings, policies and parameters, exported through the management API. **Message payloads are not included**, and there is no point-in-time recovery; back up the messages on disk with a Velero volume snapshot instead if you need them. Restore is a **merge**, not a reset: importing definitions creates or updates what the backup contains and never deletes, so anything created after the backup survives a restore, and a to-copy restore into a separate instance imports the source's users (with their password hashes) into the target.
 
@@ -141,5 +141,5 @@ This setting is ignored if the corresponding `resources` value is set.
 
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
-See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.
 

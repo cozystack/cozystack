@@ -152,10 +152,10 @@ func main() {
 		"Default container memory limit in eligible system namespaces, including kube-system. "+
 			"Lowering or an oversized request creates a durable hold requiring an administrator's "+
 			"exact-value acknowledgement. Empty or 0 disables and removes managed LimitRanges; "+
-			"safety state is retained. See docs/operations/system-memory-limits.md.")
+			"safety state is retained. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
-			"An empty installer value selects the operator default. See docs/operations/system-memory-limits.md.")
+			"An empty installer value selects the operator default. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
 
 	opts := zap.Options{
 		Development: true,

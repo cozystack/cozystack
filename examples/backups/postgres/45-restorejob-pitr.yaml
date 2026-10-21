@@ -11,7 +11,7 @@
 # backup's completion and at/before the latest WAL shipped to object storage.
 # A target past the latest archived WAL cannot converge - the RestoreJob fails
 # with condition Ready=False/RecoveryTargetUnreachable instead of hanging. See
-# docs/operations/backup-classes.md ("Point-in-time recovery") for how to
+# https://cozystack.io/docs/v1/operations/services/backup-classes/ ("Point-in-time recovery") for how to
 # discover the earliest/latest restorable time.
 #
 # run-all.sh substitutes REPLACE_WITH_RECOVERY_TIME with a timestamp it captures
