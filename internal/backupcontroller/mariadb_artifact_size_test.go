@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
@@ -79,8 +80,29 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		if l.conn.AccessKey != "AKID" || l.conn.Endpoint != "s3.example:9000" {
 			t.Errorf("connection = %+v, want the Secret's key and the rendered endpoint", l.conn)
 		}
-		if l.bucket != "bkt" || l.prefix != prefix {
-			t.Errorf("listed %q/%q, want bkt/%q", l.bucket, l.prefix, prefix)
+		if l.bucket != "bkt" || l.prefix != prefix || l.recursive {
+			t.Errorf("listed %q/%q recursive=%v, want bkt/%q non-recursive", l.bucket, l.prefix, l.recursive, prefix)
+		}
+	})
+
+	t.Run("reads the endpoint CA from its Secret", func(t *testing.T) {
+		tlsS3 := newRenderedMariaDBTemplate().Storage.S3
+		tlsS3.Prefix = "tenant/db"
+		tlsS3.TLS = &strategyv1alpha1.MariaDBS3TLS{
+			Enabled:        true,
+			CASecretKeyRef: &strategyv1alpha1.MariaDBSecretKeySelector{Name: "ca", Key: "ca.crt"},
+		}
+		ca := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "ca"},
+			Data:       map[string][]byte{"ca.crt": []byte("PEM")},
+		}
+		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 3}}}
+		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), ca)
+		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", tlsS3, mdbBackup, completed); got != 3 {
+			t.Errorf("size = %d, want 3", got)
+		}
+		if !l.conn.Secure || string(l.conn.CAPEM) != "PEM" {
+			t.Errorf("connection = %+v, want TLS with the Secret's CA", l.conn)
 		}
 	})
 
@@ -135,14 +157,16 @@ func TestMariaDBArtifactSizeBytes_MinioClient(t *testing.T) {
 	created := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	key := dumpKey("tenant/db/", created.Add(time.Minute), "gzip")
 
-	var gotPath, gotPrefix, gotAuth string
+	var gotPath, gotPrefix, gotDelimiter, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		gotPath, gotPrefix, gotAuth = req.URL.Path, req.URL.Query().Get("prefix"), req.Header.Get("Authorization")
+		gotDelimiter = req.URL.Query().Get("delimiter")
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>bkt</Name><Prefix>tenant/db/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
   <Contents><Key>%s</Key><Size>31337</Size><ETag>"x"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
+  <CommonPrefixes><Prefix>tenant/db/srv/</Prefix></CommonPrefixes>
 </ListBucketResult>`, key)
 	}))
 	defer srv.Close()
@@ -161,8 +185,8 @@ func TestMariaDBArtifactSizeBytes_MinioClient(t *testing.T) {
 	if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, created.Add(3*time.Minute)); got != 31337 {
 		t.Fatalf("size = %d, want 31337", got)
 	}
-	if gotPath != "/bkt/" || gotPrefix != "tenant/db/" {
-		t.Errorf("request path=%q prefix=%q, want /bkt/ and tenant/db/", gotPath, gotPrefix)
+	if gotPath != "/bkt/" || gotPrefix != "tenant/db/" || gotDelimiter != "/" {
+		t.Errorf("request path=%q prefix=%q delimiter=%q, want /bkt/, tenant/db/ and a non-recursive listing", gotPath, gotPrefix, gotDelimiter)
 	}
 	if !strings.Contains(gotAuth, "Credential=AKID/") {
 		t.Errorf("request not signed with the Secret's access key: %q", gotAuth)

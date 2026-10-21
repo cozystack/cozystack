@@ -3,11 +3,9 @@ package backupcontroller
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -17,9 +15,11 @@ import (
 )
 
 // artifactSizeProbeTimeout bounds the object-store round trips a driver
-// makes to measure Backup.status.artifact.sizeBytes; the probe runs inside
-// the reconcile that creates the Backup.
-const artifactSizeProbeTimeout = 30 * time.Second
+// makes to measure Backup.status.artifact.sizeBytes. The probe runs inside
+// the reconcile that creates the Backup, and the BackupJob controller has a
+// single worker, so an unreachable endpoint stalls every other BackupJob for
+// this long.
+const artifactSizeProbeTimeout = 10 * time.Second
 
 type s3ObjectInfo struct {
 	Key  string
@@ -27,7 +27,7 @@ type s3ObjectInfo struct {
 }
 
 type s3ObjectLister interface {
-	ListObjects(ctx context.Context, bucket, prefix string) ([]s3ObjectInfo, error)
+	ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error)
 }
 
 // s3Connection is what a driver resolves from its rendered strategy to
@@ -62,14 +62,22 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		Secure: conn.Secure,
 	}
 	if conn.Secure && len(conn.CAPEM) > 0 {
-		pool, err := x509.SystemCertPool()
+		// Start from minio's transport to keep its proxy and timeout settings.
+		tr, err := minio.DefaultTransport(true)
 		if err != nil {
-			pool = x509.NewCertPool()
+			return nil, err
+		}
+		pool := tr.TLSClientConfig.RootCAs
+		if pool == nil {
+			if pool, err = x509.SystemCertPool(); err != nil {
+				pool = x509.NewCertPool()
+			}
 		}
 		if !pool.AppendCertsFromPEM(conn.CAPEM) {
 			return nil, errors.New("no PEM certificates in the endpoint CA bundle")
 		}
-		opts.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+		tr.TLSClientConfig.RootCAs = pool
+		opts.Transport = tr
 	}
 	client, err := minio.New(conn.Endpoint, opts)
 	if err != nil {
@@ -78,9 +86,9 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 	return &minioObjectLister{client: client}, nil
 }
 
-func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string) ([]s3ObjectInfo, error) {
+func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
 	var out []s3ObjectInfo
-	for obj := range l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+	for obj := range l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive}) {
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
@@ -96,7 +104,7 @@ func (r *BackupJobReconciler) secretValue(ctx context.Context, namespace, name, 
 	}
 	v, ok := secret.Data[key]
 	if !ok {
-		return "", fmt.Errorf("Secret %s/%s has no key %q", namespace, name, key)
+		return "", fmt.Errorf("secret %s/%s has no key %q", namespace, name, key)
 	}
 	return string(v), nil
 }
