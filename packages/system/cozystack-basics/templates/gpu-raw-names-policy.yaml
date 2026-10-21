@@ -12,8 +12,9 @@
 #
 # A pod may request a GPU resource name only as a virt-launcher pod: created
 # by kubevirt-controller with a VMI as owner, which migration target pods are
-# too. No tenant role creates pods or VMIs, so app charts that copy free-form
-# resources into pods cannot request GPUs either.
+# too. Any other creator is refused, so the pods of app charts that copy
+# free-form resources cannot request GPUs either, and no tenant role creates
+# pods or VMIs directly.
 #
 # Both are checked in tenant namespaces, which the bindings select. The GPU
 # resource names come from the settings ConfigMap the controller publishes;
