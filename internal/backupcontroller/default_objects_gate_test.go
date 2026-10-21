@@ -33,6 +33,7 @@ var gateGVKs = []schema.GroupVersionKind{
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Etcd"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Altinity"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Velero"},
+	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Kubernetes"},
 	{Group: "velero.io", Version: "v1", Kind: "BackupStorageLocation"},
 	{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"},
 }
@@ -105,6 +106,7 @@ func cozyDefaultBackupClass() *backupsv1alpha1.BackupClass {
 				ref("Altinity", "cozy-default-altinity"),
 				ref("Velero", "cozy-default-velero-vminstance"),
 				ref("Velero", "cozy-default-velero-vmdisk"),
+				ref("Kubernetes", "cozy-default-kubernetes"),
 			},
 		},
 	}
@@ -236,8 +238,8 @@ func TestCheckForcesWhenObjectsMissing(t *testing.T) {
 		t.Fatal("expected a forced Helm upgrade when default objects are missing")
 	}
 	// 6 strategyRefs (Velero twice under different names) + the BSL.
-	if len(missing) != 7 {
-		t.Fatalf("missing = %v, want 7 entries", missing)
+	if len(missing) != 8 {
+		t.Fatalf("missing = %v, want 8 entries", missing)
 	}
 	ann := forceAnnotations(t, dyn)
 	forceAt, ok := ann["reconcile.fluxcd.io/forceAt"]
@@ -267,6 +269,7 @@ func TestCheckNoopWhenAllPresent(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 		bslObject(),
 	)
 
@@ -402,8 +405,8 @@ func TestCheckThrottlesTheTwoReleasesIndependently(t *testing.T) {
 	if !forced {
 		t.Fatal("objects release throttled by the earlier credentials force")
 	}
-	if len(missing) != 7 {
-		t.Fatalf("missing = %v, want the 6 strategies + the BSL", missing)
+	if len(missing) != 8 {
+		t.Fatalf("missing = %v, want the 7 strategies + the BSL", missing)
 	}
 	if ann := forceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
 		t.Errorf("own HelmRelease not forced: %v", ann)
@@ -430,7 +433,7 @@ func TestForceSkipsSuspendedHelmRelease(t *testing.T) {
 	if forced {
 		t.Error("forced reported true for a suspended HelmRelease that ignores the annotations")
 	}
-	if len(missing) != 7 {
+	if len(missing) != 8 {
 		t.Fatalf("missing = %v, want the objects still reported", missing)
 	}
 	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
@@ -547,6 +550,7 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 		bslObject(),
 	)
 
@@ -604,6 +608,7 @@ func TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 	)
 	// Rebuild the RESTMapper without BackupStorageLocation: the velero.io API
 	// is not served on this cluster.

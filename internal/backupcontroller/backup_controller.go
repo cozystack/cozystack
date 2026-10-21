@@ -183,6 +183,9 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// deletes the object and WAITS for that delete before the Backup is
 		// removed, so no object is orphaned (see cleanupKafkaBackup).
 		return r.cleanupKafkaBackup(ctx, backup)
+	case strategyv1alpha1.KubernetesStrategyKind:
+		// Owns two artifacts: the Velero backup and the etcd dump object.
+		return r.cleanupKubernetesBackup(ctx, backup)
 	case strategyv1alpha1.VeleroStrategyKind:
 		return ctrl.Result{}, r.cleanupVeleroBackup(ctx, backup)
 	default:
