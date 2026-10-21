@@ -67,9 +67,64 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# The GPU binder adds finalizers and places devices. The create right is for
+# the template devices made on behalf of a VMI, which the controller deletes
+# with their VMI.
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses", "gpudevices"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpudevices"]
+  verbs: ["create", "delete"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses/status", "gpudevices/status", "gpunodes/status"]
+  verbs: ["get", "update", "patch"]
+# The GPU controller deletes the unscheduled VMI of a device that has to
+# leave its node, so the device becomes unattached and can move.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["delete"]
+# --metrics-secure authenticates and authorizes each scrape through the API
+# server.
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
 # Leader election (--leader-elect) is granted by a namespaced Role in cozy-system
 # (see leader-election-role.yaml): the Lease lives in the controller's own
 # namespace, so the write does not need to reach every namespace.
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]
+---
+# The GPU controller writes one ConfigMap, the GPU settings in cozy-system.
+# create cannot be scoped by name, so it is scoped by namespace instead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-controller-gpu-settings
+  namespace: cozy-system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["cozystack-gpu-settings"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-controller-gpu-settings
+  namespace: cozy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-controller-gpu-settings
+subjects:
+- kind: ServiceAccount
+  name: cozystack-controller
+  namespace: cozy-system

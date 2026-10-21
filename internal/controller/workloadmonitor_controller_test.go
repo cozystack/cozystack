@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/gpu"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -2429,6 +2431,102 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 			}
 			if workload.Status.Operational != tc.want {
 				t.Errorf("PVC Workload Operational = %v, want %v", workload.Status.Operational, tc.want)
+			}
+		})
+	}
+}
+
+// A virt-launcher pod of a VMI with device references requests the GPUs its
+// devices hold, and those devices already have usage records of their own.
+func TestReconcile_LauncherPodDoesNotReportGPUsItsDevicesCover(t *testing.T) {
+	const rn = "nvidia.com/L40S"
+	cases := []struct {
+		name     string
+		refLabel bool
+		attached []int32
+		phase    gpuv1alpha1.GPUDevicePhase
+		want     string
+	}{
+		{name: "all units covered", refLabel: true, attached: []int32{1, 1}, want: ""},
+		{name: "partly covered", refLabel: true, attached: []int32{1}, want: "1"},
+		{name: "no reference label", refLabel: false, attached: []int32{1, 1}, want: "2"},
+		// The phase table leaves a Lost device out of the usage records, and
+		// the pod must not bring its GPUs back in.
+		{name: "devices Lost", refLabel: true, attached: []int32{1, 1}, phase: gpuv1alpha1.GPUDeviceLost, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := runtime.NewScheme()
+			_ = cozyv1alpha1.AddToScheme(s)
+			_ = corev1.AddToScheme(s)
+			_ = cosiv1alpha1.AddToScheme(s)
+			_ = gpuv1alpha1.AddToScheme(s)
+
+			selector := map[string]string{"app": "vm"}
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "default"},
+				Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector},
+			}
+			podLabels := map[string]string{"app": "vm"}
+			if tc.refLabel {
+				podLabels[gpu.LabelDeviceReference] = gpu.LabelValueTrue
+			}
+			units := corev1.ResourceList{
+				corev1.ResourceCPU:   resource.MustParse("1"),
+				rn:                   resource.MustParse("2"),
+				"nvidia.com/hostdev": resource.MustParse("1"),
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "virt-launcher-vm1-x", Namespace: "default", Labels: podLabels,
+					Annotations: map[string]string{"workload.cozystack.io/resources": `{"` + rn + `":"2"}`},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance",
+						Name: "vm1", UID: "vmi-uid", Controller: ptr.To(true)}},
+				},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "compute",
+					Resources: corev1.ResourceRequirements{Requests: units, Limits: units}}}},
+			}
+			objs := []client.Object{monitor, pod, &gpuv1alpha1.GPUClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "l40s"},
+				Spec: gpuv1alpha1.GPUClassSpec{Source: gpuv1alpha1.GPUClassSource{
+					DevicePlugin: &gpuv1alpha1.DevicePluginSource{ResourceName: rn}}},
+			}}
+			phase := tc.phase
+			if phase == "" {
+				phase = gpuv1alpha1.GPUDeviceAttached
+			}
+			for i, count := range tc.attached {
+				objs = append(objs, &gpuv1alpha1.GPUDevice{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("d%d", i), Namespace: "default"},
+					Spec:       gpuv1alpha1.GPUDeviceSpec{ClassName: "l40s", Count: count},
+					Status: gpuv1alpha1.GPUDeviceStatus{Phase: phase,
+						AttachedTo: &gpuv1alpha1.GPUDeviceAttachment{VMI: "vm1"}},
+				})
+			}
+			objs = append(objs, &gpuv1alpha1.GPUDevice{
+				ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "default"},
+				Spec:       gpuv1alpha1.GPUDeviceSpec{ClassName: "l40s", Count: 1},
+				Status: gpuv1alpha1.GPUDeviceStatus{Phase: gpuv1alpha1.GPUDeviceAttached,
+					AttachedTo: &gpuv1alpha1.GPUDeviceAttachment{VMI: "vm2"}},
+			})
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(monitor).Build()
+			r := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "vm", Namespace: "default"}}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			w := &cozyv1alpha1.Workload{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "pod-virt-launcher-vm1-x", Namespace: "default"}, w); err != nil {
+				t.Fatalf("get Workload: %v", err)
+			}
+			got, ok := w.Status.Resources[rn]
+			switch {
+			case tc.want == "" && ok:
+				t.Fatalf("%s reported as %s, want it dropped", rn, got.String())
+			case tc.want != "" && (!ok || got.Cmp(resource.MustParse(tc.want)) != 0):
+				t.Fatalf("%s = %v, want %s", rn, w.Status.Resources, tc.want)
+			}
+			if q := w.Status.Resources["nvidia.com/hostdev"]; q.Cmp(resource.MustParse("1")) != 0 {
+				t.Fatalf("a NIC next to the GPU must stay reported: %v", w.Status.Resources)
 			}
 		})
 	}

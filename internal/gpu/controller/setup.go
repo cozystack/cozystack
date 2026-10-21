@@ -19,13 +19,110 @@ limitations under the License.
 package controller
 
 import (
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"context"
+	"strings"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/gpu"
+	"github.com/cozystack/cozystack/internal/gpu/model"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 )
 
-// Setup adds the GPU reconcilers to mgr. With no reconciler implemented it
-// adds nothing.
+// Setup adds the GPU reconciler to mgr. Finalizers and usage records are
+// always reconciled, so a disabled feature never hangs a deletion; with
+// cfg.Enabled it also places devices and watches KubeVirt objects, which
+// exist only where the feature is enabled.
 func Setup(mgr manager.Manager, cfg gpu.Config) error {
-	return nil
+	r := &Reconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Cache: mgr.GetCache(), Config: cfg}
+	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
+		return []reconcile.Request{{NamespacedName: passKey}}
+	})
+	devices := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+		out := []reconcile.Request{{NamespacedName: passKey}}
+		if d, ok := o.(*gpuv1alpha1.GPUDevice); ok && d.Status.BindRequest != nil && d.Status.BindRequest.Result == "" {
+			out = append([]reconcile.Request{{NamespacedName: requestsKey}}, out...)
+		}
+		return out
+	})
+	b := ctrl.NewControllerManagedBy(mgr).
+		Named("gpu-binder").
+		Watches(&gpuv1alpha1.GPUClass{}, all).
+		Watches(&gpuv1alpha1.GPUDevice{}, devices).
+		Watches(&cozyv1alpha1.Workload{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+			return o.GetLabels()[workloadMonitorLabel] == gpu.UsageMonitorName
+		}))).
+		Watches(&cozyv1alpha1.WorkloadMonitor{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+			return o.GetName() == gpu.UsageMonitorName
+		})))
+	if cfg.Enabled {
+		vmi := &unstructured.Unstructured{}
+		vmi.SetGroupVersionKind(vmiGVK)
+		vm := &unstructured.Unstructured{}
+		vm.SetGroupVersionKind(vmGVK)
+		kv := &unstructured.Unstructured{}
+		kv.SetGroupVersionKind(kubeVirtGVK)
+		b = b.
+			Watches(&gpuv1alpha1.GPUNode{}, all).
+			Watches(&corev1.Node{}, all, builder.WithPredicates(nodePlacementChanged)).
+			Watches(&corev1.Namespace{}, all, builder.WithPredicates(predicate.LabelChangedPredicate{})).
+			Watches(&helmv2.HelmRelease{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetLabels()[appsv1alpha1.ApplicationKindLabel] == tenantKind
+			}))).
+			Watches(&corev1.Pod{}, all, builder.WithPredicates(predicate.NewPredicateFuncs(requestsExtendedResource))).
+			Watches(vmi, all).
+			Watches(vm, all).
+			Watches(kv, all)
+	}
+	return b.Complete(r)
+}
+
+// nodePlacementChanged drops node updates that cannot change placement,
+// such as the kubelet's periodic status writes.
+var nodePlacementChanged = predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+	o, ok1 := e.ObjectOld.(*corev1.Node)
+	n, ok2 := e.ObjectNew.(*corev1.Node)
+	if !ok1 || !ok2 {
+		return true
+	}
+	return o.Spec.Unschedulable != n.Spec.Unschedulable ||
+		!equality.Semantic.DeepEqual(o.Spec.Taints, n.Spec.Taints) ||
+		!equality.Semantic.DeepEqual(o.Labels, n.Labels) ||
+		!equality.Semantic.DeepEqual(o.Status.Allocatable, n.Status.Allocatable) ||
+		model.Ready(o) != model.Ready(n)
+}}
+
+// requestsExtendedResource keeps pod events that can change GPU usage
+// without parsing the effective resource-name set on every pod event.
+func requestsExtendedResource(o client.Object) bool {
+	p, ok := o.(*corev1.Pod)
+	if !ok {
+		return false
+	}
+	for _, cs := range [][]corev1.Container{p.Spec.Containers, p.Spec.InitContainers} {
+		for i := range cs {
+			for _, rl := range []corev1.ResourceList{cs[i].Resources.Limits, cs[i].Resources.Requests} {
+				for name := range rl {
+					// Every virt-launcher pod requests devices.kubevirt.io/kvm.
+					if strings.Contains(string(name), "/") && !strings.HasPrefix(string(name), "devices.kubevirt.io/") {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }

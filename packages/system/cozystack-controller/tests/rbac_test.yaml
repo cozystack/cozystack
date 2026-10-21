@@ -1,4 +1,4 @@
-suite: cozystack-controller ClusterRole grants the shared Secret write
+suite: cozystack-controller ClusterRole grants
 templates:
   - templates/rbac.yaml
 
@@ -36,3 +36,106 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - it: lets the GPU binder place devices and write class, device and node status
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpuclasses", "gpudevices"]
+            verbs: ["get", "list", "watch", "update", "patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpudevices"]
+            verbs: ["create", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpuclasses/status", "gpudevices/status", "gpunodes/status"]
+            verbs: ["get", "update", "patch"]
+
+  - it: lets the GPU controller delete only VMIs among KubeVirt objects
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubevirt.io"]
+            resources: ["virtualmachineinstances"]
+            verbs: ["delete"]
+
+  - it: lets the secure metrics endpoint authenticate and authorize scrapes
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["authentication.k8s.io"]
+            resources: ["tokenreviews"]
+            verbs: ["create"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["authorization.k8s.io"]
+            resources: ["subjectaccessreviews"]
+            verbs: ["create"]
+
+  - it: grants ConfigMap writes nowhere cluster-wide
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+          any: true
+
+  - it: scopes ConfigMap writes to the GPU settings object in cozy-system
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-system
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            resourceNames: ["cozystack-gpu-settings"]
+            verbs: ["get", "update", "patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["create"]
+
+  - it: binds the GPU settings Role to the controller's ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: cozystack-controller-gpu-settings
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: cozystack-controller
+            namespace: cozy-system

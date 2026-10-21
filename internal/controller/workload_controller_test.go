@@ -111,3 +111,41 @@ func TestWorkloadReconciler_KeepsWhenAllExist(t *testing.T) {
 		t.Errorf("expected workload to persist, got error: %v", err)
 	}
 }
+
+// A GPU usage record has no monitored object and sits under a monitor whose
+// selector matches nothing: it stays exactly while its monitor exists,
+// whatever the selector does or does not match.
+func TestWorkloadReconciler_KeepsARecordWhoseMonitorSelectsNothing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = cozyv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-devices", Namespace: "default"},
+		Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: map[string]string{"gpu.cozystack.io/usage-monitor": "true"}},
+	}
+	record := func() *cozyv1alpha1.Workload {
+		return &cozyv1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: "gpu-train-0", Namespace: "default",
+				Labels: map[string]string{"workloads.cozystack.io/monitor": "gpu-devices"}},
+			Status: cozyv1alpha1.WorkloadStatus{Kind: "gpu-device"},
+		}
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "gpu-train-0", Namespace: "default"}}
+
+	kept := fake.NewClientBuilder().WithScheme(scheme).WithObjects(monitor, record()).Build()
+	if _, err := (&WorkloadReconciler{Client: kept}).Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := kept.Get(context.TODO(), req.NamespacedName, &cozyv1alpha1.Workload{}); err != nil {
+		t.Errorf("record under an existing monitor was deleted: %v", err)
+	}
+
+	orphaned := fake.NewClientBuilder().WithScheme(scheme).WithObjects(record()).Build()
+	if _, err := (&WorkloadReconciler{Client: orphaned}).Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := orphaned.Get(context.TODO(), req.NamespacedName, &cozyv1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+		t.Errorf("record whose monitor is gone was kept: %v", err)
+	}
+}
