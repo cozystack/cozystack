@@ -1,0 +1,170 @@
+suite: console proxy — the aggregated subresources.proxmox.cozystack.io API
+
+templates:
+  - templates/console-proxy-apiservice.yaml
+  - templates/console-proxy-deployment.yaml
+  - templates/console-proxy-service.yaml
+  - templates/console-proxy-rbac.yaml
+  - templates/console-proxy-certmanager.yaml
+
+release:
+  name: proxmox-vm
+  namespace: cozy-proxmox-vm
+
+tests:
+  - it: registers v1alpha1.subresources.proxmox.cozystack.io on the proxy's Service with the injected CA
+    template: templates/console-proxy-apiservice.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: v1alpha1.subresources.proxmox.cozystack.io
+      - equal:
+          path: spec.group
+          value: subresources.proxmox.cozystack.io
+      - equal:
+          path: spec.version
+          value: v1alpha1
+      - equal:
+          path: spec.service
+          value:
+            name: proxmox-console-proxy
+            namespace: cozy-proxmox-vm
+            port: 443
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cozy-proxmox-vm/proxmox-console-proxy
+
+  - it: runs the image from values with the serving certificate mounted
+    template: templates/console-proxy-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      consoleProxy:
+        image: ghcr.io/example/proxmox-console-proxy:v1@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/example/proxmox-console-proxy:v1@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: proxmox-console-proxy
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tls
+            secret:
+              secretName: proxmox-console-proxy-cert
+              defaultMode: 0440
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+
+  - it: exposes port 443 to the apiserver on the container's https port
+    template: templates/console-proxy-service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: https
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: proxmox-console-proxy
+
+  - it: lets the proxy read machines and connections, patch power state and delegate authorization
+    template: templates/console-proxy-rbac.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ClusterRole
+      - documentIndex: 0
+        contains:
+          path: rules
+          content:
+            apiGroups: ["proxmox.alperen.cloud"]
+            resources: ["virtualmachines", "proxmoxconnections"]
+            verbs: ["get", "list", "watch"]
+      - documentIndex: 0
+        contains:
+          path: rules
+          content:
+            apiGroups: ["proxmox.alperen.cloud"]
+            resources: ["virtualmachines"]
+            verbs: ["patch"]
+      - documentSelector:
+          path: metadata.name
+          value: proxmox-console-proxy:auth-delegator
+        equal:
+          path: roleRef.name
+          value: system:auth-delegator
+      - documentSelector:
+          path: metadata.name
+          value: proxmox-console-proxy-auth-reader
+        equal:
+          path: metadata.namespace
+          value: kube-system
+
+  - it: grants the token Secrets the connections name, and no other
+    template: templates/console-proxy-rbac.yaml
+    set:
+      connections:
+        - name: pve
+          endpoint: 192.0.2.10
+          tokenID: kubemox@pve!cozystack
+          secretName: proxmox-vm-credentials
+        - name: pve-2
+          endpoint: 192.0.2.11
+          tokenID: kubemox@pve!cozystack
+          secretName: proxmox-vm-credentials-2
+    documentSelector:
+      path: metadata.name
+      value: proxmox-console-proxy-tokens
+      matchMany: true
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: ["proxmox-vm-credentials", "proxmox-vm-credentials-2"]
+        documentSelector:
+          path: kind
+          value: Role
+      - equal:
+          path: rules[0].verbs
+          value: ["get"]
+        documentSelector:
+          path: kind
+          value: Role
+
+  - it: grants no Secret when the package has no connections
+    template: templates/console-proxy-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: issues the serving certificate from a CA of its own for the Service names
+    template: templates/console-proxy-certmanager.yaml
+    documentSelector:
+      path: metadata.name
+      value: proxmox-console-proxy
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: proxmox-console-proxy-cert
+      - equal:
+          path: spec.issuerRef.name
+          value: proxmox-console-proxy-ca
+      - contains:
+          path: spec.dnsNames
+          content: proxmox-console-proxy.cozy-proxmox-vm.svc

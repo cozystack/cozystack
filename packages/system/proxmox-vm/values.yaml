@@ -26,6 +26,24 @@ kubemox:
     limits:
       memory: 256Mi
 
+## @section Console proxy
+##
+## subresources.proxmox.cozystack.io, the aggregated API behind the dashboard's
+## VNC console, serial console and power buttons for machines on this
+## substrate. It holds the hypervisor's token on the tenant's behalf: the
+## browser gets a VNC stream with no authentication, as from KubeVirt, and the
+## proxy does the ticketed handshake with Proxmox itself.
+consoleProxy:
+  image: ghcr.io/cozystack/cozystack/proxmox-console-proxy:latest
+  replicas: 1
+  imagePullSecrets: []
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
 ## @param {[]Connection} connections - Proxmox clusters kubemox may talk to. Each becomes a cluster-scoped ProxmoxConnection whose token is read from a Secret in this package's namespace.
 ## @typedef {struct} Connection - One Proxmox VE API endpoint.
 ## @field {string} name - Name of the ProxmoxConnection; the catalog's `connection` names one of these.

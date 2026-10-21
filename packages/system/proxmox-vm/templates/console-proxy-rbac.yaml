@@ -1,0 +1,93 @@
+# What the console proxy may do on its own behalf. The hypervisor token it
+# uses is the platform's (C025: nothing of it reaches a tenant); whether a
+# caller may use a machine's console is the apiserver's decision, which the
+# proxy asks again through a SubjectAccessReview.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: proxmox-console-proxy
+rules:
+# Where a machine runs (node, vmid, state) and which connection to use.
+- apiGroups: ["proxmox.alperen.cloud"]
+  resources:
+  - virtualmachines
+  - proxmoxconnections
+  verbs: ["get", "list", "watch"]
+# start/stop set spec.powerState; kubemox does the rest.
+- apiGroups: ["proxmox.alperen.cloud"]
+  resources:
+  - virtualmachines
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: proxmox-console-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: proxmox-console-proxy
+subjects:
+- kind: ServiceAccount
+  name: proxmox-console-proxy
+  namespace: {{ .Release.Namespace }}
+---
+# SubjectAccessReviews, as every aggregated API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: proxmox-console-proxy:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: proxmox-console-proxy
+  namespace: {{ .Release.Namespace }}
+---
+# The front-proxy CA and header names kube-apiserver publishes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxmox-console-proxy-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+- kind: ServiceAccount
+  name: proxmox-console-proxy
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.connections }}
+---
+# The token Secrets the connections of this package name, and those only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: proxmox-console-proxy-tokens
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  {{- range .Values.connections }}
+  - {{ .secretName | quote }}
+  {{- end }}
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: proxmox-console-proxy-tokens
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: proxmox-console-proxy-tokens
+subjects:
+- kind: ServiceAccount
+  name: proxmox-console-proxy
+  namespace: {{ .Release.Namespace }}
+{{- end }}

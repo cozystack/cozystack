@@ -1,0 +1,21 @@
+# subresources.proxmox.cozystack.io: the VNC console, serial console and
+# power buttons of a machine on the Proxmox substrate, in the shape the
+# dashboard already speaks to subresources.kubevirt.io. kube-apiserver
+# authenticates and authorises the tenant (RBAC on virtualmachines/vnc and
+# the rest, granted by cozystack-basics) and hands the request to the proxy
+# with its front-proxy certificate.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/proxmox-console-proxy"
+  name: v1alpha1.subresources.proxmox.cozystack.io
+spec:
+  group: subresources.proxmox.cozystack.io
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: proxmox-console-proxy
+    namespace: {{ .Release.Namespace }}
+    port: 443
+  version: v1alpha1
