@@ -35,6 +35,7 @@ type s3ObjectInfo struct {
 
 type s3ObjectLister interface {
 	ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error)
+	StatObject(ctx context.Context, bucket, key string) (int64, error)
 }
 
 // s3Connection is what a driver resolves from its rendered strategy to
@@ -113,6 +114,14 @@ func endpointTrustPool(conn s3Connection, system *x509.CertPool) (*x509.CertPool
 
 func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
 	return collectObjects(ctx, l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive}))
+}
+
+func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) (int64, error) {
+	info, err := l.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
 }
 
 // collectObjects drains a minio listing. minio-go ends a listing whose
