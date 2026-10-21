@@ -1,7 +1,5 @@
 #!/usr/bin/env bats
 
-load test_helper
-
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 VMALERT_TOOL_IMAGE="victoriametrics/vmalert-tool:v1.136.0@sha256:417346d7b6fdb66d8e3984887c2ad114535ec7d983eeef53381b56c776f333f1"
 
