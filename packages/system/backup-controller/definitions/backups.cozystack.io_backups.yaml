@@ -132,9 +132,18 @@ spec:
                     type: string
                   sizeBytes:
                     description: |-
-                      SizeBytes is the size of the artifact in bytes, if known. Drivers
-                      leave it unset rather than writing 0 when they cannot measure the
-                      stored size, so an absent value means "unknown", not "empty".
+                      SizeBytes is the size of the backup in bytes, if known. What it
+                      measures depends on how the strategy stores data:
+                        - Strategies that write files to object storage (for example
+                          MariaDB dumps or CNPG base backups) report the bytes stored,
+                          after compression.
+                        - Velero strategies report the logical size of the backed-up
+                          volumes: the bytes read from them, which a restore writes back.
+                          The space taken in the backup repository is usually smaller and
+                          is not reported, because the repository compresses data and
+                          shares it across backups.
+                      Drivers leave it unset rather than writing 0 when they cannot
+                      measure it, so an absent value means "unknown", not "empty".
                     format: int64
                     type: integer
                   uri:

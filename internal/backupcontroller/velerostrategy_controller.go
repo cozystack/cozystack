@@ -558,11 +558,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		veleroBackupNamespaceMetadataKey: veleroBackup.Namespace,
 	}
 
-	// SizeBytes stays unset: data lands in a content-addressed kopia
-	// repository shared across backups, so there is no per-backup stored
-	// size, and DataUpload totalBytes counts bytes read, not bytes stored.
 	artifact := &backupsv1alpha1.BackupArtifact{
-		URI: fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
+		URI:       fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
+		SizeBytes: r.veleroArtifactSizeBytes(ctx, veleroBackup),
 	}
 
 	// Read underlying resources from Velero Backup annotation
