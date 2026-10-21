@@ -1,0 +1,76 @@
+suite: cozystack-basics tenant access to the Proxmox substrate console
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# subresources.proxmox.cozystack.io is served by the console proxy of the
+# proxmox-vm package in the shape of subresources.kubevirt.io, so a tenant
+# needs the same verbs there: get on vnc/console, update on start/stop/restart.
+# The proxy also asks whether the caller may get the kubemox VirtualMachine.
+tests:
+  - it: grants tenant use the Proxmox console and power subresources as it does the KubeVirt ones
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-use"]
+          value: "true"
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["subresources.proxmox.cozystack.io"]
+            resources:
+              - virtualmachines/console
+              - virtualmachines/vnc
+            verbs:
+              - get
+              - list
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["subresources.proxmox.cozystack.io"]
+            resources:
+              - virtualmachines/start
+              - virtualmachines/stop
+              - virtualmachines/restart
+            verbs:
+              - update
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["subresources.kubevirt.io"]
+            resources:
+              - virtualmachines/start
+              - virtualmachines/stop
+              - virtualmachines/restart
+            verbs:
+              - update
+
+  - it: lets a tenant admin read the kubemox VirtualMachine as it reads the KubeVirt one
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["proxmox.alperen.cloud"]
+            resources:
+              - virtualmachines
+            verbs:
+              - get
+              - list
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubevirt.io"]
+            resources:
+              - virtualmachines
+            verbs:
+              - get
+              - list

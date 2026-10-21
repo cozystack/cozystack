@@ -206,6 +206,25 @@ rules:
   - virtualmachines/restart
   verbs:
   - update
+# The same console and power controls for a vm-instance on the Proxmox
+# substrate: subresources.proxmox.cozystack.io is the aggregated API of the
+# proxmox-vm package, in the shape of the KubeVirt one. The proxy behind it
+# asks for "get" on the kubemox VirtualMachine as well, which the admin base
+# below grants alongside the KubeVirt VirtualMachine.
+- apiGroups: ["subresources.proxmox.cozystack.io"]
+  resources:
+  - virtualmachines/console
+  - virtualmachines/vnc
+  verbs:
+  - get
+  - list
+- apiGroups: ["subresources.proxmox.cozystack.io"]
+  resources:
+  - virtualmachines/start
+  - virtualmachines/stop
+  - virtualmachines/restart
+  verbs:
+  - update
 - apiGroups:
   - core.cozystack.io
   resources:
@@ -245,6 +264,15 @@ rules:
   verbs:
   - delete
 - apiGroups: ["kubevirt.io"]
+  resources:
+  - virtualmachines
+  verbs:
+  - get
+  - list
+# The kubemox VirtualMachine behind a vm-instance on the Proxmox substrate:
+# the dashboard reads its power state, and the console proxy checks this
+# very permission before opening a console.
+- apiGroups: ["proxmox.alperen.cloud"]
   resources:
   - virtualmachines
   verbs:
