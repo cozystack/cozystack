@@ -272,16 +272,20 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
 		// Update the fields this API owns on the FETCHED object, so the operator's
-		// finalizer survives. Replace url, interval, ref and secretRef from this
-		// connect, but PRESERVE a spec.verify set earlier (by this API or by an
-		// admin): a repeat connect must never silently drop a signature-verification
-		// policy. Replacing the whole ref rather than merging it is deliberate: it
-		// drops the operator's prior digest pin so the newly requested tag re-
-		// resolves (the operator re-pins it). A connect that itself carries verify
+		// finalizer survives. Replace url, interval and ref from this connect, but
+		// PRESERVE a spec.verify or spec.secretRef set earlier (by this API or by
+		// an admin) when this connect does not carry its own: a repeat connect must
+		// never silently drop a signature-verification policy or a pull credential.
+		// Replacing the whole ref rather than merging it is deliberate: it drops the
+		// operator's prior digest pin so the newly requested tag re-resolves (the
+		// operator re-pins it). A connect that itself carries verify or a secret
 		// overrides the preserved one.
 		newSpec := map[string]any{}
 		if existingVerify, ok, _ := unstructured.NestedMap(cur.Object, "spec", "verify"); ok {
 			newSpec["verify"] = existingVerify
+		}
+		if existingSecret, ok, _ := unstructured.NestedMap(cur.Object, "spec", "secretRef"); ok {
+			newSpec["secretRef"] = existingSecret
 		}
 		for k, v := range repo.Object["spec"].(map[string]any) {
 			newSpec[k] = v

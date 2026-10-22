@@ -344,6 +344,7 @@ func TestCreateRepeatPreservesVerifyAndResetsPin(t *testing.T) {
 		"provider":          "cosign",
 		"matchOIDCIdentity": []any{map[string]any{"issuer": "https://token.actions.githubusercontent.com", "subject": "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"}},
 	}, "spec", "verify")
+	_ = unstructured.SetNestedMap(existing.Object, map[string]any{"name": "pull-creds"}, "spec", "secretRef")
 	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
 	existing.SetAnnotations(map[string]string{
 		"apps.cozystack.io/materialized-revision": "v1@" + oldDigest,
@@ -361,6 +362,9 @@ func TestCreateRepeatPreservesVerifyAndResetsPin(t *testing.T) {
 	}
 	if prov, _, _ := unstructured.NestedString(u.Object, "spec", "verify", "provider"); prov != "cosign" {
 		t.Errorf("spec.verify was dropped on repeat connect: %+v", u.Object["spec"])
+	}
+	if name, _, _ := unstructured.NestedString(u.Object, "spec", "secretRef", "name"); name != "pull-creds" {
+		t.Errorf("spec.secretRef must be preserved on a repeat connect that omits a secret, got %q", name)
 	}
 	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
 		t.Errorf("tag not updated to v2, got %q", tag)
