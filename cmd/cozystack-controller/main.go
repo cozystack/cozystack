@@ -27,17 +27,13 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/cluster"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -48,15 +44,9 @@ import (
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
-	"github.com/cozystack/cozystack/internal/controller/cacert"
-	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
-	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
-	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	"github.com/cozystack/cozystack/internal/gpu"
-	gpucontroller "github.com/cozystack/cozystack/internal/gpu/controller"
 	"github.com/cozystack/cozystack/internal/gpu/model"
-	gpuwebhook "github.com/cozystack/cozystack/internal/gpu/webhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -103,12 +93,16 @@ func main() {
 	var tlsOpts []func(*tls.Config)
 	var gpuCfg gpu.Config
 	var gpuResourceNames, gpuRawResourceNames string
+	var gpuOnly bool
+	var leaderElectionID string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&leaderElectionID, "leader-election-id", defaultLeaderElectionID,
+		"Name of the leader election Lease, in the controller's own namespace.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
@@ -135,11 +129,16 @@ func main() {
 		"How long a GPU node stays NotReady, or serves fewer units of a GPU resource than its devices hold, before those devices move.")
 	flag.DurationVar(&gpuCfg.AttachmentGrace, "gpu-attachment-grace", 2*time.Minute,
 		"How long a GPUDevice attachment waits for its VMI to appear; must exceed the API server request timeout.")
+	flag.BoolVar(&gpuOnly, "gpu-only", false,
+		"Run only the GPU binder, its webhooks and probes. Needs --enable-gpu. Meant to run beside a cozystack-controller built without the GPU binder: "+
+			"beside one built from this tree, two binders would run, so enable GPU on that one instead. "+
+			"That older controller's WorkloadMonitor still counts device GPUs on virt-launcher pods, so a VM an application monitor covers is counted twice.")
 	opts := zap.Options{
 		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// Parse telemetry interval
 	interval, err := time.ParseDuration(telemetryInterval)
@@ -171,6 +170,10 @@ func main() {
 		setupLog.Error(nil, "invalid --gpu-raw-resource-names, want allowed or forbidden", "value", gpuRawResourceNames)
 		os.Exit(1)
 	}
+	if err := validateGPUOnly(gpuOnly, gpuCfg.Enabled, enableLeaderElection, leaderElectionID); err != nil {
+		setupLog.Error(err, "invalid flags")
+		os.Exit(1)
+	}
 
 	// Configure telemetry
 	telemetryConfig := telemetry.Config{
@@ -178,8 +181,6 @@ func main() {
 		Endpoint: telemetryEndpoint,
 		Interval: interval,
 	}
-
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -233,7 +234,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "19a0338c.cozystack.io",
+		LeaderElectionID:       leaderElectionID,
 		// Scope the shared Secret informer so the WildcardSecret reconciler's
 		// cluster-wide Secret watch does not cache every Secret (and its key
 		// material) in memory. Only managed wildcard replicas and the values
@@ -245,9 +246,9 @@ func main() {
 		// v1/Secret would route to THIS same per-GVK cache and inherit its
 		// wildcard-replica label selector, so its source watch would never fire for
 		// an unlabelled CA source. It therefore owns a SEPARATE metadata-only cache
-		// (caSecretCluster, below) and reads the one source it projects through the
-		// uncached APIReader. So this manager-level Secret scoping is
-		// wildcardsecret's alone.
+		// (caSecretCluster, in the CACert step of setup.go) and reads the one
+		// source it projects through the uncached APIReader. So this
+		// manager-level Secret scoping is wildcardsecret's alone.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
@@ -271,178 +272,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.WorkloadMonitorReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		Recorder:                 mgr.GetEventRecorderFor("workloadmonitor-controller"),
-		SeaweedfsMetricsEndpoint: seaweedfsMetricsEndpoint,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitor")
-		os.Exit(1)
-	}
-
-	if err = (&controller.WorkloadReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkloadReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.ApplicationDefinitionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.ApplicationDefinitionHelmReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("applicationdefinition-helm-reconciler"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&tenantgateway.Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
-		os.Exit(1)
-	}
-
-	if err = (&tenantquota.Reconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("tenantquota-controller"),
-		BufferPercent: quotaBufferPercent,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
-		os.Exit(1)
-	}
-
-	if err = (&tenantlogrouting.Reconciler{
-		Client: mgr.GetClient(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantLogRouting")
-		os.Exit(1)
-	}
-
-	if err = (&wildcardsecret.Reconciler{
-		Client:   mgr.GetClient(),
-		Reader:   mgr.GetAPIReader(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("wildcardsecret"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WildcardSecret")
-		os.Exit(1)
-	}
-
-	// The CA-extraction reconciler watches its source Secrets as metadata only, so
-	// no private key ever enters a cache. It cannot watch them on the manager's
-	// cache: that cache's Secret informer is label-scoped to WildcardSecret's
-	// replicas (above), a metadata informer for the same v1/Secret GVK routes to
-	// that same scoped informer and inherits the selector, and the watch would
-	// then silently never fire for an unlabelled CA source — the projection would
-	// appear only on the slow resync. So it owns a SEPARATE cache, metadata-only
-	// and unscoped, holding Secret metadata stubs cluster-wide (no key material).
-	// It is a cluster.Cluster so mgr.Add registers it in the manager's
-	// cache-runnable group — started, waited-for-sync before the controllers run,
-	// and stopped on shutdown, exactly like the shared cache.
-	caSecretCluster, err := cluster.New(config, func(o *cluster.Options) {
-		o.Scheme = scheme
+	steps := managerSteps(mgr, setupConfig{
+		restConfig:               config,
+		gpu:                      gpuCfg,
+		quotaBufferPercent:       quotaBufferPercent,
+		seaweedfsMetricsEndpoint: seaweedfsMetricsEndpoint,
+		telemetry:                telemetryConfig,
 	})
-	if err != nil {
-		setupLog.Error(err, "unable to build the CA source metadata cache")
-		os.Exit(1)
-	}
-	if err = mgr.Add(caSecretCluster); err != nil {
-		setupLog.Error(err, "unable to add the CA source metadata cache to the manager")
-		os.Exit(1)
-	}
-
-	if err = (&cacert.Reconciler{
-		Client:   mgr.GetClient(),
-		Reader:   mgr.GetAPIReader(),
-		Recorder: mgr.GetEventRecorderFor("cacert-controller"),
-	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CACert")
-		os.Exit(1)
-	}
-
-	if err = gpucontroller.Setup(mgr, gpuCfg); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "GPU")
-		os.Exit(1)
-	}
-	// Asking the manager for its webhook server starts it, and the server
-	// needs a serving certificate, so registration waits for --enable-gpu.
-	if gpuCfg.Enabled {
-		if err = gpuwebhook.Register(mgr, gpuCfg); err != nil {
-			setupLog.Error(err, "unable to register the GPU webhooks")
+	for _, s := range selectSteps(steps, gpuOnly) {
+		if err := s.run(); err != nil {
+			setupLog.Error(err, "unable to set up the manager", "step", s.name)
 			os.Exit(1)
 		}
 	}
-
 	// +kubebuilder:scaffold:builder
-
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up health check")
-		os.Exit(1)
-	}
-	// With GPU enabled, a replica is ready only once the GPU, Node,
-	// ConfigMap and Namespace informers have synced. Every replica starts
-	// them, because one that is not the leader starts no controller and GPU
-	// admission has to answer from a warm cache rather than LIST inside its
-	// deadline. Readiness does not wait for KubeVirt, whose kinds a fresh
-	// install can serve only after this controller starts: packages that
-	// depend on cozystack-controller wait for its readiness. The VMI and
-	// KubeVirt informers start once their kinds are served.
-	readyz := healthz.Ping
-	if gpuCfg.Enabled {
-		vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
-		kvGVK := vmiGVK.GroupVersion().WithKind("KubeVirt")
-		vmi := &unstructured.Unstructured{}
-		vmi.SetGroupVersionKind(vmiGVK)
-		kv := &unstructured.Unstructured{}
-		kv.SetGroupVersionKind(kvGVK)
-		warmup := &gpu.Warmup{
-			Mapper:    mgr.GetRESTMapper(),
-			Informers: mgr.GetCache(),
-			Objects: []client.Object{&gpuv1alpha1.GPUDevice{}, &gpuv1alpha1.GPUClass{}, &gpuv1alpha1.GPUNode{},
-				&corev1.Node{}, &corev1.ConfigMap{}, &corev1.Namespace{}},
-			Kinds:           []schema.GroupVersionKind{vmiGVK, kvGVK},
-			KubeVirtObjects: []client.Object{vmi, kv},
-			Interval:        5 * time.Second,
-			OnWait: func(k schema.GroupVersionKind, err error) {
-				setupLog.Info("waiting for a KubeVirt kind the GPU webhooks read", "kind", k.String(), "reason", err.Error())
-			},
-		}
-		if err := mgr.Add(warmup); err != nil {
-			setupLog.Error(err, "unable to add the GPU informer warm-up")
-			os.Exit(1)
-		}
-		readyz = warmup.Ready
-	}
-	if err := mgr.AddReadyzCheck("readyz", readyz); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
-	}
-
-	// Initialize telemetry collector
-	collector, err := telemetry.NewCollector(mgr.GetClient(), &telemetryConfig, mgr.GetConfig())
-	if err != nil {
-		setupLog.V(1).Error(err, "unable to create telemetry collector, telemetry will be disabled")
-	}
-
-	if collector != nil {
-		if err := mgr.Add(collector); err != nil {
-			setupLog.Error(err, "unable to set up telemetry collector")
-			setupLog.V(1).Error(err, "unable to set up telemetry collector, continuing without telemetry")
-		}
-	}
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
