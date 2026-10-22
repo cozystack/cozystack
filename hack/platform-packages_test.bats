@@ -166,6 +166,40 @@ load test_helper
   done
 }
 
+@test "gpu-operator serves VMs and permits the fake GPU unless the selection drops it" {
+  manifest=$(hack/e2e-platform-packages.sh)
+  enabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.enabledPackages | join(",")')
+  fake=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.gpu.permittedHostDevices.pciHostDevices[] | select(.resourceName == "nvidia.com/E2E_FAKE_GPU") | .externalResourceProvider')
+
+  if [ "$enabled" != "cozystack.external-dns-application,cozystack.gpu-operator" ]; then
+    echo "an unscoped install does not enable gpu-operator: $enabled" >&2
+    return 1
+  fi
+  if [ "$fake" != "true" ]; then
+    echo "the fake GPU resource name is not permitted as an external provider: '$fake'" >&2
+    return 1
+  fi
+
+  manifest=$(COZY_DISABLED_PACKAGES="cozystack.gpu-operator" hack/e2e-platform-packages.sh)
+  enabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.enabledPackages | join(",")')
+  gpu=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values | has("gpu")')
+  if [ "$enabled" != "cozystack.external-dns-application" ] || [ "$gpu" != "false" ]; then
+    echo "a selection without gpu-operator still enables it: enabled=$enabled gpu=$gpu" >&2
+    return 1
+  fi
+}
+
+@test "a gpudevice selection keeps gpu-operator enabled" {
+  disabled=$(hack/select-install.sh --disabled gpudevice)
+  manifest=$(COZY_DISABLED_PACKAGES="$disabled" hack/e2e-platform-packages.sh)
+  enabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.enabledPackages | join(",")')
+
+  if [ "$enabled" != "cozystack.external-dns-application,cozystack.gpu-operator" ]; then
+    echo "a gpudevice selection does not enable gpu-operator: $enabled" >&2
+    return 1
+  fi
+}
+
 @test "a malformed package name fails before emitting YAML" {
   for bad in "goldpinger" "cozystack." "cozystack.Gold" "cozystack.a;b"; do
     if manifest=$(COZY_DISABLED_PACKAGES="cozystack.keda $bad" hack/e2e-platform-packages.sh 2>/dev/null); then

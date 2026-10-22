@@ -78,11 +78,35 @@ spec:
             - cozystack.external-dns-application
 EOF
 
+# gpu-operator is optional, so a closure that keeps it still has to list it.
+# Enabled, it turns on cozystack-controller's GPU paths, which the gpudevice
+# suite drives with a fake extended resource; KubeVirt must permit that name
+# as an external provider, or a VM using a class on it is refused at
+# admission.
+gpu_operator=true
+case " $disabled " in
+  *" cozystack.gpu-operator "*) gpu_operator=false ;;
+esac
+if [ "$gpu_operator" = true ]; then
+  echo "            - cozystack.gpu-operator"
+fi
+
 if [ -n "$disabled" ]; then
   echo "          disabledPackages:"
   for pkg in $disabled; do
     echo "            - $pkg"
   done
+fi
+
+if [ "$gpu_operator" = true ]; then
+  cat <<'EOF'
+        gpu:
+          permittedHostDevices:
+            pciHostDevices:
+              - pciVendorSelector: "10DE:FFFF"
+                resourceName: nvidia.com/E2E_FAKE_GPU
+                externalResourceProvider: true
+EOF
 fi
 
 if [ "$linstor_drbd_enabled" = false ]; then
