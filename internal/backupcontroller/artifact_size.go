@@ -47,8 +47,11 @@ type s3Connection struct {
 	AccessKey    string
 	SecretKey    string
 	SessionToken string
-	// CAPEM is trusted on top of the system pool when set.
-	CAPEM []byte
+	// CAPEM is an endpoint CA bundle. It is trusted on top of the system
+	// roots, or instead of them when CAOnly is set: the probe must trust
+	// what the writer of the backup trusted, no more.
+	CAPEM  []byte
+	CAOnly bool
 }
 
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
@@ -74,16 +77,9 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		if err != nil {
 			return nil, err
 		}
-		pool := tr.TLSClientConfig.RootCAs
-		if pool == nil {
-			if pool, err = x509.SystemCertPool(); err != nil {
-				pool = x509.NewCertPool()
-			}
+		if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
+			return nil, err
 		}
-		if !pool.AppendCertsFromPEM(conn.CAPEM) {
-			return nil, errors.New("no PEM certificates in the endpoint CA bundle")
-		}
-		tr.TLSClientConfig.RootCAs = pool
 		opts.Transport = tr
 	}
 	// minio.New refuses an endpoint with a path prefix, which it cannot
@@ -93,6 +89,26 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		return nil, err
 	}
 	return &minioObjectLister{client: client}, nil
+}
+
+// endpointTrustPool returns the roots to verify the endpoint against: the
+// CA bundle on top of system, or the CA bundle alone with CAOnly. A nil
+// system means the platform's roots.
+func endpointTrustPool(conn s3Connection, system *x509.CertPool) (*x509.CertPool, error) {
+	pool := system
+	switch {
+	case conn.CAOnly:
+		pool = x509.NewCertPool()
+	case pool == nil:
+		var err error
+		if pool, err = x509.SystemCertPool(); err != nil {
+			pool = x509.NewCertPool()
+		}
+	}
+	if !pool.AppendCertsFromPEM(conn.CAPEM) {
+		return nil, errors.New("no PEM certificates in the endpoint CA bundle")
+	}
+	return pool, nil
 }
 
 func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
