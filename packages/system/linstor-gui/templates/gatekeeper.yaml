@@ -89,7 +89,14 @@ spec:
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
-            - --scope=openid email profile groups offline_access
+            # No offline_access: that scope makes Keycloak issue an *offline*
+            # refresh token, which is decoupled from the SSO session and is NOT
+            # revoked by logout (end_session). Since oauth2-proxy keeps the
+            # refresh token in the kc-access cookie and silently refreshes it,
+            # a copied cookie would stay valid for the whole offline-session
+            # lifetime (~30d) even after the user logs out. An online refresh
+            # token is bound to the SSO session and is revoked on logout.
+            - --scope=openid email profile groups
             - --allowed-group=cozystack-cluster-admin
             {{- if eq $oidcInsecureSkipVerify "true" }}
             - --ssl-insecure-skip-verify=true

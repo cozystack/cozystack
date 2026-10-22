@@ -127,7 +127,7 @@ tests:
           content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --scope=openid email profile groups offline_access
+          content: --scope=openid email profile groups
       - contains:
           path: spec.template.spec.containers[0].args
           content: --allowed-group=cozystack-cluster-admin
