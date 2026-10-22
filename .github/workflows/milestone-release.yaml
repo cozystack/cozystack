@@ -1,0 +1,224 @@
+name: Milestone release
+
+# A milestone titled exactly vX.Y.Z is the scope of release vX.Y.Z, and the
+# end of the milestone is the release (docs/release.md, "Milestones"). This
+# workflow is the hand-off between the two:
+#
+#   1. Once every item in the milestone is closed, or its due date has come,
+#      it opens one `Release vX.Y.Z` tracking issue inside the milestone. The
+#      issue lists what was delivered, what is still open, and the release
+#      steps with the exact tag and branch to cut from.
+#   2. Once the stable vX.Y.Z release is published, it closes that issue and
+#      the milestone.
+#
+# It never cuts a tag, creates a branch or dispatches another workflow. Cutting
+# the first rc freezes release-X.Y, and cut-prerelease.yaml keeps that a
+# maintainer's decision; promotion stays a reviewed PR. What this adds is that
+# nobody has to notice the milestone is done before the release begins.
+on:
+  issues:
+    types: [closed]
+  release:
+    types: [published]
+  schedule:
+    - cron: '17 6 * * *'  # daily at 06:17 UTC, after issue-triage (05:53)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log what would be opened or closed without writing'
+        type: boolean
+        # On by default, like issue-triage.yaml: the one entry point a human
+        # can reach writes nothing until somebody unchecks it.
+        default: true
+
+permissions:
+  contents: read
+
+# Every run sweeps every open milestone, so one queue is enough and a run that
+# loses its pending slot to a newer one loses nothing.
+concurrency:
+  group: milestone-release
+  cancel-in-progress: false
+
+jobs:
+  milestone:
+    # An issue closed outside any milestone cannot finish one.
+    if: github.event_name != 'issues' || github.event.issue.milestone != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # tags, branches and releases
+      issues: write   # the tracking issue and closing the milestone
+    steps:
+      - name: Open or close milestone releases
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const server = `${context.serverUrl}/${owner}/${repo}`;
+            const VERSION = /^v(\d+)\.(\d+)\.(\d+)$/;
+            const LABEL = 'area/release';
+            // Issues opened with GITHUB_TOKEN wake no issue-triage run, and the
+            // milestone is already the maintainers' decision. On stale.yaml's
+            // exempt list too, so a long rc phase cannot rot the issue.
+            const TRIAGED = 'triage/accepted';
+            // An issue body is capped at 65536 characters; past this many
+            // lines the list points at the milestone instead.
+            const MAX_LISTED = 250;
+
+            // `issues`, `release` and `schedule` write without being asked.
+            // Any trigger added later starts out dry, and a dispatch writes
+            // only on the literal `false` (inputs arrive as strings).
+            const dryRun =
+              !['issues', 'release', 'schedule'].includes(context.eventName) &&
+              String(context.payload.inputs?.dry_run ?? 'true') !== 'false';
+            const write = async (what, fn) => {
+              core.info(`${dryRun ? '[dry-run] would ' : ''}${what}`);
+              if (!dryRun) await fn();
+            };
+            const notFound = (err) => {
+              if (err.status === 404) return null;
+              throw err;
+            };
+
+            const list = (items) => {
+              const lines = items
+                .slice(0, MAX_LISTED)
+                .map((i) => `- #${i.number} ${i.title}`);
+              if (items.length > MAX_LISTED) {
+                lines.push(`- … and ${items.length - MAX_LISTED} more in the milestone`);
+              }
+              return lines.join('\n');
+            };
+
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+
+            for (const ms of milestones) {
+              const m = ms.title.match(VERSION);
+              if (!m) {
+                core.info(`${ms.title}: not a vX.Y.Z milestone, skipped`);
+                continue;
+              }
+              const version = ms.title;
+              const line = `${m[1]}.${m[2]}`;
+              const title = `Release ${version}`;
+
+              // listForRepo returns pull requests too: both are delivered work.
+              const items = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, milestone: String(ms.number), state: 'all', per_page: 100,
+              });
+              const tracking = items.find((i) =>
+                !i.pull_request && i.title === title &&
+                i.labels.some((l) => (l.name ?? l) === LABEL));
+              // The tracking issue is the release itself, not work in its scope.
+              const work = items.filter((i) => i !== tracking);
+              const open = work.filter((i) => i.state === 'open');
+              const done = work.filter((i) => i.state === 'closed');
+              // Closed is not delivered: an issue closed as not planned, or a
+              // pull request closed unmerged, shipped nothing.
+              const delivered = done.filter((i) =>
+                i.state_reason !== 'not_planned' &&
+                !(i.pull_request && !i.pull_request.merged_at));
+              const n = (k, what) => `${k} ${what}${k === 1 ? '' : 's'}`;
+
+              // getReleaseByTag never returns a draft, and promotion keeps the
+              // stable release a draft until finalize publishes it.
+              const release = await github.rest.repos
+                .getReleaseByTag({ owner, repo, tag: version })
+                .then((r) => r.data, notFound);
+              if (release && !release.prerelease) {
+                if (tracking && tracking.state === 'open') {
+                  await write(`close #${tracking.number}: ${version} is published`, async () => {
+                    await github.rest.issues.createComment({
+                      owner, repo, issue_number: tracking.number,
+                      body: `${version} is published: ${release.html_url}`,
+                    });
+                    await github.rest.issues.update({
+                      owner, repo, issue_number: tracking.number,
+                      state: 'closed', state_reason: 'completed',
+                    });
+                  });
+                }
+                await write(`close milestone ${version}`, () =>
+                  github.rest.issues.updateMilestone({
+                    owner, repo, milestone_number: ms.number, state: 'closed',
+                  }));
+                continue;
+              }
+
+              if (tracking) {
+                core.info(`${version}: release is under way in #${tracking.number}`);
+                continue;
+              }
+              const complete = open.length === 0 && done.length > 0;
+              const due = ms.due_on !== null && new Date(ms.due_on) <= new Date();
+              if (!complete && !due) {
+                core.info(`${version}: ${open.length} open, ${done.length} closed, not due`);
+                continue;
+              }
+
+              // Where the next rc comes from, by the rules cut-prerelease.yaml
+              // enforces: a new minor from main until its first rc creates
+              // release-X.Y, everything after that from release-X.Y.
+              const branch = `release-${line}`;
+              const frozen = await github.rest.repos
+                .getBranch({ owner, repo, branch })
+                .then(() => true, (err) => notFound(err) ?? false);
+              const from = m[3] === '0' && !frozen ? 'main' : branch;
+              const rcs = (await github.rest.git.listMatchingRefs({
+                owner, repo, ref: `tags/${version}-rc.`,
+              })).data
+                .map((r) => Number(r.ref.split('-rc.')[1]))
+                .filter(Number.isInteger);
+              const rc = `${version}-rc.${Math.max(0, ...rcs) + 1}`;
+
+              const reason = complete
+                ? `all ${n(done.length, 'item')} in it are closed`
+                : `its due date ${ms.due_on.slice(0, 10)} has come with ${n(open.length, 'item')} still open`;
+              const body = [
+                `The [${version} milestone](${ms.html_url}) is done: ${reason}.`,
+                '',
+                'The end of a milestone is the release ([docs/release.md, "Milestones"]' +
+                  `(${server}/blob/main/docs/release.md#milestones)). This issue tracks ` +
+                  `${version} until it is published, then closes together with the milestone.`,
+                '',
+                `### Delivered (${delivered.length})`,
+                '',
+                delivered.length ? list(delivered) : '_nothing_',
+                '',
+                ...(open.length ? [
+                  `### Still open (${open.length})`,
+                  '',
+                  'Finish each one, or move it to the next milestone, before the rc is cut:',
+                  '',
+                  list(open),
+                  '',
+                ] : []),
+                '### Release steps',
+                '',
+                ...(rcs.length ? [
+                  `Already cut: ${rcs.sort((a, b) => a - b).map((n) => `\`${version}-rc.${n}\``).join(', ')}.`,
+                  '',
+                ] : []),
+                ...(from === branch ? [
+                  `- [ ] Everything delivered is on \`${branch}\`: \`./backport-audit ${branch}\` exits 0 ` +
+                    `([Backports](${server}/blob/main/docs/release.md#backports))`,
+                ] : []),
+                `- [ ] Cut \`${rc}\`: run [Cut Pre-release Tag](${server}/actions/workflows/cut-prerelease.yaml) ` +
+                  `from \`${from}\`` + (from === 'main' ? `, which also freezes \`${branch}\`` : ''),
+                `- [ ] \`rc-e2e\` is green and the [pre-release verification checklist]` +
+                  `(${server}/blob/main/docs/release.md#pre-release-verification-checklist) is done`,
+                `- [ ] Run [promote-rc.yaml](${server}/actions/workflows/promote-rc.yaml) from \`main\` with that rc`,
+                `- [ ] Review the promote PR against the [Phase 4 checklist]` +
+                  `(${server}/blob/main/docs/release.md#phase-4--review-and-merge-the-promote-pr) and merge it, not squashed`,
+                '- [ ] Merge the parked `cozystack/website` docs PR once the release is published',
+                '- [ ] Announce the release, with the delivered list above',
+              ].join('\n');
+
+              await write(`open "${title}" in milestone ${version} (${reason})`, () =>
+                github.rest.issues.create({
+                  owner, repo, title, body, labels: [LABEL, TRIAGED], milestone: ms.number,
+                }));
+            }
