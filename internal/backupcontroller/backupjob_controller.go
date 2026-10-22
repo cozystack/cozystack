@@ -135,6 +135,23 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("strategy Kind %q is not supported by this controller (supported: %s)", strategyRef.Kind, strings.Join(supportedBackupStrategyKinds(), ", ")))
 	}
 
+	// Hold a run that has not started while a restore writes into its
+	// application. Only before StartedAt: every driver stamps it on its
+	// first pass, and a run already moving data is not interrupted here.
+	if j.Status.StartedAt == nil {
+		restore, err := activeRestoreTargeting(ctx, r.Client, j.Namespace, normalizedAppRef)
+		if err != nil {
+			logger.Error(err, "failed to check for a restore in progress")
+			return ctrl.Result{}, err
+		}
+		if restore != "" {
+			return r.holdForRestore(ctx, j, restore)
+		}
+		if err := r.releaseRestoreHold(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Now project the platform-managed S3 credentials into the tenant
 	// namespace so default Strategy CRs can reference a deterministic
 	// Secret name. The projection is idempotent and silently skipped on
