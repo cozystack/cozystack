@@ -180,6 +180,24 @@ func buildTapOCIRepository(name string, r ociRef, secret string, verify *sourcev
 	return obj
 }
 
+// carryoverSourceFields preserves an existing tap source's verification policy
+// and pull credential when this invocation did not set them from flags, so a
+// re-tap (e.g. to move the pin to a new tag) never silently drops signature
+// verification or the pull secret. A server-side apply that omits a field this
+// field owner previously set would otherwise remove it, which the API connect
+// path (rest.go) deliberately avoids; this keeps the CLI symmetric with it.
+func carryoverSourceFields(obj, existing *sourcev1.OCIRepository, flagVerify *sourcev1.OCIRepositoryVerification, flagSecret string) {
+	if existing == nil {
+		return
+	}
+	if flagVerify == nil && existing.Spec.Verify != nil {
+		obj.Spec.Verify = existing.Spec.Verify
+	}
+	if flagSecret == "" && existing.Spec.SecretRef != nil {
+		obj.Spec.SecretRef = existing.Spec.SecretRef
+	}
+}
+
 // tapVerification builds a keyless cosign verification policy from the connect
 // flags, or nil when neither is set. Both the certificate identity (subject)
 // and the OIDC issuer are required together: a policy that verified a signature
@@ -396,6 +414,9 @@ runs its charts in your management cluster: tap only sources you trust.`,
 			if existing.Spec.URL != "" && existing.Spec.URL != ref.URL {
 				return fmt.Errorf("a different repository (%s) is already tapped as %q; run 'cozypkg untap %s' before tapping %s", existing.Spec.URL, srcName, names[0], ref.URL)
 			}
+			// Same repository, re-tapped: carry over a verify policy or pull secret
+			// this invocation did not set, so moving the pin never silently drops them.
+			carryoverSourceFields(ociRepo, existing, verify, tapCmdFlags.secret)
 		}
 
 		// A tapped repository keeps its own declared name. Refuse the whole tap

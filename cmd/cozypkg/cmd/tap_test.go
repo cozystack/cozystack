@@ -22,6 +22,7 @@ import (
 	"io"
 	"testing"
 
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -205,6 +206,40 @@ func TestTapVerification(t *testing.T) {
 	if v.MatchOIDCIdentity[0].Issuer != "https://token.actions.githubusercontent.com" || v.MatchOIDCIdentity[0].Subject == "" {
 		t.Errorf("identity matcher not set: %+v", v.MatchOIDCIdentity[0])
 	}
+}
+
+func TestCarryoverSourceFields(t *testing.T) {
+	verifyPol := &sourcev1.OCIRepositoryVerification{Provider: "cosign", MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{Issuer: "iss", Subject: "subj"}}}
+	existing := &sourcev1.OCIRepository{Spec: sourcev1.OCIRepositorySpec{
+		Verify:    verifyPol,
+		SecretRef: &fluxmeta.LocalObjectReference{Name: "pull-creds"},
+	}}
+
+	// Re-tap without flags: an existing verify policy and pull secret are carried
+	// onto the object to apply, so a server-side apply that omits them does not
+	// remove them (SSA prunes a previously-owned field left out of the apply).
+	obj := &sourcev1.OCIRepository{}
+	carryoverSourceFields(obj, existing, nil, "")
+	if obj.Spec.Verify == nil {
+		t.Error("existing verify policy must be preserved when no --certificate-* flags are given")
+	}
+	if obj.Spec.SecretRef == nil || obj.Spec.SecretRef.Name != "pull-creds" {
+		t.Error("existing pull secret must be preserved when no --secret is given")
+	}
+
+	// Flags present: the invocation's own values win, nothing is carried over.
+	flagVerify := &sourcev1.OCIRepositoryVerification{Provider: "cosign"}
+	obj2 := &sourcev1.OCIRepository{Spec: sourcev1.OCIRepositorySpec{Verify: flagVerify, SecretRef: &fluxmeta.LocalObjectReference{Name: "new-creds"}}}
+	carryoverSourceFields(obj2, existing, flagVerify, "new-creds")
+	if obj2.Spec.Verify != flagVerify {
+		t.Error("a verify policy from flags must not be overwritten by the existing one")
+	}
+	if obj2.Spec.SecretRef.Name != "new-creds" {
+		t.Error("a secret from --secret must not be overwritten by the existing one")
+	}
+
+	// No existing source: a no-op, no panic.
+	carryoverSourceFields(&sourcev1.OCIRepository{}, nil, nil, "")
 }
 
 func TestBuildTapOCIRepositoryWithVerify(t *testing.T) {
