@@ -55,6 +55,8 @@ var tapCmdFlags struct {
 	kubeconfig   string
 	index        string
 	skipValidate bool
+	certIdentity string
+	certIssuer   string
 }
 
 // ociRef is the parsed form of an oci:// reference.
@@ -148,7 +150,7 @@ func fluxSourceName(r ociRef) string {
 // optional pull-credential secretRef (the private-tap credential, symmetric
 // with #2472). A tag-only reference is pinned to a digest later by the tap
 // materializer; an explicit digest is pinned here at connect time.
-func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRepository {
+func buildTapOCIRepository(name string, r ociRef, secret string, verify *sourcev1.OCIRepositoryVerification) *sourcev1.OCIRepository {
 	obj := &sourcev1.OCIRepository{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: sourcev1.GroupVersion.String(),
@@ -172,7 +174,28 @@ func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRe
 	if secret != "" {
 		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{Name: secret}
 	}
+	if verify != nil {
+		obj.Spec.Verify = verify
+	}
 	return obj
+}
+
+// tapVerification builds a keyless cosign verification policy from the connect
+// flags, or nil when neither is set. Both the certificate identity (subject)
+// and the OIDC issuer are required together: a policy that verified a signature
+// without pinning who signed it would be worse than none. Both are Go regular
+// expressions at the Flux layer, so an exact identity should be anchored.
+func tapVerification(identity, issuer string) (*sourcev1.OCIRepositoryVerification, error) {
+	if identity == "" && issuer == "" {
+		return nil, nil
+	}
+	if identity == "" || issuer == "" {
+		return nil, fmt.Errorf("keyless signature verification needs both --certificate-identity and --certificate-oidc-issuer")
+	}
+	return &sourcev1.OCIRepositoryVerification{
+		Provider:          "cosign",
+		MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{Issuer: issuer, Subject: identity}},
+	}, nil
 }
 
 // rewritePackageSourceForTap prepares a PackageSource read from the artifact for
@@ -304,6 +327,10 @@ charts in your management cluster: tap only sources you trust.`,
 		if tapCmdFlags.tag != "" {
 			ref.Tag = tapCmdFlags.tag
 		}
+		verify, err := tapVerification(tapCmdFlags.certIdentity, tapCmdFlags.certIssuer)
+		if err != nil {
+			return err
+		}
 
 		// Pull first: an unreachable/invalid ref must fail before any cluster
 		// resource is created (no half-created source).
@@ -333,7 +360,7 @@ charts in your management cluster: tap only sources you trust.`,
 		}
 
 		srcName := fluxSourceName(ref)
-		ociRepo := buildTapOCIRepository(srcName, ref, tapCmdFlags.secret)
+		ociRepo := buildTapOCIRepository(srcName, ref, tapCmdFlags.secret, verify)
 
 		toApply := make([]client.Object, 0, len(sources)+1)
 		toApply = append(toApply, ociRepo)
@@ -552,6 +579,8 @@ func init() {
 	tapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	tapCmd.Flags().StringVar(&tapCmdFlags.index, "index", "", "Index location for resolving a short name (local dir or oci:// ref; defaults to COZYPKG_INDEX)")
 	tapCmd.Flags().BoolVar(&tapCmdFlags.skipValidate, "skip-validate", false, "Skip validating the artifact before tapping")
+	tapCmd.Flags().StringVar(&tapCmdFlags.certIdentity, "certificate-identity", "", "Keyless cosign certificate identity (subject regex) to verify the artifact's signature against at pull time; requires --certificate-oidc-issuer")
+	tapCmd.Flags().StringVar(&tapCmdFlags.certIssuer, "certificate-oidc-issuer", "", "Keyless cosign OIDC issuer (regex) to verify the artifact's signature against at pull time; requires --certificate-identity")
 	untapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	untapCmd.Flags().BoolVar(&untapConfirmFlag, "yes", false, "Untap even if a Package from this source is still installed")
 }

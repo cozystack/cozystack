@@ -376,6 +376,46 @@ func TestCreateRepeatPreservesVerifyAndResetsPin(t *testing.T) {
 	}
 }
 
+func TestCreateSetsVerify(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL: "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{
+			Issuer:  "https://token.actions.githubusercontent.com",
+			Subject: "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1",
+		},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov, _, _ := unstructured.NestedString(u.Object, "spec", "verify", "provider"); prov != "cosign" {
+		t.Errorf("verify.provider = %q, want cosign", prov)
+	}
+	ids, _, _ := unstructured.NestedSlice(u.Object, "spec", "verify", "matchOIDCIdentity")
+	if len(ids) != 1 {
+		t.Fatalf("expected one matchOIDCIdentity, got %v", ids)
+	}
+	id := ids[0].(map[string]any)
+	if id["issuer"] != "https://token.actions.githubusercontent.com" || id["subject"] == "" {
+		t.Errorf("unexpected identity matcher: %v", id)
+	}
+}
+
+func TestCreateVerifyRequiresBothIdentityFields(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL:    "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{Issuer: "https://token.actions.githubusercontent.com"},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("a keyless verify with only an issuer must be BadRequest, got %v", err)
+	}
+}
+
 func TestCreateRefusesConflictingURL(t *testing.T) {
 	// A source with the same derived name but a different registry host must not
 	// be silently retargeted.
