@@ -217,6 +217,15 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
+	// A connect carries a tag, a digest, or both; an explicit digest is pinned
+	// here, while a tag-only source is pinned to a digest later by the operator.
+	refSpec := map[string]any{}
+	if target.Tag != "" {
+		refSpec["tag"] = target.Tag
+	}
+	if target.Digest != "" {
+		refSpec["digest"] = target.Digest
+	}
 	repo := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "source.toolkit.fluxcd.io/v1",
 		"kind":       "OCIRepository",
@@ -229,7 +238,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		"spec": map[string]any{
 			"url":      target.URL,
 			"interval": "5m0s",
-			"ref":      map[string]any{"tag": target.Tag},
+			"ref":      refSpec,
 		},
 	}}
 	if in.Spec.SecretRef != "" {
@@ -255,12 +264,22 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			return nil, apierrors.NewConflict(r.gvr.GroupResource(), target.FluxSourceName,
 				fmt.Errorf("a different repository (%s) is already connected as %q; disconnect it before connecting %s", curURL, target.FluxSourceName, target.URL))
 		}
-		// Update only the fields this API owns (spec, the tap label and name
-		// annotation) on the FETCHED object, so the operator's finalizer survives.
-		// Clear the materialized-revision annotation so a re-connect re-materializes
-		// and recovers a registration Package (or PackageSource) removed out-of-band
-		// since the last materialization, the same recovery `cozypkg tap` performs.
-		cur.Object["spec"] = repo.Object["spec"]
+		// Update the fields this API owns on the FETCHED object, so the operator's
+		// finalizer survives. Replace url, interval, ref and secretRef from this
+		// connect, but PRESERVE a spec.verify set earlier (by this API or by an
+		// admin): a repeat connect must never silently drop a signature-verification
+		// policy. Replacing the whole ref rather than merging it is deliberate: it
+		// drops the operator's prior digest pin so the newly requested tag re-
+		// resolves (the operator re-pins it). A connect that itself carries verify
+		// overrides the preserved one.
+		newSpec := map[string]any{}
+		if existingVerify, ok, _ := unstructured.NestedMap(cur.Object, "spec", "verify"); ok {
+			newSpec["verify"] = existingVerify
+		}
+		for k, v := range repo.Object["spec"].(map[string]any) {
+			newSpec[k] = v
+		}
+		cur.Object["spec"] = newSpec
 		labels := cur.GetLabels()
 		if labels == nil {
 			labels = map[string]string{}
@@ -272,7 +291,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			ann = map[string]string{}
 		}
 		ann[tapconst.NameAnnotation] = target.FluxSourceName
+		// Clear the materialized-revision annotation so a re-connect re-materializes
+		// (recovering a registration removed out-of-band, the same recovery `cozypkg
+		// tap` performs), and the pinned-digest annotation so the operator re-pins
+		// the newly requested tag rather than treating the dropped pin as a user digest.
 		delete(ann, tapconst.MaterializedRevisionAnnotation)
+		delete(ann, tapconst.PinnedDigestAnnotation)
 		cur.SetAnnotations(ann)
 		if _, err := src.Update(ctx, cur, metav1.UpdateOptions{FieldManager: "cozystack-api", DryRun: createDryRun(opts)}); err != nil {
 			return nil, apierrors.NewInternalError(fmt.Errorf("update Flux source for tap %s: %w", target.FluxSourceName, err))

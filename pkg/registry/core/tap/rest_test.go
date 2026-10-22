@@ -309,6 +309,73 @@ func TestCreateRepeatPreservesFinalizerAndForcesRematerialize(t *testing.T) {
 	}
 }
 
+func TestCreatePinsExplicitDigest(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar@" + digest}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "digest"); got != digest {
+		t.Errorf("explicit digest not pinned on the source: got %q", got)
+	}
+	// A digest-only connect must not also follow a tag.
+	if tag, found, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); found && tag != "" {
+		t.Errorf("digest connect must not set a tag, got %q", tag)
+	}
+}
+
+func TestCreateRepeatPreservesVerifyAndResetsPin(t *testing.T) {
+	// A source connected earlier, pinned by the operator to a digest, with a
+	// signature-verification policy added by an admin. A repeat connect at a new
+	// tag must: preserve spec.verify (never silently downgrade trust), drop the
+	// operator's digest pin so the new tag re-resolves, and clear the pin and
+	// materialized-revision annotations so the operator re-pins and re-materializes.
+	const oldDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	existing := ociRepoObj("tap-foo-bar")
+	_ = unstructured.SetNestedField(existing.Object, "oci://ghcr.io/foo/bar", "spec", "url")
+	_ = unstructured.SetNestedField(existing.Object, oldDigest, "spec", "ref", "digest")
+	_ = unstructured.SetNestedField(existing.Object, "v1", "spec", "ref", "tag")
+	_ = unstructured.SetNestedMap(existing.Object, map[string]any{
+		"provider":          "cosign",
+		"matchOIDCIdentity": []any{map[string]any{"issuer": "https://token.actions.githubusercontent.com", "subject": "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"}},
+	}, "spec", "verify")
+	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
+	existing.SetAnnotations(map[string]string{
+		"apps.cozystack.io/materialized-revision": "v1@" + oldDigest,
+		"apps.cozystack.io/tap-pinned-digest":     oldDigest,
+	})
+	r := fakeREST(existing)
+
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v2"}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("repeat create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov, _, _ := unstructured.NestedString(u.Object, "spec", "verify", "provider"); prov != "cosign" {
+		t.Errorf("spec.verify was dropped on repeat connect: %+v", u.Object["spec"])
+	}
+	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
+		t.Errorf("tag not updated to v2, got %q", tag)
+	}
+	if d, found, _ := unstructured.NestedString(u.Object, "spec", "ref", "digest"); found && d != "" {
+		t.Errorf("operator digest pin must be dropped so the new tag re-resolves, got %q", d)
+	}
+	if _, ok := u.GetAnnotations()["apps.cozystack.io/tap-pinned-digest"]; ok {
+		t.Error("pinned-digest annotation must be cleared on re-connect")
+	}
+	if _, ok := u.GetAnnotations()["apps.cozystack.io/materialized-revision"]; ok {
+		t.Error("materialized-revision annotation must be cleared on re-connect")
+	}
+}
+
 func TestCreateRefusesConflictingURL(t *testing.T) {
 	// A source with the same derived name but a different registry host must not
 	// be silently retargeted.
