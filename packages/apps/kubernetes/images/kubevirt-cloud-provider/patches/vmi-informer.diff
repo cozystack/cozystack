@@ -1,0 +1,429 @@
+diff --git a/pkg/controller/kubevirteps/kubevirteps_controller.go b/pkg/controller/kubevirteps/kubevirteps_controller.go
+index 8af51fbe8..e8f1a4488 100644
+--- a/pkg/controller/kubevirteps/kubevirteps_controller.go
++++ b/pkg/controller/kubevirteps/kubevirteps_controller.go
+@@ -12,12 +12,15 @@ import (
+ 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+ 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/labels"
+ 	"k8s.io/apimachinery/pkg/runtime"
+ 	"k8s.io/apimachinery/pkg/runtime/schema"
+ 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+ 	"k8s.io/apimachinery/pkg/util/sets"
+ 	"k8s.io/apimachinery/pkg/util/wait"
+ 	"k8s.io/client-go/dynamic"
++	"k8s.io/client-go/dynamic/dynamicinformer"
+ 	"k8s.io/client-go/informers"
+ 	"k8s.io/client-go/kubernetes"
+ 	"k8s.io/client-go/tools/cache"
+@@ -31,8 +34,19 @@ import (
+ 
+ const (
+ 	ControllerName = controllerName("kubevirt_eps_controller")
++
++	// A periodic resync re-reconciles every LoadBalancer Service even if an event was
++	// missed, so infra EndpointSlices cannot stay stale indefinitely.
++	defaultResyncPeriod = 5 * time.Minute
++
++	// clusterNameLabel is set by CAPK on the VMIs backing a tenant cluster. It is used to
++	// avoid selecting VMIs that do not belong to this cluster when falling back to all VMIs.
++	clusterNameLabel = "cluster.x-k8s.io/cluster-name"
+ )
+ 
++var vmiGVR = kubevirtv1.VirtualMachineInstanceGroupVersionKind.GroupVersion().
++	WithResource("virtualmachineinstances")
++
+ type controllerName string
+ 
+ func (c controllerName) dashed() string {
+@@ -49,9 +63,10 @@ type Controller struct {
+ 	tenantFactory    informers.SharedInformerFactory
+ 	tenantEPSTracker tenantEPSTracker
+ 
+-	infraClient  kubernetes.Interface
+-	infraDynamic dynamic.Interface
+-	infraFactory informers.SharedInformerFactory
++	infraClient         kubernetes.Interface
++	infraDynamic        dynamic.Interface
++	infraFactory        informers.SharedInformerFactory
++	infraDynamicFactory dynamicinformer.DynamicSharedInformerFactory
+ 
+ 	infraNamespace       string
+ 	clusterName          string
+@@ -67,8 +82,11 @@ func NewKubevirtEPSController(
+ 	infraNamespace string,
+ 	clusterName string,
+ ) *Controller {
+-	tenantFactory := informers.NewSharedInformerFactory(tenantClient, 0)
+-	infraFactory := informers.NewSharedInformerFactoryWithOptions(infraClient, 0, informers.WithNamespace(infraNamespace))
++	tenantFactory := informers.NewSharedInformerFactory(tenantClient, defaultResyncPeriod)
++	infraFactory := informers.NewSharedInformerFactoryWithOptions(infraClient, defaultResyncPeriod,
++		informers.WithNamespace(infraNamespace))
++	infraDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(infraDynamic,
++		defaultResyncPeriod, infraNamespace, nil)
+ 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+ 
+ 	return &Controller{
+@@ -78,6 +96,7 @@ func NewKubevirtEPSController(
+ 		infraClient:          infraClient,
+ 		infraDynamic:         infraDynamic,
+ 		infraFactory:         infraFactory,
++		infraDynamicFactory:  infraDynamicFactory,
+ 		infraNamespace:       infraNamespace,
+ 		clusterName:          clusterName,
+ 		queue:                queue,
+@@ -236,9 +255,84 @@ func (c *Controller) Init() error {
+ 		return err
+ 	}
+ 
++	// The desired infra endpoints of a LoadBalancer Service are derived from the VMIs backing the
++	// tenant nodes, so a VMI appearing, disappearing or changing its address must trigger a
++	// reconciliation. Without this, EndpointSlices keep pointing at VMIs that no longer exist
++	// (for example after a MachineDeployment rollout or a cluster-autoscaler scale down) and the
++	// LoadBalancer blackholes the share of the traffic hashed onto those dead addresses.
++	_, err = c.infraDynamicFactory.ForResource(vmiGVR).Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
++		AddFunc: func(obj interface{}) {
++			c.enqueueLoadBalancerServices(fmt.Sprintf("VMI added: %s", vmiKey(obj)))
++		},
++		UpdateFunc: func(oldObj, newObj interface{}) {
++			if vmiEndpointFingerprint(oldObj) == vmiEndpointFingerprint(newObj) {
++				return
++			}
++			c.enqueueLoadBalancerServices(fmt.Sprintf("VMI updated: %s", vmiKey(newObj)))
++		},
++		DeleteFunc: func(obj interface{}) {
++			if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
++				obj = tombstone.Obj
++			}
++			c.enqueueLoadBalancerServices(fmt.Sprintf("VMI deleted: %s", vmiKey(obj)))
++		},
++	})
++	if err != nil {
++		return err
++	}
++
+ 	return nil
+ }
+ 
++func vmiKey(obj interface{}) string {
++	u, ok := obj.(*unstructured.Unstructured)
++	if !ok {
++		return "<unknown>"
++	}
++	return u.GetNamespace() + "/" + u.GetName()
++}
++
++// vmiEndpointFingerprint returns the parts of a VMI that influence the endpoints derived from it:
++// the cluster it belongs to, the infra node it runs on, its phase and the address of its "default"
++// interface. Any other update, and a running VMI sees many, cannot change an EndpointSlice.
++func vmiEndpointFingerprint(obj interface{}) string {
++	u, ok := obj.(*unstructured.Unstructured)
++	if !ok {
++		return ""
++	}
++	vmi := &kubevirtv1.VirtualMachineInstance{}
++	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, vmi); err != nil {
++		// Fall back to the resource version so an unparsable update is never silently dropped.
++		return u.GetResourceVersion()
++	}
++	ip := ""
++	for _, i := range vmi.Status.Interfaces {
++		if i.Name == "default" {
++			ip = i.IP
++			break
++		}
++	}
++	return fmt.Sprintf("%s|%s|%s|%s", u.GetLabels()[clusterNameLabel], vmi.Status.NodeName, vmi.Status.Phase, ip)
++}
++
++// enqueueLoadBalancerServices requeues the LoadBalancer Services of this cluster only: the infra
++// namespace can hold the Services of other tenant clusters, which reconcile would skip anyway.
++func (c *Controller) enqueueLoadBalancerServices(reason string) {
++	svcs, err := c.infraFactory.Core().V1().Services().Lister().Services(c.infraNamespace).
++		List(labels.SelectorFromSet(labels.Set{kubevirt.TenantClusterNameLabelKey: c.clusterName}))
++	if err != nil {
++		klog.Errorf("Failed to list Services in namespace %s: %v", c.infraNamespace, err)
++		return
++	}
++	for _, svc := range svcs {
++		if svc.Spec.Type != v1.ServiceTypeLoadBalancer {
++			continue
++		}
++		klog.Infof("%s, requeuing Service: %v/%v", reason, svc.Namespace, svc.Name)
++		c.queue.Add(newRequest(UpdateReq, svc, nil))
++	}
++}
++
+ // getInfraServiceForEPS returns the Service in the infra cluster associated with the given EndpointSlice.
+ // It does this by reading the "kubernetes.io/service-name" label from the EndpointSlice, which should correspond
+ // to the Service name. If not found or if the Service doesn't exist, it returns nil.
+@@ -276,10 +370,12 @@ func (c *Controller) Run(numWorkers int, stopCh <-chan struct{}, controllerManag
+ 
+ 	c.tenantFactory.Start(stopCh)
+ 	c.infraFactory.Start(stopCh)
++	c.infraDynamicFactory.Start(stopCh)
+ 
+ 	if !cache.WaitForNamedCacheSync(ControllerName.String(), stopCh,
+ 		c.infraFactory.Core().V1().Services().Informer().HasSynced,
+-		c.tenantFactory.Discovery().V1().EndpointSlices().Informer().HasSynced) {
++		c.tenantFactory.Discovery().V1().EndpointSlices().Informer().HasSynced,
++		c.infraDynamicFactory.ForResource(vmiGVR).Informer().HasSynced) {
+ 		return
+ 	}
+ 
+@@ -868,17 +964,45 @@ func (c *Controller) getDesiredEndpoints(service *v1.Service, tenantSlices []*di
+ func (c *Controller) getAllVMIEndpoints() []*discovery.Endpoint {
+ 	var endpoints []*discovery.Endpoint
+ 
+-	// List all VMIs in the infra namespace
+-	vmiList, err := c.infraDynamic.
+-		Resource(kubevirtv1.VirtualMachineInstanceGroupVersionKind.GroupVersion().WithResource("virtualmachineinstances")).
+-		Namespace(c.infraNamespace).
++	// List every VMI of the infra namespace, then keep only the ones of this cluster. An infra
++	// namespace can hold more than one tenant cluster, as well as plain VirtualMachines, and those
++	// VMIs do not serve this Service's NodePort: selecting them would add endpoints that blackhole
++	// the traffic, or route it to another tenant.
++	vmiList, err := c.infraDynamic.Resource(vmiGVR).Namespace(c.infraNamespace).
+ 		List(context.TODO(), metav1.ListOptions{})
+ 	if err != nil {
+ 		klog.Errorf("Failed to list VMIs in namespace %q: %v", c.infraNamespace, err)
+ 		return endpoints
+ 	}
+ 
+-	for _, obj := range vmiList.Items {
++	items := vmiList.Items
++	if c.clusterName != "" {
++		mine := make([]unstructured.Unstructured, 0, len(items))
++		anyLabelled := false
++		for i := range items {
++			name, found := items[i].GetLabels()[clusterNameLabel]
++			if !found {
++				continue
++			}
++			anyLabelled = true
++			if name == c.clusterName {
++				mine = append(mine, items[i])
++			}
++		}
++		// Widen to every VMI only when NONE of them carries the label: the VMIs are then not
++		// managed by CAPK (or by an older version of it) and there is no way to tell the clusters
++		// apart, so returning nothing would take the LoadBalancer down. As soon as some VMIs are
++		// labelled, an empty selection is a legitimate answer -- this cluster currently has no
++		// node -- and must not be widened to the VMIs of another cluster.
++		if anyLabelled {
++			items = mine
++		} else {
++			klog.Warningf("No VMI carries %q in namespace %s, selecting every VMI of the namespace",
++				clusterNameLabel, c.infraNamespace)
++		}
++	}
++
++	for _, obj := range items {
+ 		vmi := &kubevirtv1.VirtualMachineInstance{}
+ 		err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, vmi)
+ 		if err != nil {
+@@ -916,7 +1040,8 @@ func (c *Controller) getAllVMIEndpoints() []*discovery.Endpoint {
+ 		}
+ 	}
+ 
+-	klog.Infof("Fallback: created %d endpoints from all VMIs in namespace %s", len(endpoints), c.infraNamespace)
++	klog.Infof("Fallback: created %d endpoints from the VMIs of cluster %q in namespace %s",
++		len(endpoints), c.clusterName, c.infraNamespace)
+ 	return endpoints
+ }
+ 
+diff --git a/pkg/controller/kubevirteps/kubevirteps_controller_test.go b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
+index 17608fa10..8fa76678b 100644
+--- a/pkg/controller/kubevirteps/kubevirteps_controller_test.go
++++ b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
+@@ -965,3 +965,188 @@ var _ = g.Describe("getDesiredEndpoints", func() {
+ 		Expect(endpoints).To(HaveLen(0), "Expected no endpoints due to missing NodeName or IP")
+ 	})
+ })
++
++func createUnstructuredVMIForCluster(name, nodeName, ip, clusterName string) *unstructured.Unstructured {
++	vmi := createUnstructuredVMINode(name, nodeName, ip)
++	if clusterName != "" {
++		vmi.SetLabels(map[string]string{clusterNameLabel: clusterName})
++	}
++	return vmi
++}
++
++var _ = g.Describe("KubevirtEPSController VMI tracking", func() {
++
++	createVMI := func(t *testKubevirtEPSController, vmi *unstructured.Unstructured) {
++		_, err := t.infraDynamic.Resource(vmiGVR).Namespace(infraNamespace).
++			Create(context.TODO(), vmi, metav1.CreateOptions{})
++		Expect(err).To(BeNil())
++	}
++
++	g.It("Should only select the VMIs of its own cluster when falling back to all VMIs", func() {
++		t := setupTestKubevirtEPSController()
++		// "test-cluster" is the cluster name the controller is created with.
++		createVMI(t, createUnstructuredVMIForCluster("mine-1", "infra-1", "10.0.0.1", "test-cluster"))
++		createVMI(t, createUnstructuredVMIForCluster("mine-2", "infra-2", "10.0.0.2", "test-cluster"))
++		createVMI(t, createUnstructuredVMIForCluster("other", "infra-3", "10.0.0.3", "another-cluster"))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(HaveLen(2), "Only the VMIs of test-cluster should be selected")
++		var addresses []string
++		for _, e := range endpoints {
++			addresses = append(addresses, e.Addresses[0])
++		}
++		Expect(addresses).To(ConsistOf("10.0.0.1", "10.0.0.2"))
++		Expect(addresses).ToNot(ContainElement("10.0.0.3"), "A VMI of another cluster must never be an endpoint")
++	})
++
++	g.It("Should keep selecting every VMI when none carries the cluster label", func() {
++		t := setupTestKubevirtEPSController()
++		createVMI(t, createUnstructuredVMIForCluster("unlabelled-1", "infra-1", "10.0.0.1", ""))
++		createVMI(t, createUnstructuredVMIForCluster("unlabelled-2", "infra-2", "10.0.0.2", ""))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(HaveLen(2), "Unlabelled VMIs must still be selected, so the LB does not lose every endpoint")
++	})
++
++	g.It("Should return no endpoint when only another cluster's VMIs are present", func() {
++		t := setupTestKubevirtEPSController()
++		// The controller's cluster is "test-cluster" and has no VMI right now (scaled to zero, or
++		// every VMI being replaced by a rollout), while another tenant cluster of the same infra
++		// namespace does have some. Widening to every VMI here would publish the other cluster's
++		// addresses as this Service's endpoints.
++		createVMI(t, createUnstructuredVMIForCluster("other-1", "infra-1", "10.0.0.1", "another-cluster"))
++		createVMI(t, createUnstructuredVMIForCluster("other-2", "infra-2", "10.0.0.2", "another-cluster"))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(BeEmpty(),
++			"An empty selection is legitimate and must not be widened to another cluster's VMIs")
++	})
++
++	g.It("Should ignore the unlabelled VMIs when some VMIs carry the cluster label", func() {
++		t := setupTestKubevirtEPSController()
++		createVMI(t, createUnstructuredVMIForCluster("mine", "infra-1", "10.0.0.1", "test-cluster"))
++		// A standalone VirtualMachine of the same namespace, not part of any tenant cluster.
++		createVMI(t, createUnstructuredVMIForCluster("standalone", "infra-2", "10.0.0.2", ""))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(HaveLen(1))
++		Expect(endpoints[0].Addresses).To(ConsistOf("10.0.0.1"))
++	})
++
++	// startTracking starts the informers the VMI event handlers rely on, with a LoadBalancer Service
++	// of this cluster and one of another cluster, and returns once the initial events, want of them,
++	// have been drained from the queue.
++	startTracking := func(t *testKubevirtEPSController, stop chan struct{}, want int) {
++		for _, svc := range []*v1.Service{
++			createInfraServiceLB("lb-svc", "tenant-svc", "test-cluster",
++				v1.ServicePort{Name: "http", Port: 80, Protocol: v1.ProtocolTCP, TargetPort: intstr.FromInt32(30000)},
++				v1.ServiceExternalTrafficPolicyCluster),
++			createInfraServiceLB("other-lb-svc", "tenant-svc", "another-cluster",
++				v1.ServicePort{Name: "http", Port: 80, Protocol: v1.ProtocolTCP, TargetPort: intstr.FromInt32(30001)},
++				v1.ServiceExternalTrafficPolicyCluster),
++		} {
++			_, err := t.infraClient.CoreV1().Services(infraNamespace).Create(context.TODO(), svc, metav1.CreateOptions{})
++			Expect(err).To(BeNil())
++		}
++
++		// Services first, so that the add event of a VMI already present finds them in the lister.
++		t.controller.infraFactory.Start(stop)
++		Expect(cache.WaitForCacheSync(stop,
++			t.controller.infraFactory.Core().V1().Services().Informer().HasSynced)).To(BeTrue())
++		t.controller.infraDynamicFactory.Start(stop)
++		Expect(cache.WaitForCacheSync(stop,
++			t.controller.infraDynamicFactory.ForResource(vmiGVR).Informer().HasSynced)).To(BeTrue())
++
++		Eventually(func() int { return t.controller.queue.Len() }, "10s", "20ms").Should(Equal(want))
++		drainQueue(t)
++	}
++
++	updateVMI := func(t *testKubevirtEPSController, name string, mutate func(*unstructured.Unstructured)) {
++		vmi, err := t.infraDynamic.Resource(vmiGVR).Namespace(infraNamespace).
++			Get(context.TODO(), name, metav1.GetOptions{})
++		Expect(err).To(BeNil())
++		mutate(vmi)
++		_, err = t.infraDynamic.Resource(vmiGVR).Namespace(infraNamespace).
++			Update(context.TODO(), vmi, metav1.UpdateOptions{})
++		Expect(err).To(BeNil())
++	}
++
++	expectRequeueOf := func(t *testKubevirtEPSController, why string) {
++		Eventually(func() int { return t.controller.queue.Len() }, "10s", "20ms").Should(Equal(1), why)
++		item, _ := t.controller.queue.Get()
++		t.controller.queue.Done(item)
++		Expect(item.(*Request).Obj.(*v1.Service).Name).To(Equal("lb-svc"),
++			"Only the Service of this cluster should be requeued")
++		Consistently(func() int { return t.controller.queue.Len() }, "200ms", "20ms").Should(BeZero())
++	}
++
++	expectNoRequeue := func(t *testKubevirtEPSController, why string) {
++		Consistently(func() int { return t.controller.queue.Len() }, "500ms", "20ms").Should(BeZero(), why)
++	}
++
++	g.It("Should requeue the LoadBalancer Services when a VMI appears or disappears", func() {
++		t := setupTestKubevirtEPSController()
++		stop := make(chan struct{})
++		defer close(stop)
++		startTracking(t, stop, 2)
++
++		// A new VMI must trigger a reconciliation, otherwise a node added by a scale up or a
++		// rollout never becomes an endpoint.
++		createVMI(t, createUnstructuredVMIForCluster("vmi-1", "infra-1", "10.0.0.1", "test-cluster"))
++		expectRequeueOf(t, "Creating a VMI should requeue the LoadBalancer Service")
++
++		// A deleted VMI must trigger a reconciliation as well, otherwise its address stays in the
++		// EndpointSlice and the LoadBalancer blackholes the traffic hashed onto it.
++		err := t.infraDynamic.Resource(vmiGVR).Namespace(infraNamespace).
++			Delete(context.TODO(), "vmi-1", metav1.DeleteOptions{})
++		Expect(err).To(BeNil())
++		expectRequeueOf(t, "Deleting a VMI should requeue the LoadBalancer Service")
++	})
++
++	g.It("Should requeue the LoadBalancer Services only on the VMI updates that can change an endpoint", func() {
++		t := setupTestKubevirtEPSController()
++		stop := make(chan struct{})
++		defer close(stop)
++		createVMI(t, createUnstructuredVMIForCluster("vmi-1", "infra-1", "10.0.0.1", "test-cluster"))
++		// Both Service adds, plus the add of the VMI already present.
++		startTracking(t, stop, 3)
++
++		updateVMI(t, "vmi-1", func(u *unstructured.Unstructured) {
++			u.SetAnnotations(map[string]string{"unrelated": "change"})
++		})
++		expectNoRequeue(t, "An update that touches no endpoint field must not requeue")
++
++		updateVMI(t, "vmi-1", func(u *unstructured.Unstructured) {
++			Expect(unstructured.SetNestedField(u.Object, "Failed", "status", "phase")).To(Succeed())
++		})
++		expectRequeueOf(t, "A phase change should requeue the LoadBalancer Service")
++
++		updateVMI(t, "vmi-1", func(u *unstructured.Unstructured) {
++			Expect(unstructured.SetNestedField(u.Object, "infra-2", "status", "nodeName")).To(Succeed())
++		})
++		expectRequeueOf(t, "A node change should requeue the LoadBalancer Service")
++
++		updateVMI(t, "vmi-1", func(u *unstructured.Unstructured) {
++			Expect(unstructured.SetNestedSlice(u.Object, []interface{}{
++				map[string]interface{}{"name": "default", "ipAddress": "10.0.0.9"},
++			}, "status", "interfaces")).To(Succeed())
++		})
++		expectRequeueOf(t, "An address change should requeue the LoadBalancer Service")
++
++		updateVMI(t, "vmi-1", func(u *unstructured.Unstructured) {
++			u.SetLabels(map[string]string{clusterNameLabel: "another-cluster"})
++		})
++		expectRequeueOf(t, "Moving a VMI to another cluster should requeue the LoadBalancer Service")
++	})
++})
++
++func drainQueue(t *testKubevirtEPSController) {
++	for t.controller.queue.Len() > 0 {
++		item, _ := t.controller.queue.Get()
++		t.controller.queue.Done(item)
++	}
++}
