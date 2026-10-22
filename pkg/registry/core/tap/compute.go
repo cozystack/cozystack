@@ -20,12 +20,18 @@ import (
 
 var sanitizeDNSRe = regexp.MustCompile(`[^a-z0-9-]+`)
 
+var ociDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
 // connectTarget is the parsed form of a connect request's oci:// URL.
 type connectTarget struct {
 	URL  string // reference without a tag
 	Org  string
 	Repo string
 	Tag  string
+	// Digest, when set, pins the exact content (sha256:<64 hex>); it takes
+	// precedence over Tag at pull time, so a digest-pinned connect never
+	// follows a moved tag. Mirrors the CLI's ociRef.Digest.
+	Digest string
 	// FluxSourceName is the RFC-1123 name of the tap's OCIRepository. The tapped
 	// repository keeps its own declared PackageSource name(s), which are not
 	// known until the artifact is materialized, so the source (this name) is the
@@ -41,9 +47,19 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 		return connectTarget{}, fmt.Errorf("url %q must start with oci://", url)
 	}
 	body := strings.TrimPrefix(url, "oci://")
-	if strings.Contains(body, "@") {
-		return connectTarget{}, fmt.Errorf("digest references are not supported; use a tag")
+
+	// A digest pins the exact content (oci://host/org/repo@sha256:...); an
+	// optional tag may precede it and is then informational only. Mirrors the
+	// CLI's parseOCIRef so the API and CLI agree on digest handling.
+	digest := ""
+	if at := strings.LastIndex(body, "@"); at >= 0 {
+		digest = body[at+1:]
+		body = body[:at]
+		if !ociDigestRe.MatchString(digest) {
+			return connectTarget{}, fmt.Errorf("invalid digest %q in url %q: want sha256:<64 hex>", digest, url)
+		}
 	}
+
 	tag := tagOverride
 	if colon := strings.LastIndex(body, ":"); colon >= 0 && !strings.Contains(body[colon:], "/") {
 		if tag == "" {
@@ -55,11 +71,12 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 	if len(segs) < 2 {
 		return connectTarget{}, fmt.Errorf("url %q must include a host and a repository path", url)
 	}
-	t := connectTarget{URL: "oci://" + body, Repo: segs[len(segs)-1], Tag: tag}
+	t := connectTarget{URL: "oci://" + body, Repo: segs[len(segs)-1], Tag: tag, Digest: digest}
 	if len(segs) >= 3 {
 		t.Org = segs[len(segs)-2]
 	}
-	if t.Tag == "" {
+	// Default to latest only when neither a tag nor a digest pins the content.
+	if t.Tag == "" && digest == "" {
 		t.Tag = "latest"
 	}
 	fluxBase := t.Repo

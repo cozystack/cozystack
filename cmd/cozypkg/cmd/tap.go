@@ -65,9 +65,17 @@ type ociRef struct {
 	// Repo is the last path segment.
 	Repo string
 	Tag  string
+	// Digest, when set, pins the exact content (sha256:<64 hex>). It takes
+	// precedence over Tag at pull time (Flux resolves digest before tag), so a
+	// digest-pinned reference never follows a moved tag.
+	Digest string
 }
 
 var sanitizeName = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// ociDigestRe matches a full OCI manifest digest (sha256:<64 hex>), the same
+// shape the platform source's "digest=" reference enforces.
+var ociDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // parseOCIRef splits an oci:// reference into its URL (without tag), org, repo,
 // and tag. A missing tag defaults to "latest".
@@ -77,11 +85,20 @@ func parseOCIRef(ref string) (ociRef, error) {
 	}
 	body := strings.TrimPrefix(ref, "oci://")
 
-	tag := ""
-	// Digest pins are not tag-addressable; tap is tag-based for now.
-	if strings.Contains(body, "@") {
-		return ociRef{}, fmt.Errorf("digest references are not supported by tap yet; use a tag (oci://host/org/repo:tag)")
+	// A digest pins the exact content (oci://host/org/repo@sha256:...). An
+	// optional tag may precede it and is then informational only. The digest
+	// must be a full sha256:<64 hex>, the same contract the platform source's
+	// "digest=" reference enforces.
+	digest := ""
+	if at := strings.LastIndex(body, "@"); at >= 0 {
+		digest = body[at+1:]
+		body = body[:at]
+		if !ociDigestRe.MatchString(digest) {
+			return ociRef{}, fmt.Errorf("invalid digest %q in reference %q: want sha256:<64 hex>", digest, ref)
+		}
 	}
+
+	tag := ""
 	if colon := strings.LastIndex(body, ":"); colon >= 0 && !strings.Contains(body[colon:], "/") {
 		tag = body[colon+1:]
 		body = body[:colon]
@@ -96,10 +113,11 @@ func parseOCIRef(ref string) (ociRef, error) {
 	if len(segs) >= 3 {
 		org = segs[len(segs)-2]
 	}
-	if tag == "" {
+	// Default to latest only when neither a tag nor a digest pins the content.
+	if tag == "" && digest == "" {
 		tag = "latest"
 	}
-	return ociRef{URL: "oci://" + body, Org: org, Repo: repo, Tag: tag}, nil
+	return ociRef{URL: "oci://" + body, Org: org, Repo: repo, Tag: tag, Digest: digest}, nil
 }
 
 // fluxSourceName is the RFC-1123 name of the OCIRepository tap creates. It

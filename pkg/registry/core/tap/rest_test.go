@@ -240,8 +240,27 @@ func TestParseConnectURL(t *testing.T) {
 	if _, err := parseConnectURL("ghcr.io/foo/bar", ""); err == nil {
 		t.Error("expected error for non-oci url")
 	}
+	// A malformed digest (not sha256:<64 hex>) is rejected.
 	if _, err := parseConnectURL("oci://ghcr.io/foo/bar@sha256:abc", ""); err == nil {
-		t.Error("expected error for digest ref")
+		t.Error("expected error for malformed digest ref")
+	}
+	// A valid digest pins the content: the tag is left empty (not defaulted to
+	// latest), mirroring the CLI's parseOCIRef.
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	d, err := parseConnectURL("oci://ghcr.io/foo/bar@"+digest, "")
+	if err != nil {
+		t.Fatalf("digest ref err: %v", err)
+	}
+	if d.URL != "oci://ghcr.io/foo/bar" || d.Tag != "" || d.Digest != digest || d.FluxSourceName != "tap-foo-bar" {
+		t.Fatalf("unexpected digest parse: %+v", d)
+	}
+	// A tag may precede the digest and is then informational.
+	td, err := parseConnectURL("oci://ghcr.io/foo/bar:v1@"+digest, "")
+	if err != nil {
+		t.Fatalf("tag+digest ref err: %v", err)
+	}
+	if td.Tag != "v1" || td.Digest != digest {
+		t.Fatalf("unexpected tag+digest parse: %+v", td)
 	}
 }
 

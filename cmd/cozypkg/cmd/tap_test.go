@@ -36,18 +36,26 @@ import (
 )
 
 func TestParseOCIRef(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	cases := []struct {
-		in                                  string
-		wantURL, wantOrg, wantRepo, wantTag string
-		wantErr                             bool
+		in                                              string
+		wantURL, wantOrg, wantRepo, wantTag, wantDigest string
+		wantErr                                         bool
 	}{
-		{"oci://ghcr.io/foo/bar:v1", "oci://ghcr.io/foo/bar", "foo", "bar", "v1", false},
-		{"oci://ghcr.io/foo/bar", "oci://ghcr.io/foo/bar", "foo", "bar", "latest", false},
-		{"oci://ghcr.io/foo/group/bar:1.2.3", "oci://ghcr.io/foo/group/bar", "group", "bar", "1.2.3", false},
-		{"oci://registry.example.com/solo:tag", "oci://registry.example.com/solo", "", "solo", "tag", false},
-		{"https://ghcr.io/foo/bar", "", "", "", "", true},
-		{"oci://ghcr.io/foo/bar@sha256:abc", "", "", "", "", true},
-		{"oci://ghcr.io", "", "", "", "", true},
+		{"oci://ghcr.io/foo/bar:v1", "oci://ghcr.io/foo/bar", "foo", "bar", "v1", "", false},
+		{"oci://ghcr.io/foo/bar", "oci://ghcr.io/foo/bar", "foo", "bar", "latest", "", false},
+		{"oci://ghcr.io/foo/group/bar:1.2.3", "oci://ghcr.io/foo/group/bar", "group", "bar", "1.2.3", "", false},
+		{"oci://registry.example.com/solo:tag", "oci://registry.example.com/solo", "", "solo", "tag", "", false},
+		// A digest pin is accepted; the tag is left empty (not defaulted to
+		// latest) because the digest is the authoritative reference.
+		{"oci://ghcr.io/foo/bar@" + digest, "oci://ghcr.io/foo/bar", "foo", "bar", "", digest, false},
+		// A tag may precede the digest; the tag is then informational only.
+		{"oci://ghcr.io/foo/bar:v1@" + digest, "oci://ghcr.io/foo/bar", "foo", "bar", "v1", digest, false},
+		{"https://ghcr.io/foo/bar", "", "", "", "", "", true},
+		// A malformed digest (not sha256:<64 hex>) is still rejected.
+		{"oci://ghcr.io/foo/bar@sha256:abc", "", "", "", "", "", true},
+		{"oci://ghcr.io/foo/bar@notadigest", "", "", "", "", "", true},
+		{"oci://ghcr.io", "", "", "", "", "", true},
 	}
 	for _, c := range cases {
 		got, err := parseOCIRef(c.in)
@@ -61,8 +69,8 @@ func TestParseOCIRef(t *testing.T) {
 			t.Errorf("parseOCIRef(%q) unexpected error: %v", c.in, err)
 			continue
 		}
-		if got.URL != c.wantURL || got.Org != c.wantOrg || got.Repo != c.wantRepo || got.Tag != c.wantTag {
-			t.Errorf("parseOCIRef(%q) = %+v, want url=%q org=%q repo=%q tag=%q", c.in, got, c.wantURL, c.wantOrg, c.wantRepo, c.wantTag)
+		if got.URL != c.wantURL || got.Org != c.wantOrg || got.Repo != c.wantRepo || got.Tag != c.wantTag || got.Digest != c.wantDigest {
+			t.Errorf("parseOCIRef(%q) = %+v, want url=%q org=%q repo=%q tag=%q digest=%q", c.in, got, c.wantURL, c.wantOrg, c.wantRepo, c.wantTag, c.wantDigest)
 		}
 	}
 }
