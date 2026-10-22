@@ -87,6 +87,25 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 	return t, nil
 }
 
+// buildVerifySpec maps a connect-time TapVerify input to a Flux OCIRepository
+// spec.verify. Only keyless cosign identity matching is exposed, so both the
+// issuer and the subject are required: a verification policy that matched any
+// signer would be worse than none. A key-based policy an admin sets by hand on
+// the source is preserved across connects (see Create) but is not settable here.
+func buildVerifySpec(v *corev1alpha1.TapVerify) (map[string]any, error) {
+	if v.Issuer == "" || v.Subject == "" {
+		return nil, fmt.Errorf("verify requires both issuer and subject (keyless cosign identity)")
+	}
+	provider := v.Provider
+	if provider == "" {
+		provider = "cosign"
+	}
+	return map[string]any{
+		"provider":          provider,
+		"matchOIDCIdentity": []any{map[string]any{"issuer": v.Issuer, "subject": v.Subject}},
+	}, nil
+}
+
 var (
 	gvrPackageSources = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packagesources"}
 	gvrPackages       = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packages"}

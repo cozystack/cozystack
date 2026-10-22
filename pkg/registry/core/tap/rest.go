@@ -244,6 +244,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if in.Spec.SecretRef != "" {
 		_ = unstructured.SetNestedMap(repo.Object, map[string]any{"name": in.Spec.SecretRef}, "spec", "secretRef")
 	}
+	if in.Spec.Verify != nil {
+		verifySpec, err := buildVerifySpec(in.Spec.Verify)
+		if err != nil {
+			return nil, apierrors.NewBadRequest(err.Error())
+		}
+		_ = unstructured.SetNestedMap(repo.Object, verifySpec, "spec", "verify")
+	}
 
 	// Create the Flux source, idempotently: a repeat connect updates the
 	// existing source (new tag/secret) rather than erroring.

@@ -126,7 +126,7 @@ func TestObjectExists(t *testing.T) {
 
 func TestBuildTapOCIRepository(t *testing.T) {
 	r := ociRef{URL: "oci://ghcr.io/foo/bar", Org: "foo", Repo: "bar", Tag: "v1"}
-	obj := buildTapOCIRepository("tap-foo-bar", r, "")
+	obj := buildTapOCIRepository("tap-foo-bar", r, "", nil)
 	if obj.Namespace != "cozy-system" || obj.Spec.URL != "oci://ghcr.io/foo/bar" {
 		t.Fatalf("unexpected OCIRepository: %+v", obj.Spec)
 	}
@@ -147,7 +147,7 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	if obj.Spec.SecretRef != nil {
 		t.Fatalf("expected no secretRef, got %+v", obj.Spec.SecretRef)
 	}
-	withSecret := buildTapOCIRepository("n", r, "pull-creds")
+	withSecret := buildTapOCIRepository("n", r, "pull-creds", nil)
 	if withSecret.Spec.SecretRef == nil || withSecret.Spec.SecretRef.Name != "pull-creds" {
 		t.Fatalf("expected secretRef pull-creds, got %+v", withSecret.Spec.SecretRef)
 	}
@@ -156,7 +156,7 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	// the user is written by the CLI itself (the operator only pins tag refs).
 	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	rd := ociRef{URL: "oci://ghcr.io/foo/bar", Org: "foo", Repo: "bar", Digest: digest}
-	objd := buildTapOCIRepository("tap-foo-bar", rd, "")
+	objd := buildTapOCIRepository("tap-foo-bar", rd, "", nil)
 	if objd.Spec.Reference == nil || objd.Spec.Reference.Digest != digest {
 		t.Fatalf("expected digest pin %q, got %+v", digest, objd.Spec.Reference)
 	}
@@ -165,7 +165,7 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	}
 	// A tag may accompany the digest and is then informational.
 	rtd := ociRef{URL: "oci://ghcr.io/foo/bar", Repo: "bar", Tag: "v1", Digest: digest}
-	objtd := buildTapOCIRepository("n", rtd, "")
+	objtd := buildTapOCIRepository("n", rtd, "", nil)
 	if objtd.Spec.Reference.Digest != digest || objtd.Spec.Reference.Tag != "v1" {
 		t.Fatalf("expected tag v1 + digest, got %+v", objtd.Spec.Reference)
 	}
@@ -180,6 +180,42 @@ func TestOCIRefPullRef(t *testing.T) {
 	// regardless of where the tag currently points.
 	if got := (ociRef{URL: "oci://ghcr.io/foo/bar", Tag: "v1", Digest: digest}).pullRef(); got != "oci://ghcr.io/foo/bar@"+digest {
 		t.Errorf("digest pullRef = %q", got)
+	}
+}
+
+func TestTapVerification(t *testing.T) {
+	// No identity and no issuer: no verification policy.
+	if v, err := tapVerification("", ""); err != nil || v != nil {
+		t.Fatalf("empty flags should yield no policy, got %+v err %v", v, err)
+	}
+	// Only one of the pair: an error, never a half-configured policy.
+	if _, err := tapVerification("subj", ""); err == nil {
+		t.Error("identity without issuer must error")
+	}
+	if _, err := tapVerification("", "iss"); err == nil {
+		t.Error("issuer without identity must error")
+	}
+	v, err := tapVerification("https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1", "https://token.actions.githubusercontent.com")
+	if err != nil {
+		t.Fatalf("valid pair: %v", err)
+	}
+	if v == nil || v.Provider != "cosign" || len(v.MatchOIDCIdentity) != 1 {
+		t.Fatalf("unexpected verification: %+v", v)
+	}
+	if v.MatchOIDCIdentity[0].Issuer != "https://token.actions.githubusercontent.com" || v.MatchOIDCIdentity[0].Subject == "" {
+		t.Errorf("identity matcher not set: %+v", v.MatchOIDCIdentity[0])
+	}
+}
+
+func TestBuildTapOCIRepositoryWithVerify(t *testing.T) {
+	r := ociRef{URL: "oci://ghcr.io/foo/bar", Repo: "bar", Tag: "v1"}
+	v := &sourcev1.OCIRepositoryVerification{
+		Provider:          "cosign",
+		MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{Issuer: "iss", Subject: "subj"}},
+	}
+	obj := buildTapOCIRepository("tap-foo-bar", r, "", v)
+	if obj.Spec.Verify == nil || obj.Spec.Verify.Provider != "cosign" || len(obj.Spec.Verify.MatchOIDCIdentity) != 1 {
+		t.Fatalf("verify not set on the source: %+v", obj.Spec.Verify)
 	}
 }
 

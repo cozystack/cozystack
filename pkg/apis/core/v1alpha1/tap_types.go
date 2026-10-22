@@ -52,6 +52,25 @@ type TapSpec struct {
 	// Secret in cozy-system for a private repository. It is consumed when a Tap
 	// is created and, being a credential reference, is never returned on read.
 	SecretRef string `json:"secretRef,omitempty"`
+	// Verify is a connect-time input only: a signature-verification policy to
+	// set on the tap's Flux source (spec.verify). It is consumed when a Tap is
+	// created, preserved across repeat connects, and never returned on read.
+	Verify *TapVerify `json:"verify,omitempty"`
+}
+
+// TapVerify is a connect-time signature-verification policy for a tap. It maps
+// to the Flux OCIRepository spec.verify: keyless cosign identity matching
+// (issuer + subject) is the supported form, so a moved tag cannot be followed
+// unless it is also signed by the recorded identity.
+type TapVerify struct {
+	// Provider is the signature technology: "cosign" (default) or "notation".
+	Provider string `json:"provider,omitempty"`
+	// Issuer is the OIDC issuer URL for keyless cosign verification, e.g.
+	// https://token.actions.githubusercontent.com.
+	Issuer string `json:"issuer,omitempty"`
+	// Subject is the certificate identity (subject) for keyless cosign
+	// verification; it is matched against the artifact's signing identity.
+	Subject string `json:"subject,omitempty"`
 }
 
 // TapSource identifies the Flux source backing a tap. It carries no credential.
