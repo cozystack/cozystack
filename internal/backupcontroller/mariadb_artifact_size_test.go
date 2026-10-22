@@ -427,3 +427,51 @@ func TestReconcileMariaDB_UnreadableBackupIsRetried(t *testing.T) {
 		t.Error("the BackupJob was failed although its Backup exists")
 	}
 }
+
+// TestReconcileMariaDB_RejectedCreateFailsTheJob pins that only the
+// read-back is retried: a Create the apiserver rejects still fails the
+// BackupJob.
+func TestReconcileMariaDB_RejectedCreateFailsTheJob(t *testing.T) {
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	now := metav1.Now()
+	bj := newMariaDBBackupJob("bj-rejected", "tenant")
+	bj.Status.StartedAt = &now
+	bj.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+	strategy := &strategyv1alpha1.MariaDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "mdb-strategy"},
+		Spec:       strategyv1alpha1.MariaDBSpec{Template: *newRenderedMariaDBTemplate()},
+	}
+	operatorMariaDB := &mariadbtypes.MariaDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp("mariadb-src")}}
+	operatorBackup := &mariadbtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-bk",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      bj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: bj.Namespace,
+			},
+		},
+		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, LastTransitionTime: now,
+		}}},
+	}
+	store := newMariaDBStrategyTestClient(t, bj, strategy, newMariaDBApp("mariadb-src", "tenant"), operatorMariaDB, operatorBackup)
+	r := &BackupJobReconciler{
+		Client:   forbidBackupCreate(t, store),
+		Scheme:   store.Scheme(),
+		Recorder: record.NewFakeRecorder(10),
+	}
+	resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+		APIGroup: &strategyGroup, Kind: strategyv1alpha1.MariaDBStrategyKind, Name: strategy.Name,
+	}}
+
+	if _, err := r.reconcileMariaDB(context.Background(), bj, resolved); err != nil {
+		t.Fatalf("reconcileMariaDB err = %v, want the BackupJob failed rather than retried", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(bj), persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a rejected Create", persisted.Status.Phase)
+	}
+}

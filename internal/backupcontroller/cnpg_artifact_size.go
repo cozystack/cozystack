@@ -105,7 +105,9 @@ func (r *BackupJobReconciler) cnpgS3Connection(ctx context.Context, namespace st
 		if err != nil {
 			return conn, err
 		}
-		conn.CAPEM = []byte(pem)
+		// barman-cloud gets endpointCA as AWS_CA_BUNDLE, which replaces the
+		// default trust store rather than adding to it.
+		conn.CAPEM, conn.CAOnly = []byte(pem), true
 	}
 	return conn, nil
 }

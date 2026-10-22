@@ -126,7 +126,7 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 		if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", store, "srv", "20261021T100000"); got != 5 {
 			t.Errorf("size = %d, want 5", got)
 		}
-		if l.conn.AccessKey != "ID2" || l.conn.SecretKey != "KEY2" || string(l.conn.CAPEM) != "PEM" {
+		if l.conn.AccessKey != "ID2" || l.conn.SecretKey != "KEY2" || string(l.conn.CAPEM) != "PEM" || !l.conn.CAOnly {
 			t.Errorf("connection = %+v", l.conn)
 		}
 	})
@@ -415,5 +415,39 @@ func TestCreateCNPGBackupArtifact_FailedExistenceCheckSkipsProbe(t *testing.T) {
 	}
 	if l.calls != 0 {
 		t.Errorf("S3 probed %d times after the existence check failed", l.calls)
+	}
+}
+
+// TestReconcileCNPG_RejectedCreateFailsTheJob pins that only the read-back
+// is retried: a Create the apiserver rejects still fails the BackupJob.
+func TestReconcileCNPG_RejectedCreateFailsTheJob(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Minute)),
+		newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+		newRolloutInstancePod(time.Now().Add(-time.Hour)))
+	_, backups := f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1", len(backups))
+	}
+	ctx := context.Background()
+	completed := backups[0].DeepCopy()
+	completed.Status.Phase = cnpgBackupPhaseComplete
+	if err := f.c.Update(ctx, completed); err != nil {
+		t.Fatalf("complete cnpg.io/Backup: %v", err)
+	}
+	f.r.Client = forbidBackupCreate(t, f.c)
+
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(ctx, j, f.resolved); err != nil {
+		t.Fatalf("reconcileCNPG err = %v, want the BackupJob failed rather than retried", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a rejected Create", persisted.Status.Phase)
 	}
 }

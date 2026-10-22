@@ -3,8 +3,17 @@ package backupcontroller
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -221,5 +230,58 @@ func TestFailBackupArtifact(t *testing.T) {
 		if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 			t.Errorf("phase = %q, want Failed", j.Status.Phase)
 		}
+	})
+}
+
+// TestEndpointTrustPool_CAOnly tells apart "the CA on top of the system
+// roots" and "the CA alone". The system pool holds the endpoint's
+// certificate, and the configured CA is an unrelated one, so the endpoint
+// must stop being trusted only when CAOnly is set.
+func TestEndpointTrustPool_CAOnly(t *testing.T) {
+	endpoint := httptest.NewTLSServer(http.NotFoundHandler())
+	defer endpoint.Close()
+	system := x509.NewCertPool()
+	system.AddCert(endpoint.Certificate())
+
+	// Every httptest server shares one certificate, so the unrelated CA is
+	// minted here.
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "unrelated CA"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelatedCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	verifies := func(caOnly bool) bool {
+		pool, err := endpointTrustPool(s3Connection{CAPEM: unrelatedCA, CAOnly: caOnly}, system.Clone())
+		if err != nil {
+			t.Fatalf("endpointTrustPool: %v", err)
+		}
+		_, err = endpoint.Certificate().Verify(x509.VerifyOptions{Roots: pool})
+		return err == nil
+	}
+	if !verifies(false) {
+		t.Error("CA on top of the system roots: the endpoint was not trusted")
+	}
+	if verifies(true) {
+		t.Error("CA alone: the endpoint was trusted through the system roots")
+	}
+}
+
+// forbidBackupCreate wraps a fake client whose Create of a Backup is
+// rejected, the way an admission webhook rejects one.
+func forbidBackupCreate(t *testing.T, c client.Client) client.Client {
+	t.Helper()
+	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+				return apierrors.NewForbidden(backupsv1alpha1.GroupVersion.WithResource("backups").GroupResource(), obj.GetName(), errors.New("denied by policy"))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
 	})
 }
