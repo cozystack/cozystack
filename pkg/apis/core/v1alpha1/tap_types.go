@@ -63,7 +63,9 @@ type TapSpec struct {
 // (issuer + subject) is the supported form, so a moved tag cannot be followed
 // unless it is also signed by the recorded identity.
 type TapVerify struct {
-	// Provider is the signature technology: "cosign" (default) or "notation".
+	// Provider is the signature technology. Only keyless cosign (the default) is
+	// settable at connect, since the identity match below is a cosign construct;
+	// a non-cosign value is rejected.
 	Provider string `json:"provider,omitempty"`
 	// Issuer is the OIDC issuer URL for keyless cosign verification, e.g.
 	// https://token.actions.githubusercontent.com.

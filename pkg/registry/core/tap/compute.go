@@ -93,15 +93,16 @@ func parseConnectURL(url, tagOverride string) (connectTarget, error) {
 // signer would be worse than none. A key-based policy an admin sets by hand on
 // the source is preserved across connects (see Create) but is not settable here.
 func buildVerifySpec(v *corev1alpha1.TapVerify) (map[string]any, error) {
+	// Only keyless cosign is settable here; matchOIDCIdentity is a cosign-only
+	// construct, so a non-cosign provider would produce a nonsensical policy.
+	if v.Provider != "" && v.Provider != "cosign" {
+		return nil, fmt.Errorf("verify.provider %q is not supported; only keyless cosign identity matching is settable at connect", v.Provider)
+	}
 	if v.Issuer == "" || v.Subject == "" {
 		return nil, fmt.Errorf("verify requires both issuer and subject (keyless cosign identity)")
 	}
-	provider := v.Provider
-	if provider == "" {
-		provider = "cosign"
-	}
 	return map[string]any{
-		"provider":          provider,
+		"provider":          "cosign",
 		"matchOIDCIdentity": []any{map[string]any{"issuer": v.Issuer, "subject": v.Subject}},
 	}, nil
 }

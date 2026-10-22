@@ -739,7 +739,7 @@ func schema_pkg_apis_core_v1alpha1_TapVerify(ref common.ReferenceCallback) commo
 				Properties: map[string]spec.Schema{
 					"provider": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Provider is the signature technology: \"cosign\" (default) or \"notation\".",
+							Description: "Provider is the signature technology. Only keyless cosign (the default) is settable at connect, since the identity match below is a cosign construct; a non-cosign value is rejected.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
