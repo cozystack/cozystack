@@ -45,7 +45,7 @@ render_pool() {
     echo "render succeeded with Kubernetes v1.30 on the default Talos" >&2
     return 1
   fi
-  printf '%s\n' "$out" | grep -qF "Kubernetes v1.30 is not supported by Talos v1.13.6. Supported versions: [v1.31 v1.32 v1.33 v1.34 v1.35 v1.36]. Bump 'version' or set talos.version explicitly." \
+  printf '%s\n' "$out" | grep -qF "Kubernetes v1.30 is not supported by Talos v1.13.12. Supported versions: [v1.31 v1.32 v1.33 v1.34 v1.35 v1.36]. Bump 'version' or set talos.version explicitly." \
     || { echo "$out" >&2; return 1; }
 }
 
