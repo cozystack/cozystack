@@ -127,15 +127,42 @@ assert_full_suite() {
     # kubevirt-cdi reaches vm-disk-application and nothing else runnable, so
     # until vm-disk-application mapped to a suite every CDI change ran all of
     # them. The vminstance suite creates a VMDisk and asserts the DataVolume
-    # behind it, so it is the suite that covers CDI.
+    # behind it, so it is the suite that covers CDI; gpuclaim attaches a
+    # VMDisk to its VMs too.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "vminstance" ]
+    [ "$output" = "gpuclaim vminstance" ]
     closure=$(hack/select-install.sh "$output" "$tmp/sources")
     printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.vm-disk-application
     printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.kubevirt-cdi
+    rm -rf "$tmp"
+}
+
+@test "a GPU change selects gpuclaim, a change downstream of gpu-operator does not" {
+    # gpu-operator and the VM applications map to gpuclaim by name. hami
+    # depends on gpu-operator, so the walk must not carry it the other way.
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    for path in packages/system/gpu-operator/values.yaml packages/system/gpu-node-agent/values.yaml packages/apps/vm-instance/values.yaml; do
+        echo "$path" > "$tmp/diff"
+        output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+        if ! printf '%s\n' "$output" | tr ' ' '\n' | grep -Fxq gpuclaim; then
+            echo "$path does not select gpuclaim: $output" >&2
+            return 1
+        fi
+    done
+    echo "packages/apps/vm-instance/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "gpuclaim vminstance" ]
+    echo "packages/system/hami/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -n "$output" ]
+    if printf '%s\n' "$output" | tr ' ' '\n' | grep -Fxq gpuclaim; then
+        echo "a hami change selects gpuclaim: $output" >&2
+        return 1
+    fi
     rm -rf "$tmp"
 }
 

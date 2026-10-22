@@ -189,6 +189,17 @@ load test_helper
   fi
 }
 
+@test "a gpuclaim selection keeps gpu-operator enabled" {
+  disabled=$(hack/select-install.sh --disabled gpuclaim)
+  manifest=$(COZY_DISABLED_PACKAGES="$disabled" hack/e2e-platform-packages.sh)
+  enabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.enabledPackages | join(",")')
+
+  if [ "$enabled" != "cozystack.external-dns-application,cozystack.gpu-operator" ]; then
+    echo "a gpuclaim selection does not enable gpu-operator: $enabled" >&2
+    return 1
+  fi
+}
+
 @test "a malformed package name fails before emitting YAML" {
   for bad in "goldpinger" "cozystack." "cozystack.Gold" "cozystack.a;b"; do
     if manifest=$(COZY_DISABLED_PACKAGES="cozystack.keda $bad" hack/e2e-platform-packages.sh 2>/dev/null); then
