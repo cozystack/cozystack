@@ -35,6 +35,9 @@ func (r *BackupJobReconciler) redisArtifact(ctx context.Context, namespace, obje
 		logger.Info("cannot read the S3 endpoint CA to locate the Redis snapshot", "objectKey", objectKey, "error", err)
 		return nil
 	}
+	// The script passes the CA as curl --cacert, which replaces the default
+	// trust store rather than adding to it.
+	conn.CAOnly = true
 	lister, err := r.s3Lister(conn)
 	if err != nil {
 		logger.Info("cannot build S3 client to locate the Redis snapshot", "objectKey", objectKey, "error", err)
@@ -113,12 +116,13 @@ func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string
 				return pem, false, nil
 			}
 		}
+		caMissing = true
 	}
 	for _, c := range podSpec.Containers {
 		for _, e := range c.Env {
 			if e.Name == redisS3InsecureSkipEnv && e.Value == "true" {
 				if caMissing {
-					return nil, false, fmt.Errorf("CA Secret of the %s volume is gone; not skipping TLS verification in its place", redisS3CAVolume)
+					return nil, false, fmt.Errorf("the %s volume yields no CA now; not skipping TLS verification in its place", redisS3CAVolume)
 				}
 				return nil, true, nil
 			}

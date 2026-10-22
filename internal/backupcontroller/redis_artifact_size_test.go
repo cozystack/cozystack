@@ -200,6 +200,13 @@ func TestRedisS3Trust(t *testing.T) {
 		},
 		"no pod spec": {},
 	}
+	t.Run("a mounted CA Secret without CA keys never turns into skip-verify", func(t *testing.T) {
+		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t, caSecret(map[string]string{"other": "x"}))}
+		ca, skip, err := r.redisS3Trust(context.Background(), "tenant", redisPodSpec("s3-endpoint-ca", "true"))
+		if err == nil || skip || ca != nil {
+			t.Errorf("trust = (%q, %v, %v), want an error and no skip-verify", ca, skip, err)
+		}
+	})
 	t.Run("a mounted CA Secret that is gone never turns into skip-verify", func(t *testing.T) {
 		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t)}
 		ca, skip, err := r.redisS3Trust(context.Background(), "tenant", redisPodSpec("s3-endpoint-ca", "true"))
@@ -357,4 +364,78 @@ func TestCreateRedisBackupArtifact_RetryCheck(t *testing.T) {
 			t.Errorf("err = %v, want errBackupNotReadBack", err)
 		}
 	})
+}
+
+func TestRedisArtifact_HangingEndpointIsGivenUp(t *testing.T) {
+	r := redisReconciler(t, &fakeS3Lister{}, projectedCredsSecret(nil))
+	r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
+	withShortProbeTimeout(t, func() {
+		if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil); got != nil {
+			t.Errorf("artifact = %#v, want nil", got)
+		}
+	})
+}
+
+func TestRedisArtifact_TrustsOnlyTheCA(t *testing.T) {
+	l := &fakeS3Lister{statSize: 1}
+	ca := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "s3-endpoint-ca"},
+		Data:       map[string][]byte{"ca.crt": []byte("PEM")},
+	}
+	r := redisReconciler(t, l, projectedCredsSecret(nil), ca)
+	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "")); got == nil {
+		t.Fatal("artifact = nil")
+	}
+	if !l.conn.CAOnly {
+		t.Error("the probe trusts the system roots on top of the CA, which curl --cacert does not")
+	}
+}
+
+// TestReconcileRedis_UnreadableBackupIsRetried drives a completed backup
+// through the reconcile: when the Backup exists but cannot be read back,
+// the reconcile is retried and the BackupJob is not failed.
+func TestReconcileRedis_UnreadableBackupIsRetried(t *testing.T) {
+	app := newRedisApp("cache", "tenant-test")
+	strategy := newRedisStrategy("redis-strategy")
+	now := metav1.Now()
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newRedisAppRef("cache"),
+			BackupClassName: "cozy-default",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	completedK8sJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobNameForBackupJob(backupJob),
+			Namespace: backupJob.Namespace,
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      backupJob.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: backupJob.Namespace,
+			},
+		},
+		Status: batchv1.JobStatus{
+			CompletionTime: &now,
+			Conditions:     []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}},
+		},
+	}
+	existing := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-test", Name: "test-bj"}}
+	resolved := newRedisResolved("redis-strategy", map[string]string{"bucketName": "redis-bucket"})
+
+	r, _ := newRedisTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy, completedK8sJob, existing))
+	store := r.Client
+	r.Client, r.APIReader = staleCache(t, store), failingReads(t, store)
+	ctx := context.Background()
+
+	if _, err := r.reconcileRedis(ctx, backupJob, resolved); !errors.Is(err, errBackupNotReadBack) {
+		t.Fatalf("reconcileRedis err = %v, want errBackupNotReadBack so the reconcile is retried", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := store.Get(ctx, client.ObjectKeyFromObject(backupJob), persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Error("the BackupJob was failed although its Backup exists")
+	}
 }
