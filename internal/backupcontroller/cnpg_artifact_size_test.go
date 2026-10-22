@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -350,5 +352,68 @@ func TestCreateCNPGBackupArtifact_UnreadableExistingBackupIsRetried(t *testing.T
 	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
 	if !errors.Is(err, errBackupNotReadBack) {
 		t.Errorf("err = %v, want errBackupNotReadBack", err)
+	}
+}
+
+// TestReconcileCNPG_UnreadableBackupIsRetried drives a completed backup
+// through the reconcile: when the Backup exists but cannot be read back,
+// the reconcile is retried and the BackupJob is not failed.
+func TestReconcileCNPG_UnreadableBackupIsRetried(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Minute)),
+		newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+		newRolloutInstancePod(time.Now().Add(-time.Hour)))
+	_, backups := f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1", len(backups))
+	}
+	ctx := context.Background()
+	completed := backups[0].DeepCopy()
+	completed.Status.Phase = cnpgBackupPhaseComplete
+	completed.Status.BackupID = "20261021T100000"
+	if err := f.c.Update(ctx, completed); err != nil {
+		t.Fatalf("complete cnpg.io/Backup: %v", err)
+	}
+	if err := f.c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: "bj"}}); err != nil {
+		t.Fatalf("seed Backup: %v", err)
+	}
+	f.r.APIReader = failingReads(t, f.c)
+
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(ctx, j, f.resolved); !errors.Is(err, errBackupNotReadBack) {
+		t.Fatalf("reconcileCNPG err = %v, want errBackupNotReadBack so the reconcile is retried", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Error("the BackupJob was failed although its Backup exists")
+	}
+}
+
+func TestCreateCNPGBackupArtifact_FailedExistenceCheckSkipsProbe(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-transient"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "x", Size: 1}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
+	r.APIReader = failingReads(t, newCNPGStrategyTestClient(t))
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
+
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	if err != nil || got == nil {
+		t.Fatalf("createCNPGBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
+	}
+	if l.calls != 0 {
+		t.Errorf("S3 probed %d times after the existence check failed", l.calls)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -96,8 +97,12 @@ func TestExistingBackup_ReadsPastTheCache(t *testing.T) {
 		Client:    newMariaDBStrategyTestClient(t),
 		APIReader: newMariaDBStrategyTestClient(t, backup),
 	}
-	if got := r.existingBackup(context.Background(), "tenant", "bj"); got == nil {
+	if got, _ := r.existingBackup(context.Background(), "tenant", "bj"); got == nil {
 		t.Fatal("existingBackup = nil; want the Backup the API server holds")
+	}
+	r.APIReader = newMariaDBStrategyTestClient(t)
+	if got, probe := r.existingBackup(context.Background(), "tenant", "bj"); got != nil || !probe {
+		t.Errorf("existingBackup = %v, probe=%v; want nil and a probe when there is no Backup", got, probe)
 	}
 }
 
@@ -139,8 +144,8 @@ func TestExistingBackup_ReadErrorIsNotFatal(t *testing.T) {
 		},
 	})
 	r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t), APIReader: failing}
-	if got := r.existingBackup(context.Background(), "tenant", "bj"); got != nil {
-		t.Errorf("existingBackup = %#v, want nil on a read error", got)
+	if got, probe := r.existingBackup(context.Background(), "tenant", "bj"); got != nil || probe {
+		t.Errorf("existingBackup = %#v, probe=%v; want nil and no probe on a read error", got, probe)
 	}
 }
 
@@ -195,8 +200,15 @@ func TestFailBackupArtifact(t *testing.T) {
 		if !errors.Is(err, errBackupNotReadBack) {
 			t.Errorf("err = %v, want it returned so the reconcile is retried", err)
 		}
-		if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		persisted := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(context.Background(), client.ObjectKeyFromObject(j), persisted); err != nil {
+			t.Fatalf("get BackupJob: %v", err)
+		}
+		if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 			t.Error("the BackupJob was failed although its Backup exists")
+		}
+		if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "BackupNotReadBack" {
+			t.Errorf("Ready condition = %+v, want False/BackupNotReadBack", cond)
 		}
 	})
 

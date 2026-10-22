@@ -365,7 +365,8 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	mdbBackup *mariadbtypes.Backup,
 	rendered *strategyv1alpha1.MariaDBTemplate,
 ) (*backupsv1alpha1.Backup, error) {
-	if existing := r.existingBackup(ctx, j.Namespace, j.Name); existing != nil {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
 		return existing, nil
 	}
 	takenAt := metav1.Now()
@@ -395,9 +396,9 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	// operator's PVC ID), so an Artifact{URI: ""} is a worse signal than
 	// no Artifact at all - leave it nil instead.
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
-		status.Artifact = &backupsv1alpha1.BackupArtifact{
-			URI:       uri,
-			SizeBytes: r.mariadbArtifactSizeBytes(ctx, j.Namespace, rendered.Storage.S3, mdbBackup, takenAt.Time),
+		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
+		if probe {
+			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, j.Namespace, rendered.Storage.S3, mdbBackup, takenAt.Time)
 		}
 	}
 	backup := &backupsv1alpha1.Backup{
