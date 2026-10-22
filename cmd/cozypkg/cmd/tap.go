@@ -307,12 +307,19 @@ With --secret the OCIRepository is given a pull-credential secretRef (the
 admin pre-creates the Secret in cozy-system), so a private repository taps in
 one command.
 
-Trust: tap validates the artifact's structure but does NOT verify its cosign
-signature. Signature verification is the community index's job at publication
-time ('cozypkg validate --require-signature' in the index CI gate, pinned to
-the entry's recorded identity), and can additionally be enforced at pull time
-via Flux OCIRepository verification. Tapping a third-party repository runs its
-charts in your management cluster: tap only sources you trust.`,
+Pinning: a tapped repository does not follow a moving tag. A reference given by
+digest (oci://host/org/repo@sha256:...) is pinned to that digest immediately; a
+tag reference is pinned to the digest it currently resolves to as soon as the
+source materializes, with the tag kept informational. Moving the tag upstream
+changes nothing in the cluster; tap the repository again to move the pin.
+
+Trust: tap validates the artifact's structure. Keyless signature verification at
+pull time is enabled with --certificate-identity and --certificate-oidc-issuer,
+which set a Flux cosign verify policy on the source so content is pulled only
+when signed by that identity. Signature verification at publication time is the
+community index's job ('cozypkg validate --require-signature' in the index CI
+gate, pinned to the entry's recorded identity). Tapping a third-party repository
+runs its charts in your management cluster: tap only sources you trust.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

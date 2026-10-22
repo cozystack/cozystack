@@ -48,6 +48,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		corev1alpha1.TapPackage{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_TapPackage(ref),
 		corev1alpha1.TapSource{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TapSource(ref),
 		corev1alpha1.TapSpec{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_TapSpec(ref),
+		corev1alpha1.TapVerify{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TapVerify(ref),
 		corev1alpha1.TenantModule{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantModule(ref),
 		corev1alpha1.TenantModuleList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
 		corev1alpha1.TenantModuleStatus{}.OpenAPIModelName():      schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
@@ -715,11 +716,51 @@ func schema_pkg_apis_core_v1alpha1_TapSpec(ref common.ReferenceCallback) common.
 							Format:      "",
 						},
 					},
+					"verify": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Verify is a connect-time input only: a signature-verification policy to set on the tap's Flux source (spec.verify). It is consumed when a Tap is created, preserved across repeat connects, and never returned on read.",
+							Ref:         ref(corev1alpha1.TapVerify{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			corev1alpha1.TapPackage{}.OpenAPIModelName(), corev1alpha1.TapSource{}.OpenAPIModelName()},
+			corev1alpha1.TapPackage{}.OpenAPIModelName(), corev1alpha1.TapSource{}.OpenAPIModelName(), corev1alpha1.TapVerify{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_TapVerify(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TapVerify is a connect-time signature-verification policy for a tap. It maps to the Flux OCIRepository spec.verify: keyless cosign identity matching (issuer + subject) is the supported form, so a moved tag cannot be followed unless it is also signed by the recorded identity.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"provider": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Provider is the signature technology: \"cosign\" (default) or \"notation\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"issuer": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Issuer is the OIDC issuer URL for keyless cosign verification, e.g. https://token.actions.githubusercontent.com.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"subject": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Subject is the certificate identity (subject) for keyless cosign verification; it is matched against the artifact's signing identity.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
