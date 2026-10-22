@@ -24,6 +24,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -198,6 +199,13 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	// Pin the resolved digest so the source stops following a mutable tag: the
+	// tag may move upstream, but the cluster keeps pulling this exact content
+	// until an explicit re-connect. This runs only after verifyAndExtract
+	// accepted the artifact, so the digest pinned is the digest of verified
+	// content. A user-supplied explicit digest is never rewritten.
+	pinTapDigest(&repo, art.Revision)
+
 	// Stamp the revision so an unchanged artifact is not re-pulled every resync.
 	if repo.Annotations == nil {
 		repo.Annotations = map[string]string{}
@@ -207,6 +215,46 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// manifestDigestRe matches a full OCI manifest digest (sha256:<64 hex>).
+var manifestDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// pinTapDigest pins a tag-following tap source to the digest Flux resolved for
+// the current artifact, so moving the tag upstream no longer changes what the
+// cluster pulls. source-controller formats an OCI tag revision as
+// '<tag>@<digest>' and a digest revision as the bare '<digest>', so the
+// manifest digest is the segment after the last '@'.
+//
+// A user-supplied explicit digest (ref.digest set without the operator's pin
+// annotation) is left untouched: the operator pins only what a tag resolved to,
+// or re-pins its own prior pin. A revision without a well-formed digest leaves
+// the source following its tag rather than writing a malformed reference (the
+// caller requires a non-empty art.Digest, so this is defensive).
+func pinTapDigest(repo *sourcev1.OCIRepository, revision string) {
+	parts := strings.Split(revision, "@")
+	digest := parts[len(parts)-1]
+	if !manifestDigestRe.MatchString(digest) {
+		return
+	}
+	ref := repo.Spec.Reference
+	// A user-supplied explicit digest carries no matching operator pin
+	// annotation; never rewrite it.
+	if ref != nil && ref.Digest != "" && repo.Annotations[tapconst.PinnedDigestAnnotation] != ref.Digest {
+		return
+	}
+	if ref != nil && ref.Digest == digest && repo.Annotations[tapconst.PinnedDigestAnnotation] == digest {
+		return // already pinned to this digest
+	}
+	if ref == nil {
+		ref = &sourcev1.OCIRepositoryRef{}
+		repo.Spec.Reference = ref
+	}
+	ref.Digest = digest
+	if repo.Annotations == nil {
+		repo.Annotations = map[string]string{}
+	}
+	repo.Annotations[tapconst.PinnedDigestAnnotation] = digest
 }
 
 // failMaterialize records a materialization failure (e.g. a name collision with

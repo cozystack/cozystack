@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -517,5 +518,109 @@ func TestReconcileBlocksNameCollision(t *testing.T) {
 	}
 	if ps.GetLabels()[tapconst.Label] == "true" {
 		t.Error("the collision check must not overwrite the foreign PackageSource")
+	}
+}
+
+// A tag-following tap source must be pinned to the digest Flux resolved, so it
+// stops following a moved tag. The manifest digest is the part of the artifact
+// revision after '@' (source-controller formats an OCI tag revision as
+// '<tag>@<digest>').
+func TestReconcilePinsDigestFromTagRevision(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Digest != manifest {
+		t.Fatalf("expected ref.digest pinned to %q, got %+v", manifest, got.Spec.Reference)
+	}
+	if got.Spec.Reference.Tag != "v1" {
+		t.Errorf("tag must stay informational, got %q", got.Spec.Reference.Tag)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != manifest {
+		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
+	}
+}
+
+// A user-supplied explicit digest (ref.digest set with no operator pin
+// annotation) must never be rewritten by the operator: the operator pins only
+// tag-following sources.
+func TestReconcileDoesNotRepinUserDigest(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	userDigest := "sha256:" + strings.Repeat("c", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Digest: userDigest}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	// A digest-pinned source reports its revision as the bare digest.
+	setArtifact(t, cl, digest, userDigest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != userDigest {
+		t.Errorf("a user-supplied digest must be left as is, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("the operator must not claim a user-supplied digest as its own pin, got %v", got.Annotations)
+	}
+}
+
+// Once pinned, the source reports its revision as the bare digest; a further
+// reconcile must keep the same pin rather than thrash it.
+func TestReconcilePinIsIdempotent(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	// Flux re-resolves by digest now and reports the bare-digest revision.
+	setArtifact(t, cl, digest, manifest)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != manifest {
+		t.Errorf("pin must be stable, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != manifest {
+		t.Errorf("expected materialized revision stamped to the bare digest, got %q", got.Annotations[tapconst.MaterializedRevisionAnnotation])
 	}
 }
