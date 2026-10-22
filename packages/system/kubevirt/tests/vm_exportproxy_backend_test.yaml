@@ -1,0 +1,38 @@
+suite: vm-exportproxy routes reach the Service KubeVirt creates
+templates:
+  - templates/vm-exportproxy-ingress.yaml
+  - templates/vm-exportproxy-tlsroute.yaml
+
+release:
+  name: kubevirt
+  namespace: cozy-kubevirt
+
+# virt-operator names the export proxy Service virt-exportproxy
+# (VirtExportProxyName in pkg/virt-operator/resource/generate/components).
+# The public hostname is vm-exportproxy.<host>; the Service name is not
+# derived from it.
+
+tests:
+  - it: the Ingress backend is virt-exportproxy
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "vm-exportproxy"
+        gateway-enabled: "false"
+    template: templates/vm-exportproxy-ingress.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: virt-exportproxy
+
+  - it: the TLSRoute backend is virt-exportproxy
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "vm-exportproxy"
+        gateway-enabled: "true"
+    template: templates/vm-exportproxy-tlsroute.yaml
+    asserts:
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: virt-exportproxy

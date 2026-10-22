@@ -224,6 +224,23 @@ spec:
   - toEndpoints:
       - matchLabels:
           "k8s:io.kubernetes.pod.namespace": cozy-kubevirt-cdi
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-vm-exportproxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-kubevirt
+          kubevirt.io: virt-exportproxy
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
 {{- if .Values.monitoring }}
 ---
 apiVersion: cilium.io/v2
