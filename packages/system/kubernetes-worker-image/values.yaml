@@ -96,7 +96,7 @@ storage: "6Gi"
 
 ## @typedef {struct} WorkerImage - A golden Talos worker image entry.
 ## @field {string} schematicID - Talos image-factory schematic ID.
-## @field {string} version - Talos version (e.g. "v1.13.6").
+## @field {string} version - Talos version (e.g. "v1.13.12").
 ## @field {string} [imageFactoryURL] - Override the global imageFactoryURL for this image.
 ## @field {quantity} [storage] - Override the global storage size for this image.
 ## @field {string} [storageClass] - Override the global StorageClass for this image.
@@ -104,4 +104,4 @@ storage: "6Gi"
 ## @param {[]WorkerImage} images - Catalog of golden Talos worker images to provision in the cozy-public namespace. Each entry is one (schematicID, version) flavor a tenant node group can clone via `osImage.builtin`.
 images:
   - schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-    version: "v1.13.6"
+    version: "v1.13.12"

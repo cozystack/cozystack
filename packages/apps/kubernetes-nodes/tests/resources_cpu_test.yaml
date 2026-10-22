@@ -174,7 +174,7 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
       - equal:
           path: metadata.name
-          value: kubernetes-myk8s-md0-28d812
+          value: kubernetes-myk8s-md0-92f330
 
   # A quoted zero is truthy, so it never took the unset path. It was refused
   # before this guard existed as well, by the kubelet CPU reservation check,
@@ -212,7 +212,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: kubernetes-myk8s-md0-ce2335
+          value: kubernetes-myk8s-md0-8a06d5
 
   # KubeVirt declares cores as uint32, so a count past its ceiling cannot size
   # the guest even though it is a whole number.

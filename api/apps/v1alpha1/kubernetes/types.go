@@ -378,7 +378,7 @@ type Talos struct {
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
 	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
-	// +kubebuilder:default:="v1.13.6"
+	// +kubebuilder:default:="v1.13.12"
 	Version string `json:"version"`
 }
 
