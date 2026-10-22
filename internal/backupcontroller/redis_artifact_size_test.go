@@ -325,3 +325,36 @@ func TestReconcileRedis_ArtifactUsesTheJobTrust(t *testing.T) {
 		t.Errorf("Artifact = %#v, want SizeBytes 512", created.Status.Artifact)
 	}
 }
+
+func TestCreateRedisBackupArtifact_RetryCheck(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: "Redis", Name: "cache"},
+		},
+	}
+
+	t.Run("a failed existence check creates the Backup without probing", func(t *testing.T) {
+		l := &fakeS3Lister{statSize: 777}
+		r := redisReconciler(t, l, j, projectedCredsSecret(nil))
+		r.APIReader = failingReads(t, newMariaDBStrategyTestClient(t))
+		got, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil)
+		if err != nil || got == nil {
+			t.Fatalf("createRedisBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
+		}
+		if l.calls != 0 {
+			t.Errorf("S3 probed %d times after the existence check failed", l.calls)
+		}
+	})
+
+	t.Run("an existing Backup that cannot be read back is retried", func(t *testing.T) {
+		backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"}}
+		store := newMariaDBStrategyTestClient(t, j, backup, projectedCredsSecret(nil))
+		r := redisReconciler(t, &fakeS3Lister{statSize: 777})
+		r.Client, r.APIReader = staleCache(t, store), failingReads(t, store)
+		if _, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil); !errors.Is(err, errBackupNotReadBack) {
+			t.Errorf("err = %v, want errBackupNotReadBack", err)
+		}
+	})
+}
