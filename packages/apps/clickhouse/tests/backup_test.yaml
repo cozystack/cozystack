@@ -15,6 +15,7 @@ templates:
   - templates/clickhouse.yaml
   - templates/backup-strategy-secret.yaml
   - templates/backup-secret.yaml
+  - templates/backup-script.yaml
 
 release:
   name: ch-test
@@ -150,3 +151,24 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef."
+
+  # Regression for #3758. The legacy per-instance backup script's retention
+  # cleanup loop iterates $DB_LIST, which must be assigned from the table list.
+  # A prior `echo DB_LIST=$(...)` typo left DB_LIST unset, so the cleanup loop
+  # ran zero iterations and `restic forget`/`restic prune` never executed —
+  # snapshots accumulated in object storage forever while the Job still
+  # reported success. Assert the assignment is present and the echo typo is gone.
+  - it: "legacy backup script: DB_LIST is assigned so retention cleanup runs (#3758)"
+    template: templates/backup-script.yaml
+    set:
+      backup:
+        enabled: true
+        schedule: "0 3 * * *"
+        useSystemBucket: false
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: '(?m)^\s*DB_LIST=\$\(echo "\$TABLE_LIST"'
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'echo DB_LIST='
