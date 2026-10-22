@@ -22,8 +22,8 @@ import (
 // makes to measure Backup.status.artifact.sizeBytes. The probe runs inside
 // the reconcile that creates the Backup, and the BackupJob controller has a
 // single worker, so an unreachable endpoint stalls every other BackupJob for
-// this long.
-const artifactSizeProbeTimeout = 10 * time.Second
+// this long. A variable so tests can shorten it.
+var artifactSizeProbeTimeout = 10 * time.Second
 
 type s3ObjectInfo struct {
 	Key          string
@@ -63,8 +63,10 @@ type minioObjectLister struct {
 func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 	// An endpoint behind a path prefix cannot be addressed: minio-go has no
 	// such option, and the SigV4 signature covers the request path, so the
-	// prefix cannot be added below the client either.
-	if strings.Contains(conn.Endpoint, "/") {
+	// prefix cannot be added below the client either. A bare trailing slash
+	// is not a prefix, and the operators accept it.
+	endpoint := strings.TrimSuffix(conn.Endpoint, "/")
+	if strings.Contains(endpoint, "/") {
 		return nil, fmt.Errorf("endpoint %q has a path, which the S3 client cannot address", conn.Endpoint)
 	}
 	opts := &minio.Options{
@@ -90,7 +92,7 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		tr.TLSClientConfig.RootCAs = pool
 		opts.Transport = tr
 	}
-	client, err := minio.New(conn.Endpoint, opts)
+	client, err := minio.New(endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -121,18 +123,20 @@ func collectObjects(ctx context.Context, objects <-chan minio.ObjectInfo) ([]s3O
 
 // existingBackup returns the Backup a previous reconcile already created
 // for the job, so a retry skips the size probe whose result it would
-// discard. Returns (nil, nil) when there is none. It reads past the cache:
-// a retry typically follows a Create made moments earlier, which the cache
-// may not show yet.
-func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, name string) (*backupsv1alpha1.Backup, error) {
+// discard. It reads past the cache: a retry typically follows a Create made
+// moments earlier, which the cache may not show yet. It returns nil both
+// when there is no Backup and when the read fails: it only saves a probe,
+// and the Create that follows handles an existing Backup on its own, so a
+// transient read error must not fail a backup that succeeded.
+func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, name string) *backupsv1alpha1.Backup {
 	existing := &backupsv1alpha1.Backup{}
 	if err := r.apiReader().Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
+		if !apierrors.IsNotFound(err) {
+			getLogger(ctx).Info("cannot check for an existing Backup; creating it", "backup", name, "error", err)
 		}
-		return nil, err
+		return nil
 	}
-	return existing, nil
+	return existing
 }
 
 func (r *BackupJobReconciler) secretValue(ctx context.Context, namespace, name, key string) (string, error) {

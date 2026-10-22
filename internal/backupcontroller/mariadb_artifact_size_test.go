@@ -13,6 +13,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -149,6 +151,25 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0: no dump is inside the window on both clocks", got)
 		}
+	})
+
+	t.Run("a dump uploaded just after Complete is inside the slack", func(t *testing.T) {
+		l := &fakeS3Lister{objects: []s3ObjectInfo{
+			{Key: dumpKey(prefix, completed.Add(30*time.Second), "gzip"), Size: 5, LastModified: completed.Add(30 * time.Second)},
+		}}
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 5 {
+			t.Errorf("size = %d, want 5", got)
+		}
+	})
+
+	t.Run("a hanging endpoint is given up at the probe timeout", func(t *testing.T) {
+		r := reconcilerWithLister(t, &fakeS3Lister{}, s3CredsSecret("tenant", "creds"))
+		r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
+		withShortProbeTimeout(t, func() {
+			if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+				t.Errorf("size = %d, want 0", got)
+			}
+		})
 	})
 
 	t.Run("two dumps in the window leave size unset", func(t *testing.T) {
@@ -296,5 +317,45 @@ func TestCreateMariaDBBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
 	}
 	if got.Status.Artifact == nil || got.Status.Artifact.SizeBytes != 99 {
 		t.Errorf("Artifact = %#v, want the existing one", got.Status.Artifact)
+	}
+}
+
+func TestCreateMariaDBBackupArtifact_TransientRetryReadStillCreates(t *testing.T) {
+	apps := mariadbapp.GroupName
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-transient"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+		},
+	}
+	r := reconcilerWithLister(t, &fakeS3Lister{}, job)
+	r.APIReader = interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("etcdserver: request timed out")
+		},
+	})
+	got, err := r.createMariaDBBackupArtifact(context.Background(), job, &ResolvedBackupConfig{}, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"}}, newRenderedMariaDBTemplate())
+	if err != nil || got == nil || got.Name != "bj-transient" {
+		t.Fatalf("createMariaDBBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(got), &backupsv1alpha1.Backup{}); err != nil {
+		t.Errorf("the Backup was not created: %v", err)
+	}
+}
+
+func TestCreateMariaDBBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *testing.T) {
+	apps := mariadbapp.GroupName
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-race"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-race"}}
+	store := newMariaDBStrategyTestClient(t, job, backup)
+	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: notFoundOnce(t, store), Scheme: store.Scheme()}
+	got, err := r.createMariaDBBackupArtifact(context.Background(), job, &ResolvedBackupConfig{}, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"}}, &strategyv1alpha1.MariaDBTemplate{})
+	if err != nil || got == nil || got.Name != "bj-race" {
+		t.Fatalf("createMariaDBBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
 }

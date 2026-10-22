@@ -815,8 +815,8 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
 ) (*backupsv1alpha1.Backup, error) {
-	if existing, err := r.existingBackup(ctx, j.Namespace, j.Name); err != nil || existing != nil {
-		return existing, err
+	if existing := r.existingBackup(ctx, j.Namespace, j.Name); existing != nil {
+		return existing, nil
 	}
 	takenAt := metav1.Now()
 	if cnpgBackup.Status.StartedAt != nil && !cnpgBackup.Status.StartedAt.IsZero() {
