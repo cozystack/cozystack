@@ -1,5 +1,4 @@
-image: "ghcr.io/cozystack/cozystack/flux-plunger:latest@sha256:6a6ec938973e6583c5e1573f7d25beddc1852a6699a089116b2407e29a564a72"
-
+image: "ghcr.io/cozystack/cozystack/flux-plunger:v1.7.0-rc.2@sha256:f09439183b70fd1a267f0bdbdc5d01e1bc75ad5559f75ccf216a07f277b76050"
 # How long flux-plunger is given to stop, between 40 and 140. On SIGTERM it stops
 # its manager (up to 10 seconds), then gives up the uninstall fences it holds,
 # waiting for helm-controller to uninstall a release being deleted, under a
@@ -8,7 +7,6 @@ image: "ghcr.io/cozystack/cozystack/flux-plunger:latest@sha256:6a6ec938973e6583c
 # acts. The pre-delete hook waits for the pod a little longer than this before it
 # releases what is left.
 shutdownGracePeriodSeconds: 90
-
 # Image for the pre-delete uninstall-fence cleanup hook Job (see
 # templates/uninstall-fence-cleanup.yaml). Only needs a kubectl binary. The tag
 # is digest-pinned so an upstream retag does not change what runs across the

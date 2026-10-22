@@ -1,8 +1,7 @@
 # Injected by the platform from the cozystack-values Secret. The empty
 # default keeps the chart renderable on its own, outside a cluster.
 _cluster: {}
-
 console:
-  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.6.0@sha256:ad0e132ce506bbc9e0f6a5dfb94311c9bbc08da3d8eca84eb0e527ba6c1a8897
+  image: ghcr.io/cozystack/cozystack/cozystack-ui:v1.7.0-rc.2@sha256:f266bb00c088561c01234c6d02d26d629be8e2527ba35b65eab0b768c54b9b54
 tokenProxy:
-  image: ghcr.io/cozystack/cozystack/token-proxy:v1.6.0@sha256:97124c012246c33cdcac60e8f884097b48c0081624716fe8161efc2b3ceeb2a8
+  image: ghcr.io/cozystack/cozystack/token-proxy:v1.7.0-rc.2@sha256:b5b17859ba0f69d1dac6b2cc3ed377acc821fdb0a9e83142610ac57e40b31fb0

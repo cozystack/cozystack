@@ -2,63 +2,58 @@
 # defaults keep the chart renderable on its own, outside a cluster.
 _cluster: {}
 _namespace: {}
-
 host: ""
-
 metricsStorages:
-## Example:
-## metricsStorages:
-## - name: shortterm
-##   retentionPeriod: "3d"
-##   deduplicationInterval: "15s"
-##   storage: 10Gi
-##   storageClassName: ""
-##   vminsert:
-##     minAllowed:
-##       cpu: 200m
-##       memory: 512Mi
-##     maxAllowed:
-##       cpu: 1500m
-##       memory: 3Gi
-##   vmselect:
-##     minAllowed:
-##       cpu: 300m
-##       memory: 1Gi
-##     maxAllowed:
-##       cpu: 3500m
-##       memory: 6Gi
-##   vmstorage:
-##     minAllowed:
-##       cpu: 500m
-##       memory: 2Gi
-##     maxAllowed:
-##       cpu: 4000m
-##       memory: 8Gi
-- name: shortterm
-  retentionPeriod: "3d"
-  deduplicationInterval: "15s"
-  storage: 10Gi
-  storageClassName: ""
-- name: longterm
-  retentionPeriod: "14d"
-  deduplicationInterval: "5m"
-  storage: 10Gi
-  storageClassName: ""
-
+  ## Example:
+  ## metricsStorages:
+  ## - name: shortterm
+  ##   retentionPeriod: "3d"
+  ##   deduplicationInterval: "15s"
+  ##   storage: 10Gi
+  ##   storageClassName: ""
+  ##   vminsert:
+  ##     minAllowed:
+  ##       cpu: 200m
+  ##       memory: 512Mi
+  ##     maxAllowed:
+  ##       cpu: 1500m
+  ##       memory: 3Gi
+  ##   vmselect:
+  ##     minAllowed:
+  ##       cpu: 300m
+  ##       memory: 1Gi
+  ##     maxAllowed:
+  ##       cpu: 3500m
+  ##       memory: 6Gi
+  ##   vmstorage:
+  ##     minAllowed:
+  ##       cpu: 500m
+  ##       memory: 2Gi
+  ##     maxAllowed:
+  ##       cpu: 4000m
+  ##       memory: 8Gi
+  - name: shortterm
+    retentionPeriod: "3d"
+    deduplicationInterval: "15s"
+    storage: 10Gi
+    storageClassName: ""
+  - name: longterm
+    retentionPeriod: "14d"
+    deduplicationInterval: "5m"
+    storage: 10Gi
+    storageClassName: ""
 logsStorages:
-- name: generic
-  retentionPeriod: "1"
-  storage: 10Gi
-  storageClassName: ""
-
+  - name: generic
+    retentionPeriod: "1"
+    storage: 10Gi
+    storageClassName: ""
 tracingStorages: []
 tracingCentralHost: false
-
 tracingCollector:
   enabled: true
   replicas: 1
   samplingPercentage: 10
-  image: docker.io/otel/opentelemetry-collector-contrib:0.136.0@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
+  image: ghcr.io/cozystack/cozystack/otelcol-tracing:v0.136.0-cozystack.0@sha256:006107b8a0467d87746f873d15d032ab729babef86b1cbe1fd8a9c16562d61dd
   redactAttributes: []
   resources:
     limits:
@@ -123,7 +118,6 @@ vmagent:
   ##   - job_name: "custom"
   ##     static_configs:
   ##       - targets: ["my-service:9090"]
-
 ## OIDC authentication for the Grafana instance.
 ##
 ## Identity mode picks the auth source for `[auth.generic_oauth]`:

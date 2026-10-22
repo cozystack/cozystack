@@ -3,37 +3,37 @@ harbor:
   # with a multi-arch rebuild from images/.
   core:
     image:
-      repository: docker.io/goharbor/harbor-core
-      tag: v2.15.1@sha256:887a85b8ea98b76bfc9f715f1a0785bb99f9a1034241513902dd6e95be922a83
+      repository: ghcr.io/cozystack/cozystack/harbor-core
+      tag: v1.7.0-rc.2@sha256:b645c46af670bbff36313466ffe955f8c0c4ea81cd8eb20f6d82a904be4be934
   jobservice:
     image:
-      repository: docker.io/goharbor/harbor-jobservice
-      tag: v2.15.1@sha256:0de4fd2ce3a02d3e6591b439e4674ea085885ddf43652b44004cc67eb19dba12
+      repository: ghcr.io/cozystack/cozystack/harbor-jobservice
+      tag: v1.7.0-rc.2@sha256:b1988c0fc72d4710d11f7f19ebc0a15b506d986606ce84ab5627861a69b206f0
   portal:
     image:
-      repository: docker.io/goharbor/harbor-portal
-      tag: v2.15.1@sha256:ac55161c57a8351807adf8f8def264bdd52667c371d0436beefebdac4341c9e2
+      repository: ghcr.io/cozystack/cozystack/harbor-portal
+      tag: v1.7.0-rc.2@sha256:0974f606b8f6aaed7abd400c421e8e0e175d277394623f53bffd873479cdeec5
   registry:
     registry:
       image:
-        repository: docker.io/goharbor/registry-photon
-        tag: v2.15.1@sha256:ebf0325c2661729dbb317cbf839608eb8b15cfa158911a94976f2c21563c466e
+        repository: ghcr.io/cozystack/cozystack/registry-photon
+        tag: v1.7.0-rc.2@sha256:bb7103f8ea3784b7924da12404806f1b2f19e2d284c54f2049766aaaf687054b
     controller:
       image:
-        repository: docker.io/goharbor/harbor-registryctl
-        tag: v2.15.1@sha256:554147a956989175f63f8d41573d716c6ddf6052acd1749c88c0f99ce6ee2bff
+        repository: ghcr.io/cozystack/cozystack/harbor-registryctl
+        tag: v1.7.0-rc.2@sha256:223af937d92110210ee0dbdcd19c8d2c365918236dc41111393acd1885303217
   exporter:
     image:
-      repository: docker.io/goharbor/harbor-exporter
-      tag: v2.15.1@sha256:372275b6b6abeb571fa7bd5de458e3d75f1a1636503b3c0abe02938f2b285d75
+      repository: ghcr.io/cozystack/cozystack/harbor-exporter
+      tag: v1.7.0-rc.2@sha256:b437212b0206bc39e2f930b3b8113d0af0b00ee6108db7e76850f916bb698a7c
   nginx:
     image:
-      repository: docker.io/goharbor/nginx-photon
-      tag: v2.15.1@sha256:1f9d06d040f2478f6cf7f6da0091877bf987a641810f4bfaadb2a87d73dbf4fb
+      repository: ghcr.io/cozystack/cozystack/nginx-photon
+      tag: v1.7.0-rc.2@sha256:0b424a225d291786b1c15d7eb7ad4ac4a33c9a0a845a8487747f17afe4c0f5f0
   trivy:
     image:
-      repository: docker.io/goharbor/trivy-adapter-photon
-      tag: v2.15.1@sha256:f0c52bed36c083ec4fded26cefab01e4cd58c9354c261cb3156c69f57bb50131
+      repository: ghcr.io/cozystack/cozystack/trivy-adapter-photon
+      tag: v1.7.0-rc.2@sha256:ab6a59fac0abdc58f752d6bc50ec69c6a900f856448891b2701921533ca576b9
 db:
   replicas: 2
   size: 5Gi

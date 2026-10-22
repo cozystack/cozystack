@@ -31,7 +31,7 @@ seaweedfs:
   # `make image` rewrites both keys on every build.
   image:
     repository: "ghcr.io/cozystack/cozystack/seaweedfs"
-    tag: "4.45@sha256:2a063deb9992ac0c06f8c09589ae063a30ac8c87af2c6aa1f4d4420cc544535c"
+    tag: "v1.7.0-rc.2@sha256:6d4b63d9c28e7553eebc45bd3723cd0160d2fdb6b4f6fd39a869c7cab0839f71"
   master:
     # At the shipped replicationFactor of 2 the size limit and
     # extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
@@ -310,7 +310,7 @@ seaweedfs:
     bucketClassName: "seaweedfs"
     region: ""
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.7.0-rc.2@sha256:b7b0d339e0e2c5043eb03b6d78e05437daae1116c0e1a6a1d88ae4f70b296534"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
