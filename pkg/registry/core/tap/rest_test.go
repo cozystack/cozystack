@@ -416,6 +416,21 @@ func TestCreateVerifyRequiresBothIdentityFields(t *testing.T) {
 	}
 }
 
+func TestCreateVerifyRejectsNonCosignProvider(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL: "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{
+			Provider: "notation",
+			Issuer:   "https://token.actions.githubusercontent.com",
+			Subject:  "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1",
+		},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("a non-cosign provider must be BadRequest (matchOIDCIdentity is cosign-only), got %v", err)
+	}
+}
+
 func TestCreateRefusesConflictingURL(t *testing.T) {
 	// A source with the same derived name but a different registry host must not
 	// be silently retargeted.
