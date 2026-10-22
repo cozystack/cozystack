@@ -11,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
 
 type fakeS3Lister struct {
@@ -87,5 +89,20 @@ func TestNewMinioObjectLister_RejectsEndpointPath(t *testing.T) {
 	}
 	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org:9000", Secure: true}); err != nil {
 		t.Errorf("host:port endpoint rejected: %v", err)
+	}
+}
+
+// TestExistingBackup_ReadsPastTheCache pins that the retry check sees a
+// Backup the cache does not show yet: the previous reconcile created it
+// moments earlier.
+func TestExistingBackup_ReadsPastTheCache(t *testing.T) {
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"}}
+	r := &BackupJobReconciler{
+		Client:    newMariaDBStrategyTestClient(t),
+		APIReader: newMariaDBStrategyTestClient(t, backup),
+	}
+	got, err := r.existingBackup(context.Background(), "tenant", "bj")
+	if err != nil || got == nil {
+		t.Fatalf("existingBackup = %v, %v; want the Backup the API server holds", got, err)
 	}
 }

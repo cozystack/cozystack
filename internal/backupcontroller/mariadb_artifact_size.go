@@ -11,15 +11,17 @@ import (
 )
 
 // Slack around the [created, completed] window of the operator Backup when
-// matching the timestamp mariadb-operator embeds in the dump file name: that
-// timestamp comes from the backup Job pod's clock, not the apiserver's, and
-// is truncated to seconds.
+// matching a dump: the timestamp in its file name comes from the backup Job
+// pod's clock and is truncated to seconds, and its LastModified comes from
+// the object store's clock, neither of which is the apiserver's.
 const mariadbSizeProbeClockSkew = time.Minute
 
 // mariadbArtifactSizeBytes measures the dump mariadb-operator uploaded for
 // mdbBackup. The strategy prefix is shared by every backup of the
-// application, so the dump is identified by the timestamp in its file name
-// falling inside the operator Backup's lifetime. Returns 0 - leaving
+// application, so the dump is identified by both the timestamp in its file
+// name and its LastModified falling inside the operator Backup's lifetime:
+// the two come from different clocks, so a skewed pod clock alone cannot
+// pull a neighbouring run's dump into the window. Returns 0 - leaving
 // Artifact.SizeBytes absent - when the object store cannot be read or the
 // window does not match exactly one dump: an unknown size must not be
 // reported as a measured one.
@@ -59,7 +61,7 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 	var matched []s3ObjectInfo
 	for _, obj := range objects {
 		ts, ok := parseMariaDBLogicalBackupFile(strings.TrimPrefix(obj.Key, prefix))
-		if !ok || ts.Before(lower) || ts.After(upper) {
+		if !ok || !inWindow(ts, lower, upper) || !inWindow(obj.LastModified, lower, upper) {
 			continue
 		}
 		matched = append(matched, obj)
@@ -115,15 +117,30 @@ func mariadbOperatorS3Prefix(prefix string) string {
 	return prefix
 }
 
+func inWindow(t, lower, upper time.Time) bool {
+	return !t.Before(lower) && !t.After(upper)
+}
+
+// Compression tokens mariadb-operator puts in a dump file name: the
+// algorithm before .sql in v25.10 (backup.<ts>.gzip.sql), the extension
+// after it in later releases (backup.<ts>.sql.gz).
+var (
+	mariadbDumpAlgorithms = map[string]bool{"none": true, "bzip2": true, "gzip": true, "zstd": true}
+	mariadbDumpExtensions = map[string]bool{"bz2": true, "gz": true, "zst": true}
+)
+
 // parseMariaDBLogicalBackupFile accepts the logical-backup file names
-// mariadb-operator writes, backup.<RFC3339>.sql and
-// backup.<RFC3339>.<compression>.sql, and returns the embedded timestamp.
+// mariadb-operator writes and returns the embedded timestamp.
 func parseMariaDBLogicalBackupFile(name string) (time.Time, bool) {
 	parts := strings.Split(name, ".")
-	if len(parts) != 3 && len(parts) != 4 {
+	if parts[0] != "backup" {
 		return time.Time{}, false
 	}
-	if parts[0] != "backup" || parts[len(parts)-1] != "sql" {
+	switch {
+	case len(parts) == 3 && parts[2] == "sql":
+	case len(parts) == 4 && parts[2] == "sql" && mariadbDumpExtensions[parts[3]]:
+	case len(parts) == 4 && parts[3] == "sql" && mariadbDumpAlgorithms[parts[2]]:
+	default:
 		return time.Time{}, false
 	}
 	ts, err := time.Parse(time.RFC3339, parts[1])
