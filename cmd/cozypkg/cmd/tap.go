@@ -71,6 +71,16 @@ type ociRef struct {
 	Digest string
 }
 
+// pullRef is the reference to pull: by digest when one is pinned (so the pull
+// resolves the exact content regardless of where the tag points), otherwise by
+// tag.
+func (r ociRef) pullRef() string {
+	if r.Digest != "" {
+		return r.URL + "@" + r.Digest
+	}
+	return r.URL + ":" + r.Tag
+}
+
 var sanitizeName = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // ociDigestRe matches a full OCI manifest digest (sha256:<64 hex>), the same
@@ -134,8 +144,10 @@ func fluxSourceName(r ociRef) string {
 }
 
 // buildTapOCIRepository mirrors the operator's generateOCIRepository: an
-// OCIRepository in cozy-system, 5m interval, optional tag reference, optional
-// pull-credential secretRef (the private-tap credential, symmetric with #2472).
+// OCIRepository in cozy-system, 5m interval, a tag and/or digest reference,
+// optional pull-credential secretRef (the private-tap credential, symmetric
+// with #2472). A tag-only reference is pinned to a digest later by the tap
+// materializer; an explicit digest is pinned here at connect time.
 func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRepository {
 	obj := &sourcev1.OCIRepository{
 		TypeMeta: metav1.TypeMeta{
@@ -152,11 +164,9 @@ func buildTapOCIRepository(name string, r ociRef, secret string) *sourcev1.OCIRe
 			Annotations: map[string]string{tapconst.NameAnnotation: name},
 		},
 		Spec: sourcev1.OCIRepositorySpec{
-			URL:      r.URL,
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
-			Reference: &sourcev1.OCIRepositoryRef{
-				Tag: r.Tag,
-			},
+			URL:       r.URL,
+			Interval:  metav1.Duration{Duration: 5 * time.Minute},
+			Reference: &sourcev1.OCIRepositoryRef{Tag: r.Tag, Digest: r.Digest},
 		},
 	}
 	if secret != "" {
@@ -280,7 +290,7 @@ charts in your management cluster: tap only sources you trust.`,
 
 		// Pull first: an unreachable/invalid ref must fail before any cluster
 		// resource is created (no half-created source).
-		fullRef := ref.URL + ":" + ref.Tag
+		fullRef := ref.pullRef()
 		dir, cleanup, err := pullOCIArtifact(fullRef)
 		if err != nil {
 			return err
@@ -377,7 +387,7 @@ charts in your management cluster: tap only sources you trust.`,
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s (%s:%s)\n", fullRef, srcName, ref.URL, ref.Tag)
+		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s\n", fullRef, srcName)
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
 		}
