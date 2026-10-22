@@ -83,6 +83,16 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 		}
 	})
 
+	t.Run("a hanging endpoint is given up at the probe timeout", func(t *testing.T) {
+		r := reconcilerWithLister(t, &fakeS3Lister{}, s3CredsSecret("tenant", "creds"))
+		r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
+		withShortProbeTimeout(t, func() {
+			if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", newSizedBarmanObjectStore(), "srv", "20261021T100000"); got != 0 {
+				t.Errorf("size = %d, want 0", got)
+			}
+		})
+	})
+
 	t.Run("an empty endpointURL means AWS", func(t *testing.T) {
 		store := newSizedBarmanObjectStore()
 		store.EndpointURL = ""
@@ -304,5 +314,23 @@ func TestCreateCNPGBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
 	}
 	if l.calls != 0 {
 		t.Errorf("S3 listed %d times for a Backup that already exists", l.calls)
+	}
+}
+
+func TestCreateCNPGBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-race"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-race"}}
+	store := newCNPGStrategyTestClient(t, backup)
+	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: notFoundOnce(t, store)}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	if err != nil || got == nil || got.Name != "bj-race" {
+		t.Fatalf("createCNPGBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
 }

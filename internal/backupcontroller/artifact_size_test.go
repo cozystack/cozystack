@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
@@ -87,8 +90,10 @@ func TestNewMinioObjectLister_RejectsEndpointPath(t *testing.T) {
 	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org/prefix", Secure: true}); err == nil {
 		t.Error("an endpoint with a path was accepted")
 	}
-	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org:9000", Secure: true}); err != nil {
-		t.Errorf("host:port endpoint rejected: %v", err)
+	for _, ok := range []string{"s3.example.org:9000", "s3.example.org/"} {
+		if _, err := newMinioObjectLister(s3Connection{Endpoint: ok, Secure: true}); err != nil {
+			t.Errorf("endpoint %q rejected: %v", ok, err)
+		}
 	}
 }
 
@@ -101,8 +106,78 @@ func TestExistingBackup_ReadsPastTheCache(t *testing.T) {
 		Client:    newMariaDBStrategyTestClient(t),
 		APIReader: newMariaDBStrategyTestClient(t, backup),
 	}
-	got, err := r.existingBackup(context.Background(), "tenant", "bj")
-	if err != nil || got == nil {
-		t.Fatalf("existingBackup = %v, %v; want the Backup the API server holds", got, err)
+	if got := r.existingBackup(context.Background(), "tenant", "bj"); got == nil {
+		t.Fatal("existingBackup = nil; want the Backup the API server holds")
+	}
+}
+
+// staleCache wraps a fake client so that Get reports NotFound for Backups,
+// the way an informer cache does right after another writer created one.
+func staleCache(t *testing.T, c client.Client) client.Client {
+	t.Helper()
+	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+				return apierrors.NewNotFound(backupsv1alpha1.GroupVersion.WithResource("backups").GroupResource(), key.Name)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+}
+
+// notFoundOnce wraps a fake client whose first Backup Get reports NotFound:
+// the retry check runs before the Backup exists, the refetch after Create
+// collides with it.
+func notFoundOnce(t *testing.T, c client.Client) client.Client {
+	t.Helper()
+	missed := false
+	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok && !missed {
+				missed = true
+				return apierrors.NewNotFound(backupsv1alpha1.GroupVersion.WithResource("backups").GroupResource(), key.Name)
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+}
+
+func TestExistingBackup_ReadErrorIsNotFatal(t *testing.T) {
+	failing := interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("etcdserver: request timed out")
+		},
+	})
+	r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t), APIReader: failing}
+	if got := r.existingBackup(context.Background(), "tenant", "bj"); got != nil {
+		t.Errorf("existingBackup = %#v, want nil on a read error", got)
+	}
+}
+
+// blockingLister answers nothing until the probe's context is done, the way
+// a black-holed endpoint does.
+type blockingLister struct{}
+
+func (blockingLister) ListObjects(ctx context.Context, _, _ string, _ bool) ([]s3ObjectInfo, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// withShortProbeTimeout shortens the probe timeout and fails the test if fn
+// is not back well before the default timeout would have expired.
+func withShortProbeTimeout(t *testing.T, fn func()) {
+	t.Helper()
+	saved := artifactSizeProbeTimeout
+	artifactSizeProbeTimeout = 50 * time.Millisecond
+	defer func() { artifactSizeProbeTimeout = saved }()
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the probe did not give up at its timeout")
 	}
 }
