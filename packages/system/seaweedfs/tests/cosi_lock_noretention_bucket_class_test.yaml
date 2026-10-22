@@ -1,0 +1,49 @@
+suite: seaweedfs COSI lock BucketClass without default retention
+
+# patches/cosi-bucket-class-lock-readonly.patch adds the -lock-noretention
+# class next to -lock: Object Lock enabled, no default retention, and Retain,
+# because the driver deletes a bucket through the filer without checking
+# retention. Upstream renders neither class, so this fails on unpatched code.
+
+templates:
+  - charts/seaweedfs/templates/cosi/cosi-bucket-class.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: renders the class with Object Lock enabled and no default retention
+    set:
+      seaweedfs.cosi.bucketClassName: tenant-root
+      seaweedfs.cosi.driverName: tenant-root.seaweedfs.objectstorage.k8s.io
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-lock-noretention
+    asserts:
+      - isKind:
+          of: BucketClass
+      - equal:
+          path: driverName
+          value: tenant-root.seaweedfs.objectstorage.k8s.io
+      - equal:
+          path: deletionPolicy
+          value: Retain
+      - equal:
+          path: parameters
+          value:
+            objectLockEnabled: "true"
+
+  - it: leaves the -lock class and its default retention unchanged
+    set:
+      seaweedfs.cosi.bucketClassName: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-lock
+    asserts:
+      - equal:
+          path: parameters
+          value:
+            objectLockEnabled: "true"
+            objectLockRetentionMode: COMPLIANCE
+            objectLockRetentionDays: "365"
