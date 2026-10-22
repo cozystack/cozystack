@@ -435,7 +435,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, rendered, app)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -877,7 +877,7 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 		}
 		existing := &backupsv1alpha1.Backup{}
 		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}
