@@ -317,16 +317,23 @@ func TestCreatePackageIdempotent(t *testing.T) {
 	}
 }
 
-func TestClearMaterializedRevision(t *testing.T) {
+func TestResetTapPinState(t *testing.T) {
 	s := untapScheme(t)
+	const oldDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	oci := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{
 		Name: "tap-acme-hello", Namespace: "cozy-system",
-		Annotations: map[string]string{tapconst.MaterializedRevisionAnnotation: "rev-1", "keep": "me"},
-	}}
+		Annotations: map[string]string{
+			tapconst.MaterializedRevisionAnnotation: "v1@" + oldDigest,
+			tapconst.PinnedDigestAnnotation:         oldDigest,
+			"keep":                                  "me",
+		},
+	}, Spec: sourcev1.OCIRepositorySpec{Reference: &sourcev1.OCIRepositoryRef{Tag: "v1", Digest: oldDigest}}}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(oci).Build()
 
-	if err := clearMaterializedRevision(context.Background(), cl, "tap-acme-hello"); err != nil {
-		t.Fatalf("clear: %v", err)
+	// A tag-based re-tap must drop the operator's digest pin (cozypkg cannot
+	// clear a field the operator owns via server-side apply) and both annotations.
+	if err := resetTapPinState(context.Background(), cl, "tap-acme-hello", false); err != nil {
+		t.Fatalf("reset: %v", err)
 	}
 	var got sourcev1.OCIRepository
 	if err := cl.Get(context.Background(), client.ObjectKey{Name: "tap-acme-hello", Namespace: "cozy-system"}, &got); err != nil {
@@ -335,11 +342,38 @@ func TestClearMaterializedRevision(t *testing.T) {
 	if _, ok := got.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
 		t.Error("materialized-revision annotation must be cleared to force re-materialization")
 	}
+	if _, ok := got.Annotations[tapconst.PinnedDigestAnnotation]; ok {
+		t.Error("pinned-digest annotation must be cleared so the operator re-pins")
+	}
+	if got.Spec.Reference != nil && got.Spec.Reference.Digest != "" {
+		t.Errorf("a tag re-tap must drop the operator digest pin, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Tag != "v1" {
+		t.Errorf("the tag must be left in place, got %+v", got.Spec.Reference)
+	}
 	if got.Annotations["keep"] != "me" {
 		t.Error("unrelated annotations must be preserved")
 	}
+
+	// An explicit-digest re-tap must NOT drop the digest the CLI itself set.
+	oci2 := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{
+		Name: "tap-acme-two", Namespace: "cozy-system",
+		Annotations: map[string]string{tapconst.MaterializedRevisionAnnotation: oldDigest},
+	}, Spec: sourcev1.OCIRepositorySpec{Reference: &sourcev1.OCIRepositoryRef{Digest: oldDigest}}}
+	cl2 := fake.NewClientBuilder().WithScheme(s).WithObjects(oci2).Build()
+	if err := resetTapPinState(context.Background(), cl2, "tap-acme-two", true); err != nil {
+		t.Fatalf("reset explicit: %v", err)
+	}
+	var got2 sourcev1.OCIRepository
+	if err := cl2.Get(context.Background(), client.ObjectKey{Name: "tap-acme-two", Namespace: "cozy-system"}, &got2); err != nil {
+		t.Fatal(err)
+	}
+	if got2.Spec.Reference == nil || got2.Spec.Reference.Digest != oldDigest {
+		t.Errorf("an explicit-digest re-tap must keep its digest, got %+v", got2.Spec.Reference)
+	}
+
 	// Absent source: no error.
-	if err := clearMaterializedRevision(context.Background(), cl, "missing"); err != nil {
+	if err := resetTapPinState(context.Background(), cl, "missing", false); err != nil {
 		t.Errorf("a missing source must not error, got %v", err)
 	}
 }
