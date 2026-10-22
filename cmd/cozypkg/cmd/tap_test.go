@@ -151,6 +151,36 @@ func TestBuildTapOCIRepository(t *testing.T) {
 	if withSecret.Spec.SecretRef == nil || withSecret.Spec.SecretRef.Name != "pull-creds" {
 		t.Fatalf("expected secretRef pull-creds, got %+v", withSecret.Spec.SecretRef)
 	}
+
+	// A digest-pinned reference sets spec.ref.digest; an explicit digest from
+	// the user is written by the CLI itself (the operator only pins tag refs).
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	rd := ociRef{URL: "oci://ghcr.io/foo/bar", Org: "foo", Repo: "bar", Digest: digest}
+	objd := buildTapOCIRepository("tap-foo-bar", rd, "")
+	if objd.Spec.Reference == nil || objd.Spec.Reference.Digest != digest {
+		t.Fatalf("expected digest pin %q, got %+v", digest, objd.Spec.Reference)
+	}
+	if objd.Spec.Reference.Tag != "" {
+		t.Errorf("a digest-only reference must not carry a tag, got %q", objd.Spec.Reference.Tag)
+	}
+	// A tag may accompany the digest and is then informational.
+	rtd := ociRef{URL: "oci://ghcr.io/foo/bar", Repo: "bar", Tag: "v1", Digest: digest}
+	objtd := buildTapOCIRepository("n", rtd, "")
+	if objtd.Spec.Reference.Digest != digest || objtd.Spec.Reference.Tag != "v1" {
+		t.Fatalf("expected tag v1 + digest, got %+v", objtd.Spec.Reference)
+	}
+}
+
+func TestOCIRefPullRef(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	if got := (ociRef{URL: "oci://ghcr.io/foo/bar", Tag: "v1"}).pullRef(); got != "oci://ghcr.io/foo/bar:v1" {
+		t.Errorf("tag pullRef = %q", got)
+	}
+	// A digest is pulled by digest, so the pull resolves the exact content
+	// regardless of where the tag currently points.
+	if got := (ociRef{URL: "oci://ghcr.io/foo/bar", Tag: "v1", Digest: digest}).pullRef(); got != "oci://ghcr.io/foo/bar@"+digest {
+		t.Errorf("digest pullRef = %q", got)
+	}
 }
 
 // rewritePackageSourceForTap must NOT rename the PackageSource: a tapped
