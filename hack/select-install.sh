@@ -128,6 +128,9 @@ suite_to_source() {
       echo "cozystack.vm-instance-application cozystack.vm-disk-application"
       return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
+    gpudevice)
+      echo "cozystack.gpu-operator cozystack.vm-instance-application cozystack.vm-disk-application"
+      return ;;
     kafka-metadata) echo cozystack.kafka-application ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do

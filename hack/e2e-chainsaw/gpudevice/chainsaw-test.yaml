@@ -1,0 +1,510 @@
+# GPUDevice ordering, budgets, VM attachment, usage records and teardown,
+# against a fake extended resource: CI has no GPUs. hack/e2e-platform-packages.sh
+# enables gpu-operator, which turns on cozystack-controller's GPU paths, and
+# permits nvidia.com/E2E_FAKE_GPU in KubeVirt as an external provider. This
+# suite advertises two units of it on one node and points a class at them.
+#
+# No device plugin serves the fake name, so virt-handler finds no device to
+# hand the guest and the VMI never syncs. The VM checks therefore stop at what
+# admission and scheduling decide: the device attached to the VMI, its gpus
+# entry, and the launcher pod pinned to the device's node. Guest state is not
+# asserted.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gpudevice
+spec:
+  catch:
+  - events: {}
+  - events:
+      namespace: tenant-test-gpua
+  - events:
+      namespace: tenant-test-gpub
+  - describe:
+      apiVersion: gpu.cozystack.io/v1alpha1
+      kind: GPUClass
+      name: e2e-fake
+  - describe:
+      apiVersion: gpu.cozystack.io/v1alpha1
+      kind: GPUDevice
+      namespace: tenant-test-gpua
+  - describe:
+      apiVersion: gpu.cozystack.io/v1alpha1
+      kind: GPUDevice
+      namespace: tenant-test-gpub
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      namespace: tenant-test-gpua
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      namespace: tenant-test-gpub
+  - podLogs:
+      namespace: cozy-system
+      selector: app=cozystack-controller
+      tail: 200
+  steps:
+  - name: gpu-paths-are-on
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cozystack-controller
+            namespace: cozy-system
+          spec:
+            template:
+              spec:
+                (containers[?name == 'cozystack-controller']):
+                - (contains(args, '--enable-gpu')): true
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: KubeVirt
+          metadata:
+            name: kubevirt
+            namespace: cozy-kubevirt
+          spec:
+            configuration:
+              (contains(permittedHostDevices.pciHostDevices[*].resourceName, 'nvidia.com/E2E_FAKE_GPU')): true
+
+  - name: advertise-fake-gpus
+    try:
+    - script:
+        content: |
+          set -eu
+          node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          kubectl label node "$node" e2e.cozystack.io/fake-gpu=true --overwrite
+          kubectl patch node "$node" --subresource=status --type=json \
+            -p '[{"op":"add","path":"/status/capacity/nvidia.com~1E2E_FAKE_GPU","value":"2"}]'
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            labels:
+              e2e.cozystack.io/fake-gpu: "true"
+          status:
+            allocatable:
+              nvidia.com/E2E_FAKE_GPU: "2"
+    # Nothing owns the node patch, so Chainsaw cannot reclaim it. The label
+    # goes on first, so cleanup finds the node even if the patch failed.
+    cleanup:
+    - script:
+        content: |
+          set -eu
+          for node in $(kubectl get nodes -l e2e.cozystack.io/fake-gpu=true -o jsonpath='{.items[*].metadata.name}'); do
+            if [ -n "$(kubectl get node "$node" -o jsonpath='{.status.capacity.nvidia\.com/E2E_FAKE_GPU}')" ]; then
+              kubectl patch node "$node" --subresource=status --type=json \
+                -p '[{"op":"remove","path":"/status/capacity/nvidia.com~1E2E_FAKE_GPU"}]'
+            fi
+            kubectl label node "$node" e2e.cozystack.io/fake-gpu-
+          done
+
+  - name: create-class
+    try:
+    - apply:
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: e2e-fake
+          spec:
+            displayName: E2E fake GPU
+            vendor: nvidia
+            model: FAKE
+            mode: passthrough
+            maxCount: 2
+            nodeSelector:
+              e2e.cozystack.io/fake-gpu: "true"
+            source:
+              devicePlugin:
+                resourceName: nvidia.com/E2E_FAKE_GPU
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: e2e-fake
+          status:
+            free: 2
+            (conditions[?type == 'ResourceNameNotPermitted']):
+            - status: "False"
+
+  # gpub may hold two units, so its second order below is limited by capacity
+  # alone.
+  - name: create-tenants
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gpua
+          spec:
+            resourceQuotas:
+              cpu: "4"
+              memory: 8Gi
+              storage: 10Gi
+              gpu.cozystack.io/e2e-fake: "1"
+              gpu.cozystack.io/total: "1"
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gpub
+          spec:
+            resourceQuotas:
+              cpu: "4"
+              memory: 8Gi
+              storage: 10Gi
+              gpu.cozystack.io/e2e-fake: "2"
+              gpu.cozystack.io/total: "2"
+    # 17m: above the 15m install timeout tenant-rd gives these releases; see
+    # "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 17m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-gpua
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 17m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-gpub
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: order-binds
+    try:
+    - apply:
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: held
+            namespace: tenant-test-gpua
+          spec:
+            className: e2e-fake
+            count: 1
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: held
+            namespace: tenant-test-gpua
+          status:
+            phase: Bound
+            (nodeName != null): true
+
+  - name: over-budget-order-is-refused
+    try:
+    - script:
+        content: |
+          set -eu
+          if out=$(kubectl create -f - 2>&1 <<EOF
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: over
+            namespace: tenant-test-gpua
+          spec:
+            className: e2e-fake
+            count: 1
+          EOF
+          ); then
+            echo "FAIL: an order over the budget was admitted: $out"
+            false
+          fi
+          echo "$out"
+          echo "$out" | grep -F 'budget gpu.cozystack.io/e2e-fake of tenant tenant-test-gpua is 1'
+
+  - name: vm-attaches-held-device
+    try:
+    # A blank VMDisk because vm-instance renders `disks: []` as null, which
+    # KubeVirt refuses.
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: blank
+            namespace: tenant-test-gpua
+          spec:
+            source: {}
+            storage: 1Gi
+            storageClass: ($values.storageClass)
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          metadata:
+            name: vmheld
+            namespace: tenant-test-gpua
+          spec:
+            runStrategy: Always
+            instanceType: u1.medium
+            disks:
+            - name: blank
+            gpus:
+            - device: held
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstance
+          metadata:
+            name: vm-instance-vmheld
+            namespace: tenant-test-gpua
+            labels:
+              gpu.cozystack.io/device-reference: "true"
+          spec:
+            domain:
+              devices:
+                gpus:
+                - deviceName: nvidia.com/E2E_FAKE_GPU
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: held
+            namespace: tenant-test-gpua
+          status:
+            phase: Attached
+            attachedTo:
+              vmi: vm-instance-vmheld
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-test-gpua
+            labels:
+              kubevirt.io: virt-launcher
+              vm.kubevirt.io/name: vm-instance-vmheld
+    - script:
+        content: |
+          set -eu
+          node=$(kubectl -n tenant-test-gpua get gpudevice held -o jsonpath='{.status.nodeName}')
+          pinned=$(kubectl -n tenant-test-gpua get pod -l kubevirt.io=virt-launcher,vm.kubevirt.io/name=vm-instance-vmheld \
+            -o jsonpath='{.items[0].spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[*].matchFields[*].values[*]}')
+          echo "device node: $node, launcher pinned to: $pinned"
+          [ -n "$node" ]
+          [ "$pinned" = "$node" ]
+
+  - name: other-tenant-cannot-take-held-unit
+    try:
+    - apply:
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: b1
+            namespace: tenant-test-gpub
+          spec:
+            className: e2e-fake
+            count: 1
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: b1
+            namespace: tenant-test-gpub
+          status:
+            phase: Bound
+    - script:
+        content: |
+          set -eu
+          if out=$(kubectl create -f - 2>&1 <<EOF
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: b2
+            namespace: tenant-test-gpub
+          spec:
+            className: e2e-fake
+            count: 1
+          EOF
+          ); then
+            echo "FAIL: an order was admitted with every unit held: $out"
+            false
+          fi
+          echo "$out"
+          echo "$out" | grep -F 'the class has 0 free units'
+    - assert:
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: held
+            namespace: tenant-test-gpua
+          status:
+            phase: Attached
+            attachedTo:
+              vmi: vm-instance-vmheld
+
+  - name: usage-record-follows-the-hold
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Workload
+          metadata:
+            name: gpu-held
+            namespace: tenant-test-gpua
+            labels:
+              workloads.cozystack.io/monitor: gpu-devices
+          status:
+            kind: gpu-device
+            resources:
+              gpu.cozystack.io/e2e-fake: "1"
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          name: vmheld
+          namespace: tenant-test-gpua
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: held
+            namespace: tenant-test-gpua
+          status:
+            phase: Bound
+            (attachedTo == null): true
+    - delete:
+        ref:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          name: held
+          namespace: tenant-test-gpua
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Workload
+          metadata:
+            name: gpu-held
+            namespace: tenant-test-gpua
+
+  - name: template-device-lives-with-its-vmi
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: blank
+            namespace: tenant-test-gpub
+          spec:
+            source: {}
+            storage: 1Gi
+            storageClass: ($values.storageClass)
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          metadata:
+            name: vmtmpl
+            namespace: tenant-test-gpub
+          spec:
+            runStrategy: Always
+            instanceType: u1.medium
+            disks:
+            - name: blank
+            gpus:
+            - deviceTemplate:
+                className: e2e-fake
+                count: 1
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: vm-instance-vmtmpl-gpu-0
+            namespace: tenant-test-gpub
+            ownerReferences:
+            - kind: VirtualMachineInstance
+              name: vm-instance-vmtmpl
+          status:
+            phase: Attached
+            attachedTo:
+              vmi: vm-instance-vmtmpl
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          name: vmtmpl
+          namespace: tenant-test-gpub
+    - error:
+        timeout: 5m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: vm-instance-vmtmpl-gpu-0
+            namespace: tenant-test-gpub
+
+  - name: tenant-with-held-device-deletes
+    try:
+    - apply:
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: last
+            namespace: tenant-test-gpua
+          spec:
+            className: e2e-fake
+            count: 1
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gpu.cozystack.io/v1alpha1
+          kind: GPUDevice
+          metadata:
+            name: last
+            namespace: tenant-test-gpua
+          status:
+            phase: Bound
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: gpua
+    # 10m: the tenant's helm uninstall runs first, then the namespace waits
+    # for its disk PVC and the GPUDevice protection finalizer.
+    - error:
+        timeout: 10m
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-gpua

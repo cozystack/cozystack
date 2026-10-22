@@ -127,12 +127,13 @@ assert_full_suite() {
     # kubevirt-cdi reaches vm-disk-application and nothing else runnable, so
     # until vm-disk-application mapped to a suite every CDI change ran all of
     # them. The vminstance suite creates a VMDisk and asserts the DataVolume
-    # behind it, so it is the suite that covers CDI.
+    # behind it, so it is the suite that covers CDI; gpudevice attaches a
+    # VMDisk to its VMs too.
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/kubevirt-cdi/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    [ "$output" = "vminstance" ]
+    [ "$output" = "gpudevice vminstance" ]
     closure=$(hack/select-install.sh "$output" "$tmp/sources")
     printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.vm-disk-application
     printf '%s\n' "$closure" | tr ' ' '\n' | grep -Fxq cozystack.kubevirt-cdi
