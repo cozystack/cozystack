@@ -38,7 +38,11 @@ type IndexEntry struct {
 	// OCIRef is the artifact location, e.g. oci://ghcr.io/org/repo.
 	OCIRef string `json:"ociRef"`
 	// Version is the OCI tag of the listed release; a version bump updates it.
-	Version     string   `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
+	// Digest pins the exact content the CI gate verified (sha256:<64 hex>). When
+	// set, tapping the entry's short name pins this digest, so a short-name tap
+	// does not follow a moved tag. The version is kept informational alongside it.
+	Digest      string   `json:"digest,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Homepage    string   `json:"homepage,omitempty"`
 	Maintainer  string   `json:"maintainer,omitempty"`
@@ -87,6 +91,9 @@ func loadIndex(dir string) ([]IndexEntry, error) {
 		}
 		if entry.Name == "" || entry.OCIRef == "" {
 			return fmt.Errorf("%s: index entry must set both name and ociRef", rel)
+		}
+		if entry.Digest != "" && !ociDigestRe.MatchString(entry.Digest) {
+			return fmt.Errorf("%s: index entry digest %q must be sha256:<64 hex>", rel, entry.Digest)
 		}
 		entries = append(entries, entry)
 		return nil
@@ -218,13 +225,18 @@ func resolveTapTarget(arg, indexRef string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no index entry named %q", arg)
 	}
-	// Pin to the entry's recorded version: the CI gate validated and
+	// Pin to the entry's recorded version and digest: the CI gate validated and
 	// cosign-verified <ociRef>:<version>, so tapping must consume that exact
-	// tag rather than defaulting to latest.
+	// release rather than defaulting to latest. A recorded digest pins the exact
+	// content (the strongest form); the version is kept informational alongside it.
+	ref := entry.OCIRef
 	if entry.Version != "" {
-		return entry.OCIRef + ":" + entry.Version, nil
+		ref += ":" + entry.Version
 	}
-	return entry.OCIRef, nil
+	if entry.Digest != "" {
+		ref += "@" + entry.Digest
+	}
+	return ref, nil
 }
 
 func init() {
