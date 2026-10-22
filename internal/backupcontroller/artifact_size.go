@@ -12,6 +12,8 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -122,9 +124,19 @@ var errBackupNotReadBack = errors.New("the Backup already exists but could not b
 
 // failBackupArtifact handles an error from creating the Backup of a
 // completed backup: errBackupNotReadBack is retried through the controller's
-// backoff, anything else fails the BackupJob.
+// backoff, with Ready=False telling why the BackupJob is still Running;
+// anything else fails the BackupJob.
 func (r *BackupJobReconciler) failBackupArtifact(ctx context.Context, j *backupsv1alpha1.BackupJob, err error) (ctrl.Result, error) {
 	if errors.Is(err, errBackupNotReadBack) {
+		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "BackupNotReadBack",
+			Message: err.Error(),
+		})
+		if uerr := r.Status().Update(ctx, j); uerr != nil {
+			getLogger(ctx).Info("cannot record that the Backup could not be read back", "backupjob", j.Name, "error", uerr)
+		}
 		return ctrl.Result{}, err
 	}
 	return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
@@ -133,19 +145,21 @@ func (r *BackupJobReconciler) failBackupArtifact(ctx context.Context, j *backups
 // existingBackup returns the Backup a previous reconcile already created
 // for the job, so a retry skips the size probe whose result it would
 // discard. It reads past the cache: a retry typically follows a Create made
-// moments earlier, which the cache may not show yet. It returns nil both
-// when there is no Backup and when the read fails: it only saves a probe,
-// and the Create that follows handles an existing Backup on its own, so a
-// transient read error must not fail a backup that succeeded.
-func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, name string) *backupsv1alpha1.Backup {
-	existing := &backupsv1alpha1.Backup{}
+// moments earlier, which the cache may not show yet. A failed read is not
+// fatal, because the Create that follows handles an existing Backup on its
+// own; probe is false then, since the Backup may well exist and a probe
+// would only be discarded, while a read that keeps failing would rerun it on
+// every retry.
+func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, name string) (existing *backupsv1alpha1.Backup, probe bool) {
+	existing = &backupsv1alpha1.Backup{}
 	if err := r.apiReader().Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
-		if !apierrors.IsNotFound(err) {
-			getLogger(ctx).Info("cannot check for an existing Backup; creating it", "backup", name, "error", err)
+		if apierrors.IsNotFound(err) {
+			return nil, true
 		}
-		return nil
+		getLogger(ctx).Info("cannot check for an existing Backup; creating it without measuring its size", "backup", name, "error", err)
+		return nil, false
 	}
-	return existing
+	return existing, false
 }
 
 func (r *BackupJobReconciler) secretValue(ctx context.Context, namespace, name, key string) (string, error) {

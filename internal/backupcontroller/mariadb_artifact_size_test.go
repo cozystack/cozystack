@@ -13,8 +13,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -328,18 +328,18 @@ func TestCreateMariaDBBackupArtifact_TransientRetryReadStillCreates(t *testing.T
 			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
 		},
 	}
-	r := reconcilerWithLister(t, &fakeS3Lister{}, job)
-	r.APIReader = interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
-		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
-			return errors.New("etcdserver: request timed out")
-		},
-	})
+	l := &fakeS3Lister{}
+	r := reconcilerWithLister(t, l, job, s3CredsSecret("tenant", "creds"))
+	r.APIReader = failingReads(t, newMariaDBStrategyTestClient(t))
 	got, err := r.createMariaDBBackupArtifact(context.Background(), job, &ResolvedBackupConfig{}, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"}}, newRenderedMariaDBTemplate())
 	if err != nil || got == nil || got.Name != "bj-transient" {
 		t.Fatalf("createMariaDBBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
 	}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(got), &backupsv1alpha1.Backup{}); err != nil {
 		t.Errorf("the Backup was not created: %v", err)
+	}
+	if l.calls != 0 {
+		t.Errorf("S3 probed %d times after the existence check failed", l.calls)
 	}
 }
 
@@ -374,5 +374,56 @@ func TestCreateMariaDBBackupArtifact_UnreadableExistingBackupIsRetried(t *testin
 	_, err := r.createMariaDBBackupArtifact(context.Background(), job, &ResolvedBackupConfig{}, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"}}, &strategyv1alpha1.MariaDBTemplate{})
 	if !errors.Is(err, errBackupNotReadBack) {
 		t.Errorf("err = %v, want errBackupNotReadBack", err)
+	}
+}
+
+// TestReconcileMariaDB_UnreadableBackupIsRetried drives a completed backup
+// through the reconcile: when the Backup exists but cannot be read back,
+// the reconcile is retried and the BackupJob is not failed.
+func TestReconcileMariaDB_UnreadableBackupIsRetried(t *testing.T) {
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	now := metav1.Now()
+	bj := newMariaDBBackupJob("bj-unreadable", "tenant")
+	bj.Status.StartedAt = &now
+	bj.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+	strategy := &strategyv1alpha1.MariaDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "mdb-strategy"},
+		Spec:       strategyv1alpha1.MariaDBSpec{Template: *newRenderedMariaDBTemplate()},
+	}
+	operatorMariaDB := &mariadbtypes.MariaDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp("mariadb-src")}}
+	operatorBackup := &mariadbtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "op-bk",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      bj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: bj.Namespace,
+			},
+		},
+		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, LastTransitionTime: now,
+		}}},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: bj.Name}}
+	store := newMariaDBStrategyTestClient(t, bj, strategy, newMariaDBApp("mariadb-src", "tenant"), operatorMariaDB, operatorBackup, backup)
+	r := &BackupJobReconciler{
+		Client:    store,
+		APIReader: failingReads(t, store),
+		Scheme:    store.Scheme(),
+		Recorder:  record.NewFakeRecorder(10),
+	}
+	resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{
+		APIGroup: &strategyGroup, Kind: strategyv1alpha1.MariaDBStrategyKind, Name: strategy.Name,
+	}}
+
+	_, err := r.reconcileMariaDB(context.Background(), bj, resolved)
+	if !errors.Is(err, errBackupNotReadBack) {
+		t.Fatalf("reconcileMariaDB err = %v, want errBackupNotReadBack so the reconcile is retried", err)
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := store.Get(context.Background(), client.ObjectKeyFromObject(bj), persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Error("the BackupJob was failed although its Backup exists")
 	}
 }

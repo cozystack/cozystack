@@ -815,7 +815,8 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
 ) (*backupsv1alpha1.Backup, error) {
-	if existing := r.existingBackup(ctx, j.Namespace, j.Name); existing != nil {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
 		return existing, nil
 	}
 	takenAt := metav1.Now()
@@ -858,11 +859,13 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 		Status: backupsv1alpha1.BackupStatus{
 			Phase: backupsv1alpha1.BackupPhaseReady,
 			Artifact: &backupsv1alpha1.BackupArtifact{
-				URI:       fmt.Sprintf("cnpg://%s/%s", serverName, cnpgBackup.Name),
-				SizeBytes: r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID),
+				URI: fmt.Sprintf("cnpg://%s/%s", serverName, cnpgBackup.Name),
 			},
 			UnderlyingResources: underlyingResources,
 		},
+	}
+	if probe {
+		backup.Status.Artifact.SizeBytes = r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID)
 	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
