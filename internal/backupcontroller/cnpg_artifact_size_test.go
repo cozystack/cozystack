@@ -83,6 +83,19 @@ func TestCNPGArtifactSizeBytes(t *testing.T) {
 		}
 	})
 
+	t.Run("an empty endpointURL means AWS", func(t *testing.T) {
+		store := newSizedBarmanObjectStore()
+		store.EndpointURL = ""
+		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: prefix + "data.tar", Size: 5}}}
+		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"))
+		if got := r.cnpgArtifactSizeBytes(context.Background(), "tenant", store, "srv", "20261021T100000"); got != 5 {
+			t.Errorf("size = %d, want 5", got)
+		}
+		if l.conn.Endpoint != "s3.amazonaws.com" || !l.conn.Secure {
+			t.Errorf("connection = %+v, want s3.amazonaws.com over TLS", l.conn)
+		}
+	})
+
 	t.Run("honours custom credential keys and the endpoint CA", func(t *testing.T) {
 		store := newSizedBarmanObjectStore()
 		store.S3Credentials.AccessKeyIDKey = "id"

@@ -26,8 +26,9 @@ import (
 const artifactSizeProbeTimeout = 10 * time.Second
 
 type s3ObjectInfo struct {
-	Key  string
-	Size int64
+	Key          string
+	Size         int64
+	LastModified time.Time
 }
 
 type s3ObjectLister interface {
@@ -110,7 +111,7 @@ func collectObjects(ctx context.Context, objects <-chan minio.ObjectInfo) ([]s3O
 		if obj.Err != nil {
 			return nil, obj.Err
 		}
-		out = append(out, s3ObjectInfo{Key: obj.Key, Size: obj.Size})
+		out = append(out, s3ObjectInfo{Key: obj.Key, Size: obj.Size, LastModified: obj.LastModified})
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -120,10 +121,12 @@ func collectObjects(ctx context.Context, objects <-chan minio.ObjectInfo) ([]s3O
 
 // existingBackup returns the Backup a previous reconcile already created
 // for the job, so a retry skips the size probe whose result it would
-// discard. Returns (nil, nil) when there is none.
+// discard. Returns (nil, nil) when there is none. It reads past the cache:
+// a retry typically follows a Create made moments earlier, which the cache
+// may not show yet.
 func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, name string) (*backupsv1alpha1.Backup, error) {
 	existing := &backupsv1alpha1.Backup{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
+	if err := r.apiReader().Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}

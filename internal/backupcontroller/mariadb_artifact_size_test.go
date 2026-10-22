@@ -33,6 +33,11 @@ func TestParseMariaDBLogicalBackupFile(t *testing.T) {
 		"backup.2026-10-21T10:00:00Z.gzip.sql":   true,
 		"backup.2026-10-21T10:00:00+04:00.sql":   true,
 		"backup.2026-10-21T10:00:00Z.sql.tmp":    false,
+		"backup.2026-10-21T10:00:00Z.sql.gz":     true,
+		"backup.2026-10-21T10:00:00Z.sql.zst":    true,
+		"backup.2026-10-21T10:00:00Z.zstd.sql":   true,
+		"backup.2026-10-21T10:00:00Z.xz.sql":     false,
+		"backup.2026-10-21T10:00:00Z.sql.gz.tmp": false,
 		"physicalbackup-20261021100000.xb":       false,
 		"backup.not-a-date.sql":                  false,
 		"sub/backup.2026-10-21T10:00:00Z.sql":    false,
@@ -69,8 +74,8 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 
 	t.Run("single dump inside the backup window", func(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
-			{Key: dumpKey(prefix, created.Add(-24*time.Hour), "gzip"), Size: 111},
-			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4242},
+			{Key: dumpKey(prefix, created.Add(-24*time.Hour), "gzip"), Size: 111, LastModified: created.Add(-24 * time.Hour)},
+			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4242, LastModified: created.Add(time.Minute)},
 			{Key: prefix + "0-backup-target.txt", Size: 7},
 		}}
 		got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed)
@@ -96,7 +101,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "ca"},
 			Data:       map[string][]byte{"ca.crt": []byte("PEM")},
 		}
-		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 3}}}
+		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 3, LastModified: created.Add(time.Minute)}}}
 		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), ca)
 		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", tlsS3, mdbBackup, completed); got != 3 {
 			t.Errorf("size = %d, want 3", got)
@@ -114,7 +119,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "sts"},
 			Data:       map[string][]byte{"token": []byte("TOKEN")},
 		}
-		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4}}}
+		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4, LastModified: created.Add(time.Minute)}}}
 		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), sts)
 		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", stsS3, mdbBackup, completed); got != 4 {
 			t.Errorf("size = %d, want 4", got)
@@ -126,17 +131,30 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 
 	t.Run("pod clock skew within tolerance", func(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
-			{Key: dumpKey(prefix, created.Add(-30*time.Second), ""), Size: 9},
+			{Key: dumpKey(prefix, created.Add(-30*time.Second), ""), Size: 9, LastModified: created.Add(time.Minute)},
 		}}
 		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 9 {
 			t.Errorf("size = %d, want 9", got)
 		}
 	})
 
+	t.Run("a skewed pod clock does not attribute a neighbouring run's dump", func(t *testing.T) {
+		// The pod clock runs 5m behind. This run's dump is named outside the
+		// window; the previous run's dump, uploaded before this run started,
+		// is named inside it.
+		l := &fakeS3Lister{objects: []s3ObjectInfo{
+			{Key: dumpKey(prefix, created.Add(-4*time.Minute), "gzip"), Size: 7, LastModified: created.Add(time.Minute)},
+			{Key: dumpKey(prefix, created.Add(30*time.Second), "gzip"), Size: 666, LastModified: created.Add(-4 * time.Minute)},
+		}}
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+			t.Errorf("size = %d, want 0: no dump is inside the window on both clocks", got)
+		}
+	})
+
 	t.Run("two dumps in the window leave size unset", func(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
-			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 1},
-			{Key: dumpKey(prefix, created.Add(2*time.Minute), "gzip"), Size: 2},
+			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 1, LastModified: created.Add(time.Minute)},
+			{Key: dumpKey(prefix, created.Add(2*time.Minute), "gzip"), Size: 2, LastModified: created.Add(2 * time.Minute)},
 		}}
 		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0 (ambiguous)", got)
@@ -145,7 +163,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 
 	t.Run("no dump in the window leaves size unset", func(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
-			{Key: dumpKey(prefix, completed.Add(time.Hour), "gzip"), Size: 1},
+			{Key: dumpKey(prefix, completed.Add(time.Hour), "gzip"), Size: 1, LastModified: completed.Add(time.Hour)},
 		}}
 		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0", got)
@@ -234,7 +252,7 @@ func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 		},
 	}
 	r := reconcilerWithLister(t, &fakeS3Lister{objects: []s3ObjectInfo{
-		{Key: dumpKey("src/", completed.Add(-time.Minute), "gzip"), Size: 2048},
+		{Key: dumpKey("src/", completed.Add(-time.Minute), "gzip"), Size: 2048, LastModified: completed.Add(-time.Minute)},
 	}}, job, s3CredsSecret("tenant", "creds"))
 	rendered := newRenderedMariaDBTemplate()
 	rendered.Storage.S3.Prefix = "src/"
