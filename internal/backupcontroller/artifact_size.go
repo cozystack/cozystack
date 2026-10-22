@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -14,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
@@ -38,7 +38,7 @@ type s3ObjectLister interface {
 // s3Connection is what a driver resolves from its rendered strategy to
 // read the bucket with the same identity the backup was written with.
 type s3Connection struct {
-	// Endpoint is host[:port], without a scheme or a path.
+	// Endpoint is host[:port], without a scheme.
 	Endpoint     string
 	Secure       bool
 	Region       string
@@ -61,14 +61,6 @@ type minioObjectLister struct {
 }
 
 func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
-	// An endpoint behind a path prefix cannot be addressed: minio-go has no
-	// such option, and the SigV4 signature covers the request path, so the
-	// prefix cannot be added below the client either. A bare trailing slash
-	// is not a prefix, and the operators accept it.
-	endpoint := strings.TrimSuffix(conn.Endpoint, "/")
-	if strings.Contains(endpoint, "/") {
-		return nil, fmt.Errorf("endpoint %q has a path, which the S3 client cannot address", conn.Endpoint)
-	}
 	opts := &minio.Options{
 		Creds:  credentials.NewStaticV4(conn.AccessKey, conn.SecretKey, conn.SessionToken),
 		Region: conn.Region,
@@ -92,7 +84,9 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		tr.TLSClientConfig.RootCAs = pool
 		opts.Transport = tr
 	}
-	client, err := minio.New(endpoint, opts)
+	// minio.New refuses an endpoint with a path prefix, which it cannot
+	// address, and accepts a bare trailing slash.
+	client, err := minio.New(conn.Endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +113,21 @@ func collectObjects(ctx context.Context, objects <-chan minio.ObjectInfo) ([]s3O
 		return nil, err
 	}
 	return out, nil
+}
+
+// errBackupNotReadBack reports that Create collided with an existing Backup
+// that could then not be read. The backup itself succeeded, so callers
+// retry the reconcile instead of failing the BackupJob.
+var errBackupNotReadBack = errors.New("the Backup already exists but could not be read back")
+
+// failBackupArtifact handles an error from creating the Backup of a
+// completed backup: errBackupNotReadBack is retried through the controller's
+// backoff, anything else fails the BackupJob.
+func (r *BackupJobReconciler) failBackupArtifact(ctx context.Context, j *backupsv1alpha1.BackupJob, err error) (ctrl.Result, error) {
+	if errors.Is(err, errBackupNotReadBack) {
+		return ctrl.Result{}, err
+	}
+	return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 }
 
 // existingBackup returns the Backup a previous reconcile already created

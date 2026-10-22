@@ -359,3 +359,20 @@ func TestCreateMariaDBBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *te
 		t.Fatalf("createMariaDBBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
 }
+
+func TestCreateMariaDBBackupArtifact_UnreadableExistingBackupIsRetried(t *testing.T) {
+	apps := mariadbapp.GroupName
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-unreadable"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-unreadable"}}
+	store := newMariaDBStrategyTestClient(t, job, backup)
+	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: failingReads(t, store), Scheme: store.Scheme()}
+	_, err := r.createMariaDBBackupArtifact(context.Background(), job, &ResolvedBackupConfig{}, &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"}}, &strategyv1alpha1.MariaDBTemplate{})
+	if !errors.Is(err, errBackupNotReadBack) {
+		t.Errorf("err = %v, want errBackupNotReadBack", err)
+	}
+}

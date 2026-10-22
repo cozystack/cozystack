@@ -214,7 +214,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		artifact, err := r.createMariaDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -422,7 +422,7 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 		}
 		existing := &backupsv1alpha1.Backup{}
 		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}

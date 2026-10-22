@@ -334,3 +334,21 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *testi
 		t.Fatalf("createCNPGBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
 }
+
+func TestCreateCNPGBackupArtifact_UnreadableExistingBackupIsRetried(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-unreadable"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-unreadable"}}
+	store := newCNPGStrategyTestClient(t, backup)
+	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: failingReads(t, store)}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
+	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	if !errors.Is(err, errBackupNotReadBack) {
+		t.Errorf("err = %v, want errBackupNotReadBack", err)
+	}
+}

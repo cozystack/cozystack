@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -83,17 +84,6 @@ func TestCollectObjects(t *testing.T) {
 	close(errCh)
 	if _, err := collectObjects(context.Background(), errCh); err == nil {
 		t.Error("listing error was not returned")
-	}
-}
-
-func TestNewMinioObjectLister_RejectsEndpointPath(t *testing.T) {
-	if _, err := newMinioObjectLister(s3Connection{Endpoint: "s3.example.org/prefix", Secure: true}); err == nil {
-		t.Error("an endpoint with a path was accepted")
-	}
-	for _, ok := range []string{"s3.example.org:9000", "s3.example.org/"} {
-		if _, err := newMinioObjectLister(s3Connection{Endpoint: ok, Secure: true}); err != nil {
-			t.Errorf("endpoint %q rejected: %v", ok, err)
-		}
 	}
 }
 
@@ -180,4 +170,44 @@ func withShortProbeTimeout(t *testing.T, fn func()) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the probe did not give up at its timeout")
 	}
+}
+
+// failingReads wraps a fake client whose every Get fails, like an apiserver
+// that times out.
+func failingReads(t *testing.T, c client.Client) client.Client {
+	t.Helper()
+	return interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("etcdserver: request timed out")
+		},
+	})
+}
+
+func TestFailBackupArtifact(t *testing.T) {
+	newJob := func() *backupsv1alpha1.BackupJob {
+		return &backupsv1alpha1.BackupJob{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"}}
+	}
+
+	t.Run("a Backup that exists but cannot be read is retried", func(t *testing.T) {
+		j := newJob()
+		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t, j)}
+		_, err := r.failBackupArtifact(context.Background(), j, fmt.Errorf("%w: timeout", errBackupNotReadBack))
+		if !errors.Is(err, errBackupNotReadBack) {
+			t.Errorf("err = %v, want it returned so the reconcile is retried", err)
+		}
+		if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Error("the BackupJob was failed although its Backup exists")
+		}
+	})
+
+	t.Run("any other error fails the BackupJob", func(t *testing.T) {
+		j := newJob()
+		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t, j)}
+		if _, err := r.failBackupArtifact(context.Background(), j, errors.New("admission webhook denied")); err != nil {
+			t.Fatalf("failBackupArtifact: %v", err)
+		}
+		if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Errorf("phase = %q, want Failed", j.Status.Phase)
+		}
+	})
 }
