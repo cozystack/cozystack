@@ -83,7 +83,7 @@ tests:
             diskType: ssd
     asserts:
       - failedTemplate:
-          errorMessage: "volume.pools key 'fast-lock-noretention' must not end with '-lock', '-lock-noretention' or '-readonly' (reserved suffixes for COSI resources)."
+          errorMessage: "volume.pools key 'fast-lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
 
   - it: refuses a zone storage pool whose name ends with -lock-noretention
     template: templates/seaweedfs.yaml
@@ -104,4 +104,76 @@ tests:
                 diskType: ssd
     asserts:
       - failedTemplate:
-          errorMessage: "volume.zones.a.pools key 'fast-lock-noretention' must not end with '-lock', '-lock-noretention' or '-readonly' (reserved suffixes for COSI resources)."
+          errorMessage: "volume.zones.a.pools key 'fast-lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          lock-noretention:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly lock
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          lock:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'lock' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly readonly
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          readonly:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'readonly' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a zone storage pool named exactly lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      topology: MultiZone
+      replicationFactor: 1
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        zones:
+          a:
+            pools:
+              lock-noretention:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.zones.a.pools key 'lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
