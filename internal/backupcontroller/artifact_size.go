@@ -35,6 +35,7 @@ type s3ObjectInfo struct {
 
 type s3ObjectLister interface {
 	ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error)
+	StatObject(ctx context.Context, bucket, key string) (int64, error)
 }
 
 // s3Connection is what a driver resolves from its rendered strategy to
@@ -52,6 +53,9 @@ type s3Connection struct {
 	// what the writer of the backup trusted, no more.
 	CAPEM  []byte
 	CAOnly bool
+	// InsecureSkipVerify mirrors an explicit admin opt-in a strategy
+	// already applies to its own uploads; it is never a fallback.
+	InsecureSkipVerify bool
 }
 
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
@@ -71,14 +75,18 @@ func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
 		Region: conn.Region,
 		Secure: conn.Secure,
 	}
-	if conn.Secure && len(conn.CAPEM) > 0 {
+	if conn.Secure && (len(conn.CAPEM) > 0 || conn.InsecureSkipVerify) {
 		// Start from minio's transport to keep its proxy and timeout settings.
 		tr, err := minio.DefaultTransport(true)
 		if err != nil {
 			return nil, err
 		}
-		if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
-			return nil, err
+		if len(conn.CAPEM) > 0 {
+			if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
+				return nil, err
+			}
+		} else {
+			tr.TLSClientConfig.InsecureSkipVerify = true
 		}
 		opts.Transport = tr
 	}
@@ -113,6 +121,14 @@ func endpointTrustPool(conn s3Connection, system *x509.CertPool) (*x509.CertPool
 
 func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
 	return collectObjects(ctx, l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive}))
+}
+
+func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) (int64, error) {
+	info, err := l.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
 }
 
 // collectObjects drains a minio listing. minio-go ends a listing whose
