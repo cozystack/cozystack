@@ -209,21 +209,38 @@ func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, sourceName, sour
 	}
 }
 
-// clearMaterializedRevision removes the operator's materialized-revision
-// annotation from the tap's OCIRepository, so the next reconcile does not
-// short-circuit on the unchanged artifact revision and re-materializes (which
-// re-creates a registration removed out-of-band). A no-op when the source or the
-// annotation is absent.
-func clearMaterializedRevision(ctx context.Context, k8sClient client.Client, srcName string) error {
+// resetTapPinState prepares a tap's OCIRepository for a re-tap. It clears the
+// materialized-revision annotation so the next reconcile does not short-circuit
+// on the unchanged revision and re-materializes (re-creating a registration
+// removed out-of-band), and the pinned-digest annotation so the operator re-pins
+// the newly requested reference. For a tag-based re-tap (explicitDigest false)
+// it also drops the operator's prior digest pin from spec.ref: a server-side
+// apply under field owner cozypkg cannot clear a field the operator owns, so a
+// moved tag would otherwise stay pinned to the old digest. An explicit-digest
+// re-tap keeps the digest the apply itself set. A no-op (and no error) when the
+// source is absent or there is nothing to clear.
+func resetTapPinState(ctx context.Context, k8sClient client.Client, srcName string, explicitDigest bool) error {
 	reg := &sourcev1.OCIRepository{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, reg); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	if _, ok := reg.Annotations[tapconst.MaterializedRevisionAnnotation]; !ok {
+	base := reg.DeepCopy()
+	changed := false
+	if _, ok := reg.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
+		delete(reg.Annotations, tapconst.MaterializedRevisionAnnotation)
+		changed = true
+	}
+	if _, ok := reg.Annotations[tapconst.PinnedDigestAnnotation]; ok {
+		delete(reg.Annotations, tapconst.PinnedDigestAnnotation)
+		changed = true
+	}
+	if !explicitDigest && reg.Spec.Reference != nil && reg.Spec.Reference.Digest != "" {
+		reg.Spec.Reference.Digest = ""
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-	base := reg.DeepCopy()
-	delete(reg.Annotations, tapconst.MaterializedRevisionAnnotation)
 	return k8sClient.Patch(ctx, reg, client.MergeFrom(base))
 }
 
@@ -383,7 +400,7 @@ charts in your management cluster: tap only sources you trust.`,
 		// the two are indistinguishable (both leave the registration absent), and
 		// there is no per-app opt-out. A first tap has no such annotation, so this is
 		// a no-op then.
-		if err := clearMaterializedRevision(ctx, k8sClient, srcName); err != nil {
+		if err := resetTapPinState(ctx, k8sClient, srcName, ref.Digest != ""); err != nil {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
 		}
 
