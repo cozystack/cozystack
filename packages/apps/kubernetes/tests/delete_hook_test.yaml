@@ -68,3 +68,124 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'get tenantcontrolplanes\.kamaji\.clastix\.io test-k8s[\s\S]*still present[\s\S]*patch secret test-k8s-datastore-config'
+
+  # The remaining tests pin the wall-clock bounds on every delete in the hook.
+  # kubectl defaults --wait to true and reads --timeout=0 as a week, so a delete
+  # written with neither flag is one stuck finalizer away from parking this hook
+  # for 168 hours.
+
+  - it: every delete in the hook carries a wall-clock bound
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # Each pattern walks only continuation lines — the ones ending in a
+      # backslash — so it stays inside the command it names. A cross-line
+      # wildcard reaches a flag belonging to the next command instead, and RE2,
+      # which helm-unittest matches with, has no lookahead to exclude the echo
+      # in between.
+      #
+      # None of the three waits, so none of them needs a guard to swallow an
+      # expired one — which matters, because a guard cannot tell a timeout from
+      # a rejected request and would report both as cleanup that happened.
+      #
+      # Step 3. What matters downstream is the TenantControlPlane, which Step 4
+      # deletes and waits for; waiting here only adds a second place for a CAPI
+      # finalizer to stall.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete kamajicontrolplanes\.controlplane\.cluster\.x-k8s\.io test-k8s(?:[^\n]*\\\n)*[^\n]*--wait=false'
+      # Steps 5 and 6: nothing after them reads the result, and a DELETE that
+      # has been accepted is not made more complete by watching it. --wait=false
+      # and an expired --wait leave the same cluster state, one of them sooner.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete datavolumes(?:[^\n]*\\\n)*[^\n]*--wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete services(?:[^\n]*\\\n)*[^\n]*--wait=false'
+      # And the two that were already bounded stay bounded. --wait=false and
+      # --timeout bound the waiting, not the request: --request-timeout is still
+      # 0 on every call here, so an apiserver that stops answering hangs this
+      # hook the same as before. That is a different failure from the stuck
+      # finalizer these bounds are for, and it wants one answer across all the
+      # calls rather than a flag on the deletes.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete helmreleases\.helm\.toolkit\.fluxcd\.io(?:[^\n]*\\\n)*[^\n]*--timeout=[1-9][0-9]*s'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete tenantcontrolplanes\.kamaji\.clastix\.io test-k8s(?:[^\n]*\\\n)*[^\n]*--timeout=[1-9][0-9]*s'
+
+  - it: cleanup Role keeps watch on exactly the two resources whose deletes wait
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      # kubectl opens a watch only on the wait path, so watch is granted to the
+      # two resources Steps 2 and 4 wait on and to no others. Removing it from
+      # either of those does not error — the delete hangs instead, which is the
+      # failure mode that is hardest to read from the outside, so it is pinned
+      # rather than left to the reviewer of the next RBAC change.
+      #
+      # Whole-rule contains, not per-index verb assertions. notContains passes
+      # when its path does not resolve, so an index-addressed "and nowhere else"
+      # goes quiet the moment the rules list is reordered or shortened — the
+      # failure it is written to prevent would take the assertion with it.
+      # Matching the entire rule pins the verb set in both directions and names
+      # the resource when it fails; lengthEqual is what closes the remaining
+      # hole, a sixth rule appended past everything asserted here.
+      - lengthEqual:
+          path: rules
+          count: 6
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["helm.toolkit.fluxcd.io"]
+            resources: ["helmreleases"]
+            verbs: ["get", "list", "watch", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kamaji.clastix.io"]
+            resources: ["tenantcontrolplanes"]
+            verbs: ["get", "list", "watch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["controlplane.cluster.x-k8s.io"]
+            resources: ["kamajicontrolplanes"]
+            verbs: ["get", "list", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cdi.kubevirt.io"]
+            resources: ["datavolumes"]
+            verbs: ["get", "list", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["services"]
+            verbs: ["get", "list", "delete"]
+
+  - it: pre-delete Job makes a single attempt
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # restartPolicy is Never, so the default backoffLimit of 6 allows seven
+      # pods in series, each re-running every step from the top and each paying
+      # its own image pull. That outlives the uninstall budget, and helm gives
+      # up on its own timeout without reporting which step failed.
+      #
+      # Zero and not one: both remaining waits are guarded, so an attempt can
+      # spend its full 240s without failing, and a retry starts from Step 1 with
+      # the clock already there. On a nodeless tenant it also re-pays Step 4's
+      # 120s, because attempt 1 leaves the TenantControlPlane still terminating.
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
