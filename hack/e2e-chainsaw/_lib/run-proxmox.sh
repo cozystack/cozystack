@@ -22,7 +22,15 @@ CLUSTER="${COZY_PROXMOX_CLUSTER:-k8s-e2e}"
 PVE_SSH="${COZY_PVE_SSH:?COZY_PVE_SSH is required: the ssh destination of the Proxmox host, user@host}"
 PVE_SSH_KEY="${COZY_PVE_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 STORAGE="${COZY_PROXMOX_STORAGE:?COZY_PROXMOX_STORAGE is required, the PVE storage id for the PVC probe}"
-TENANT_KUBECONFIG="${TMPDIR:-/tmp}/proxmox-e2e-tenant.kubeconfig"
+# Where this run keeps the tenant's super-admin kubeconfig. Per run rather than
+# a fixed path under /tmp: the file is a credential for the whole tenant, so it
+# must not outlive the run on a shared runner, and dump_diagnostics reads
+# whatever is at this path, so a file left by a previous run would be reported
+# as this run's tenant. The workflow points this at runner.temp, which the
+# runner empties between jobs; apply-tenant removes a leftover before it does
+# anything else, and the suite's finally removes the file when the run ends.
+WORKDIR="${COZY_PROXMOX_WORKDIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
+TENANT_KUBECONFIG="$WORKDIR/proxmox-e2e-tenant.kubeconfig"
 FIXTURE="$(cd "$(dirname "$0")/.." && pwd)/kubernetes-proxmox/tenant.yaml"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -77,6 +85,10 @@ render_tenant() {
 }
 
 apply_tenant() {
+  # First step of the suite, so this is where a kubeconfig left by an earlier
+  # run on this runner is removed: from here on the path holds this run's file
+  # or nothing, and dump_diagnostics cannot pick up another tenant.
+  rm -f "$TENANT_KUBECONFIG"
   render_tenant | kubectl apply -f -
 }
 
@@ -85,8 +97,16 @@ apply_tenant() {
 # carries the address a runner outside the management cluster can reach; .svc
 # is the in-cluster Service the management-side controllers use.
 fetch_tenant_kubeconfig() {
-  kubectl -n "$NS" get secret "kubernetes-${CLUSTER}-admin-kubeconfig" \
-    -o jsonpath='{.data.super-admin\.conf}' | base64 -d > "$TENANT_KUBECONFIG"
+  # Written under umask 077 in a subshell of its own: the workflow sets that
+  # umask only in its staging step, and a chainsaw script step runs with the
+  # runner's default, under which the file would be readable by every local
+  # user. No pipefail in POSIX sh, so a failed read leaves an empty file, which
+  # the size check below turns into a failure rather than an empty kubeconfig.
+  (
+    umask 077
+    kubectl -n "$NS" get secret "kubernetes-${CLUSTER}-admin-kubeconfig" \
+      -o jsonpath='{.data.super-admin\.conf}' | base64 -d > "$TENANT_KUBECONFIG"
+  )
   [ -s "$TENANT_KUBECONFIG" ] || die "tenant kubeconfig is empty — did the control plane come up?"
 }
 

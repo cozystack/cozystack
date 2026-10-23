@@ -49,6 +49,11 @@ jobs:
       COZY_PVE_SSH: ${{ vars.PROXMOX_SSH }}
       COZY_PVE_SSH_KEY: ${{ github.workspace }}/.ssh-pve
       COZY_KEEP_TENANT: ${{ inputs.keep_tenant == true }}
+      # Where run-proxmox.sh keeps the tenant's super-admin kubeconfig for the
+      # run. runner.temp is emptied by the runner between jobs, and the cleanup
+      # step below removes the file as well; see the script for why neither is
+      # left to /tmp.
+      COZY_PROXMOX_WORKDIR: ${{ runner.temp }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -157,4 +162,6 @@ jobs:
 
       - name: Remove staged credentials
         if: always()
-        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY"
+        # The tenant kubeconfig is the suite's, fetched by run-proxmox.sh; its
+        # finally removes it too, but a run killed mid-step never reaches that.
+        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY" "$COZY_PROXMOX_WORKDIR/proxmox-e2e-tenant.kubeconfig"
