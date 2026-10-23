@@ -67,6 +67,18 @@
         ],
         "x-kubernetes-int-or-string": true
       }
+    },
+    "gpu": {
+      "description": "GPU settings of the tenant.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "vgpu": {
+          "description": "Entitle the tenant to order vGPU claims. Takes effect only when the parent tenant is entitled too; the root tenant takes its value from the platform's `gpu.vgpu`.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     }
   }
 }

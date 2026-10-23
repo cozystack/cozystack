@@ -28,10 +28,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/cozystack/cozystack/internal/gpu"
+	"github.com/cozystack/cozystack/internal/gpu/model"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 )
@@ -59,6 +62,12 @@ type tenantValues struct {
 // `cozy-lib.resources.flatten` expansion into limits.*/requests.* is a
 // downstream rendering concern of the tenant chart and is intentionally not
 // applied here.
+//
+// GPU budget keys (gpu.cozystack.io/*) are dropped: they cap the declaring
+// tenant's whole subtree on their own rule, which the GPUClaim admission and
+// the controller enforce rather than this gate, so they neither make a tenant
+// bounded nor take part in the carve-out arithmetic, and a child's key may
+// overlap its siblings'.
 func parseDeclaredQuotas(raw []byte) (map[string]resource.Quantity, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -66,6 +75,11 @@ func parseDeclaredQuotas(raw []byte) (map[string]resource.Quantity, error) {
 	var values tenantValues
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, fmt.Errorf("decode tenant values: %w", err)
+	}
+	for k := range values.ResourceQuotas {
+		if model.IsGPUQuotaKey(corev1.ResourceName(k)) {
+			delete(values.ResourceQuotas, k)
+		}
 	}
 	return values.ResourceQuotas, nil
 }
@@ -193,6 +207,9 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 	if err != nil {
 		return append(allErrs, field.Invalid(fldPath, "", err.Error()))
 	}
+	if errs := r.forbiddenRawGPUKeys(ctx, childQuota, fldPath); len(errs) > 0 {
+		return errs
+	}
 	if len(childQuota) == 0 {
 		// Unbounded child: shares the parent pool, allowed at declaration time.
 		return allErrs
@@ -233,7 +250,7 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 		parentLimit := parentQuota[res]
 		allocated := siblings[res] // zero value when no sibling bounds this resource
-		used := poolUsed[renderedLimitKey(res)]
+		used := poolUsed[usageKey(res)]
 		remaining := parentLimit.DeepCopy()
 		remaining.Sub(allocated)
 		remaining.Sub(used)
@@ -244,6 +261,46 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 	}
 	return allErrs
+}
+
+// forbiddenRawGPUKeys refuses quota keys on a GPU resource name, in any form a
+// ResourceQuota accepts for an extended resource, once the hoster has set
+// gpu.rawResourceNames to forbidden. The setting and the effective GPU
+// resource-name set come from the controller-written settings ConfigMap; while
+// it is absent raw names are allowed.
+func (r *REST) forbiddenRawGPUKeys(ctx context.Context, quotas map[string]resource.Quantity, fldPath *field.Path) field.ErrorList {
+	var candidates []string
+	for _, k := range sortedQuotaKeys(quotas) {
+		if strings.Contains(k, "/") {
+			candidates = append(candidates, k)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	cm := &corev1.ConfigMap{}
+	// Uncached read, like the pool usage: no cluster-wide ConfigMap informer.
+	if err := r.w.Get(ctx, client.ObjectKey{Namespace: gpu.SettingsNamespace, Name: gpu.SettingsConfigMap}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return field.ErrorList{field.InternalError(fldPath, fmt.Errorf("read GPU settings: %w", err))}
+	}
+	if gpu.RawNamesPolicy(cm.Data[gpu.SettingsKeyRawResourceNames]) != gpu.RawNamesForbidden {
+		return nil
+	}
+	names := sets.New(model.ParseResourceNames(cm.Data[gpu.SettingsKeyResourceNames])...)
+
+	var errs field.ErrorList
+	for _, k := range candidates {
+		name := strings.TrimPrefix(strings.TrimPrefix(k, "requests."), "limits.")
+		if names.Has(name) {
+			errs = append(errs, field.Forbidden(fldPath.Key(k),
+				fmt.Sprintf("%s is a GPU resource name and raw GPU names are forbidden on this platform; budget GPUs with %s<class> or %s instead", name, gpu.QuotaKeyPrefix, gpu.QuotaKeyTotal)))
+		}
+	}
+	return errs
 }
 
 // addQuotas adds src into dst in place, per resource key.
@@ -285,25 +342,45 @@ var rawQuotaKeys = map[string]struct{}{
 	"resourcequotas":         {},
 }
 
-// renderedLimitKey maps a shorthand resourceQuotas key (the vocabulary admission
-// works in) to the rendered ResourceQuota key that carries its limit-side
-// budget, mirroring cozy-lib.resources.flatten. The mapping is allocation-ratio
-// independent: ratios only scale the requests.* side that flatten derives from
-// the same shorthand value, so the limit-side key always holds the operator's
-// declared amount. This lets admission read a tenant's current usage from its
-// rendered ResourceQuota.status.used without replicating the chart's ratio math.
+// limitCountedKeys are the shorthand keys whose usage the ResourceQuota pod
+// evaluator reports under limits.*. For every other resource it counts only
+// requests.*, so limits.<extended resource> or limits.hugepages-* never carries
+// usage even though the chart renders it.
+var limitCountedKeys = map[string]struct{}{
+	"cpu":               {},
+	"memory":            {},
+	"ephemeral-storage": {},
+}
+
+// usageKey maps a shorthand resourceQuotas key (the vocabulary admission works
+// in) to the rendered ResourceQuota key whose status.used carries its usage.
+// cozy-lib.resources.flatten renders a shorthand key both as limits.<key> and as
+// requests.<key>; usage is read from whichever of the two the quota controller
+// counts. For cpu, memory and ephemeral-storage that is the limit side, which
+// holds the operator's declared amount whatever allocation ratio scales the
+// request side. Every other resource is counted only on the request side, where
+// flatten applies no ratio, so requests.<key> holds the declared amount too.
+// This lets admission read a tenant's current usage from its rendered
+// ResourceQuota.status.used without replicating the chart's ratio math.
 //
-//	cpu, memory, ephemeral-storage, custom resources -> "limits.<key>"
+//	cpu, memory, ephemeral-storage                   -> "limits.<key>"
 //	storage                                          -> "requests.storage" (no hard limits.storage)
 //	pods, services, services.loadbalancers, ...      -> "<key>" (verbatim)
-func renderedLimitKey(raw string) string {
-	if raw == "storage" {
-		return "requests.storage"
-	}
+//	extended resources, hugepages-<size>, ...        -> "requests.<key>"
+//	requests.<r>, limits.<r>, count/<r>              -> "<key>" (already a usage key)
+func usageKey(raw string) string {
 	if _, ok := rawQuotaKeys[raw]; ok {
 		return raw
 	}
-	return "limits." + raw
+	for _, prefix := range []string{"requests.", "limits.", "count/"} {
+		if strings.HasPrefix(raw, prefix) {
+			return raw
+		}
+	}
+	if _, ok := limitCountedKeys[raw]; ok {
+		return "limits." + raw
+	}
+	return "requests." + raw
 }
 
 // parentNamespaceOf returns the namespace owned by the parent of the tenant that
@@ -341,7 +418,7 @@ func (r *REST) poolRootOf(ns string, bounded map[string]bool) string {
 // created/updated). Usage is read from each member's ResourceQuota.status.used,
 // taking a per-resource max within a namespace to avoid double-counting the
 // chart-rendered and controller-allocated quotas, and is keyed in the rendered
-// quota key space (see renderedLimitKey). Boundedness is decided by declared
+// quota key space (see usageKey). Boundedness is decided by declared
 // resourceQuotas so the result does not depend on whether Flux has rendered a
 // freshly-created tenant's quota yet.
 func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) (map[string]resource.Quantity, error) {

@@ -1,0 +1,100 @@
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+---
+# A class keeps its meaning: held claims and their usage records name the
+# class, so what it sells cannot change under them. resourceName,
+# nodeSelector and tolerations stay changeable, for host-layer changes and
+# for moving the offer to other nodes, and the CRD keeps mode fixed for
+# good. The rule holds while the class carries its protection finalizer,
+# which the controller sets on every class and removes only once a deleted
+# class has no claims left, so a changed offer is a new class. The stored
+# object is checked, so a write that removes the finalizer cannot change the
+# spec too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-class-immutability
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gpu.cozystack.io"]
+      apiVersions: ["*"]
+      operations: ["UPDATE"]
+      resources: ["gpuclasses"]
+  variables:
+  - name: held
+    expression: >-
+      has(oldObject.metadata.finalizers) &&
+      "gpu.cozystack.io/class-protection" in oldObject.metadata.finalizers
+  - name: oldSource
+    expression: oldObject.spec.?source.orValue({})
+  - name: newSource
+    expression: object.spec.?source.orValue({})
+  validations:
+  - expression: >-
+      !variables.held || (
+        oldObject.spec.?vendor == object.spec.?vendor &&
+        oldObject.spec.?model == object.spec.?model &&
+        oldObject.spec.?profile == object.spec.?profile &&
+        oldObject.spec.?memory == object.spec.?memory &&
+        oldObject.spec.?maxCount == object.spec.?maxCount &&
+        variables.oldSource.all(k, k in variables.newSource) &&
+        variables.newSource.all(k, k in variables.oldSource))
+    messageExpression: >-
+      "GPUClass " + object.metadata.name + ": vendor, model, profile, memory, maxCount and the kind of source cannot change once the GPU controller protects the class. Publish the changed offer as a new class."
+    reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-class-immutability
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-class-immutability
+  validationActions: [Deny]
+---
+# A class being deleted waits only for the claims that already hold it, so
+# it takes no new orders, from a tenant or from a claimTemplate. The policy
+# is evaluated once per class, so it refuses only an order of the class that
+# is being deleted.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-class-deleted-orders
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: gpu.cozystack.io/v1alpha1
+    kind: GPUClass
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gpu.cozystack.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE"]
+      resources: ["gpuclaims"]
+  validations:
+  - expression: >-
+      params.metadata.name != object.spec.?className.orValue("") ||
+      !has(params.metadata.deletionTimestamp)
+    messageExpression: >-
+      "GPUClass " + params.metadata.name + " is being deleted and takes no new orders. Order a claim of another class."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-class-deleted-orders
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-class-deleted-orders
+  validationActions: [Deny]
+  paramRef:
+    selector: {}
+    parameterNotFoundAction: Allow
+{{- end }}

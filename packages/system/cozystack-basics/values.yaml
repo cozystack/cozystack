@@ -1,1 +1,5 @@
 _cluster: {}
+# Set by the platform where gpu-operator serves GPUs to VMs. Renders the GPU
+# admission policies.
+gpu:
+  enabled: false

@@ -1,0 +1,79 @@
+suite: root tenant vGPU entitlement from platform values
+# The root tenant is rendered here, not by the tenant chart, so its vGPU
+# entitlement comes from the platform's gpu.vgpu through _cluster.gpu-vgpu.
+# Every child's entitlement requires its parent's, so this is where the chain
+# starts.
+templates:
+  - templates/tenant-root.yaml
+  - templates/cozystack-values-secret.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+set:
+  _cluster:
+    root-host: example.org
+tests:
+  - it: labels the root namespace entitled when the platform turns vGPU on
+    set:
+      _cluster:
+        gpu-vgpu: "true"
+    template: templates/tenant-root.yaml
+    documentSelector:
+      path: kind
+      value: Namespace
+    asserts:
+      - equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "true"
+
+  - it: passes the entitlement to the root tenant's children
+    set:
+      _cluster:
+        gpu-vgpu: "true"
+    template: templates/cozystack-values-secret.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^_namespace:\\n(  .*\\n)*  vgpu: true$"
+
+  - it: labels the root namespace not entitled by default
+    template: templates/tenant-root.yaml
+    documentSelector:
+      path: kind
+      value: Namespace
+    asserts:
+      - equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "false"
+
+  - it: leaves _namespace.vgpu out by default
+    template: templates/cozystack-values-secret.yaml
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^  vgpu:"
+
+  # A bool set on the command line reaches here as a bool, a value from the
+  # platform's Secret as a string; only "true" in either form entitles.
+  - it: accepts a bool true
+    set:
+      _cluster:
+        gpu-vgpu: true
+    template: templates/tenant-root.yaml
+    documentSelector:
+      path: kind
+      value: Namespace
+    asserts:
+      - equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "true"
+
+  - it: treats the string "false" as not entitled
+    set:
+      _cluster:
+        gpu-vgpu: "false"
+    template: templates/cozystack-values-secret.yaml
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^  vgpu:"
