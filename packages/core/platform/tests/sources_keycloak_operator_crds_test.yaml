@@ -1,0 +1,22 @@
+suite: keycloak-operator applies CRD updates on upgrade
+# keycloak-configure sets spec.sessions and spec.organizationsEnabled, and
+# spec.login when configured, on the cozy ClusterKeycloakRealm. The CRDs of
+# keycloak-operator v1.25.0 declare none of them. Helm never upgrades CRDs
+# shipped in crds/, so without CreateReplace a cluster installed before v1.2.0
+# keeps those CRDs, the apiserver drops the fields without an error, and the
+# operator never applies them to the realm. Pin the policy so an upgrade cannot
+# silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: keycloak-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace
