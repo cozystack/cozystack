@@ -124,6 +124,31 @@ func TestResolveTapTarget(t *testing.T) {
 	}
 }
 
+func TestResolveTapTargetPinsDigest(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	dir := t.TempDir()
+	writeFile(t, dir, "pinned.yaml", "name: pin.ned\nociRef: oci://ghcr.io/foo/bar\nversion: v1.2.3\ndigest: "+digest+"\n")
+	writeFile(t, dir, "digestonly.yaml", "name: dig.only\nociRef: oci://ghcr.io/baz/qux\ndigest: "+digest+"\n")
+
+	// A recorded digest pins the exact content the CI gate verified; the version
+	// is kept informational alongside it.
+	if got, err := resolveTapTarget("pin.ned", dir); err != nil || got != "oci://ghcr.io/foo/bar:v1.2.3@"+digest {
+		t.Fatalf("version+digest resolve = %q err %v", got, err)
+	}
+	// A digest with no version resolves to the bare ref pinned by digest.
+	if got, err := resolveTapTarget("dig.only", dir); err != nil || got != "oci://ghcr.io/baz/qux@"+digest {
+		t.Fatalf("digest-only resolve = %q err %v", got, err)
+	}
+}
+
+func TestLoadIndexRejectsBadDigest(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.yaml", "name: x\nociRef: oci://r/x\ndigest: sha256:not-a-digest\n")
+	if _, err := loadIndex(dir); err == nil {
+		t.Fatal("expected error for a malformed digest in an index entry")
+	}
+}
+
 func TestDefaultIndexRef(t *testing.T) {
 	if got := defaultIndexRef("/explicit"); got != "/explicit" {
 		t.Errorf("flag should win, got %q", got)
