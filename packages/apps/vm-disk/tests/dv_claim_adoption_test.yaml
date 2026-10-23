@@ -1,0 +1,71 @@
+suite: vm-disk DataVolume claim adoption
+templates:
+  - templates/dv.yaml
+tests:
+  # The state a Velero restore leaves behind: the restore controller deleted the
+  # DataVolume and Velero recreated the PVC under the DataVolume's name, without
+  # an owner. CDI's admission webhook refuses a DataVolume over such a claim
+  # unless the DataVolume itself carries the annotation, so the release would
+  # stay failed on every upgrade after the restore.
+  - it: lets CDI adopt the PVC a restore recreated without its DataVolume
+    set:
+      source: {http: {url: https://example.com/disk.img}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: RELEASE-NAME
+            namespace: NAMESPACE
+            annotations:
+              cdi.kubevirt.io/createdForDataVolume: 2e53a035-aa93-49a8-b712-1f74ac18eb11
+            labels:
+              velero.io/restore-name: tenant-test.restore-disk
+    asserts:
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/allowClaimAdoption"]
+          value: "true"
+      # The creation path, not the existing-DataVolume one: this is the render
+      # Helm uses to recreate the deleted DataVolume.
+      - equal:
+          path: spec.source
+          value: {http: {url: https://example.com/disk.img}}
+
+  # The existing-DataVolume path renders its own annotation block. Dropping the
+  # annotation there would make every upgrade after an adoption patch it away
+  # and the next restore put it back.
+  - it: keeps the annotation on an existing DataVolume
+    set:
+      storageClass: replicated
+      source: {http: {url: https://example.com/original.qcow2}}
+    kubernetesProvider:
+      scheme:
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+      objects:
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: RELEASE-NAME
+            namespace: NAMESPACE
+            annotations:
+              vm-disk.cozystack.io/source: '{"http":{"url":"https://example.com/original.qcow2"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {http: {url: https://example.com/original.qcow2}}
+            storage: {resources: {requests: {storage: 9Gi}}, storageClassName: replicated}
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 9Gi
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/allowClaimAdoption"]
+          value: "true"
