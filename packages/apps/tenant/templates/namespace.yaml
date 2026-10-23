@@ -3,8 +3,8 @@
   ownerReference uid. During a real helm-controller reconcile the parent
   namespace (.Release.Namespace) always exists, so the ownerReference is
   always emitted. The lookup returns empty only when rendering offline
-  (helm template / helm unittest), where the ownerReference is simply omitted
-  so the rest of the template — notably the ancestor labels below, which are
+  (helm template, or a helm unittest suite without kubernetesProvider), where
+  the ownerReference is simply omitted so the rest of the template — notably the ancestor labels below, which are
   derived purely from the namespace name and need no cluster state — still
   renders and can be unit-tested.
 */}}
