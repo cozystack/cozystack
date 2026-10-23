@@ -1,0 +1,41 @@
+suite: RabbitMQ affinity
+
+release:
+  name: rabbitmq-test
+  namespace: tenant-test
+
+templates:
+  - templates/rabbitmq.yaml
+
+tests:
+  - it: omits affinity by default
+    asserts:
+      - notExists:
+          path: spec.affinity
+
+  - it: omits affinity when null
+    set:
+      affinity: null
+    asserts:
+      - notExists:
+          path: spec.affinity
+
+  - it: passes configured affinity to RabbitmqCluster
+    set:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: rabbitmq
+              topologyKey: kubernetes.io/hostname
+    asserts:
+      - equal:
+          path: spec.affinity
+          value:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: rabbitmq
+                  topologyKey: kubernetes.io/hostname

@@ -86,6 +86,9 @@ spec:
     type: LoadBalancer
   {{- end }}
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
+  {{- with .Values.affinity }}
+  affinity: {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if $tlsEnabled }}
   {{- /* secretName is the whole of it: the operator's defaultTLSConf then supplies
        ssl_options and management.ssl itself, so no additionalConfig is needed to

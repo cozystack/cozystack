@@ -7,6 +7,7 @@ package rabbitmq
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -36,6 +37,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Pod affinity applied to RabbitMQ pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread RabbitMQ pods across nodes.
+	// +kubebuilder:default:={}
+	Affinity *k8sRuntime.RawExtension `json:"affinity,omitempty"`
 	// TLS configuration. TLS is off unless `tls.enabled` is set to true.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
