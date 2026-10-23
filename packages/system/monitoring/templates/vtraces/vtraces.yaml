@@ -71,9 +71,11 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   insert:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vtinsert" .name "ScheduleAnyway") | nindent 4 }}
     resources: {}
   select:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vtselect" .name "ScheduleAnyway") | nindent 4 }}
     resources: {}
   storage:
     retentionPeriod: {{ .retentionPeriod | quote }}
@@ -84,6 +86,7 @@ spec:
       retention.maxDiskUsagePercent: "80"
     {{- end }}
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vtstorage" .name "DoNotSchedule") | nindent 4 }}
     resources: {}
     storage:
       volumeClaimTemplate:
