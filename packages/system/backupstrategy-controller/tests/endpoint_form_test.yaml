@@ -57,7 +57,7 @@ tests:
         template: templates/strategy-mariadb-default.yaml
       - equal:
           path: spec.template.blobStoreConfiguration.accountName
-          value: s3.example.com:8333
+          value: "@s3.example.com:8333"
         template: templates/strategy-foundationdb-default.yaml
       - contains:
           path: spec.template.blobStoreConfiguration.urlParameters

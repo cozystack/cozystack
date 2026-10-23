@@ -188,7 +188,7 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: ["apps.foundationdb.org"]
   resources: ["foundationdbbackups"]
-  verbs: ["get", "list", "watch", "create", "patch"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
 - apiGroups: ["apps.foundationdb.org"]
   resources: ["foundationdbrestores"]
   verbs: ["get", "list", "watch", "create"]

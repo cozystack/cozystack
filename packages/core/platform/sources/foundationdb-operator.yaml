@@ -20,3 +20,8 @@ spec:
       install:
         namespace: cozy-foundationdb-operator
         releaseName: foundationdb-operator
+        # helm-controller defaults CRD upgrades to Skip, so a cluster that
+        # took an operator bump keeps the old schema: the v2.30.0 operator's
+        # status.backupDetails.restorable is pruned and backups never report
+        # restorable. The schema diff is additive, so replace is safe.
+        upgradeCRDs: CreateReplace
