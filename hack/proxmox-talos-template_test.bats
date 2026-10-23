@@ -96,7 +96,7 @@ EOF
 @test "a template already carrying the same tag set stops the program before the download" {
   stub="$(mktemp -d)"
   stub_pve "$stub"
-  printf '[{"vmid":9000,"name":"old","node":"pve1","template":1,"tags":"talos-v1.13.6;Talos;schematic-%s;cozystack"}]' \
+  printf '[{"vmid":9000,"name":"old","node":"pve1","template":1,"tags":"talos-v1.13.12;Talos;schematic-%s;cozystack"}]' \
     "$(chart schematicID | cut -c1-8)" > "$stub/resources.json"
   rc=0
   out="$("$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh 2>&1)" || rc=$?
@@ -110,7 +110,7 @@ EOF
 @test "a template whose tags are a superset does not count, and the template is built" {
   stub="$(mktemp -d)"
   stub_pve "$stub"
-  printf '[{"vmid":9000,"name":"old","node":"pve1","template":1,"tags":"cozystack;schematic-%s;talos;talos-v1.13.6;zfs"},{"vmid":101,"name":"vm","node":"pve1","template":0}]' \
+  printf '[{"vmid":9000,"name":"old","node":"pve1","template":1,"tags":"cozystack;schematic-%s;talos;talos-v1.13.12;zfs"},{"vmid":101,"name":"vm","node":"pve1","template":0}]' \
     "$(chart schematicID | cut -c1-8)" > "$stub/resources.json"
   "$SCRIPT" print 9002 main-pool | PATH="$stub:$PATH" TMPDIR="$stub" sh >/dev/null
   calls="$(cat "$stub/calls")"

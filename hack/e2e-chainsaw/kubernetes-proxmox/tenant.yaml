@@ -79,7 +79,7 @@ spec:
   proxmox:
     # capmox matches tags as a SET, not by containment: a template carrying four
     # tags is not selected by naming one of them.
-    templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    templateTags: [capmox-template, cozystack, talos, talos-v1.13.12]
     # false is the default and the reason the suite asserts it on the hypervisor:
     # a full clone costs the whole template disk per worker and breaks nothing.
     # No `storage` with it: a linked clone lives on the template's storage, and

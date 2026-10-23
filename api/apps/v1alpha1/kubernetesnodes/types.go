@@ -185,7 +185,7 @@ type Talos struct {
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
 	// Default Talos release for this pool's worker OS image and in-guest installer. The pool can pin its own release via `osImage.builtin.version` or `osImage.factory.version`; when `osImage` omits it, this value applies. Both ways in are checked against the chart's Talos<->Kubernetes support matrix, against whichever release the pool actually resolves to, so an override cannot slip past a check `talos.version` would have failed. The matrix rejects a pairing it lists as unsupported; it lists the Talos minors this chart ships and passes any other minor unchecked, so pointing either field at a Talos release the chart does not know about is the operator's call, not a checked one. Whichever release applies is interpolated into an image URL and a DataVolume name, so it must be a full `vMAJOR.MINOR.PATCH` release, optionally with a pre-release suffix -- the render refuses anything else, a minor-only `v1.13` included. The values schema types this as a bare string, so a malformed one is accepted by the CR and fails the pool's HelmRelease instead.
-	// +kubebuilder:default:="v1.13.6"
+	// +kubebuilder:default:="v1.13.12"
 	Version string `json:"version"`
 }
 

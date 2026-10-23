@@ -72,7 +72,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0-ffdbe1
+          value: kubernetes-myk8s-md0-a9467e
       - matchRegex:
           path: spec.template.spec.bootstrap.configRef.name
           pattern: ^kubernetes-myk8s-md0-[0-9a-f]{6}$
@@ -95,7 +95,7 @@ tests:
       # Same literal as the paired test in talos_reconcile_job_test.yaml.
       - equal:
           path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0-0f8081
+          value: kubernetes-myk8s-md0-069deb
 
   - it: names the KubevirtMachineTemplate with the parent cluster prefix and a content hash
     documentSelector:

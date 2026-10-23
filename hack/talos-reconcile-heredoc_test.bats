@@ -109,7 +109,7 @@ VALS
     printf '%s' "$out" | grep -qF 'reg$(id)`x`y/installer' || { echo "kubernetes-nodes installerRepository was not preserved literally" >&2; rm -rf "$work"; exit 1; }
     # The default version still reaches both of its sites, so narrowing this test
     # to installerRepository did not quietly drop the two-site assertion.
-    [ "$(printf '%s' "$out" | grep -cF 'v1.13.6')" -ge 2 ] || { echo "kubernetes-nodes talos.version did not reach both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
+    [ "$(printf '%s' "$out" | grep -cF 'v1.13.12')" -ge 2 ] || { echo "kubernetes-nodes talos.version did not reach both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
 

@@ -144,7 +144,7 @@ osImage: {}
 
 ## @param {Talos} talos - Talos worker image configuration. Keep in sync with the parent cluster's `talos`.
 talos:
-  version: "v1.13.6"
+  version: "v1.13.12"
   schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
   imageFactoryURL: "https://factory.talos.dev"
   installerRepository: "factory.talos.dev/installer"
