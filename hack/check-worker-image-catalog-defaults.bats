@@ -13,10 +13,10 @@
 # silently breaks every fresh install using osImage.builtin, and nothing catches it
 # until a ~95-minute e2e run does.
 #
-# The StorageClass is the same trap from the other direction: CDI cannot
-# CSI-clone across StorageClasses (it would silently fall back to a host-assisted
-# copy over the pod network), so the render also rejects a group whose
-# storageClass differs from its golden's. Bumping one file's default alone brings
+# The StorageClass is the same trap from the other direction: the render also
+# rejects a group whose storageClass differs from its golden's, because across
+# classes CDI either falls back to a host-assisted copy over the pod network or
+# leaves the clone to the CSI driver. Bumping one file's default alone brings
 # that guard down on the default path.
 #
 # Both checks are cheap and exact, which is the point — they turn a slow, remote
@@ -70,8 +70,8 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
     echo "StorageClass mismatch on the default osImage.builtin path:" >&2
     echo "  packages/apps/kubernetes-nodes/values.yaml storageClass:  $app_sc" >&2
     echo "  kubernetes-worker-image golden effective storageClass:    $entry_sc" >&2
-    echo "CDI cannot CSI-clone across StorageClasses, so the tenant render" >&2
-    echo "rejects this outright. Keep the two defaults in step." >&2
+    echo "The tenant render refuses a pool whose storageClass differs from" >&2
+    echo "its golden's. Keep the two defaults in step." >&2
     return 1
   fi
 }

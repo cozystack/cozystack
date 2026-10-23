@@ -1,6 +1,6 @@
 suite: osImage.builtin golden guards on a pool that has already cloned
 
-# The absence and Failed guards abort the ENTIRE KubernetesNodes HelmRelease, and
+# The absence and failed-import guards abort the ENTIRE KubernetesNodes HelmRelease, and
 # for a pool whose workers all cloned long ago that price buys nothing: replica
 # changes, kubelet retuning and MachineHealthCheck timeouts have no stake in the
 # golden, and no CR edit is needed to trigger the abort — the next periodic
@@ -152,6 +152,30 @@ kubernetesProvider:
           resources: {requests: {storage: 6Gi}}
           storageClassName: replicated
       status: {phase: Failed}
+    # md0's own disk against a golden whose re-import is now stuck: the pool
+    # already holds its copy, so it needs nothing from the source.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: disk-system-kubernetes-myk8s-md0-pqrst
+        namespace: tenant-test
+        annotations:
+          kubernetes-worker-image.cozystack.io/golden: talos-worker-stucklater-v1.0.0
+          kubernetes-worker-image.cozystack.io/pool: kubernetes-myk8s-md0
+      status: {phase: Succeeded}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-stucklater-v1.0.0, namespace: cozy-public}
+      spec:
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status:
+        phase: ImportInProgress
+        # A string: helm-unittest's lookup cannot deep-copy an int, and | int takes either.
+        restartCount: "7"
+        conditions:
+          - {type: Running, status: "False", reason: Error}
 
 tests:
   - it: renders when the golden is gone but this pool already cloned it
@@ -217,3 +241,13 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'golden DataVolume "talos-worker-sibling-v1\.0\.0" in cozy-public failed to import'
+
+  - it: renders when the golden importer keeps failing but this pool already cloned it
+    set:
+      osImage:
+        builtin: {schematicID: stucklater, version: v1.0.0}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-stucklater-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
