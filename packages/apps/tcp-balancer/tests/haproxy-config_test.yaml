@@ -130,3 +130,39 @@ tests:
       - matchRegex:
           path: data["haproxy.cfg"]
           pattern: '(?m)^frontend talos$\n(?:[ \t]+.*\n)*?[ \t]+acl whitelist src 10\.0\.0\.0/8\n[ \t]+acl all src 0\.0\.0\.0\n[ \t]+tcp-request content accept if whitelist\n[ \t]+tcp-request content reject$'
+
+  - it: caps the automatic fd and thread counts by the default preset
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '\Aglobal\n[ \t]+fd-hard-limit 4096\n[ \t]+thread-hard-limit 1\n\n'
+      - notMatchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '\Aglobal\n(?:[ \t]+.*\n)*?[ \t]+(?:maxconn|nbthread)\b'
+
+  - it: scales the caps with the preset
+    set:
+      resourcesPreset: t1.medium
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '\Aglobal\n[ \t]+fd-hard-limit 32768\n[ \t]+thread-hard-limit 2\n\n'
+
+  - it: takes the caps from explicit resources and rounds the CPU limit up
+    set:
+      resources:
+        cpu: 2500m
+        memory: 768Mi
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '\Aglobal\n[ \t]+fd-hard-limit 24576\n[ \t]+thread-hard-limit 3\n\n'
+
+  - it: never renders a thread cap of zero, which HAProxy refuses to parse
+    set:
+      resources:
+        cpu: "0"
+    asserts:
+      - matchRegex:
+          path: data["haproxy.cfg"]
+          pattern: '(?m)^[ \t]+thread-hard-limit 1$'
