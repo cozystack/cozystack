@@ -535,3 +535,15 @@ stringData:
     EOT
     {{- end }}
 {{- end }}
+{{- if hasKey (.Values.users | default dict) "app" }}
+---
+{{- /* The bootstrap secret db.yaml gives CNPG for its "app" owner; see there. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-app-owner
+type: kubernetes.io/basic-auth
+stringData:
+  username: app
+  password: {{ quote (index $passwords "app") }}
+{{- end }}
