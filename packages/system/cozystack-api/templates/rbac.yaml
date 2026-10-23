@@ -18,6 +18,11 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["create", "update", "patch", "delete"]
+# A mint or revoke records an Event on the application naming the account and
+# the caller, never the value.
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
 - apiGroups: ["admissionregistration.k8s.io"]
   resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations", "validatingadmissionpolicies", "validatingadmissionpolicybindings"]
   verbs: ["get", "watch", "list"]

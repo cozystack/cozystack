@@ -36,116 +36,127 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		v1alpha1.Application{}.OpenAPIModelName():                 schema_pkg_apis_apps_v1alpha1_Application(ref),
-		v1alpha1.ApplicationList{}.OpenAPIModelName():             schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
-		v1alpha1.ApplicationStatus{}.OpenAPIModelName():           schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
-		corev1alpha1.Option{}.OpenAPIModelName():                  schema_pkg_apis_core_v1alpha1_Option(ref),
-		corev1alpha1.OptionItem{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionItem(ref),
-		corev1alpha1.OptionList{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionList(ref),
-		corev1alpha1.OptionSpec{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
-		corev1alpha1.Tap{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_Tap(ref),
-		corev1alpha1.TapList{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_TapList(ref),
-		corev1alpha1.TapPackage{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_TapPackage(ref),
-		corev1alpha1.TapSource{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TapSource(ref),
-		corev1alpha1.TapSpec{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_TapSpec(ref),
-		corev1alpha1.TenantModule{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantModule(ref),
-		corev1alpha1.TenantModuleList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
-		corev1alpha1.TenantModuleStatus{}.OpenAPIModelName():      schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
-		corev1alpha1.TenantNamespace{}.OpenAPIModelName():         schema_pkg_apis_core_v1alpha1_TenantNamespace(ref),
-		corev1alpha1.TenantNamespaceList{}.OpenAPIModelName():     schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
-		corev1alpha1.TenantSecret{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
-		corev1alpha1.TenantSecretList{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
-		sdnv1alpha1.ApplicationReference{}.OpenAPIModelName():     schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
-		sdnv1alpha1.EgressRule{}.OpenAPIModelName():               schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
-		sdnv1alpha1.FQDNSelector{}.OpenAPIModelName():             schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
-		sdnv1alpha1.IngressRule{}.OpenAPIModelName():              schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
-		sdnv1alpha1.PortProtocol{}.OpenAPIModelName():             schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref),
-		sdnv1alpha1.PortRule{}.OpenAPIModelName():                 schema_pkg_apis_sdn_v1alpha1_PortRule(ref),
-		sdnv1alpha1.SecurityGroup{}.OpenAPIModelName():            schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref),
-		sdnv1alpha1.SecurityGroupList{}.OpenAPIModelName():        schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref),
-		sdnv1alpha1.SecurityGroupSpec{}.OpenAPIModelName():        schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref),
-		v1.ConversionRequest{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
-		v1.ConversionResponse{}.OpenAPIModelName():                schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
-		v1.ConversionReview{}.OpenAPIModelName():                  schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
-		v1.CustomResourceColumnDefinition{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceColumnDefinition(ref),
-		v1.CustomResourceConversion{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceConversion(ref),
-		v1.CustomResourceDefinition{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceDefinition(ref),
-		v1.CustomResourceDefinitionCondition{}.OpenAPIModelName(): schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionCondition(ref),
-		v1.CustomResourceDefinitionList{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionList(ref),
-		v1.CustomResourceDefinitionNames{}.OpenAPIModelName():     schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionNames(ref),
-		v1.CustomResourceDefinitionSpec{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionSpec(ref),
-		v1.CustomResourceDefinitionStatus{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionStatus(ref),
-		v1.CustomResourceDefinitionVersion{}.OpenAPIModelName():   schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionVersion(ref),
-		v1.CustomResourceSubresourceScale{}.OpenAPIModelName():    schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceScale(ref),
-		v1.CustomResourceSubresourceStatus{}.OpenAPIModelName():   schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceStatus(ref),
-		v1.CustomResourceSubresources{}.OpenAPIModelName():        schema_pkg_apis_apiextensions_v1_CustomResourceSubresources(ref),
-		v1.CustomResourceValidation{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceValidation(ref),
-		v1.ExternalDocumentation{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_ExternalDocumentation(ref),
-		v1.JSON{}.OpenAPIModelName():                              schema_pkg_apis_apiextensions_v1_JSON(ref),
-		v1.JSONSchemaProps{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_JSONSchemaProps(ref),
-		v1.JSONSchemaPropsOrArray{}.OpenAPIModelName():            schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrArray(ref),
-		v1.JSONSchemaPropsOrBool{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrBool(ref),
-		v1.JSONSchemaPropsOrStringArray{}.OpenAPIModelName():      schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrStringArray(ref),
-		v1.SelectableField{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_SelectableField(ref),
-		v1.ServiceReference{}.OpenAPIModelName():                  schema_pkg_apis_apiextensions_v1_ServiceReference(ref),
-		v1.ValidationRule{}.OpenAPIModelName():                    schema_pkg_apis_apiextensions_v1_ValidationRule(ref),
-		v1.WebhookClientConfig{}.OpenAPIModelName():               schema_pkg_apis_apiextensions_v1_WebhookClientConfig(ref),
-		v1.WebhookConversion{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_WebhookConversion(ref),
-		resource.Quantity{}.OpenAPIModelName():                    schema_apimachinery_pkg_api_resource_Quantity(ref),
-		metav1.APIGroup{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_APIGroup(ref),
-		metav1.APIGroupList{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIGroupList(ref),
-		metav1.APIResource{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_APIResource(ref),
-		metav1.APIResourceList{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_APIResourceList(ref),
-		metav1.APIVersions{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_APIVersions(ref),
-		metav1.ApplyOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		metav1.Condition{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Condition(ref),
-		metav1.CreateOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_CreateOptions(ref),
-		metav1.DeleteOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		metav1.Duration{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_Duration(ref),
-		metav1.FieldSelectorRequirement{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		metav1.FieldsV1{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_FieldsV1(ref),
-		metav1.GetOptions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_GetOptions(ref),
-		metav1.GroupKind{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_GroupKind(ref),
-		metav1.GroupResource{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupResource(ref),
-		metav1.GroupVersion{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_GroupVersion(ref),
-		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		metav1.GroupVersionKind{}.OpenAPIModelName():              schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		metav1.GroupVersionResource{}.OpenAPIModelName():          schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		metav1.InternalEvent{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_InternalEvent(ref),
-		metav1.LabelSelector{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_LabelSelector(ref),
-		metav1.LabelSelectorRequirement{}.OpenAPIModelName():      schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		metav1.List{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_List(ref),
-		metav1.ListMeta{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_ListMeta(ref),
-		metav1.ListOptions{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_ListOptions(ref),
-		metav1.ManagedFieldsEntry{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		metav1.MicroTime{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_MicroTime(ref),
-		metav1.ObjectMeta{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		metav1.OwnerReference{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_OwnerReference(ref),
-		metav1.PartialObjectMetadata{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		metav1.PartialObjectMetadataList{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		metav1.Patch{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_Patch(ref),
-		metav1.PatchOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_PatchOptions(ref),
-		metav1.Preconditions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_Preconditions(ref),
-		metav1.RootPaths{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_RootPaths(ref),
-		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():     schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		metav1.ShardInfo{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_ShardInfo(ref),
-		metav1.Status{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_Status(ref),
-		metav1.StatusCause{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_StatusCause(ref),
-		metav1.StatusDetails{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_StatusDetails(ref),
-		metav1.Table{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_Table(ref),
-		metav1.TableColumnDefinition{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		metav1.TableOptions{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_TableOptions(ref),
-		metav1.TableRow{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_TableRow(ref),
-		metav1.TableRowCondition{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		metav1.Time{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_Time(ref),
-		metav1.Timestamp{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_Timestamp(ref),
-		metav1.TypeMeta{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_TypeMeta(ref),
-		metav1.UpdateOptions{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		metav1.WatchEvent{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_WatchEvent(ref),
-		runtime.RawExtension{}.OpenAPIModelName():                 schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
-		runtime.TypeMeta{}.OpenAPIModelName():                     schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
-		runtime.Unknown{}.OpenAPIModelName():                      schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
-		version.Info{}.OpenAPIModelName():                         schema_k8sio_apimachinery_pkg_version_Info(ref),
+		v1alpha1.Application{}.OpenAPIModelName():                        schema_pkg_apis_apps_v1alpha1_Application(ref),
+		v1alpha1.ApplicationList{}.OpenAPIModelName():                    schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
+		v1alpha1.ApplicationStatus{}.OpenAPIModelName():                  schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
+		corev1alpha1.Credential{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_Credential(ref),
+		corev1alpha1.CredentialApplicationRef{}.OpenAPIModelName():       schema_pkg_apis_core_v1alpha1_CredentialApplicationRef(ref),
+		corev1alpha1.CredentialHistoryEntry{}.OpenAPIModelName():         schema_pkg_apis_core_v1alpha1_CredentialHistoryEntry(ref),
+		corev1alpha1.CredentialList{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_CredentialList(ref),
+		corev1alpha1.CredentialPasswordState{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_CredentialPasswordState(ref),
+		corev1alpha1.CredentialRequest{}.OpenAPIModelName():              schema_pkg_apis_core_v1alpha1_CredentialRequest(ref),
+		corev1alpha1.CredentialRequestPreconditions{}.OpenAPIModelName(): schema_pkg_apis_core_v1alpha1_CredentialRequestPreconditions(ref),
+		corev1alpha1.CredentialRequestSpec{}.OpenAPIModelName():          schema_pkg_apis_core_v1alpha1_CredentialRequestSpec(ref),
+		corev1alpha1.CredentialRequestStatus{}.OpenAPIModelName():        schema_pkg_apis_core_v1alpha1_CredentialRequestStatus(ref),
+		corev1alpha1.CredentialSpec{}.OpenAPIModelName():                 schema_pkg_apis_core_v1alpha1_CredentialSpec(ref),
+		corev1alpha1.CredentialStatus{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_CredentialStatus(ref),
+		corev1alpha1.Option{}.OpenAPIModelName():                         schema_pkg_apis_core_v1alpha1_Option(ref),
+		corev1alpha1.OptionItem{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_OptionItem(ref),
+		corev1alpha1.OptionList{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_OptionList(ref),
+		corev1alpha1.OptionSpec{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
+		corev1alpha1.Tap{}.OpenAPIModelName():                            schema_pkg_apis_core_v1alpha1_Tap(ref),
+		corev1alpha1.TapList{}.OpenAPIModelName():                        schema_pkg_apis_core_v1alpha1_TapList(ref),
+		corev1alpha1.TapPackage{}.OpenAPIModelName():                     schema_pkg_apis_core_v1alpha1_TapPackage(ref),
+		corev1alpha1.TapSource{}.OpenAPIModelName():                      schema_pkg_apis_core_v1alpha1_TapSource(ref),
+		corev1alpha1.TapSpec{}.OpenAPIModelName():                        schema_pkg_apis_core_v1alpha1_TapSpec(ref),
+		corev1alpha1.TenantModule{}.OpenAPIModelName():                   schema_pkg_apis_core_v1alpha1_TenantModule(ref),
+		corev1alpha1.TenantModuleList{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
+		corev1alpha1.TenantModuleStatus{}.OpenAPIModelName():             schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
+		corev1alpha1.TenantNamespace{}.OpenAPIModelName():                schema_pkg_apis_core_v1alpha1_TenantNamespace(ref),
+		corev1alpha1.TenantNamespaceList{}.OpenAPIModelName():            schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
+		corev1alpha1.TenantSecret{}.OpenAPIModelName():                   schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
+		corev1alpha1.TenantSecretList{}.OpenAPIModelName():               schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
+		sdnv1alpha1.ApplicationReference{}.OpenAPIModelName():            schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
+		sdnv1alpha1.EgressRule{}.OpenAPIModelName():                      schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
+		sdnv1alpha1.FQDNSelector{}.OpenAPIModelName():                    schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
+		sdnv1alpha1.IngressRule{}.OpenAPIModelName():                     schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
+		sdnv1alpha1.PortProtocol{}.OpenAPIModelName():                    schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref),
+		sdnv1alpha1.PortRule{}.OpenAPIModelName():                        schema_pkg_apis_sdn_v1alpha1_PortRule(ref),
+		sdnv1alpha1.SecurityGroup{}.OpenAPIModelName():                   schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref),
+		sdnv1alpha1.SecurityGroupList{}.OpenAPIModelName():               schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref),
+		sdnv1alpha1.SecurityGroupSpec{}.OpenAPIModelName():               schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref),
+		v1.ConversionRequest{}.OpenAPIModelName():                        schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
+		v1.ConversionResponse{}.OpenAPIModelName():                       schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
+		v1.ConversionReview{}.OpenAPIModelName():                         schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
+		v1.CustomResourceColumnDefinition{}.OpenAPIModelName():           schema_pkg_apis_apiextensions_v1_CustomResourceColumnDefinition(ref),
+		v1.CustomResourceConversion{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_CustomResourceConversion(ref),
+		v1.CustomResourceDefinition{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_CustomResourceDefinition(ref),
+		v1.CustomResourceDefinitionCondition{}.OpenAPIModelName():        schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionCondition(ref),
+		v1.CustomResourceDefinitionList{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionList(ref),
+		v1.CustomResourceDefinitionNames{}.OpenAPIModelName():            schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionNames(ref),
+		v1.CustomResourceDefinitionSpec{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionSpec(ref),
+		v1.CustomResourceDefinitionStatus{}.OpenAPIModelName():           schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionStatus(ref),
+		v1.CustomResourceDefinitionVersion{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceDefinitionVersion(ref),
+		v1.CustomResourceSubresourceScale{}.OpenAPIModelName():           schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceScale(ref),
+		v1.CustomResourceSubresourceStatus{}.OpenAPIModelName():          schema_pkg_apis_apiextensions_v1_CustomResourceSubresourceStatus(ref),
+		v1.CustomResourceSubresources{}.OpenAPIModelName():               schema_pkg_apis_apiextensions_v1_CustomResourceSubresources(ref),
+		v1.CustomResourceValidation{}.OpenAPIModelName():                 schema_pkg_apis_apiextensions_v1_CustomResourceValidation(ref),
+		v1.ExternalDocumentation{}.OpenAPIModelName():                    schema_pkg_apis_apiextensions_v1_ExternalDocumentation(ref),
+		v1.JSON{}.OpenAPIModelName():                                     schema_pkg_apis_apiextensions_v1_JSON(ref),
+		v1.JSONSchemaProps{}.OpenAPIModelName():                          schema_pkg_apis_apiextensions_v1_JSONSchemaProps(ref),
+		v1.JSONSchemaPropsOrArray{}.OpenAPIModelName():                   schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrArray(ref),
+		v1.JSONSchemaPropsOrBool{}.OpenAPIModelName():                    schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrBool(ref),
+		v1.JSONSchemaPropsOrStringArray{}.OpenAPIModelName():             schema_pkg_apis_apiextensions_v1_JSONSchemaPropsOrStringArray(ref),
+		v1.SelectableField{}.OpenAPIModelName():                          schema_pkg_apis_apiextensions_v1_SelectableField(ref),
+		v1.ServiceReference{}.OpenAPIModelName():                         schema_pkg_apis_apiextensions_v1_ServiceReference(ref),
+		v1.ValidationRule{}.OpenAPIModelName():                           schema_pkg_apis_apiextensions_v1_ValidationRule(ref),
+		v1.WebhookClientConfig{}.OpenAPIModelName():                      schema_pkg_apis_apiextensions_v1_WebhookClientConfig(ref),
+		v1.WebhookConversion{}.OpenAPIModelName():                        schema_pkg_apis_apiextensions_v1_WebhookConversion(ref),
+		resource.Quantity{}.OpenAPIModelName():                           schema_apimachinery_pkg_api_resource_Quantity(ref),
+		metav1.APIGroup{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_APIGroup(ref),
+		metav1.APIGroupList{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_APIGroupList(ref),
+		metav1.APIResource{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_APIResource(ref),
+		metav1.APIResourceList{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_APIResourceList(ref),
+		metav1.APIVersions{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_APIVersions(ref),
+		metav1.ApplyOptions{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		metav1.Condition{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_Condition(ref),
+		metav1.CreateOptions{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_CreateOptions(ref),
+		metav1.DeleteOptions{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		metav1.Duration{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_Duration(ref),
+		metav1.FieldSelectorRequirement{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		metav1.FieldsV1{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_FieldsV1(ref),
+		metav1.GetOptions{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_GetOptions(ref),
+		metav1.GroupKind{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_GroupKind(ref),
+		metav1.GroupResource{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_GroupResource(ref),
+		metav1.GroupVersion{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_GroupVersion(ref),
+		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		metav1.GroupVersionKind{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		metav1.GroupVersionResource{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		metav1.InternalEvent{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_InternalEvent(ref),
+		metav1.LabelSelector{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_LabelSelector(ref),
+		metav1.LabelSelectorRequirement{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		metav1.List{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_List(ref),
+		metav1.ListMeta{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_ListMeta(ref),
+		metav1.ListOptions{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_ListOptions(ref),
+		metav1.ManagedFieldsEntry{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		metav1.MicroTime{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_MicroTime(ref),
+		metav1.ObjectMeta{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		metav1.OwnerReference{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_OwnerReference(ref),
+		metav1.PartialObjectMetadata{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		metav1.PartialObjectMetadataList{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		metav1.Patch{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_Patch(ref),
+		metav1.PatchOptions{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_PatchOptions(ref),
+		metav1.Preconditions{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_Preconditions(ref),
+		metav1.RootPaths{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_RootPaths(ref),
+		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		metav1.ShardInfo{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_ShardInfo(ref),
+		metav1.Status{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_Status(ref),
+		metav1.StatusCause{}.OpenAPIModelName():                          schema_pkg_apis_meta_v1_StatusCause(ref),
+		metav1.StatusDetails{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_StatusDetails(ref),
+		metav1.Table{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_Table(ref),
+		metav1.TableColumnDefinition{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		metav1.TableOptions{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_TableOptions(ref),
+		metav1.TableRow{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_TableRow(ref),
+		metav1.TableRowCondition{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		metav1.Time{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_Time(ref),
+		metav1.Timestamp{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_Timestamp(ref),
+		metav1.TypeMeta{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_TypeMeta(ref),
+		metav1.UpdateOptions{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		metav1.WatchEvent{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_WatchEvent(ref),
+		runtime.RawExtension{}.OpenAPIModelName():                        schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
+		runtime.TypeMeta{}.OpenAPIModelName():                            schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
+		runtime.Unknown{}.OpenAPIModelName():                             schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
+		version.Info{}.OpenAPIModelName():                                schema_k8sio_apimachinery_pkg_version_Info(ref),
 	}
 }
 
@@ -294,6 +305,391 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 		},
 		Dependencies: []string{
 			metav1.Condition{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_Credential(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Credential is one account of a converted application.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(corev1alpha1.CredentialSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(corev1alpha1.CredentialStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.CredentialSpec{}.OpenAPIModelName(), corev1alpha1.CredentialStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialApplicationRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialApplicationRef names a managed application.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"apiGroup": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"apiGroup", "kind", "name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialHistoryEntry(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialHistoryEntry is one recorded operation.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"operation": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"at": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref(metav1.Time{}.OpenAPIModelName()),
+						},
+					},
+					"by": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"operation", "at", "by"},
+			},
+		},
+		Dependencies: []string{
+			metav1.Time{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialList is a list of Credential objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(corev1alpha1.Credential{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.Credential{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialPasswordState(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialPasswordState records the operation that set the live password.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"origin": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"at": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref(metav1.Time{}.OpenAPIModelName()),
+						},
+					},
+					"by": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.Time{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialRequest(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialRequest is the body and the answer of the mint and revoke subresources of a Credential, in the shape of a Kubernetes TokenRequest: a create on the subresource carries the request in spec and is answered with the result in status, and nothing is stored. The password in a mint's answer is the only place it ever exists outside the API's memory.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(corev1alpha1.CredentialRequestSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(corev1alpha1.CredentialRequestStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.CredentialRequestSpec{}.OpenAPIModelName(), corev1alpha1.CredentialRequestStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialRequestPreconditions(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialRequestPreconditions makes the operation conditional on the Credential being unchanged since the caller read it, so a mint cannot silently replace a password someone else just received.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"resourceVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ResourceVersion is the Credential's resourceVersion the caller last read.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialRequestSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialRequestSpec carries the caller's preconditions.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"preconditions": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref(corev1alpha1.CredentialRequestPreconditions{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.CredentialRequestPreconditions{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialRequestStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialRequestStatus is the result of a mint or a revoke.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"username": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Username is the account name as the engine knows it.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"password": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Password is the new plaintext, present in a mint's answer only and shown once.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"issuedAt": {
+						SchemaProps: spec.SchemaProps{
+							Description: "IssuedAt is when the operation took effect in the record.",
+							Ref:         ref(metav1.Time{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.Time{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialSpec identifies the account. It is derived from the application and read-only.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"application": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Application is the managed application the account belongs to.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(corev1alpha1.CredentialApplicationRef{}.OpenAPIModelName()),
+						},
+					},
+					"user": {
+						SchemaProps: spec.SchemaProps{
+							Description: "User is the account name as the application declares it.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"application", "user"},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.CredentialApplicationRef{}.OpenAPIModelName()},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_CredentialStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CredentialStatus is the account's record.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"password": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Password says where the live password came from.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(corev1alpha1.CredentialPasswordState{}.OpenAPIModelName()),
+						},
+					},
+					"history": {
+						SchemaProps: spec.SchemaProps{
+							Description: "History holds the last ten operations, newest first.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(corev1alpha1.CredentialHistoryEntry{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			corev1alpha1.CredentialHistoryEntry{}.OpenAPIModelName(), corev1alpha1.CredentialPasswordState{}.OpenAPIModelName()},
 	}
 }
 
