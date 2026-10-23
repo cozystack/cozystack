@@ -79,3 +79,9 @@ tests:
         equal:
           path: spec.chartRef.name
           value: cozystack-tenant-application-default-tenant
+
+  - it: tenant-root namespace carries no tenant.cozystack.io/tenant-root label, which the tenant namespace delete policy selects on
+    asserts:
+      - documentIndex: 0
+        notExists:
+          path: metadata.labels["tenant.cozystack.io/tenant-root"]

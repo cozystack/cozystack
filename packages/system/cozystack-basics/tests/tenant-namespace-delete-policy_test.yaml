@@ -1,0 +1,51 @@
+suite: tenant namespace delete policy renders with its binding
+templates:
+  - templates/tenant-namespace-delete-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+tests:
+  - it: renders the policy and a Deny binding to it
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-tenant-namespace-delete-policy
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-tenant-namespace-delete-policy
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+
+  - it: matches only DELETE of core namespaces
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules
+          value:
+            - apiGroups: [""]
+              apiVersions: ["v1"]
+              operations: ["DELETE"]
+              resources: ["namespaces"]
+
+  - it: binds to the namespaces the tenant chart labels as descendants of tenant-root
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.matchResources.objectSelector
+          value:
+            matchExpressions:
+              - key: tenant.cozystack.io/tenant-root
+                operator: Exists
