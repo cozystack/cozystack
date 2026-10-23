@@ -23,6 +23,9 @@ serviceAccount:
 
 goldpinger:
   port: 8080
+  udp:
+    enabled: false
+    port: 6969
   zapConfig: |
     {
       "level": "info",
@@ -70,6 +73,17 @@ ingress:
   #  - secretName: chart-example-tls
   #    hosts:
   #      - chart-example.local
+
+httpRoute:
+  enabled: false
+  hostnames: []
+    # - chart-example.local
+  parentRefs: []
+    # - group: gateway.networking.k8s.io
+    #   kind: Gateway
+    #   name: default-gateway
+    #   namespace: "gateway-namespace"
+  annotations: {}
 
 ## Set a priorityClassName for the pod. If left blank a default priority will be set.
 priorityClassName:
