@@ -40,11 +40,22 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "tenant.name" . }}-cleanup
   namespace: cozy-system
+{{- /* The Job name becomes the job-name label of its pod, which takes 63
+       characters at most, and a nested tenant namespace can use all 63 by
+       itself. Cutting the name to fit would let a parent and one of its
+       children land on the same Job in cozy-system, where the child's
+       before-hook-creation would delete the parent's running cleanup, so a
+       name that does not fit keeps a hash of the whole namespace instead. */}}
+{{- $tenantName := include "tenant.name" . }}
+{{- $jobName := printf "%s-cleanup" $tenantName }}
+{{- if gt (len $jobName) 63 }}
+{{- $jobName = printf "%s-%s-cleanup" ($tenantName | trunc 48 | trimSuffix "-") ($tenantName | sha256sum | trunc 6) }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "tenant.name" . }}-cleanup
+  name: {{ $jobName }}
   namespace: cozy-system
   annotations:
     helm.sh/hook: pre-delete
@@ -98,7 +109,7 @@ spec:
   ttlSecondsAfterFinished: 300
   template:
     metadata:
-      name: {{ include "tenant.name" . }}-cleanup
+      name: {{ $jobName }}
       labels:
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
