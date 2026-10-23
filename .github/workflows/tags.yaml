@@ -561,6 +561,24 @@ jobs:
         with:
           cosign-release: v3.1.3
 
+      # Every index the stitch repinned the tree on is signed by digest with
+      # this job's OIDC identity, and the SBOM attestation each carries is read
+      # back into one archive, before anything is uploaded: a signature that
+      # does not verify, or an image that lost its SBOM, fails the job with no
+      # asset uploaded. The checksums hack/upload-assets.sh signs next cover
+      # the archive and the image list. The signature over an index covers its
+      # attestation manifest, and promotion copies the digest within the same
+      # repository, so the stable release needs no signing step of its own.
+      - name: Sign the release images and collect their SBOMs
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        run: |
+          set -eu
+          hack/sign-release-images.sh --list _out/assets/cozystack-images.txt packages "$REGISTRY"
+          hack/collect-image-sboms.sh packages "$REGISTRY" _out/assets/cozystack-images-sbom.tar.gz
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY: ghcr.io/cozystack/cozystack
+
       # The assets were built by build-amd64; the operator manifests are
       # rendered here, from the tree pinned on the index digests.
       - name: Upload assets

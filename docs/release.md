@@ -327,10 +327,12 @@ So a commit on a supported `release-X.Y` line ships when a maintainer promotes t
 
 ## Release signatures and SBOM
 
-A release cut from a tree that has [`hack/sign-release-assets.sh`](../hack/sign-release-assets.sh) carries three files beside its other assets, which [`hack/upload-assets.sh`](../hack/upload-assets.sh) has that script write before it uploads anything. Releases cut before it have none of them, and neither does a maintenance line until the script is backported to it (see below).
+A release cut from a tree that has [`hack/sign-release-assets.sh`](../hack/sign-release-assets.sh) carries three files beside its other assets, which [`hack/upload-assets.sh`](../hack/upload-assets.sh) has that script write before it uploads anything, and one cut from a tree that also has [`hack/sign-release-images.sh`](../hack/sign-release-images.sh) and [`hack/collect-image-sboms.sh`](../hack/collect-image-sboms.sh) carries two more, which `tags.yaml::prepare-release` writes before the upload. Releases cut before them have none of these files, and neither does a maintenance line until the scripts are backported to it (see below).
 
 - `cozystack-source-sbom.spdx.json` is an SPDX SBOM, made with syft, of the committed source tree (the Go modules, npm lockfiles, GitHub Actions references and other manifests syft reads in it) and of the `cozypkg` binaries in the `cozypkg-*.tar.gz` assets. It does not describe what runs in the cluster: neither the container images that `packages/` pins by digest, whose SBOMs are [#2937](https://github.com/cozystack/cozystack/issues/2937) (item A2 in [#3278](https://github.com/cozystack/cozystack/issues/3278)), nor the Talos ISO, disk, kernel and initramfs images. Its name says what it covers, so that `cozystack-sbom` stays free for an SBOM of the release as a whole.
-- `cozystack-checksums.txt` holds the SHA-256 of every other asset and of the SBOM.
+- `cozystack-images.txt` lists every first-party container image the release pins, one `<repository>@<digest>` per line: the multi-arch indexes [`hack/stitch-multiarch.sh`](../hack/stitch-multiarch.sh) repinned the tree on, which is what a cluster installed from this release pulls. The packages artifact and the installer chart are not in it.
+- `cozystack-images-sbom.tar.gz` holds the SPDX SBOM of each image in that list, as `<image>.<os>-<arch>.spdx.json`, one document per platform, read from the attestation BuildKit attached to the image at build time (`SBOM=1` in `tags.yaml`, the scanner pinned in [`hack/common-envs.mk`](../hack/common-envs.mk)). These documents come from the syft inside that scanner, the source SBOM from the syft the workflow installs, so the two need not agree on a version. An image without an attestation fails the release instead of being left out.
+- `cozystack-checksums.txt` holds the SHA-256 of every other asset, the SBOMs and the image list among them.
 - `cozystack-checksums.txt.sigstore.json` is a Sigstore bundle with a keyless cosign signature over the checksums. Its certificate names the workflow that published the release: `tags.yaml` for a pre-release, `promote-rc.yaml` for a stable one.
 
 One signature covers every asset through the checksums. To check a download, verify the checksums, then the file against them, with cosign v3.1.3 or later (v2.6.5 or later on the v2 line):
@@ -350,6 +352,32 @@ The regexp pins the ref each workflow runs from: `tags.yaml` on a `v*` tag push,
 The script runs the same `cosign verify-blob` before it returns, so a signature this check would reject fails the job before the first upload, and the release is not published with assets but without a signature. Both jobs that call `make upload_assets`, `tags.yaml::prepare-release` and `promote-rc.yaml::promote`, hold `id-token: write` for the signing identity and install syft and cosign v3.1.3, the version users are asked for above. They install syft from its release tarball, checked against a SHA-256 committed in the workflow, and not with `anchore/sbom-action/download-syft`, which runs an install script fetched at run time in a job that holds the release credentials; [`hack/ci-tool-installs-contract.bats`](../hack/ci-tool-installs-contract.bats) keeps it that way. A stable release gets its own three files rather than its rc's: promotion restamps several assets, so the checksums are recomputed and signed again.
 
 `promote-rc.yaml` runs the `hack/upload-assets.sh` of the rc tree, not the dispatch ref's. A stable release is therefore signed only when its rc was tagged from a tree that has `hack/sign-release-assets.sh`, and a maintenance line starts carrying signatures once that script is backported to its `release-X.Y` branch.
+
+### Image signatures
+
+The images in `cozystack-images.txt` are signed too. After the stitch, `hack/sign-release-images.sh` signs each digest with cosign, keylessly, as the `tags.yaml` run that prepared the pre-release, and verifies every signature against the same identity as above before `hack/upload-assets.sh` runs, so a release is never published with unsigned images. A signature over an index covers every manifest the index lists by digest, the attestation manifest that holds the SBOM included, which is why the SBOM carries no signature of its own. cosign keeps a signature beside the image, as the tag `sha256-<digest>.sig` of the same repository: promotion copies each digest to its stable tag inside that repository, so a stable release's images carry the signatures made for its rc, and their certificates name `tags.yaml` at the rc tag. `promote-rc.yaml::promote` checks every signature with the rc tree's `hack/sign-release-images.sh --verify-only` before it stages the stable release, and skips the check with a notice for an rc cut from a tree that has no such script. A re-run of `prepare-release` signs only the digests that do not verify yet, so it never stacks a second signature on an image. The packages artifact and the installer chart are not signed: promotion republishes both under a new digest.
+
+### How to verify a release
+
+With cosign v3.1.3 or later and the assets of the release in the current directory, this checks the signature over the checksums, every downloaded asset against them, the signature of every image the release pins, and unpacks the image SBOMs:
+
+```sh
+cosign verify-blob cozystack-checksums.txt \
+  --bundle cozystack-checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/cozystack/cozystack/\.github/workflows/(tags\.yaml@refs/tags/v|promote-rc\.yaml@refs/heads/main$)' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com &&
+  sha256sum --check --ignore-missing cozystack-checksums.txt &&
+  while read -r image; do
+    cosign verify "$image" \
+      --certificate-identity-regexp '^https://github\.com/cozystack/cozystack/\.github/workflows/(tags\.yaml@refs/tags/v|promote-rc\.yaml@refs/heads/main$)' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+  done <cozystack-images.txt &&
+  mkdir -p image-sboms && tar -xzf cozystack-images-sbom.tar.gz -C image-sboms
+```
+
+`cosign verify` prints the certificate of each signature; its `Subject` names the workflow and the tag, and the image is pulled only as far as its manifests. The same SBOM can be read from the registry without the archive, with `docker buildx imagetools inspect <image> --format '{{ json .SBOM }}'`, which prints the documents keyed by platform. Checking an image by the tag a release page shows rather than by the digest in `cozystack-images.txt` proves less: a tag can be moved, a digest cannot, and the signature is bound to the digest.
+
+What fails, and what it means: `cosign verify-blob` rejecting the bundle, or `cosign verify` finding no matching signature, means the file or the image is not what the release workflow published, or cosign is older than the version above; `sha256sum` reporting a mismatch means the download is corrupt or replaced; an image in `cozystack-images.txt` that `cosign verify` cannot find at all means the registry no longer serves that digest. An image missing from the archive cannot happen for a release that has one, since `hack/collect-image-sboms.sh` fails the release instead.
 
 ## Nightly builds
 
@@ -645,6 +673,7 @@ For RCs and final releases, run this before merging the release PR. Each item is
 | Changelog Copilot job returns 402 | Token quota — `COPILOT_GITHUB_TOKEN` premium-request quota empty | Both changelog entry points hit it: the optional rc-time `changelog-rc` dispatch and the promote-time `changelog` job (both call the reusable `changelog-generate.yaml`), plus the `tags.yaml` backstop | No — `continue-on-error: true` on the AI step, generate changelog by hand following [`agents/changelog.md`](./agents/changelog.md) |
 | `Prepare Release` skipped and the run red, `Build arm64 images` failed | The rc's arm64 build failed | Read the `build-arm64` log; `build-arm64-nightly.yaml` usually failed the same way first. Fix on the line, cut the next rc | Yes — an rc is not published amd64 only |
 | `Stitch multi-arch indexes and republish` fails listing refs | `verify-multiarch.sh` found refs that are not amd64+arm64 indexes, or that it could not check | Each listed ref names its reason. Single-platform manifest or index without one architecture: make the image multi-arch, or allowlist its repository with a reason if it cannot be. Manifest unreadable: correct the ref or digest; the allowlist does not excuse it. Rate-limited or unavailable after 3 tries: re-run once the throttle clears | Yes |
+| `Sign the release images and collect their SBOMs` fails | `hack/sign-release-images.sh` could not sign a pinned digest or its signature does not verify against the release identity, or `hack/collect-image-sboms.sh` found a pinned image with no SBOM attestation | A signing failure names the ref: Fulcio or Rekor unreachable, or the OIDC token missing, re-run once they answer; a signature already there is kept, so a re-run signs only what is missing. An image without an SBOM was built without `SBOM=1` on the docker-container builder, or its index lost the attestation: fix the build, re-cut the rc | Yes |
 | E2E `kubernetes-test` fails with `CSINode does not contain driver csi.kubevirt.io` | Test ordering bug | Tenant's `kubernetes-${test_name}-csi` HelmRelease still installing when NFS PVC is created. Fix: wait for `csinode/<node>` to advertise the driver before creating the PVC | Yes — flaky and masks real CSI bugs |
 | `tenant-root` HR in perpetual upgrade-rollback loop after OIDC patch | Real bug at the intersection of #2602's readiness change and the cozystack reconcile cadence | Look for `rate: Wait(n=1) would exceed context deadline` in operator logs; multiple tenant child HRs stuck `InProgress` | Yes |
 | `cozy-dashboard` ImagePullBackOff from `cozystack-ui:latest` | Registry flake | Known noisy on some OCI mirrors; not currently in the prepull set | No — retry |
