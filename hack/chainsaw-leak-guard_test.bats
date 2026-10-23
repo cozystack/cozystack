@@ -1,18 +1,21 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for the pod-leak guard: hack/e2e-chainsaw/_lib/leak-guard.sh and
-# the per-suite runner hack/e2e-chainsaw-run.sh that calls it.
+# Unit tests for the leak guard: hack/e2e-chainsaw/_lib/leak-guard.sh and the
+# per-suite runner hack/e2e-chainsaw-run.sh that calls it.
 #
-# What these pin is the attribution rule (which leftover pod is charged to the
-# suite that just ran, and which is left alone), the budget (a pod still tearing
-# down inside it passes, one past it fails), the allowlist (an exemption warns
-# instead of failing, and cannot outlive its suite directory), the JUnit merge,
-# and that the runner hands chainsaw the same suites a single invocation would.
+# What these pin is the attribution rule (which leftover pod or cert-manager
+# Secret is charged to the suite that just ran, and which is left alone), the
+# budget (a pod still tearing down inside it passes, one past it fails), the
+# allowlist (an exemption warns instead of failing, and cannot outlive its suite
+# directory), the JUnit merge, and that the runner hands chainsaw the same
+# suites a single invocation would.
 #
 # kubectl and chainsaw are stubs on PATH that answer from fixture files, so the
 # cluster is a directory: pods.json is what `get pods` returns (pods.after.json
-# once a `kubectl wait` has succeeded), obj/ holds the owners the walk may look
-# up, and `now` is the apiserver clock. The guard is bash; the legacy
+# once a `kubectl wait` has succeeded), secrets.json and secrets.after.json the
+# same for `get secrets`, which answers an empty list when there is neither,
+# obj/ holds the owners the walk may look up, and `now` is the apiserver clock.
+# The guard is bash; the legacy
 # cozytest.sh translator runs these bodies under sh, so each test calls it
 # through `bash`.
 #
@@ -66,6 +69,12 @@ case "$1 $2" in
       exit 1
     fi
     if [ -f "$FIX/waited" ] && [ -f "$FIX/pods.after.json" ]; then cat "$FIX/pods.after.json"; else cat "$FIX/pods.json"; fi
+    exit ;;
+  "get secrets")
+    if [ -f "$FIX/secrets-read-fails" ]; then echo 'Unable to connect to the server: i/o timeout' >&2; exit 1; fi
+    if [ -f "$FIX/waited" ] && [ -f "$FIX/secrets.after.json" ]; then cat "$FIX/secrets.after.json"
+    elif [ -f "$FIX/secrets.json" ]; then cat "$FIX/secrets.json"
+    else echo '{"items":[]}'; fi
     exit ;;
   "get "*)
     if [ -f "$FIX/obj-read-fails" ]; then echo 'Unable to connect to the server: i/o timeout' >&2; exit 1; fi
@@ -121,6 +130,9 @@ case ${name##*/} in
 esac
 base=${name%.xml}
 if [ -f "$FIX/leak-after-$base" ]; then cp "$FIX/leak-after-$base" "$FIX/pods.json"; fi
+if [ -f "$FIX/secrets-after-$base" ]; then cp "$FIX/secrets-after-$base" "$FIX/secrets.json"; fi
+# The apiserver clock moves on while a suite runs.
+if [ -f "$FIX/now-after-$base" ]; then cp "$FIX/now-after-$base" "$FIX/now"; fi
 printf '<testsuites name="chainsaw-report" time="1.5" tests="1">\n  <testsuite name="%s" tests="1" failures="0" errors="0" id="0" time="">\n    <testcase name="%s" classname="" time="1.5"></testcase>\n  </testsuite>\n</testsuites>' "$base" "$base" >"$file"
 exit 0
 EOF
@@ -182,6 +194,40 @@ kafka_leak() {
 
 baseline_of_platform() {
   printf '["uid-etcd-0"]'
+}
+
+# secret NAME NS CREATED [CERTIFICATE [OWNER_API OWNER_KIND OWNER_NAME]] prints
+# one kubernetes.io/tls Secret, as cert-manager writes it for CERTIFICATE when
+# one is named. Its key reads S0VZ, so a test can tell whether key material got
+# past the list.
+secret() {
+  ann=""
+  owners=""
+  if [ -n "${4:-}" ]; then
+    ann=$(printf ',"annotations":{"cert-manager.io/certificate-name":"%s","cert-manager.io/issuer-name":"%s-issuer"}' "$4" "$4")
+  fi
+  if [ -n "${5:-}" ]; then
+    owners=$(printf ',"ownerReferences":[{"apiVersion":"%s","kind":"%s","name":"%s","controller":true}]' "$5" "$6" "$7")
+  fi
+  printf '{"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/tls","metadata":{"name":"%s","namespace":"%s","uid":"uid-%s","creationTimestamp":"%s"%s%s},"data":{"ca.crt":"Q0E=","tls.crt":"Q0VSVA==","tls.key":"S0VZ"}}' \
+    "$1" "$2" "$1" "$3" "$ann" "$owners"
+}
+
+# secrets FILE SECRET... writes a Secret list.
+secrets() {
+  pods "$@"
+}
+
+# The leak cozystack/cozystack#4704 reports, the Secret a qdrant release's
+# Certificate wrote, still there once the release and the Certificate are gone.
+qdrant_leak() {
+  secret qdrant-test-tls tenant-test 2026-09-24T15:11:20Z qdrant-test-tls
+}
+
+# A Secret cert-manager wrote at install, for a Certificate that still exists.
+platform_secret() {
+  owner cert-manager.io/v1 Certificate cozystack-api-cert cozy-system "$T_OLD"
+  secret cozystack-api-cert cozy-system "$T_OLD" cozystack-api-cert
 }
 
 @test "a pod whose root the suite created and that is still running is charged to the suite" {
@@ -283,6 +329,111 @@ baseline_of_platform() {
     echo "lg_check_suite passed a suite it could not check" >&2
     return 1
   fi
+  rm -rf "$FIX"
+}
+
+@test "a cert-manager Secret whose Certificate is gone is charged to the suite that created it" {
+  new_fixture
+  secrets "$FIX/secrets.json" "$(platform_secret)" "$(qdrant_leak)"
+  out=$(lg lg_secret_leaks "$T_START")
+  echo "$out" | grep -Fxq '  secret/tenant-test/qdrant-test-tls certificate=qdrant-test-tls deleting=no root=Secret/tenant-test/qdrant-test-tls (owner Certificate/qdrant-test-tls missing) rootCreated=2026-09-24T15:11:20Z'
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]
+  grep -Fxq 'get secrets --all-namespaces --field-selector type=kubernetes.io/tls --output json' "$FIX/kubectl-calls"
+  rm -rf "$FIX"
+}
+
+@test "a Secret re-issued mid-suite for a Certificate the install created is not charged" {
+  new_fixture
+  owner cert-manager.io/v1 Certificate cozystack-api-cert cozy-system "$T_OLD"
+  secrets "$FIX/secrets.json" "$(secret cozystack-api-cert cozy-system 2026-09-24T15:12:00Z cozystack-api-cert)"
+  [ -z "$(lg lg_secret_leaks "$T_START")" ]
+  # The same Secret with its Certificate gone has nothing older behind it.
+  rm "$FIX/obj/Certificate.v1.cert-manager.io_cozy-system_cozystack-api-cert.json"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'secret/cozy-system/cozystack-api-cert '
+  rm -rf "$FIX"
+}
+
+@test "a Secret whose Certificate still exists is charged by the root above that Certificate" {
+  new_fixture
+  # ingress-shim makes the Certificate a child of the Ingress that asked for it.
+  owner networking.k8s.io/v1 Ingress web tenant-test 2026-09-24T15:11:00Z
+  owner cert-manager.io/v1 Certificate web-tls tenant-test 2026-09-24T15:11:01Z networking.k8s.io/v1 Ingress web
+  secrets "$FIX/secrets.json" "$(secret web-tls tenant-test 2026-09-24T15:11:30Z web-tls)"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'secret/tenant-test/web-tls certificate=web-tls deleting=no root=Ingress/tenant-test/web rootCreated=2026-09-24T15:11:00Z'
+  rm -rf "$FIX"
+}
+
+@test "a Secret older than the suite is not charged even when the suite recreated its Certificate" {
+  new_fixture
+  # An earlier suite left the Secret behind. This one installed a release of
+  # the same name, whose Certificate took the Secret over and is not gone yet.
+  owner cert-manager.io/v1 Certificate reused-tls tenant-test 2026-09-24T15:12:00Z
+  secrets "$FIX/secrets.json" "$(secret reused-tls tenant-test 2026-09-24T15:09:59Z reused-tls)"
+  [ -z "$(lg lg_secret_leaks "$T_START")" ]
+  # Created in the second the suite started, it is the suite's.
+  secrets "$FIX/secrets.json" "$(secret reused-tls tenant-test "$T_START" reused-tls)"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'secret/tenant-test/reused-tls '
+  rm -rf "$FIX"
+}
+
+@test "a TLS Secret that cert-manager did not write is not charged" {
+  new_fixture
+  # An operator's own serving certificate carries no certificate-name annotation.
+  secrets "$FIX/secrets.json" "$(secret kafka-test-cluster-ca-cert tenant-test 2026-09-24T15:11:00Z)"
+  [ -z "$(lg lg_secret_leaks "$T_START")" ]
+  secrets "$FIX/secrets.json" "$(secret kafka-test-cluster-ca-cert tenant-test 2026-09-24T15:11:00Z kafka-test-cluster-ca-cert)"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'secret/tenant-test/kafka-test-cluster-ca-cert '
+  rm -rf "$FIX"
+}
+
+@test "a Secret with an owner of its own is walked through that owner rather than its Certificate" {
+  new_fixture
+  # The Percona operator patches its CR on as the owner of the Secrets
+  # cert-manager writes for it, so those go with the CR.
+  owner psmdb.percona.com/v1 PerconaServerMongoDB mongodb-test tenant-test 2026-09-24T15:10:30Z
+  secrets "$FIX/secrets.json" "$(secret mongodb-test-ssl tenant-test 2026-09-24T15:11:00Z mongodb-test-ssl psmdb.percona.com/v1 PerconaServerMongoDB mongodb-test)"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'root=PerconaServerMongoDB/tenant-test/mongodb-test rootCreated=2026-09-24T15:10:30Z'
+  rm "$FIX/obj/PerconaServerMongoDB.v1.psmdb.percona.com_tenant-test_mongodb-test.json"
+  lg lg_secret_leaks "$T_START" | grep -Fq 'root=Secret/tenant-test/mongodb-test-ssl (owner PerconaServerMongoDB/mongodb-test missing)'
+  rm -rf "$FIX"
+}
+
+@test "a Certificate read that fails for any reason but NotFound is an error and charges nothing" {
+  new_fixture
+  secrets "$FIX/secrets.json" "$(qdrant_leak)"
+  : >"$FIX/obj-read-fails"
+  if out=$(lg lg_secret_leaks "$T_START" 2>&1); then
+    echo "an unreadable Certificate was accepted and printed $out" >&2
+    return 1
+  fi
+  echo "$out" | grep -Fq 'could not read owner Certificate/qdrant-test-tls in tenant-test'
+  [ "$(echo "$out" | grep -c 'secret/')" -eq 0 ]
+  rm -rf "$FIX"
+}
+
+@test "an unreadable Secret list is an error and leaves the suite unchecked" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)"
+  : >"$FIX/secrets-read-fails"
+  if lg lg_secret_leaks "$T_START"; then
+    echo "lg_secret_leaks succeeded without a Secret list" >&2
+    return 1
+  fi
+  rc=0
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 /dev/null) || rc=$?
+  [ "$rc" -eq 2 ]
+  echo "$out" | grep -Fq '::error title=leak-guard::suite=qdrant the leak check could not read the cluster'
+  rm -rf "$FIX"
+}
+
+@test "the Secret list the guard keeps carries no key material" {
+  new_fixture
+  secrets "$FIX/secrets.json" "$(qdrant_leak)"
+  # The input does hold a key, so its absence below is the cut at work.
+  grep -Fq '"tls.key":"S0VZ"' "$FIX/secrets.json"
+  out=$(lg lg_tls_secrets)
+  echo "$out" | grep -Fq '"cert-manager.io/certificate-name":"qdrant-test-tls"'
+  [ "$(echo "$out" | grep -c -e S0VZ -e '"data"' -e 'issuer-name')" -eq 0 ]
   rm -rf "$FIX"
 }
 
@@ -393,7 +544,7 @@ baseline_of_platform() {
   # A short budget, so that a guard which kept waiting after the failed list
   # ends on the clock within seconds instead of spinning for five minutes.
   out=$(COZY_LEAK_BUDGET=3 lg lg_check_suite kafka "$T_START" "$(baseline_of_platform)" 0 /dev/null)
-  echo "$out" | grep -Fq 'LEAKED-PODS suite=kafka count=1 inconclusive="the re-list after the waits failed: the pod list or an owner could not be read"'
+  echo "$out" | grep -Fq 'LEAKED-PODS suite=kafka count=1 inconclusive="the re-list after the waits failed because a pod or Secret list or an owner could not be read"'
   [ "$(echo "$out" | grep -c 'could not finish')" -eq 0 ]
   [ "$(echo "$out" | grep -c '::error')" -eq 0 ]
   rm -rf "$FIX"
@@ -412,6 +563,76 @@ baseline_of_platform() {
     echo "a suite the allowlist does not name passed" >&2
     return 1
   fi
+  rm -rf "$FIX"
+}
+
+@test "a cert-manager Secret still present when the budget runs out fails the suite under its own marker" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)"
+  secrets "$FIX/secrets.json" "$(platform_secret)" "$(qdrant_leak)"
+  if out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 /dev/null); then
+    echo "a suite that left a Secret behind passed and printed $out" >&2
+    return 1
+  fi
+  echo "$out" | grep -Fq '::error title=leaked-secrets::suite=qdrant count=1 cert-manager Secrets created by this suite outlived its cleanup by more than 300s'
+  echo "$out" | grep -Fq 'LEAKED-SECRETS suite=qdrant budget=300s count=1'
+  echo "$out" | grep -Fq '  secret/tenant-test/qdrant-test-tls '
+  [ "$(echo "$out" | grep -c -i 'leaked-pods')" -eq 0 ]
+  grep -Fq 'wait --for=delete secret/qdrant-test-tls --namespace tenant-test --timeout=' "$FIX/kubectl-calls"
+  rm -rf "$FIX"
+}
+
+@test "a Secret deleted inside the budget passes the suite" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)"
+  secrets "$FIX/secrets.json" "$(qdrant_leak)"
+  secrets "$FIX/secrets.after.json"
+  : >"$FIX/wait-ok"
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 /dev/null)
+  echo "$out" | grep -Fq 'leak-guard: suite=qdrant clear after'
+  [ "$(echo "$out" | grep -c 'LEAKED-')" -eq 0 ]
+  grep -Fq 'wait --for=delete secret/qdrant-test-tls --namespace tenant-test --timeout=' "$FIX/kubectl-calls"
+  rm -rf "$FIX"
+}
+
+@test "a suite that leaves both pods and Secrets behind reports each under its own marker" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)" "$(kafka_leak)"
+  secrets "$FIX/secrets.json" "$(qdrant_leak)" "$(secret qdrant-test-ca tenant-test 2026-09-24T15:11:10Z qdrant-test-ca)"
+  rc=0
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 /dev/null) || rc=$?
+  [ "$rc" -eq 1 ]
+  echo "$out" | grep -Fq 'LEAKED-PODS suite=qdrant budget=300s count=1'
+  echo "$out" | grep -Fq 'LEAKED-SECRETS suite=qdrant budget=300s count=2'
+  # The lines between the pod marker and the next annotation are pods only.
+  [ "$(echo "$out" | sed -n '/^LEAKED-PODS/,/^::/p' | grep -c 'kafka-test-kafka-0')" -eq 1 ]
+  [ "$(echo "$out" | sed -n '/^LEAKED-PODS/,/^::/p' | grep -c 'secret/')" -eq 0 ]
+  rm -rf "$FIX"
+}
+
+@test "Secrets of a suite that already failed, or whose wait failed, are reported without failing it" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)"
+  secrets "$FIX/secrets.json" "$(qdrant_leak)"
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 1 /dev/null)
+  echo "$out" | grep -Fq '::warning title=leaked-secrets (suite already failed)::suite=qdrant count=1 cert-manager Secrets of this failed suite were present right after its cleanup'
+  echo "$out" | grep -Fq 'LEAKED-SECRETS suite=qdrant checked-once=chainsaw-failed count=1'
+  echo 1 >"$FIX/wait-errors"
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 /dev/null)
+  echo "$out" | grep -Fq '::warning title=leaked-secrets (inconclusive)::suite=qdrant count=1'
+  [ "$(echo "$out" | grep -c '::error')" -eq 0 ]
+  rm -rf "$FIX"
+}
+
+@test "an allowlisted suite reports its leaked Secrets as a warning and passes without waiting" {
+  new_fixture
+  pods "$FIX/pods.json" "$(platform)"
+  secrets "$FIX/secrets.json" "$(qdrant_leak)"
+  printf 'qdrant cozystack/cozystack#4704\n' >"$FIX/allow"
+  out=$(lg lg_check_suite qdrant "$T_START" "$(baseline_of_platform)" 0 "$FIX/allow")
+  echo "$out" | grep -Fq '::warning title=leaked-secrets (allowlisted cozystack/cozystack#4704)::suite=qdrant count=1'
+  echo "$out" | grep -Fq 'LEAKED-SECRETS suite=qdrant count=1 allowlisted=cozystack/cozystack#4704'
+  [ "$(grep -c '^wait ' "$FIX/kubectl-calls")" -eq 0 ]
   rm -rf "$FIX"
 }
 
@@ -513,6 +734,26 @@ EOF
   rm -rf "$FIX"
 }
 
+@test "the runner fails a suite that leaves a cert-manager Secret behind and not the suite after it" {
+  new_fixture
+  mkdir -p "$FIX/root/aaa" "$FIX/root/bbb"
+  : >"$FIX/root/aaa/chainsaw-test.yaml"
+  : >"$FIX/root/bbb/chainsaw-test.yaml"
+  printf '# none\n' >"$FIX/allow"
+  pods "$FIX/pods.json" "$(platform)"
+  # The stub chainsaw leaves the Secret behind when it runs suite aaa, and the
+  # apiserver clock has moved past it by the time bbb starts.
+  secrets "$FIX/secrets-after-aaa" "$(qdrant_leak)"
+  printf '2026-09-24T15:30:00Z' >"$FIX/now-after-aaa"
+  rc=0
+  out=$(cd "$FIX/root" && PATH="$FIX/bin:$PATH" COZY_LEAK_ALLOWLIST="$FIX/allow" bash "$LG_RUN" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ]
+  echo "$out" | grep -Fq 'LEAKED-SECRETS suite=aaa budget=300s count=1'
+  echo "$out" | grep -Fq 'leak-guard: suite=bbb clear after'
+  grep -Fq 'the leak guard failed this suite. See the leaked-pods or leaked-secrets lines for suite=aaa' "$FIX/root/chainsaw-report.xml"
+  rm -rf "$FIX"
+}
+
 @test "the runner reports a cluster it could not read after a suite as unchecked, not as a leak" {
   new_fixture
   mkdir -p "$FIX/root/aaa"
@@ -527,7 +768,7 @@ EOF
   [ "$rc" -eq 1 ]
   echo "$out" | grep -Fq '::error title=leak-guard::suite=aaa the leak check could not read the cluster'
   grep -Fq 'the leak guard could not read the cluster after this suite; see the leak-guard annotation for suite=aaa' "$FIX/root/chainsaw-report.xml"
-  [ "$(grep -c 'leaked-pods lines' "$FIX/root/chainsaw-report.xml")" -eq 0 ]
+  [ "$(grep -c 'the leak guard failed this suite' "$FIX/root/chainsaw-report.xml")" -eq 0 ]
   rm -rf "$FIX"
 }
 
