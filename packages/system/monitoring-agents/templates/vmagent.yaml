@@ -10,7 +10,7 @@ spec:
   shardCount: 1
   externalLabels:
     cluster: {{ .Values.vmagent.externalLabels.cluster }}
-    tenant: {{ .Values.global.target }}
+    tenant: {{ .Values.vmagent.externalLabels.tenant | default .Values.global.target }}
   extraArgs:
     {{- toYaml (deepCopy .Values.vmagent.extraArgs | mergeOverwrite (fromYaml (include "monitoring-agents.vmagent.defaultExtraArgs" .))) | nindent 4 }}
   remoteWrite:
