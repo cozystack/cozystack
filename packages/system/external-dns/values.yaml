@@ -29,3 +29,18 @@ external-dns:
     requests:
       cpu: 10m
       memory: 64Mi
+
+  # -- Startup probe for the `external-dns` container. Gives a slow first start
+  # (informer source-cache sync under CI-cluster load) a grace period before the
+  # liveness probe begins evaluating, so a healthy-but-slow start is not SIGKILLed
+  # into a restart loop. Budget = periodSeconds * failureThreshold = 5 * 45 = 225s;
+  # comfortably clears the single-digit-second healthy bind time while staying well
+  # inside the operator's default 10m HelmRelease install timeout. Requires the
+  # cozystack `patches/deployment-startup-probe.diff` template patch to render.
+  # See cozystack/cozystack#3459.
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    periodSeconds: 5
+    failureThreshold: 45
