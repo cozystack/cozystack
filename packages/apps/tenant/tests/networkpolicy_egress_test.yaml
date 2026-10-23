@@ -1,0 +1,77 @@
+suite: tenant egress to ancestor observability ingest
+# The <tenant>-egress CiliumClusterwideNetworkPolicy (networkpolicy.yaml)
+# opens child-tenant egress to a fixed set of ancestor-namespace services:
+# vminsert (VictoriaMetrics ingest), vlinsert (VictoriaLogs ingest), etcd,
+# and ingress controllers. A child tenant running monitoring-agents relies
+# on these allowances to ship metrics and container logs up to a parent
+# tenant's observability stack with no hand-edited CCNP.
+#
+# vlinsert is a security boundary: it is an allow rule on a clusterwide
+# policy, so a silent template regression would quietly cut a child
+# tenant's log delivery (observed as fluent-bit "no upstream connections
+# available", with the drop invisible downstream because the packet never
+# leaves the source node). Pin it here alongside vminsert so neither block
+# can disappear or drift its selector unnoticed.
+#
+# The ancestor namespace is derived from the release namespace by a pure
+# splitList/join walk (no cluster lookup), so helm-unittest renders it
+# offline. Depth-2 child tenant-htdev in namespace tenant-ktj resolves its
+# single ancestor to tenant-ktj.
+templates:
+  - templates/networkpolicy.yaml
+set:
+  _cluster:
+    root-host: example.com
+tests:
+  - it: child tenant egress allows vlinsert and vminsert in the parent namespace
+    release:
+      name: tenant-htdev
+      namespace: tenant-ktj
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: tenant-ktj-htdev-egress
+        contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:app.kubernetes.io/name": "vlinsert"
+                  "k8s:io.kubernetes.pod.namespace": tenant-ktj
+      - documentSelector:
+          path: metadata.name
+          value: tenant-ktj-htdev-egress
+        contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:app.kubernetes.io/name": "vminsert"
+                  "k8s:io.kubernetes.pod.namespace": tenant-ktj
+
+  - it: root tenant egress emits no ancestor ingest blocks
+    # The `ne (include "tenant.name" .) "tenant-root"` guard must suppress
+    # every ancestor-egress block for the root tenant, which has no ancestor
+    # to reach. Its egress list carries only the self-namespace allow, so a
+    # broken guard (which would emit vlinsert scoped to tenant-root) is
+    # caught both by the explicit notContains and by the exact length pin.
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: tenant-root-egress
+        notContains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:app.kubernetes.io/name": "vlinsert"
+                  "k8s:io.kubernetes.pod.namespace": tenant-root
+      - documentSelector:
+          path: metadata.name
+          value: tenant-root-egress
+        lengthEqual:
+          path: spec.egress
+          count: 1
