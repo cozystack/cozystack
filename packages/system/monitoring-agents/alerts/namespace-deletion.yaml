@@ -1,0 +1,23 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-namespace-deletion
+spec:
+  groups:
+  - name: namespace-deletion
+    params: {}
+    rules:
+    - alert: KubeNamespaceStuckTerminating
+      expr: max by (cluster, namespace) (kube_namespace_status_phase{job="kube-state-metrics", phase="Terminating"}) == 1
+      for: 30m
+      labels:
+        severity: warning
+        exported_instance: '{{ $labels.namespace }}'
+        service: namespace-deletion
+      annotations:
+        summary: A namespace has been terminating for more than 30 minutes.
+        description: >-
+          Namespace {{ $labels.namespace }} in cluster {{ $labels.cluster }} has been in phase
+          Terminating for more than 30 minutes. Usually an object inside it still carries a
+          finalizer. The conditions in the namespace status list the remaining resource types
+          and finalizers.
