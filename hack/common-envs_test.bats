@@ -144,6 +144,20 @@ load test_helper
   echo "$out" | grep -q -- '--push=0 --load=1'
 }
 
+@test "SBOM=1 attaches an SPDX attestation from a scanner pinned by digest, and the default builds none" {
+  # An image built with an attestation is an index, not a plain manifest, which
+  # the stitch and the gate have to read, so it stays off unless a build asks.
+  # --sbom=true would pull the scanner by a floating tag.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  if echo "$out" | grep -q -- '--attest\|--sbom'; then echo "FAIL: an attestation without SBOM=1"; false; fi
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b SBOM=1)
+  echo "$out" | grep -qE -- '--attest type=sbom,generator=[^ ]+@sha256:[0-9a-f]{64} ' || { echo "FAIL: no digest-pinned scanner"; false; }
+  if echo "$out" | grep -q -- '--sbom'; then echo "FAIL: --sbom=true pulls a floating scanner tag"; false; fi
+  # The environment reaches buildx as well, which is how the release workflow sets it.
+  out=$(SBOM=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--attest type=sbom,'
+}
+
 @test "talos publishes nothing to the registry with PUSH=0" {
   out=$(make -n -B -C packages/core/talos image-talos PUSH=0 PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0)
   echo "$out" | grep -q 'docker://'

@@ -66,15 +66,20 @@ PLATFORM ?= $(if $(filter 1,$(LOAD)),,$(DEFAULT_PLATFORMS))
 BUILDX_EXTRA_ARGS ?=
 COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 
-# SBOM=1 attaches a CycloneDX SBOM as a buildx build attestation (--sbom=true).
-# Requires the docker-container buildx driver and registry referrers/attestation
-# support. Kept OFF by default until an OCIR referrers/attestation probe confirms
-# support — otherwise the attestation push fails the build. See #2937.
+# SBOM=1 attaches an SPDX SBOM to every image as a BuildKit attestation. The
+# pushed ref then names an index of the image and its attestation manifest, not
+# the image itself, which hack/stitch-multiarch.sh and hack/verify-multiarch.sh
+# both handle. Attestations need the docker-container buildx driver. The scanner
+# is pinned by digest like every other build input, where --sbom=true would pull
+# a floating tag; bump the version and the digest together.
 SBOM ?= 0
+SBOM_SCANNER ?= docker.io/docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+# A variable, because the commas would split the arguments of $(if) below.
+SBOM_ATTEST := --attest type=sbom,generator=$(SBOM_SCANNER)
 
 BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
   --label org.opencontainers.image.source=https://github.com/cozystack/cozystack \
-  $(if $(filter 1,$(SBOM)),--sbom=true) \
+  $(if $(filter 1,$(SBOM)),$(SBOM_ATTEST)) \
   $(if $(strip $(BUILDER)),--builder=$(BUILDER)) \
   $(if $(strip $(PLATFORM)),--platform=$(PLATFORM)) \
   $(BUILDX_EXTRA_ARGS)
