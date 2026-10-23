@@ -7,6 +7,17 @@ metadata:
 spec:
   hard:
     {{- include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | nindent 6 }}
+{{- /* The LimitRange only exists so pods without requests or limits still pass
+       a quota that tracks them, so it defaults only the resources the quota
+       bounds. A default limit on any other resource does nothing for the quota
+       and refuses every container that requests more without a limit of its
+       own: a 128Mi memory default under a quota on load balancers, cpu or
+       ephemeral-storage alone kept virt-launcher from starting. */}}
+{{- $hard := include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | fromYaml }}
+{{- $cpu := or (hasKey $hard "requests.cpu") (hasKey $hard "limits.cpu") }}
+{{- $memory := or (hasKey $hard "requests.memory") (hasKey $hard "limits.memory") }}
+{{- $ephemeral := or (hasKey $hard "requests.ephemeral-storage") (hasKey $hard "limits.ephemeral-storage") }}
+{{- if or $cpu $memory $ephemeral }}
 ---
 apiVersion: v1
 kind: LimitRange
@@ -16,12 +27,25 @@ metadata:
 spec:
   limits:
     - default:
+        {{- if $cpu }}
         cpu: "250m"
+        {{- end }}
+        {{- if $memory }}
         memory: "128Mi"
+        {{- end }}
+        {{- if $ephemeral }}
         ephemeral-storage: "2Gi"
+        {{- end }}
       defaultRequest:
+        {{- if $cpu }}
         cpu: "25m"
+        {{- end }}
+        {{- if $memory }}
         memory: "128Mi"
+        {{- end }}
+        {{- if $ephemeral }}
         ephemeral-storage: "50Mi"
+        {{- end }}
       type: Container
+{{- end }}
 {{- end }}
