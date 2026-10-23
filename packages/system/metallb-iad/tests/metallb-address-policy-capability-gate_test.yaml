@@ -1,0 +1,20 @@
+suite: the MetalLB address policy is gated on the ValidatingAdmissionPolicy API
+
+templates:
+  - templates/metallb-address-policy.yaml
+
+release:
+  name: metallb-iad
+  namespace: cozy-metallb-iad
+
+# Pinned at suite level: helm-unittest merges per-test capabilities into the
+# suite's rather than replacing them, so the absent case cannot be expressed
+# alongside the present one (mirrors the cozystack-basics hostname gate suite).
+capabilities:
+  apiVersions: []
+
+tests:
+  - it: renders nothing when the API is unavailable
+    asserts:
+      - hasDocuments:
+          count: 0
