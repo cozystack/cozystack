@@ -188,6 +188,63 @@ tests:
       - failedTemplate:
           errorPattern: 'nodeGroup md0: resources.cpu \(0\) must be a whole number of vCPU cores between 1 and 4294967295'
 
+  # A leading zero is read as octal by YAML, so "010" gives the VM eight cores.
+  # The kubelet reservations and the autoscaler capacity annotation follow
+  # that reading rather than a decimal parse of the string, so the chart
+  # agrees with itself: 8000m minus the two 400m reservations (5% of 8 cores,
+  # inside the [50m, 500m] clamp). The template name is the one main renders
+  # for this value, so the machine template does not move.
+  - it: sizes reservations from the cores a leading-zero value gives the VM
+    set:
+      resources:
+        cpu: "010"
+        memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 8
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - equal:
+          path: metadata.name
+          value: kubernetes-myk8s-md0-ce2335
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/cpu"]
+          value: "7200m"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+
+  - it: sizes reservations for a plain eight exactly as for the octal spelling
+    set:
+      resources:
+        cpu: "8"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/cpu"]
+          value: "7200m"
+
+  - it: keeps the decimal reading for a value without a leading zero
+    set:
+      resources:
+        cpu: "10"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/cpu"]
+          value: "9000m"
+
   # The schema's quantity pattern admits a leading minus.
   - it: refuses a negative core count
     set:
@@ -294,3 +351,32 @@ tests:
       - equal:
           path: spec.template.spec.numCores
           value: 1
+
+  # No YAML round trip on this substrate: the quantity is parsed as decimal
+  # for the machine template and for the reservations alike, so a leading
+  # zero is ten cores on both sides and nothing here changes for it.
+  - it: reads a leading zero as decimal on proxmox, on both sides
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos]
+        full: true
+        network:
+          bridge: vmbr0
+        dnsServers: ["8.8.8.8"]
+      resources:
+        cpu: "010"
+        memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.numCores
+          value: 10
+        documentSelector:
+          path: kind
+          value: ProxmoxMachineTemplate
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/cpu"]
+          value: "9000m"
+        documentSelector:
+          path: kind
+          value: MachineDeployment

@@ -68,7 +68,7 @@
       }
     },
     "resources": {
-      "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
+      "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time. On the kubevirt substrate `cpu` is written into the VM as spelled and decoded as YAML, so a leading zero is read as octal, as in any Kubernetes manifest: `\"010\"` is eight cores, and the kubelet reservations and autoscaler capacity follow that reading.",
       "type": "object",
       "default": {},
       "properties": {

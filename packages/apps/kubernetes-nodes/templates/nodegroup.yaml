@@ -104,7 +104,16 @@
        or 1e1 pass as the integers they decode to, and a leading-zero
        spelling passes as whatever YAML reads it as. A bare numeric zero
        is left alone: it is falsy, so the pool renders without domain.cpu
-       and is sized by its instancetype. */}}
+       and is sized by its instancetype.
+
+       The decoded value is kept: it is the core count the VM actually gets,
+       and everything below that derives a number from resources.cpu on this
+       substrate - the kubelet reservations and the cluster-autoscaler
+       capacity annotation - reads it from here rather than parsing the raw
+       string as a decimal. The two readings differ for a leading zero:
+       YAML reads "010" as octal, so the VM has 8 cores, and a decimal parse
+       would have the autoscaler plan for 10 on a node that has 8. */}}
+{{- $kubevirtCores := "" }}
 {{- $cpuValue := (.Values.resources | default dict).cpu }}
 {{- if and (not $isProxmox) (not (kindIs "invalid" $cpuValue)) (not (and (not (kindIs "string" $cpuValue)) (eq (float64 $cpuValue) 0.0))) }}
 {{-   $cpu := printf "%v" $cpuValue }}
@@ -113,6 +122,7 @@
 {{-   if not (and $isNumber (gt (float64 $cores) 0.0) (lt (float64 $cores) 4294967296.0) (eq (floor $cores) (float64 $cores))) }}
 {{-     fail (printf "nodeGroup %s: resources.cpu (%s) must be a whole number of vCPU cores between 1 and 4294967295, such as 2. On the kubevirt substrate it becomes the worker VM's domain.cpu.cores, which KubeVirt declares as an unsigned 32-bit integer, so a millicore or fractional quantity cannot size the guest. Set a core count, or remove the field." $groupName $cpu) }}
 {{-   end }}
+{{-   $kubevirtCores = printf "%.0f" (float64 $cores) }}
 {{- end }}
 {{- /* Assembled once in _helpers.tpl and read back here and in
        talos-reconcile-job.yaml, so the TalosConfigTemplate name this file
@@ -745,7 +755,11 @@ spec:
 {{- end }}
 {{- $effectiveCpu := "" }}
 {{- if and $group.resources $group.resources.cpu }}
-{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- /* On kubevirt the count the VM gets is the YAML-decoded one kept at
+         the top of this file (see the note there); proxmox hands the raw
+         quantity to the machine template through cpuToMillicores, so it
+         reads the same string the template does. */}}
+{{-   $effectiveCpu = ternary ($group.resources.cpu | toString) $kubevirtCores $isProxmox }}
 {{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
 {{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
 {{- end }}
