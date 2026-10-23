@@ -1,3 +1,4 @@
+{{- if include "tenant.ciliumPolicies" . }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -274,3 +275,4 @@ spec:
   - toEndpoints:
     - matchLabels:
         cozystack.io/service: ingress
+{{- end }}

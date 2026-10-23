@@ -70,6 +70,10 @@ tenant-u1
     └── postgres-db1
 ```
 
+### Network isolation
+
+Tenant network isolation is enforced with Cilium network policies. On the `isp-hosted` and `isp-hosted-slim` platform variants the CNI belongs to the host, so these policies are created only if the host serves the Cilium policy API when the tenant is installed or updated. On a host without Cilium, tenants get no network isolation from Cozystack, and isolating them is up to the host. If Cilium appears on the host later, the policies are created on the tenant's next chart or values change, not automatically.
+
 ## Parameters
 
 ### Common parameters
