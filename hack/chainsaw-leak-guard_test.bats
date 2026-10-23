@@ -434,6 +434,42 @@ baseline_of_platform() {
   rm -rf "$FIX"
 }
 
+@test "an allowlist entry is accepted for every suite layout the selectors see" {
+  # hack/select-e2e.sh enumerates a suite as a directory in or below which
+  # Chainsaw finds a Test: chainsaw-test.yaml, chainsaw-test.yml, numbered step
+  # files, or a Test nested in a subdirectory. The allowlist has to accept the
+  # same set, or a suite that runs cannot be exempted and the run stops before
+  # the first suite.
+  new_fixture
+  mkdir -p "$FIX/root/plain" "$FIX/root/yml" "$FIX/root/steps" "$FIX/root/nested/sub"
+  : >"$FIX/root/plain/chainsaw-test.yaml"
+  : >"$FIX/root/yml/chainsaw-test.yml"
+  : >"$FIX/root/steps/01-install.yaml"
+  : >"$FIX/root/nested/sub/chainsaw-test.yaml"
+  printf 'plain cozystack/cozystack#1\nyml cozystack/cozystack#1\nsteps cozystack/cozystack#1\nnested cozystack/cozystack#1\n' >"$FIX/allow"
+  lg lg_allowlist_validate "$FIX/allow" "$FIX/root"
+  rm -rf "$FIX"
+}
+
+@test "a parked, empty or step-file-less suite directory cannot be allowlisted" {
+  # A chainsaw-test.yaml.disabled is registered nowhere and runs nowhere, so an
+  # exemption for it would exempt nothing today and a real suite the day the
+  # suffix goes. A file that only looks like a step file (no digits before the
+  # dash) is not one to Chainsaw either.
+  new_fixture
+  mkdir -p "$FIX/root/parked" "$FIX/root/empty" "$FIX/root/notsteps"
+  : >"$FIX/root/parked/chainsaw-test.yaml.disabled"
+  : >"$FIX/root/notsteps/install-01.yaml"
+  for suite in parked empty notsteps; do
+    printf '%s cozystack/cozystack#1\n' "$suite" >"$FIX/allow"
+    if lg lg_allowlist_validate "$FIX/allow" "$FIX/root" 2>/dev/null; then
+      echo "an allowlist entry for '$suite' was accepted" >&2
+      return 1
+    fi
+  done
+  rm -rf "$FIX"
+}
+
 @test "an allowlist whose last line has no newline still has that line validated" {
   new_fixture
   mkdir -p "$FIX/root/kafka"

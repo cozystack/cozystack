@@ -18,7 +18,15 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`.
+A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Chainsaw finds a Test. Three layouts do that, and the selector (`hack/select-e2e.sh`), the runner (`hack/e2e-chainsaw-run.sh`) and the leak-guard allowlist all recognise the same three:
+
+- `chainsaw-test.yaml`, the usual one, or `chainsaw-test.yml` when the `.yaml` is absent;
+- numbered step files such as `01-install.yaml`, which Chainsaw turns into a Test on its own when neither of the above exists;
+- either of those in a subdirectory of the suite, since Chainsaw walks every subdirectory of the directory it is handed.
+
+A parked `chainsaw-test.yaml.disabled` is none of these: the directory is then not a suite, is selected by nothing and cannot be allowlisted.
+
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
 
 ## What Chainsaw buys over the BATS suite
 
@@ -30,7 +38,7 @@ Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`,
 
 ## Test anatomy
 
-Each suite is a directory with a `chainsaw-test.yaml` (one or more `Test` docs) plus the manifests it applies. A step has `try` (operations: `apply`, `assert`, `error`, `script`, `delete`, …), optional `catch` (diagnostics on failure), and optional `finally` (teardown regardless of outcome).
+Each suite is a directory with one or more `Test` docs (in one of the layouts above, usually a `chainsaw-test.yaml`) plus the manifests it applies. A step has `try` (operations: `apply`, `assert`, `error`, `script`, `delete`, …), optional `catch` (diagnostics on failure), and optional `finally` (teardown regardless of outcome).
 
 Declarative suites assert on `status.conditions` and concrete fields. Inherently imperative suites keep their logic in `script` steps:
 
