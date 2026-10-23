@@ -16,6 +16,21 @@ RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
   if grep -qE '\$\{[A-Za-z_]+:[-=?+]' "$FIXTURE"; then echo "FAIL: the fixture must not carry a shell-style default envsubst leaves in place"; false; fi
 }
 
+# kubernetes-nodes names its release kubernetes-nodes-<CR name> and refuses one
+# that does not start with kubernetes-nodes-<spec.cluster>- (_helpers.tpl), so a
+# pool named anything but <cluster>-<pool> fails at helm install and the suite
+# only learns it from a Machine that never appears.
+@test "the fixture's KubernetesNodes is named <cluster>-<pool>, as kubernetes-nodes requires" {
+  doc="$(sed -n '/^kind: KubernetesNodes$/,/^---$/p' "$FIXTURE")"
+  name="$(printf '%s\n' "$doc" | sed -n 's/^  name: *//p' | head -n 1 | tr -d '"')"
+  cluster="$(printf '%s\n' "$doc" | sed -n 's/^  cluster: *//p' | head -n 1 | tr -d '"')"
+  if [ -z "$name" ] || [ -z "$cluster" ]; then echo "FAIL: no KubernetesNodes name or spec.cluster in the fixture"; false; fi
+  case "$name" in
+    "$cluster"-?*) ;;
+    *) echo "FAIL: KubernetesNodes $name must be named $cluster-<pool>"; false ;;
+  esac
+}
+
 @test "render-tenant expands every variable with the runner's defaults" {
   out="$(COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=teststore "$RUNNER" render-tenant)"
   if printf '%s' "$out" | grep -q '\${'; then echo "FAIL: the rendered tenant must not keep an unexpanded variable"; false; fi
