@@ -5334,7 +5334,7 @@ cozy_guard_helmrelease() {
   # are load-bearing for this guard and not only for the chart. The csi they
   # pin is helmreleases/csi.yaml, the KubeVirt driver this suite runs; on the
   # Proxmox substrate the same release comes from csi-proxmox.yaml, which sets
-  # the strategy too and has no such pin.
+  # the strategy too and is pinned by csi_proxmox_install_retry_test.yaml.
   if [ "${_strategy}" = "RetryOnFailure" ]; then
     echo "HelmRelease ${_hr} carries a failed or uninstalled Snapshot, and its install strategy is RetryOnFailure, which retries a failed action in place instead of remediating it. An action on this release failed during the run; the release may have recovered on a retry since, and the failure is still the finding. On the tenant cilium the cause can sit outside the chart: its operator Deployment cannot schedule before a worker registers, so workers arriving more than two 10m install timeouts after the install started leave this Snapshot while still inside the node-join deadline. Compare the Snapshot times below with when the first node turned Ready before looking at the release." >&2
     _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
