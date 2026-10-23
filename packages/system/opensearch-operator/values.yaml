@@ -8,8 +8,8 @@ opensearch-operator:
     replicaCount: 1
     # Enable cluster-wide mode to watch all namespaces
     watchNamespace: ""
-    # Built in-tree from images/opensearch-operator, which carries the
-    # bootstrap voting-exclusion patch. Without this block the vendored chart
+    # Built in-tree from images/opensearch-operator, which carries the patches
+    # under its patches/ directory. Without this block the vendored chart
     # falls back to opensearchproject/opensearch-operator at the chart's
     # appVersion, which is the unpatched upstream build, and the reference stays
     # outside the first-party set hack/lib/image-refs.sh collects for promote,
