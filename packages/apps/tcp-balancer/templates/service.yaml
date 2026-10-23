@@ -27,7 +27,7 @@ spec:
     port: 443
     targetPort: https
   {{- end }}
-  {{- with .Values.httpAndHttps }}
+  {{- with .Values.kubernetesAndTalos }}
   - name: kubernetes
     protocol: TCP
     port: 6443

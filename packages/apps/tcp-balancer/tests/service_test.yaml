@@ -1,0 +1,97 @@
+suite: haproxy service
+
+templates:
+  - templates/service.yaml
+  - templates/deployment.yaml
+  - templates/configmap.yaml
+
+tests:
+  - it: publishes only http and https by default, both on container ports the Deployment declares
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: http
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: https
+        template: templates/service.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8443
+              name: https
+        template: templates/deployment.yaml
+
+  - it: publishes kubernetes and talos for kubernetesAndTalos alone, both on container ports the Deployment declares
+    set:
+      httpAndHttps: null
+      kubernetesAndTalos:
+        endpoints:
+          - 10.1.1.1
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: kubernetes
+              protocol: TCP
+              port: 6443
+              targetPort: kubernetes
+            - name: talos
+              protocol: TCP
+              port: 50000
+              targetPort: talos
+        template: templates/service.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - containerPort: 6443
+              name: kubernetes
+            - containerPort: 50000
+              name: talos
+        template: templates/deployment.yaml
+
+  - it: publishes all four ports when both are set, each on a container port the Deployment declares
+    set:
+      kubernetesAndTalos:
+        endpoints:
+          - 10.1.1.1
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: http
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: https
+            - name: kubernetes
+              protocol: TCP
+              port: 6443
+              targetPort: kubernetes
+            - name: talos
+              protocol: TCP
+              port: 50000
+              targetPort: talos
+        template: templates/service.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8443
+              name: https
+            - containerPort: 6443
+              name: kubernetes
+            - containerPort: 50000
+              name: talos
+        template: templates/deployment.yaml
