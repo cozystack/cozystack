@@ -131,7 +131,7 @@ backup:
   retentionPolicy: "7d"
 
 ## @typedef {struct} Monitoring - Monitoring configuration.
-## @field {bool} enabled - Enable WorkloadMonitor integration.
+## @field {bool} enabled - Enable the dashboard resource map used by the tenant UI.
 
 ## @param {Monitoring} monitoring - Monitoring configuration.
 monitoring:
