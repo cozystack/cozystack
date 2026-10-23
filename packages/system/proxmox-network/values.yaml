@@ -1,0 +1,56 @@
+# ProxmoxNetworkZones: one per VLAN-aware bridge. A zone is the admin's table
+# of tenant networks on that bridge. For every network the chart renders one
+# InClusterIPPool `pxnet-<name>` in the owning namespace, and the kubernetes
+# and kubernetes-nodes charts of that namespace place their workers on it by
+# `proxmox.network.name`. Nothing allocates at runtime: a VLAN is in use
+# exactly while it is listed here. See README.md.
+zones: []
+# - name: default
+#   # VLAN-aware bridge with the same name on every hypervisor node tenant VMs
+#   # may land on.
+#   bridge: vmbr70
+#   # Default MTU of every NIC on the zone's networks (optional).
+#   mtu: 1500
+#   # The outer VLAN that carries the zone bridge between hypervisors
+#   # (bond0.70 -> vmbr70). Admission refuses it as the tag of a machine NIC on
+#   # any other bridge, which would reach the trunk under the zone bridge with
+#   # any inner tag the guest picks. Unset leaves that path open.
+#   uplinkVLAN: 70
+#   # Every other bridge that enslaves the uplink's parent device itself
+#   # (vmbr0 over bond0). Admission refuses any machine NIC on them: an
+#   # untagged one is a trunk on which the guest sets the uplink VLAN as the
+#   # outer tag. A bridge left out, and any VM created outside Cluster API,
+#   # stays a way into the zone until the hypervisor drops guest VLAN tags
+#   # there.
+#   uplinkBridges: [vmbr0]
+#   networks:
+#     - namespace: tenant-a       # the tenant namespace that owns the network
+#       name: workers             # proxmox.network.name in that namespace
+#       vlan: 201
+#       addresses: ["198.18.1.10-198.18.1.250"]
+#       gateway: 198.18.1.1       # served by the operator's router on VLAN 201
+#       prefix: 24
+#       mtu: 1500                 # overrides the zone's MTU (optional)
+
+admission:
+  # Switches every policy of this package.
+  enabled: true
+  # For the policies that keep machines on the platform's networks:
+  # proxmox-network-zone-binding (one binding per zone, the zone object as its
+  # parameter) and proxmox-network-cluster-pools (the ProxmoxCluster's own
+  # address pool). [Warn, Audit] reports instead of refusing.
+  validationActions: [Deny]
+  # What happens to a Cluster API machine NIC that is not on a zone bridge with
+  # a platform pool (the raw bridge/vlan path of the kubernetes-nodes chart):
+  #   Allow - nothing; clusters on the raw path keep working (default).
+  #   Warn  - admitted with a warning and an audit annotation.
+  #   Deny  - refused. Set this once every Proxmox-backed pool is on a network.
+  # Platform namespaces (cozy-*, kube-system) and exemptNamespaces are not
+  # judged by this policy. The zone bindings hold in every namespace.
+  rawNetworks: Allow
+  exemptNamespaces: []
+
+alerts:
+  # ProxmoxNetworkPoolNearlyFull, on the kube-state-metrics custom resource
+  # state of InClusterIPPools (packages/system/monitoring-agents).
+  enabled: true

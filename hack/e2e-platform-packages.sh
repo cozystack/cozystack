@@ -76,6 +76,10 @@ spec:
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
+            # Opt-in in the iaas bundle; the proxmox-network suite needs it.
+            # A run that does not select that suite gets it in
+            # COZY_DISABLED_PACKAGES from hack/select-install.sh, which wins.
+            - cozystack.proxmox-network
 EOF
 
 if [ -n "$disabled" ]; then

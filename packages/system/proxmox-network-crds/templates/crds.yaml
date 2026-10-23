@@ -1,0 +1,15 @@
+{{- /* The definitions are written by hand: there is no controller and no Go
+      types behind them. They ship as a component of their own, installed
+      before the proxmox-network package, so the package's zones render on
+      its first install. helm.sh/resource-policy: keep stops an uninstall of
+      this release from deleting the CRD, which would delete every zone with
+      it; the admission binding of a zone denies machines on its bridge once
+      its zone is gone (parameterNotFoundAction: Deny). */}}
+{{- range $path, $_ := .Files.Glob "definitions/*.yaml" }}
+{{- $crd := $.Files.Get $path | fromYaml }}
+{{- $ann := $crd.metadata.annotations | default dict }}
+{{- $_ := set $ann "helm.sh/resource-policy" "keep" }}
+{{- $_ := set $crd.metadata "annotations" $ann }}
+---
+{{ toYaml $crd }}
+{{- end }}

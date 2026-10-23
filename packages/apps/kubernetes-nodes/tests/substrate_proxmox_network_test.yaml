@@ -1,0 +1,161 @@
+suite: proxmox workers on a Proxmox tenant network
+# A pool that names a tenant network takes bridge, VLAN, MTU and IP pool from
+# the network's entry in the platform's zone table, never from tenant input.
+# The fixtures below are what the proxmox-network package renders for
+# tenant-test: network "workers" on VLAN 201 of zone "default" (vmbr70), and
+# another tenant's "workers" on VLAN 202, which this namespace must never see.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, cozystack, talos, talos-v1.13.6]
+    network:
+      name: workers
+    dnsServers: ["8.8.8.8"]
+# helm-unittest's fake cluster cannot deep-copy plain ints, so the numbers in
+# these fixtures are strings; the helper converts with int64 either way, and a
+# real lookup returns int64.
+kubernetesProvider:
+  scheme:
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworkzones"
+      namespaced: false
+    "ipam.cluster.x-k8s.io/v1alpha2/InClusterIPPool":
+      gvr:
+        group: "ipam.cluster.x-k8s.io"
+        version: "v1alpha2"
+        resource: "inclusterippools"
+      namespaced: true
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr:
+        group: "cluster.x-k8s.io"
+        version: "v1beta1"
+        resource: "machinesets"
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/ProxmoxMachineTemplate":
+      gvr:
+        group: "infrastructure.cluster.x-k8s.io"
+        version: "v1alpha1"
+        resource: "proxmoxmachinetemplates"
+      namespaced: true
+  objects:
+    # helm-unittest registers a LIST kind only for a GVK with at least one
+    # object, and the pool render LISTs MachineSets and ProxmoxMachineTemplates
+    # in its namespace. These live elsewhere so those LISTs stay empty.
+    - apiVersion: cluster.x-k8s.io/v1beta1
+      kind: MachineSet
+      metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+      spec: {template: {spec: {infrastructureRef: {kind: ProxmoxMachineTemplate, name: none}}}}
+    - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: ProxmoxMachineTemplate
+      metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetworkZone
+      metadata: {name: default}
+      spec:
+        bridge: vmbr70
+        mtu: "1500"
+        networks:
+          - {namespace: tenant-test, name: workers, vlan: "201", addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+          - {namespace: tenant-other, name: workers, vlan: "202", addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: "24"}
+          - {namespace: tenant-test, name: nopool, vlan: "203", addresses: ["198.18.3.10-198.18.3.250"], gateway: 198.18.3.1, prefix: "24"}
+    - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+      kind: InClusterIPPool
+      metadata: {name: pxnet-workers, namespace: tenant-test}
+      spec: {addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+    - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+      kind: InClusterIPPool
+      metadata: {name: pxnet-workers, namespace: tenant-other}
+      spec: {addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: "24"}
+tests:
+  - it: puts net0 on the network's bridge and VLAN with the network's pool
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.default
+          value:
+            bridge: vmbr70
+            model: virtio
+            vlan: 201
+            mtu: 1500
+            ipv4PoolRef:
+              apiGroup: ipam.cluster.x-k8s.io
+              kind: InClusterIPPool
+              name: pxnet-workers
+
+  - it: lets the pool override the network's MTU
+    set:
+      proxmox.network.mtu: 1400
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.default.mtu
+          value: 1400
+
+  - it: refuses a raw bridge or VLAN next to a network name
+    set:
+      proxmox.network.bridge: vmbr0
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.network: set either name or bridge/vlan, not both; a Proxmox tenant network's bridge and VLAN come from the platform"
+
+  - it: refuses a raw VLAN next to a network name
+    set:
+      proxmox.network.vlan: 202
+    asserts:
+      - failedTemplate:
+          errorMessage: "proxmox.network: set either name or bridge/vlan, not both; a Proxmox tenant network's bridge and VLAN come from the platform"
+
+  - it: never resolves another namespace's network of the same name
+    release:
+      namespace: tenant-nobody
+    asserts:
+      - failedTemplate:
+          errorPattern: 'proxmox.network: no Proxmox tenant network "workers" for namespace tenant-nobody'
+
+  - it: waits for the network's pool before it renders a machine template
+    set:
+      proxmox.network.name: nopool
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the IP pool tenant-test/pxnet-nopool of Proxmox tenant network "nopool" is not rendered yet'
+
+  - it: keeps the raw bridge/vlan path for pools without a network
+    set:
+      proxmox.network:
+        name: ""
+        bridge: vmbr0
+        vlan: 42
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.network.default
+          value:
+            bridge: vmbr0
+            model: virtio
+            vlan: 42
+      - notExists:
+          path: spec.template.spec.network.default.ipv4PoolRef

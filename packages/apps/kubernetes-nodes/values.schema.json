@@ -364,21 +364,23 @@
           "description": "NIC configuration.",
           "type": "object",
           "default": {},
-          "required": [
-            "bridge"
-          ],
           "properties": {
             "bridge": {
-              "description": "Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.",
+              "description": "Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`), on the raw path without a tenant network. Required when `substrate` is `proxmox` and `name` is unset. The platform may warn about or refuse this path (`admission.rawNetworks` of the proxmox-network package).",
               "type": "string",
               "default": ""
             },
             "mtu": {
-              "description": "NIC MTU. Omitted when unset.",
+              "description": "NIC MTU. Omitted when unset. Next to `name` it overrides the network's MTU.",
               "type": "integer"
             },
+            "name": {
+              "description": "Name of a Proxmox tenant network the platform operator listed for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). The NIC takes the zone's bridge, the network's VLAN and MTU, and every worker claims its address from the network's own IP pool; the tenant picks none of them. Use the same name as the parent `Kubernetes` cluster's `proxmox.network.name`. Set either `name` or `bridge`, not both.",
+              "type": "string",
+              "default": ""
+            },
             "vlan": {
-              "description": "L2 VLAN tag. Omitted when unset.",
+              "description": "L2 VLAN tag on the raw path. Omitted when unset; refused next to `name`.",
               "type": "integer"
             }
           }

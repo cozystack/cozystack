@@ -1,0 +1,28 @@
+suite: proxmox-network source and its dependencies
+# Two edges are asserted rather than left to review: the package needs the IPAM
+# provider (it renders InClusterIPPools) and nothing else, in particular not
+# Kube-OVN and not capmox, so a zone table can be prepared before any
+# Proxmox-backed cluster exists.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: makes proxmox-network depend on IPAM alone, with the CRDs installed first
+    documentSelector:
+      path: metadata.name
+      value: cozystack.proxmox-network
+    asserts:
+      - equal:
+          path: spec.variants[0].dependsOn
+          value: [cozystack.capi-provider-ipam-in-cluster]
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: proxmox-network-crds
+      - equal:
+          path: spec.variants[0].components[1].install.dependsOn
+          value: [proxmox-network-crds]
+      - equal:
+          path: spec.variants[0].components[1].install.namespace
+          value: cozy-proxmox-network

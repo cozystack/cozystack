@@ -152,12 +152,15 @@ type Proxmox struct {
 }
 
 type ProxmoxNetwork struct {
-	// Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
+	// Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`), on the raw path without a tenant network. Required when `substrate` is `proxmox` and `name` is unset. The platform may warn about or refuse this path (`admission.rawNetworks` of the proxmox-network package).
 	// +kubebuilder:default:=""
-	Bridge string `json:"bridge"`
-	// NIC MTU. Omitted when unset.
+	Bridge string `json:"bridge,omitempty"`
+	// NIC MTU. Omitted when unset. Next to `name` it overrides the network's MTU.
 	Mtu int `json:"mtu,omitempty"`
-	// L2 VLAN tag. Omitted when unset.
+	// Name of a Proxmox tenant network the platform operator listed for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). The NIC takes the zone's bridge, the network's VLAN and MTU, and every worker claims its address from the network's own IP pool; the tenant picks none of them. Use the same name as the parent `Kubernetes` cluster's `proxmox.network.name`. Set either `name` or `bridge`, not both.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// L2 VLAN tag on the raw path. Omitted when unset; refused next to `name`.
 	Vlan int `json:"vlan,omitempty"`
 }
 

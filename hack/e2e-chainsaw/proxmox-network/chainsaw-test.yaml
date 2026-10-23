@@ -1,0 +1,463 @@
+# The proxmox-network package on the regular e2e cluster, which has no
+# Proxmox VE host.
+#
+# The package runs nothing, so what a cluster shows is what the apiserver does
+# with its objects, and that is what this suite asserts: that the package
+# installs with its CRD and policies; that the zone CRD refuses a table with a
+# VLAN used twice, a network on the uplink VLAN, a bridge among its own uplink
+# bridges or a network listed twice; that every network gets its IP pool in
+# the namespace that owns it; that the admission policies keep Cluster API
+# machines on their namespace's networks, on CREATE and on UPDATE, with every
+# refusal next to an admitted request of the same shape; that a zone binding
+# whose zone is gone denies rather than allows; and that a pool whose address
+# is in use cannot be deleted.
+#
+# capmox is not installed here and its kinds are not served, so the suite
+# applies capmox's CRDs alone (no controller) for the dry runs and removes
+# them at the end. On a cluster that already serves them, it leaves them be.
+#
+# The package is installed with zones: [] (its default). The suite renders the
+# same chart from test-values.yaml and applies the zone-specific objects: the
+# zones, the pools, the per-zone bindings and the raw-networks policy, which
+# the platform release does not render. The cluster-pools policy is rendered
+# from the values too, so the suite applies it under a name of its own.
+#
+# The package is opt-in in the iaas bundle; hack/e2e-platform-packages.sh
+# enables it, and hack/select-install.sh drops it again from a run that does
+# not select this suite.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: proxmox-network
+spec:
+  # Tenant A. Chainsaw creates the namespace and deletes it at the end.
+  namespace: tenant-e2epxa
+  catch:
+  - events: {}
+  - script:
+      timeout: 3m
+      content: |
+        set -u
+        k() { timeout -k 5 20 kubectl "$@" 2>&1; }
+        echo "--- zones";    k get proxmoxnetworkzones.proxmox.cozystack.io -o yaml
+        echo "--- pools";    k get inclusterippools.ipam.cluster.x-k8s.io -A -o yaml
+        echo "--- policies"; k get validatingadmissionpolicies.admissionregistration.k8s.io -o yaml
+        echo "--- bindings"; k get validatingadmissionpolicybindings.admissionregistration.k8s.io -o yaml
+        echo "--- claims";   k get ipaddressclaims.ipam.cluster.x-k8s.io -A -o yaml
+        exit 0
+  steps:
+  - name: package-installed
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: proxmoxnetworkzones.proxmox.cozystack.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    # The zone policy renders only once the CRD is known to Helm, which is
+    # what the CRD component installing first is for. Its bindings come with
+    # the zones, so the platform release (zones: []) has none.
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicy
+          metadata:
+            name: proxmox-network-zone-binding
+          spec:
+            paramKind:
+              apiVersion: proxmox.cozystack.io/v1alpha1
+              kind: ProxmoxNetworkZone
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: proxmox-network-cluster-pools
+          spec:
+            policyName: proxmox-network-cluster-pools
+            validationActions: [Deny]
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          n=$(timeout -k 5 30 kubectl get validatingadmissionpolicybindings.admissionregistration.k8s.io -o name | grep -c '^.*/proxmox-network-zone-binding-' || true)
+          [ "$n" = 0 ] || { echo "the platform release has zone bindings, but ships zones: []: $n" >&2; exit 1; }
+        check:
+          ($error == null): true
+
+  - name: capmox-crds
+    try:
+    # The dry runs below need the kinds, not the controller. The CRDs are
+    # taken from the capmox package in this checkout, so the suite judges the
+    # schema the platform ships. A cluster that already serves them (the
+    # Proxmox lane) keeps its own; only CRDs this step created carry the label
+    # the cleanup deletes by.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          k() { timeout -k 5 30 kubectl "$@"; }
+          if k get crd proxmoxmachines.infrastructure.cluster.x-k8s.io >/dev/null 2>&1; then
+            echo "capmox CRDs are served already; using them"
+            exit 0
+          fi
+          cd ../../..
+          yq 'select(.kind == "CustomResourceDefinition")' \
+            packages/system/capi-providers-infraprovider-proxmox/files/infrastructure-components.yaml \
+            | yq '.metadata.labels["e2e.cozystack.io/proxmox-network"] = "crds"' \
+            | k apply -f -
+          for crd in proxmoxclusters proxmoxmachines proxmoxmachinetemplates; do
+            k wait --for=condition=Established --timeout=60s "crd/$crd.infrastructure.cluster.x-k8s.io"
+          done
+        check:
+          ($error == null): true
+    cleanup:
+    - script:
+        timeout: 2m
+        content: |
+          set -u
+          timeout -k 5 60 kubectl delete crd -l e2e.cozystack.io/proxmox-network=crds --ignore-not-found --wait=true
+        check:
+          ($error == null): true
+
+  - name: crd-validation
+    try:
+    # Server-side dry runs of zone objects: the CRD's own rules, with an
+    # admitted table of the same shape first, so a refusal the apiserver
+    # issues for another reason fails the step instead of passing it.
+    - script:
+        timeout: 3m
+        content: |
+          set -u
+          # Every probe pipes its manifest into admitted/refused, and the last
+          # command of a pipeline runs in a subshell, so a variable set there
+          # never reaches the exit status. Failures and executed checks go to
+          # files instead, and the step fails unless every check ran.
+          FAILS=$(mktemp) RAN=$(mktemp)
+          k() { timeout -k 5 30 kubectl "$@"; }
+          zone() { # spec body on stdin, indented 2
+            printf 'apiVersion: proxmox.cozystack.io/v1alpha1\nkind: ProxmoxNetworkZone\nmetadata:\n  name: pxnet-e2e-dryrun\nspec:\n'; cat
+          }
+          admitted() {
+            echo "$1" >> "$RAN"
+            if ! out=$(k create --dry-run=server -f - 2>&1); then echo "FAIL: $1: refused: $out" >&2; echo "$1" >> "$FAILS"; fi
+          }
+          refused() { # description, pattern
+            echo "$1" >> "$RAN"
+            if out=$(k create --dry-run=server -f - 2>&1); then echo "FAIL: $1: admitted" >&2; echo "$1" >> "$FAILS"
+            elif ! printf '%s' "$out" | grep -q "$2"; then echo "FAIL: $1: refused, but not for that: $out" >&2; echo "$1" >> "$FAILS"; fi
+          }
+          net() { printf '    - {namespace: %s, name: %s, vlan: %s, addresses: ["198.18.9.10-198.18.9.20"], gateway: 198.18.9.1, prefix: 24}\n' "$@"; }
+
+          { printf '  bridge: vmbr79\n  uplinkVLAN: 70\n  uplinkBridges: [vmbr0]\n  networks:\n'; net t a 11; net t b 12; } | zone \
+            | admitted "a zone with two networks on two VLANs"
+          { printf '  bridge: vmbr79\n  uplinkVLAN: 70\n  networks:\n'; net t a 70; } | zone \
+            | refused "a network on the zone's uplink VLAN" "must differ from uplinkVLAN"
+          { printf '  bridge: vmbr79\n  networks:\n'; net t a 11; net t b 11; } | zone \
+            | refused "two networks on one VLAN" "vlan must be unique"
+          { printf '  bridge: vmbr79\n  uplinkBridges: [vmbr0, vmbr79]\n'; } | zone \
+            | refused "the zone's bridge among its uplink bridges" "uplinkBridges must not contain bridge"
+          { printf '  bridge: vmbr79\n  networks:\n'; net t a 11; net t a 12; } | zone \
+            | refused "one network listed twice" "[Dd]uplicate"
+          ran=$(wc -l < "$RAN"); failed=$(wc -l < "$FAILS")
+          if [ "$ran" -ne 5 ]; then echo "FAIL: ran $ran of 5 checks" >&2; exit 1; fi
+          if [ "$failed" -ne 0 ]; then echo "$failed of 5 checks failed" >&2; exit 1; fi
+          echo "5 of 5 checks passed"
+        check:
+          ($error == null): true
+
+  - name: render-and-apply
+    try:
+    - apply:
+        file: namespace-b.yaml
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          cd ../../..
+          helm template pxnet-e2e packages/system/proxmox-network \
+            -f hack/e2e-chainsaw/proxmox-network/test-values.yaml \
+            --api-versions proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone \
+            | yq 'select(.kind == "ProxmoxNetworkZone" or .kind == "InClusterIPPool"
+                    or (.kind == "ValidatingAdmissionPolicyBinding" and (.metadata.name | test("^proxmox-network-zone-binding-")))
+                    or .metadata.name == "proxmox-network-raw-networks"
+                    or .metadata.name == "proxmox-network-cluster-pools")' \
+            | yq '(select(.metadata.name == "proxmox-network-cluster-pools") | .metadata.name) = "pxnet-e2e-cluster-pools"
+                  | (select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName == "proxmox-network-cluster-pools") | .spec.policyName) = "pxnet-e2e-cluster-pools"' \
+            | timeout -k 5 60 kubectl apply -f -
+        check:
+          ($error == null): true
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          spec:
+            bridge: vmbr70
+            uplinkVLAN: 70
+            (length(networks)): 2
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: proxmox-network-zone-binding-pxnet-e2e
+          spec:
+            policyName: proxmox-network-zone-binding
+            paramRef:
+              name: pxnet-e2e
+              parameterNotFoundAction: Deny
+            validationActions: [Deny]
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: proxmox-network-raw-networks
+          spec:
+            validationActions: [Deny]
+    cleanup:
+    - script:
+        timeout: 3m
+        content: |
+          set -u
+          cd ../../..
+          timeout -k 5 60 kubectl delete --ignore-not-found --wait=false \
+            validatingadmissionpolicybinding/proxmox-network-zone-binding-pxnet-e2e \
+            validatingadmissionpolicybinding/proxmox-network-zone-binding-pxnet-e2e-second \
+            validatingadmissionpolicybinding/proxmox-network-raw-networks \
+            validatingadmissionpolicybinding/pxnet-e2e-cluster-pools \
+            validatingadmissionpolicy/proxmox-network-raw-networks \
+            validatingadmissionpolicy/pxnet-e2e-cluster-pools \
+            proxmoxnetworkzone/pxnet-e2e proxmoxnetworkzone/pxnet-e2e-second
+          timeout -k 5 60 kubectl delete --ignore-not-found --wait=false ipaddressclaims.ipam.cluster.x-k8s.io -A -l e2e.cozystack.io/proxmox-network=claim
+          timeout -k 5 120 kubectl delete --ignore-not-found inclusterippools.ipam.cluster.x-k8s.io -A -l app.kubernetes.io/managed-by=proxmox-network
+        check:
+          ($error == null): true
+
+  - name: pools
+    try:
+    # One pool per network, in the namespace that owns it, with the table's
+    # addresses and gateway. The IPAM provider counts the pool's addresses.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-workers
+            namespace: tenant-e2epxa
+            labels:
+              proxmox.cozystack.io/zone: pxnet-e2e
+          spec:
+            addresses: ["198.18.1.10-198.18.1.250"]
+            gateway: 198.18.1.1
+            prefix: 24
+          status:
+            ipAddresses:
+              total: 241
+              used: 0
+    - assert:
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-workers
+            namespace: tenant-e2epxb
+          spec:
+            gateway: 198.18.2.1
+    - assert:
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-storage
+            namespace: tenant-e2epxa
+            labels:
+              proxmox.cozystack.io/zone: pxnet-e2e-second
+
+  - name: admission
+    try:
+    # Server-side dry runs: nothing is created except one machine template for
+    # the UPDATE cases, deleted at the end. A refusal counts only when it names
+    # the policy, and each refusal sits next to an admitted request of the same
+    # shape, so a manifest the apiserver refuses for its own reasons fails the
+    # step instead of passing it.
+    - script:
+        timeout: 8m
+        content: |
+          set -u
+          # See crd-validation: failures and executed checks go to files,
+          # because admitted/refused run in a pipeline's subshell.
+          FAILS=$(mktemp) RAN=$(mktemp)
+          k() { timeout -k 5 30 kubectl "$@"; }
+          A=tenant-e2epxa B=tenant-e2epxb
+          Z=proxmox-network-zone-binding R=proxmox-network-raw-networks C=pxnet-e2e-cluster-pools
+
+          nic() { # bridge [vlan] [pool]
+            printf '        bridge: %s\n        model: virtio\n' "$1"
+            [ -z "${2:-}" ] || printf '        vlan: %s\n' "$2"
+            [ -z "${3:-}" ] || printf '        ipv4PoolRef: {apiGroup: ipam.cluster.x-k8s.io, kind: InClusterIPPool, name: %s}\n' "$3"
+          }
+          # capmox's CRD refuses a ProxmoxMachine with neither a templateSelector
+          # nor sourceNode+templateID before any admission policy runs, so every
+          # probe carries a selector; nothing is cloned in a dry run.
+          machine() { # namespace, then nic blocks on stdin (default first, more as additionalDevices)
+            printf 'apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: ProxmoxMachine\nmetadata:\n  name: pxnet-e2e-probe\n  namespace: %s\nspec:\n  templateSelector:\n    matchTags: [pxnet-e2e-probe]\n  network:\n    default:\n' "$1"; cat
+          }
+          bare() { # namespace: a machine with no network at all
+            printf 'apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: ProxmoxMachine\nmetadata:\n  name: pxnet-e2e-probe\n  namespace: %s\nspec:\n  templateSelector:\n    matchTags: [pxnet-e2e-probe]\n  numCores: 1\n' "$1"
+          }
+          cluster() { # namespace, addresses (yaml list)
+            printf 'apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: ProxmoxCluster\nmetadata:\n  name: pxnet-e2e-probe\n  namespace: %s\nspec:\n  externalManagedControlPlane: true\n  dnsServers: [198.18.0.53]\n  ipv4Config:\n    addresses: %s\n    gateway: 198.18.1.1\n    prefix: 24\n' "$1" "$2"
+          }
+          admitted() {
+            echo "$1" >> "$RAN"
+            if ! out=$(k create --dry-run=server -f - 2>&1); then echo "FAIL: $1: refused: $out" >&2; echo "$1" >> "$FAILS"; fi
+          }
+          refused() { # description, policy
+            echo "$1" >> "$RAN"
+            if out=$(k create --dry-run=server -f - 2>&1); then echo "FAIL: $1: admitted" >&2; echo "$1" >> "$FAILS"
+            elif ! printf '%s' "$out" | grep -q "$2"; then echo "FAIL: $1: refused, but not by $2: $out" >&2; echo "$1" >> "$FAILS"; fi
+          }
+
+          # The zone's bridge: only the namespace's own triple.
+          nic vmbr70 201 pxnet-workers | machine $A | admitted "A's worker on A's network"
+          nic vmbr70 202 pxnet-workers | machine $B | admitted "B's worker on B's network"
+          nic vmbr70 202 pxnet-workers | machine $A | refused  "A's worker on B's VLAN" $Z
+          nic vmbr70 201 pxnet-workers | machine $B | refused  "B's worker on A's VLAN and pool" $Z
+          nic vmbr70 201               | machine $A | refused  "A's worker on its VLAN without the platform pool" $Z
+          nic vmbr70                   | machine $A | refused  "a worker untagged on the zone bridge" $Z
+          bare $A                                   | refused  "a machine in an owning namespace without network.default" $Z
+          # Two zones compose: each binding judges its own bridge.
+          { nic vmbr70 201 pxnet-workers; printf '    additionalDevices:\n    - name: net1\n'; nic vmbr71 301 pxnet-storage | sed 's/^      /    /'; } \
+            | machine $A | admitted "A's worker on both of its networks"
+          { nic vmbr70 201 pxnet-workers; printf '    additionalDevices:\n    - name: net1\n'; nic vmbr71 202 pxnet-workers | sed 's/^      /    /'; } \
+            | machine $A | refused "A's worker with a second NIC on B's VLAN in the other zone" $Z
+          # The uplink VLAN and the uplink bridges, from the zone object.
+          nic vmbr1 70                 | machine $A | refused  "a NIC on another bridge tagged with the uplink VLAN" $Z
+          nic vmbr0                    | machine $A | refused  "a NIC on an uplink bridge" $Z
+          # The raw path is refused with rawNetworks: Deny, outside the zone bridges too.
+          nic vmbr1 5                  | machine $A | refused  "a raw bridge/vlan NIC" $R
+          nic vmbr1 5                  | machine tenant-test | refused "a raw NIC in a namespace with no network" $R
+          # The ProxmoxCluster's own pool may hold only the namespace's gateways.
+          cluster $A '["198.18.1.1"]'               | admitted "A's cluster sentinel on its workers gateway"
+          cluster $A '["198.18.3.1"]'               | admitted "A's cluster sentinel on its storage gateway"
+          cluster $A '["198.18.1.10-198.18.1.20"]'  | refused  "A's cluster with a range of its own" $C
+          cluster $B '["198.18.1.1"]'               | refused  "B's cluster on A's gateway" $C
+          cluster tenant-test '["10.0.0.1"]'        | admitted "a cluster in a namespace with no network keeps its own range"
+
+          # UPDATE: the network of an existing template may not move; other
+          # fields may change.
+          tmpl=$(mktemp)
+          { printf 'apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1\nkind: ProxmoxMachineTemplate\nmetadata:\n  name: pxnet-e2e-tmpl\n  namespace: %s\nspec:\n  template:\n    spec:\n      numCores: 1\n      network:\n        default:\n' "$A"; nic vmbr70 201 pxnet-workers | sed 's/^/  /'; } > "$tmpl"
+          echo "template create" >> "$RAN"
+          if ! out=$(k apply -f "$tmpl" 2>&1); then echo "FAIL: creating the template: $out" >&2; echo create >> "$FAILS"; fi
+          echo "template update outside the network" >> "$RAN"
+          if ! out=$(k -n $A patch proxmoxmachinetemplate pxnet-e2e-tmpl --type merge -p '{"spec":{"template":{"spec":{"numCores":2}}}}' 2>&1); then
+            echo "FAIL: a change outside the network: refused: $out" >&2; echo outside >> "$FAILS"; fi
+          echo "template moved to another VLAN" >> "$RAN"
+          if out=$(k -n $A patch proxmoxmachinetemplate pxnet-e2e-tmpl --type merge -p '{"spec":{"template":{"spec":{"network":{"default":{"bridge":"vmbr70","model":"virtio","vlan":202,"ipv4PoolRef":{"apiGroup":"ipam.cluster.x-k8s.io","kind":"InClusterIPPool","name":"pxnet-workers"}}}}}}}' 2>&1); then
+            echo "FAIL: moving the template to B's VLAN: admitted" >&2; echo move >> "$FAILS"
+          elif ! printf '%s' "$out" | grep -q "$Z"; then echo "FAIL: moving the template: refused, but not by $Z: $out" >&2; echo move >> "$FAILS"; fi
+          k -n $A delete proxmoxmachinetemplate pxnet-e2e-tmpl --ignore-not-found >/dev/null 2>&1 || true
+          rm -f "$tmpl"
+
+          # A binding whose zone is gone denies, it does not open up.
+          printf 'apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: pxnet-e2e-ghost\nspec:\n  policyName: %s\n  paramRef:\n    name: pxnet-e2e-no-such-zone\n    parameterNotFoundAction: Deny\n  validationActions: [Deny]\n' $Z | k apply -f - >/dev/null
+          sleep 5
+          nic vmbr70 201 pxnet-workers | machine $A | refused "A's worker while a binding points at a missing zone" "pxnet-e2e-ghost"
+          k delete validatingadmissionpolicybinding pxnet-e2e-ghost --ignore-not-found >/dev/null
+          ran=$(wc -l < "$RAN"); failed=$(wc -l < "$FAILS")
+          if [ "$ran" -ne 22 ]; then echo "FAIL: ran $ran of 22 checks" >&2; exit 1; fi
+          if [ "$failed" -ne 0 ]; then echo "$failed of 22 checks failed" >&2; exit 1; fi
+          echo "22 of 22 checks passed"
+        check:
+          ($error == null): true
+    cleanup:
+    - script:
+        timeout: 1m
+        content: |
+          timeout -k 5 30 kubectl delete validatingadmissionpolicybinding pxnet-e2e-ghost --ignore-not-found
+          timeout -k 5 30 kubectl -n tenant-e2epxa delete proxmoxmachinetemplate pxnet-e2e-tmpl --ignore-not-found
+          exit 0
+
+  - name: pool-held-while-in-use
+    try:
+    # An address claim stands in for a VM: the IPAM provider's webhook refuses
+    # to delete a pool with an address handed out, so a network whose VMs are
+    # still running cannot lose its pool by an edit of the zone table.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          timeout -k 5 30 kubectl apply -f - <<EOF
+          apiVersion: ipam.cluster.x-k8s.io/v1beta1
+          kind: IPAddressClaim
+          metadata:
+            name: pxnet-e2e-hold
+            namespace: tenant-e2epxa
+            labels:
+              e2e.cozystack.io/proxmox-network: claim
+          spec:
+            poolRef:
+              apiGroup: ipam.cluster.x-k8s.io
+              kind: InClusterIPPool
+              name: pxnet-workers
+          EOF
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-workers
+            namespace: tenant-e2epxa
+          status:
+            ipAddresses:
+              used: 1
+    - script:
+        timeout: 2m
+        content: |
+          set -u
+          k() { timeout -k 5 30 kubectl "$@"; }
+          if out=$(k -n tenant-e2epxa delete inclusterippool pxnet-workers 2>&1); then
+            echo "FAIL: the pool was deleted while an address was in use: $out" >&2; exit 1
+          fi
+          printf '%s' "$out" | grep -qi 'webhook\|in use\|allocated' || { echo "FAIL: refused, but not by the IPAM webhook: $out" >&2; exit 1; }
+          k -n tenant-e2epxa delete ipaddressclaim pxnet-e2e-hold
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-workers
+            namespace: tenant-e2epxa
+          status:
+            ipAddresses:
+              used: 0
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          timeout -k 5 60 kubectl -n tenant-e2epxa delete inclusterippool pxnet-workers
+        check:
+          ($error == null): true
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            name: pxnet-workers
+            namespace: tenant-e2epxa

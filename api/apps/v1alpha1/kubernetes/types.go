@@ -300,9 +300,12 @@ type Proxmox struct {
 	// Skip verification of the Proxmox API server certificate in the CCM and the CSI controller, both of which run in the management cluster. Default false: the certificate is verified unless an operator turns that off. A stock Proxmox VE install serves a self-signed one, so set true for it, or install a certificate the management cluster trusts.
 	// +kubebuilder:default:=false
 	Insecure bool `json:"insecure,omitempty"`
-	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.
+	// Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required unless `network.name` is set, which brings the network's own pool.
 	// +kubebuilder:default:={}
 	Ipv4Config ProxmoxIPv4 `json:"ipv4Config"`
+	// Place the cluster on a Proxmox tenant network of this namespace instead of an address pool of your own.
+	// +kubebuilder:default:={}
+	Network ProxmoxClusterNetwork `json:"network,omitempty"`
 }
 
 type ProxmoxCCM struct {
@@ -321,6 +324,12 @@ type ProxmoxCSI struct {
 	// StorageClasses to create in the tenant.
 	// +kubebuilder:default:={}
 	StorageClasses []ProxmoxStorageClass `json:"storageClasses,omitempty"`
+}
+
+type ProxmoxClusterNetwork struct {
+	// Name of the network as the platform operator listed it for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). Set it instead of `ipv4Config`: the workers of every node pool that names the same network take their addresses from the network's own IP pool, and the ProxmoxCluster's `ipv4Config` becomes a sentinel holding only the network's gateway, which capmox cannot hand out. Keep the same name on every `KubernetesNodes` pool of this cluster that should share the network. Empty keeps the `ipv4Config` path.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
 }
 
 type ProxmoxIPv4 struct {

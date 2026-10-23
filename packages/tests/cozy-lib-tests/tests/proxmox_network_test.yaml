@@ -1,0 +1,183 @@
+suite: cozy-lib.proxmox.network resolves a tenant network from the zone table
+templates:
+  - templates/tests/proxmox-network.yaml
+release:
+  name: test
+  namespace: tenant-a
+set:
+  network: workers
+# helm-unittest's fake cluster cannot deep-copy plain ints, so the numbers in
+# the fixtures are strings; the helper converts with int64, and a real lookup
+# returns int64.
+kubernetesProvider:
+  scheme: &scheme
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworkzones"
+      namespaced: false
+    "ipam.cluster.x-k8s.io/v1alpha2/InClusterIPPool":
+      gvr:
+        group: "ipam.cluster.x-k8s.io"
+        version: "v1alpha2"
+        resource: "inclusterippools"
+      namespaced: true
+# The fixtures live on the tests, not on the suite: helm-unittest merges the
+# two, and a test that needs a different zone table would then register the
+# same zone twice.
+tests:
+  - it: returns the network's bridge, VLAN, address plan and pool, with the zone's MTU
+    kubernetesProvider:
+      scheme: *scheme
+      objects: &objects
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: default}
+          spec:
+            bridge: vmbr70
+            mtu: "1500"
+            networks:
+              - {namespace: tenant-a, name: workers, vlan: "201", addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+              - {namespace: tenant-b, name: workers, vlan: "202", addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: "24", mtu: "1400"}
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: second}
+          spec:
+            bridge: vmbr71
+            networks:
+              - {namespace: tenant-a, name: storage, vlan: "301", addresses: ["198.18.3.0/24"], gateway: 198.18.3.1, prefix: "24"}
+        - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata: {name: pxnet-workers, namespace: tenant-a}
+          spec: {addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: "24"}
+        - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata: {name: pxnet-workers, namespace: tenant-b}
+          spec: {addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: "24"}
+    asserts:
+      - equal:
+          path: data
+          value:
+            zone: default
+            bridge: vmbr70
+            vlan: 201
+            mtu: 1500
+            gateway: "198.18.1.1"
+            prefix: 24
+            pool: pxnet-workers
+
+  - it: takes the network's own MTU over the zone's
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *objects
+    release:
+      namespace: tenant-b
+    asserts:
+      - equal:
+          path: data.mtu
+          value: 1400
+      - equal:
+          path: data.vlan
+          value: 202
+
+  - it: reports no MTU when neither the zone nor the network sets one
+    set:
+      network: storage
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: second}
+          spec:
+            bridge: vmbr71
+            networks:
+              - {namespace: tenant-a, name: storage, vlan: "301", addresses: ["198.18.3.0/24"], gateway: 198.18.3.1, prefix: "24"}
+        - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata: {name: pxnet-storage, namespace: tenant-a}
+          spec: {addresses: ["198.18.3.0/24"], gateway: 198.18.3.1, prefix: "24"}
+    asserts:
+      - equal:
+          path: data.mtu
+          value: 0
+      - equal:
+          path: data.zone
+          value: second
+
+  - it: never resolves another namespace's network of the same name
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *objects
+    release:
+      namespace: tenant-c
+    asserts:
+      - failedTemplate:
+          errorPattern: 'proxmox.network: no Proxmox tenant network "workers" for namespace tenant-c: ask the platform operator'
+
+  - it: refuses an unset name
+    kubernetesProvider:
+      scheme: *scheme
+      objects: *objects
+    set:
+      network: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "proxmox.network.name: set the name of a Proxmox tenant network of this namespace"
+
+  - it: refuses a network listed in two zones
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: default}
+          spec:
+            bridge: vmbr70
+            networks:
+              - {namespace: tenant-a, name: workers, vlan: "201", addresses: [a], gateway: 198.18.1.1, prefix: "24"}
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: second}
+          spec:
+            bridge: vmbr71
+            networks:
+              - {namespace: tenant-a, name: workers, vlan: "301", addresses: [a], gateway: 198.18.3.1, prefix: "24"}
+        - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata: {name: pxnet-workers, namespace: tenant-a}
+          spec: {addresses: [a], gateway: 198.18.1.1, prefix: "24"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "Proxmox tenant network tenant-a/workers is listed in more than one zone \\(default, second\\)"
+
+  - it: waits for the pool before it hands out the network
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: default}
+          spec:
+            bridge: vmbr70
+            networks:
+              - {namespace: tenant-a, name: workers, vlan: "201", addresses: [a], gateway: 198.18.1.1, prefix: "24"}
+        - apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the IP pool tenant-a/pxnet-workers of Proxmox tenant network "workers" is not rendered yet'
+
+  - it: fails with the same message when no zone lists the namespace
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata: {name: default}
+          spec: {bridge: vmbr70}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'no Proxmox tenant network "workers" for namespace tenant-a'

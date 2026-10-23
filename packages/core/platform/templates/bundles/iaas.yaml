@@ -251,11 +251,26 @@
 {{- if and $proxmoxEnabled (has $ipamName $pkgDisabled) -}}
 {{- fail (printf "%s requires %s, which is listed in bundles.disabledPackages: capmox allocates worker addresses from an InClusterIPPool and has no DHCP mode, so without the IPAM provider no ProxmoxCluster ever becomes Ready" $proxmoxName $ipamName) -}}
 {{- end -}}
-{{- if or $proxmoxEnabled (has $ipamName $pkgEnabled) }}
+{{- /*
+  cozystack.proxmox-network gives the platform the bridge, the VLAN and the IP
+  pool of every Proxmox tenant network. It is opt-in for the same reason capmox
+  is, and needs a VLAN-aware bridge and a router prepared on the hypervisor
+  side before it is useful (packages/system/proxmox-network/README.md). Its
+  pools are InClusterIPPools, so it brings the IPAM provider along as well.
+*/ -}}
+{{- $pxNetName := "cozystack.proxmox-network" -}}
+{{- $pxNetEnabled := and (has $pxNetName $pkgEnabled) (not (has $pxNetName $pkgDisabled)) -}}
+{{- if and $pxNetEnabled (has $ipamName $pkgDisabled) -}}
+{{- fail (printf "%s requires %s, which is listed in bundles.disabledPackages: every Proxmox tenant network's addresses live in an InClusterIPPool" $pxNetName $ipamName) -}}
+{{- end -}}
+{{- if or $proxmoxEnabled $pxNetEnabled (has $ipamName $pkgEnabled) }}
 {{include "cozystack.platform.package.default" (list $ipamName $) }}
 {{- end }}
 {{- if $proxmoxEnabled }}
 {{include "cozystack.platform.package.default" (list $proxmoxName $) }}
+{{- end }}
+{{- if $pxNetEnabled }}
+{{include "cozystack.platform.package.default" (list $pxNetName $) }}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}

@@ -1,0 +1,29 @@
+suite: kube-state-metrics exports Cluster API IPAM pools
+# The proxmox-network package has no controller; its one alert reads the
+# status of the InClusterIPPools it renders through the custom resource state
+# below, and kube-state-metrics needs the RBAC to list them.
+templates:
+  - charts/kube-state-metrics/templates/crs-configmap.yaml
+  - charts/kube-state-metrics/templates/role.yaml
+tests:
+  - it: exports total, used and free addresses of every InClusterIPPool
+    template: charts/kube-state-metrics/templates/crs-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'kind: InClusterIPPool'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'metricNamePrefix: capi_ipam_inclusterippool'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'name: addresses_used'
+  - it: lets kube-state-metrics list the pools
+    template: charts/kube-state-metrics/templates/role.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [ ipam.cluster.x-k8s.io ]
+            resources: [ inclusterippools ]
+            verbs: [ list, watch ]

@@ -54,8 +54,17 @@
 {{-   if not $.Values.proxmox.templateTags }}
 {{-     fail "substrate proxmox requires proxmox.templateTags: capmox clones a VM template and has no image URL to fall back on" }}
 {{-   end }}
-{{-   if not $.Values.proxmox.network.bridge }}
-{{-     fail "substrate proxmox requires proxmox.network.bridge" }}
+{{-   $pxnet := $.Values.proxmox.network }}
+{{-   if $pxnet.name }}
+{{- /* A tenant network carries its own bridge and VLAN, from the platform's
+         zone table. A raw value next to it would either be ignored or override
+         the platform's choice, and the second is exactly how a tenant would
+         reach a VLAN that is not theirs. Refuse the mix. */}}
+{{-     if or $pxnet.bridge $pxnet.vlan }}
+{{-       fail "proxmox.network: set either name or bridge/vlan, not both; a Proxmox tenant network's bridge and VLAN come from the platform" }}
+{{-     end }}
+{{-   else if not $pxnet.bridge }}
+{{-     fail "substrate proxmox requires proxmox.network.bridge, or proxmox.network.name" }}
 {{-   end }}
 {{-   if not $.Values.proxmox.dnsServers }}
 {{-     fail "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS" }}
@@ -170,15 +179,37 @@ spec:
   {{- with .group.proxmox.pool }}
   pool: {{ . | quote }}
   {{- end }}
+  {{- $net := .group.proxmox.network }}
   network:
     default:
-      bridge: {{ .group.proxmox.network.bridge | quote }}
+      {{- if $net.name }}
+      {{- /* bridge, VLAN and pool come from the network's entry in the
+            platform's zone table, read in this namespace only. capmox claims
+            every worker's address from that pool, the only allocator for the
+            network's range; the ProxmoxCluster's own ipv4Config is a sentinel
+            with nothing to allocate (see the kubernetes chart). The
+            proxmox-network admission policy refuses any other triple on the
+            zone's bridge. */}}
+      {{- $px := include "cozy-lib.proxmox.network" (dict "namespace" $.Release.Namespace "name" $net.name "field" "proxmox.network") | fromYaml }}
+      bridge: {{ $px.bridge | quote }}
       model: virtio
-      {{- with .group.proxmox.network.vlan }}
+      vlan: {{ $px.vlan }}
+      {{- with ($net.mtu | default $px.mtu) }}
+      mtu: {{ . }}
+      {{- end }}
+      ipv4PoolRef:
+        apiGroup: ipam.cluster.x-k8s.io
+        kind: InClusterIPPool
+        name: {{ $px.pool }}
+      {{- else }}
+      bridge: {{ $net.bridge | quote }}
+      model: virtio
+      {{- with $net.vlan }}
       vlan: {{ . }}
       {{- end }}
-      {{- with .group.proxmox.network.mtu }}
+      {{- with $net.mtu }}
       mtu: {{ . }}
+      {{- end }}
       {{- end }}
 {{- end }}
 {{- define "kubevirtmachinetemplate" -}}

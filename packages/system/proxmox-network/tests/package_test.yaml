@@ -1,0 +1,381 @@
+suite: proxmox-network package
+release:
+  name: proxmox-network
+  namespace: cozy-proxmox-network
+set:
+  zones:
+    - name: default
+      bridge: vmbr70
+      mtu: 1500
+      uplinkVLAN: 70
+      uplinkBridges: [vmbr0]
+      networks:
+        - {namespace: tenant-a, name: workers, vlan: 201, addresses: ["198.18.1.10-198.18.1.250"], gateway: 198.18.1.1, prefix: 24}
+        - {namespace: tenant-b, name: workers, vlan: 202, addresses: ["198.18.2.10-198.18.2.250"], gateway: 198.18.2.1, prefix: 24, mtu: 1400}
+    - name: second
+      bridge: vmbr71
+      networks:
+        - {namespace: tenant-a, name: storage, vlan: 301, addresses: ["198.18.3.0/24"], gateway: 198.18.3.1, prefix: 24}
+tests:
+  - it: renders one IP pool per network in the namespace that owns it
+    templates:
+      - templates/pools.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: apiVersion
+          value: ipam.cluster.x-k8s.io/v1alpha2
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: pxnet-workers
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: tenant-a
+        documentIndex: 0
+      - equal:
+          path: spec
+          value:
+            addresses: ["198.18.1.10-198.18.1.250"]
+            prefix: 24
+            gateway: "198.18.1.1"
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: tenant-b
+        documentIndex: 1
+      - equal:
+          path: metadata.labels["proxmox.cozystack.io/zone"]
+          value: second
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: pxnet-storage
+        documentIndex: 2
+
+  - it: holds the zones back until the CRD is known, so the first install does not fail
+    templates:
+      - templates/zones.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the zone table once the CRD is known
+    templates:
+      - templates/zones.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec
+          value:
+            bridge: vmbr70
+            mtu: 1500
+            uplinkVLAN: 70
+            uplinkBridges: [vmbr0]
+            networks:
+              - {namespace: tenant-a, name: workers, vlan: 201, addresses: ["198.18.1.10-198.18.1.250"], gateway: "198.18.1.1", prefix: 24}
+              - {namespace: tenant-b, name: workers, vlan: 202, addresses: ["198.18.2.10-198.18.2.250"], gateway: "198.18.2.1", prefix: 24, mtu: 1400}
+        documentIndex: 0
+      - notExists:
+          path: spec.uplinkVLAN
+        documentIndex: 1
+      - notExists:
+          path: spec.mtu
+        documentIndex: 1
+
+  - it: refuses two zones on one bridge
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70}
+        - {name: b, bridge: vmbr70}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\] and zones\\[b\\] share bridge vmbr70"
+
+  - it: refuses a network listed in two zones
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, networks: [{namespace: t, name: n, vlan: 1, addresses: [x], gateway: g, prefix: 24}]}
+        - {name: b, bridge: vmbr71, networks: [{namespace: t, name: n, vlan: 2, addresses: [x], gateway: g, prefix: 24}]}
+    asserts:
+      - failedTemplate:
+          errorPattern: "network t/n is listed twice \\(zones a and b\\)"
+
+  - it: refuses a network on the zone's uplink VLAN
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, uplinkVLAN: 70, networks: [{namespace: t, name: n, vlan: 70, addresses: [x], gateway: g, prefix: 24}]}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\].networks\\[t/n\\].vlan 70 is the zone's uplink VLAN"
+
+  - it: refuses a network without a gateway
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, networks: [{namespace: t, name: n, vlan: 7, addresses: [x], prefix: 24}]}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\].networks\\[t/n\\].gateway is required"
+
+  - it: refuses a zone bridge among its own uplink bridges
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, uplinkBridges: [vmbr0, vmbr70]}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\].uplinkBridges lists vmbr70, which is the zone's own bridge"
+
+  - it: refuses uplink bridges that are not a list
+    templates:
+      - templates/zones.yaml
+    set:
+      zones:
+        - {name: a, bridge: vmbr70, uplinkBridges: vmbr0}
+    asserts:
+      - failedTemplate:
+          errorPattern: "zones\\[a\\].uplinkBridges must be a list of bridge names"
+
+  - it: binds the zone policy once per zone, with the zone as its parameter, and denies without it
+    templates:
+      - templates/admission.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    set:
+      admission.validationActions: [Warn, Audit]
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+        documentIndex: 0
+      - equal:
+          path: spec.paramKind
+          value:
+            apiVersion: proxmox.cozystack.io/v1alpha1
+            kind: ProxmoxNetworkZone
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: proxmox-network-zone-binding-default
+        documentIndex: 1
+      - equal:
+          path: spec.paramRef
+          value:
+            name: default
+            parameterNotFoundAction: Deny
+        documentIndex: 1
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 1
+      - equal:
+          path: spec.paramRef.name
+          value: second
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: proxmox-network-cluster-pools
+        documentIndex: 3
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 4
+
+  - it: judges every namespace and only the zone's own bridge in the zone policy, on CREATE and UPDATE
+    templates:
+      - templates/admission.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    asserts:
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].operations
+          value: [CREATE, UPDATE]
+        documentIndex: 0
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxmachines, proxmoxmachinetemplates, proxmoxclusters]
+        documentIndex: 0
+      - equal:
+          path: spec.matchConditions
+          value:
+            - name: not-being-deleted
+              expression: "!has(object.metadata.deletionTimestamp)"
+        documentIndex: 0
+      - contains:
+          path: spec.variables
+          content:
+            name: changed
+            expression: "oldObject == null || variables.current != variables.previous"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[1].expression
+          pattern: 'variables\.nics\.all\(n, n\.bridge != params\.spec\.bridge \|\|'
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[1].expression
+          pattern: "in variables\\.allowed"
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[2].expression
+          pattern: 'n\.bridge == params\.spec\.bridge \|\| !has\(n\.vlan\) \|\| n\.vlan != params\.spec\.uplinkVLAN'
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[3].expression
+          pattern: 'variables\.nics\.all\(n, !\(n\.bridge in params\.spec\.uplinkBridges\)\)'
+        documentIndex: 0
+
+  - it: keeps the zone policy and its bindings back until the CRD is known
+    templates:
+      - templates/admission.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: proxmox-network-cluster-pools
+        documentIndex: 0
+
+  - it: lets a ProxmoxCluster in an owning namespace list only its networks' gateways
+    templates:
+      - templates/admission.yaml
+    asserts:
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
+        documentIndex: 0
+      - contains:
+          path: spec.variables
+          content:
+            name: gateways
+            expression: '{"tenant-a":["198.18.1.1","198.18.3.1"],"tenant-b":["198.18.2.1"]}'
+        documentIndex: 0
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables\.spec\.ipv4Config\.addresses\.all\(a, a in variables\.gateways\[request\.namespace\]\)'
+        documentIndex: 0
+
+  - it: leaves the raw bridge/vlan path alone by default
+    templates:
+      - templates/admission.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notEqual:
+          path: metadata.name
+          value: proxmox-network-raw-networks
+        documentIndex: 0
+
+  - it: warns on the raw path with rawNetworks Warn, outside the platform and exempt namespaces
+    templates:
+      - templates/admission.yaml
+    set:
+      admission.rawNetworks: Warn
+      admission.exemptNamespaces: [ops]
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: metadata.name
+          value: proxmox-network-raw-networks
+        documentIndex: 2
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: "!request.namespace.startsWith('cozy-') && !(request.namespace in [\"kube-system\",\"cozy-proxmox-network\",\"ops\"])"
+        documentIndex: 2
+      - contains:
+          path: spec.variables
+          content:
+            name: zoneBridges
+            expression: '["vmbr70","vmbr71"]'
+        documentIndex: 2
+      - equal:
+          path: spec.validationActions
+          value: [Warn, Audit]
+        documentIndex: 3
+
+  - it: refuses the raw path with rawNetworks Deny
+    templates:
+      - templates/admission.yaml
+    set:
+      admission.rawNetworks: Deny
+    asserts:
+      - equal:
+          path: spec.validationActions
+          value: [Deny]
+        documentIndex: 3
+
+  - it: refuses an unknown rawNetworks mode
+    templates:
+      - templates/admission.yaml
+    set:
+      admission.rawNetworks: Maybe
+    asserts:
+      - failedTemplate:
+          errorPattern: 'admission.rawNetworks must be Allow, Warn or Deny, got "Maybe"'
+
+  - it: renders no policy with admission off
+    templates:
+      - templates/admission.yaml
+    capabilities:
+      apiVersions:
+        - proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone
+    set:
+      admission.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: alerts on a platform pool over 90% used, and not at all when switched off
+    templates:
+      - templates/alerts.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: ProxmoxNetworkPoolNearlyFull
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'capi_ipam_inclusterippool_addresses_used\{name=~"pxnet-\.\*"\}'
+
+  - it: renders no alert when switched off
+    templates:
+      - templates/alerts.yaml
+    set:
+      alerts.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gives tenants read access to the pools of their namespace and nothing more
+    templates:
+      - templates/tenant-clusterroles.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-view"]
+          value: "true"
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["ipam.cluster.x-k8s.io"]
+              resources: ["inclusterippools"]
+              verbs: ["get", "list", "watch"]
