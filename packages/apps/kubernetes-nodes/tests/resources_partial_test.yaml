@@ -1,0 +1,121 @@
+suite: worker pool resources are all-or-nothing
+
+# resources.cpu and resources.memory size the worker VM together or not at
+# all. With an instancetype a lone override is refused by KubeVirt; without one
+# cpu alone renders a VM with no memory, which KubeVirt refuses at admission,
+# and memory alone sizes the guest at one vCPU with nothing saying so. The
+# field description promises a render-time error for a partial spec, and this
+# file holds the chart to it on every pool. A pool with neither sizing source
+# is refused too, the way vm-instance refuses it: no such pool ever passed
+# admission, so nothing that runs today is affected.
+
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+tests:
+  - it: refuses cpu without memory on a pool with no instancetype
+    set:
+      resources:
+        cpu: "2"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+
+  - it: refuses memory without cpu on a pool with no instancetype
+    set:
+      resources:
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+
+  # The case the check always caught. Pinned so the two halves cannot drift:
+  # the partial check runs before the instancetype lookup, so no stub is needed.
+  - it: refuses cpu without memory on a pool sized by an instancetype
+    set:
+      instanceType: u1.medium
+      resources:
+        cpu: "2"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+
+  - it: refuses memory without cpu on a pool sized by an instancetype
+    set:
+      instanceType: u1.medium
+      resources:
+        memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set both resources.cpu and resources.memory, or neither'
+
+  - it: refuses a pool with neither an instancetype nor explicit resources
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set instanceType, or both resources.cpu and resources.memory'
+
+  - it: refuses an empty resources block beside an empty instancetype
+    set:
+      resources: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup md0: set instanceType, or both resources.cpu and resources.memory'
+
+  - it: sizes the guest from both fields when both are set
+    set:
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory.guest
+          value: 4Gi
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.instancetype
+
+  # An unquoted value is decoded as float64, which Go prints in exponent form
+  # from one million upward. The CRD field is an integer, so the chart prints
+  # the whole number; every smaller value prints the same bytes as before.
+  - it: prints a float64 core count of a million as an integer
+    set:
+      resources:
+        cpu: 1000000
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 1000000
+
+  - it: prints a whole float64 below a million the way it always did
+    set:
+      resources:
+        cpu: 4.0
+        memory: 4Gi
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 4

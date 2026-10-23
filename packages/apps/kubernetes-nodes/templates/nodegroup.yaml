@@ -567,7 +567,13 @@ spec:
             {{- if and .group.resources .group.resources.cpu }}
             cpu:
               threads: 1
-              cores: {{ .group.resources.cpu }}
+              {{- /* An unquoted value arrives as float64, which Go prints in
+                     exponent form from 1e6 upward (1000000 -> 1e+06), and the
+                     CRD field is an integer. %.0f prints the same bytes as the
+                     default formatting for every whole number below that, so
+                     no existing template name moves; a string is emitted as
+                     written, as it always was. */}}
+              cores: {{ if kindIs "float64" .group.resources.cpu }}{{ printf "%.0f" .group.resources.cpu }}{{ else }}{{ .group.resources.cpu }}{{ end }}
               sockets: 1
             {{- end }}
             devices:
@@ -650,11 +656,26 @@ spec:
        valid, resource-sized group. Explicit resources are all-or-nothing: a
        partial spec (only one of cpu/memory) would emit one domain override
        alongside the instancetype, which KubeVirt rejects, so it fails here with
-       a clear render-time error instead of a late admission rejection. */}}
+       a clear render-time error instead of a late admission rejection. The
+       same rule holds without an instancetype, which is what the field
+       description promises: cpu alone renders a VM with no memory, which
+       KubeVirt refuses when the Machine is created, and memory alone sizes the
+       guest at KubeVirt's default of one vCPU with nothing saying so. The
+       proxmox branch requires both up front, so this is the kubevirt half of
+       one rule. Zero is falsy here as everywhere in this chart (see the
+       resources.cpu check above), so an unquoted zero counts as unset. */}}
 {{- $hasCpu := and $group.resources $group.resources.cpu }}
 {{- $hasMem := and $group.resources $group.resources.memory }}
-{{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
+{{- if or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu)) }}
 {{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
+{{- /* With neither sizing source the VM has no memory at all, and KubeVirt
+       refuses it at admission, long after helm has reported success. No pool
+       could ever have run in this state, so refusing it here costs nothing
+       and names the choice. Proxmox has no instancetype and checks the same
+       thing at the top of this file. */}}
+{{- if and (not $isProxmox) (not $group.instanceType) (not (and $hasCpu $hasMem)) }}
+{{-   fail (printf "nodeGroup %s: set instanceType, or both resources.cpu and resources.memory: with neither the worker VM has no size, and KubeVirt refuses a VirtualMachine that declares no memory" $groupName) }}
 {{- end }}
 {{- /* Presence, not truth, for both fields below: zero is a quantity the
        schema accepts, and a guard keyed on truthiness would wave through
