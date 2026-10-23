@@ -435,7 +435,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, rendered, app)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -815,6 +815,10 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	takenAt := metav1.Now()
 	if cnpgBackup.Status.StartedAt != nil && !cnpgBackup.Status.StartedAt.IsZero() {
 		takenAt = *cnpgBackup.Status.StartedAt
@@ -860,6 +864,9 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 			UnderlyingResources: underlyingResources,
 		},
 	}
+	if probe {
+		backup.Status.Artifact.SizeBytes = r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID)
+	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
@@ -872,8 +879,8 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}
