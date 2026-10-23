@@ -39,7 +39,7 @@ spec:
       kind: HelmRelease
       name: kafka-kafka-meta-src
   - describe:
-      apiVersion: kafka.strimzi.io/v1beta2
+      apiVersion: kafka.strimzi.io/v1
       kind: Kafka
       name: kafka-kafka-meta-src
   - describe:
@@ -72,7 +72,7 @@ spec:
         check:
           ($error == null): true
     # 40m budget: two single-broker Strimzi clusters (source + to-copy target,
-    # each boots ZooKeeper then the broker and passes readiness), the metadata
+    # each boots its controller and broker and passes readiness), the metadata
     # backup, and the in-place + to-copy restores with their verifications.
     # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
     # HelmReleases rather than polling out the budget.
@@ -119,7 +119,7 @@ spec:
     - error:
         timeout: 12m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -127,7 +127,7 @@ spec:
     - error:
         timeout: 12m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:

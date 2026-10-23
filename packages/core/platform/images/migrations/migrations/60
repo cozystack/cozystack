@@ -1,0 +1,473 @@
+#!/bin/sh
+# Migration 60 --> 61
+# Move the Strimzi custom resources to the v1 API before Strimzi 1.x arrives.
+#
+# Strimzi 1.0 removed the v1beta2 API from its CRDs. The kafka-operator
+# release replaces the CRDs on upgrade (upgradeCRDs: CreateReplace), and the
+# API server refuses a CRD whose spec.versions no longer lists a version that
+# status.storedVersions still records. So every stored object has to be
+# rewritten as v1, and storedVersions narrowed to [v1], before the new
+# operator arrives. That needs CRDs serving both versions, which only Strimzi
+# 0.49 to 0.51 ship: the 0.51.0 CRDs are baked into this image (see the
+# Dockerfile). The conversion itself is Strimzi's v1-api-conversion tool, run
+# as a Job from the 0.51.0 operator image: convert-resource rewrites the
+# objects, crd-upgrade switches the storage version and narrows
+# storedVersions.
+#
+# Strimzi 0.46 also removed ZooKeeper. A ZooKeeper-based Kafka that did not
+# reach KRaft on the release carrying the chart's ZooKeeper to KRaft
+# migration cannot be run, converted or migrated by anything after this
+# point, so this migration refuses to proceed while one is left.
+#
+# Strimzi 1.2 runs neither Kafka 3.8 nor 3.9, so every Kafka application on
+# v3.8 or v3.9 is moved to v4.3. Until the new kafka chart arrives, the
+# release renders with the old one, which rejects v4.3, and the HelmRelease
+# reports a values error; no Helm action runs in that window.
+#
+# Ordering: this runs as the platform chart's pre-upgrade hook, before the
+# upgrade re-points cozystack-packages, so on a variant that runs migrations
+# neither the new operator nor the new kafka chart is rendered before it. The
+# default variant renders no migration hook, and there these steps are manual.
+#
+# Re-runnable: every step tolerates having run before.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+STRIMZI_CRD_FILE="${STRIMZI_CRD_FILE:-/strimzi-crds/strimzi-crds-0.51.0.yaml}"
+CONVERSION_IMAGE="${CONVERSION_IMAGE:-quay.io/strimzi/operator:0.51.0@sha256:ef3e406aa09449dd0241d53cdc81e15e58bf59b51f2425fb64384a179d676b1d}"
+CONVERSION_NS="${CONVERSION_NS:-cozy-kafka-operator}"
+CONVERSION_NAME=strimzi-v1-api-conversion
+CONVERSION_TIMEOUT="${CONVERSION_TIMEOUT:-1800}"
+# The run that starts the Job waits up to CONVERSION_TIMEOUT for it. As the
+# platform hook, a run is cut off sooner by the Helm upgrade timeout
+# (cozystack-operator --helmrelease-upgrade-timeout, 10m by default), and the
+# retry, the next pod of the hook Job or a new hook Job once helm-controller
+# retries the upgrade, waits up to CONVERSION_TIMEOUT again for the same Job.
+# The Job is not owned by the hook Job and nothing else bounds it, so the
+# deadline is the only limit: a conversion gets two waits, and a Job whose pod
+# never starts then fails and the next run starts the conversion over.
+CONVERSION_DEADLINE=$((CONVERSION_TIMEOUT * 2))
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
+KAFKA_TARGET_VERSION=v4.3
+
+# The CRDs the conversion tool rewrites. kafkamirrormakers.kafka.strimzi.io
+# is not among them: MirrorMaker 1 left in Strimzi 0.46 and its CRD is left
+# behind untouched.
+STRIMZI_CRDS="kafkas.kafka.strimzi.io kafkanodepools.kafka.strimzi.io
+kafkaconnects.kafka.strimzi.io kafkaconnectors.kafka.strimzi.io
+kafkabridges.kafka.strimzi.io kafkamirrormaker2s.kafka.strimzi.io
+kafkarebalances.kafka.strimzi.io kafkatopics.kafka.strimzi.io
+kafkausers.kafka.strimzi.io strimzipodsets.core.strimzi.io"
+
+# --ignore-not-found separates a cluster without Strimzi (no output, rc 0)
+# from an API error, which aborts under set -e.
+crd=$(kubectl get crd kafkas.kafka.strimzi.io --ignore-not-found -o name)
+if [ -z "$crd" ]; then
+  echo "Strimzi is not installed; nothing to convert"
+  stamp_cozystack_version 61
+  exit 0
+fi
+
+# The running 0.45 operator must not write to the resources from here on.
+# Strimzi supports the conversion only under an operator that knows v1
+# (0.49 or later), and 0.45 rewrites the Kafka status through v1beta2 on every
+# reconcile, because the v1 schema prunes its kafkaMetadataState field. Each
+# such write records a v1beta2 managedFields entry again after the rewrite
+# below. The kafka-operator release brings the operator back at Strimzi 1.2:
+# its chart sets the replica count, so the upgrade restores it. Kafka pods keep
+# running while no operator reconciles them.
+stop_old_operator() {
+  operator=$(kubectl -n "$CONVERSION_NS" get deployment strimzi-cluster-operator --ignore-not-found -o name)
+  if [ -n "$operator" ]; then
+    kubectl -n "$CONVERSION_NS" scale deployment strimzi-cluster-operator --replicas=0
+    kubectl -n "$CONVERSION_NS" wait --for=delete pod -l name=strimzi-cluster-operator --timeout=300s
+  fi
+  # The topic and user operators of each cluster write KafkaTopic and
+  # KafkaUser status through v1beta2 the same way. Only now that the cluster
+  # operator is gone does a scale-down stick; the 1.2 operator scales them
+  # back up when it rolls them onto its own image.
+  kubectl get deployment --all-namespaces -l app.kubernetes.io/name=entity-operator,app.kubernetes.io/managed-by=strimzi-cluster-operator \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' |
+  while read -r ns name; do
+    kubectl -n "$ns" scale deployment "$name" --replicas=0
+  done
+  }
+
+# Called as an if condition, where set -e does not apply: a failed read exits
+# here, or it would pass for an absent CRD.
+stored_v1_only() {
+  for c in $STRIMZI_CRDS; do
+    if ! v=$(kubectl get crd "$c" --ignore-not-found -o jsonpath='{.status.storedVersions}'); then
+      echo "ERROR: reading the stored versions of $c failed" >&2
+      exit 1
+    fi
+    if [ -n "$v" ] && [ "$v" != '["v1"]' ]; then
+      return 1
+    fi
+  done
+  return 0
+  }
+
+# A Job whose pod the API server refused fails on its deadline with no failed
+# pod to count, so its Failed condition is read as well.
+job_failed() {
+  f=$(kubectl -n "$CONVERSION_NS" get job "$CONVERSION_NAME" -o jsonpath='{.status.failed} {.status.conditions[?(@.type=="Failed")].status}')
+  case "$f" in
+    [1-9]*|*True*) return 0 ;;
+  esac
+  return 1
+  }
+
+# wait_for_conversion: 0 once the conversion Job has succeeded; on a failure
+# or a timeout, print its logs and return 1.
+wait_for_conversion() {
+  echo "Waiting for the conversion Job"
+  waited=0
+  pull_reported=
+  while :; do
+    succeeded=$(kubectl -n "$CONVERSION_NS" get job "$CONVERSION_NAME" -o jsonpath='{.status.succeeded}')
+    # A pod that cannot pull its image leaves no logs to print, and its Job
+    # fails only at the deadline.
+    if [ -z "$pull_reported" ]; then
+      waiting=$(kubectl -n "$CONVERSION_NS" get pod -l "batch.kubernetes.io/job-name=$CONVERSION_NAME" \
+        -o jsonpath='{.items[*].status.initContainerStatuses[*].state.waiting.reason} {.items[*].status.containerStatuses[*].state.waiting.reason}' || true)
+      case "$waiting" in
+        *ErrImagePull*|*ImagePullBackOff*)
+          echo "ERROR: the conversion pod cannot pull $CONVERSION_IMAGE. A cluster that cannot reach quay.io needs that image mirrored under the same name and digest, for example through a registry mirror for quay.io in the container runtime of the nodes. The Job fails ${CONVERSION_DEADLINE}s after it started, and the next run of the migration starts it again." >&2
+          pull_reported=1
+          ;;
+      esac
+    fi
+    if [ "${succeeded:-0}" -ge 1 ]; then
+      kubectl -n "$CONVERSION_NS" logs "job/$CONVERSION_NAME" --all-containers --prefix || true
+      return 0
+    fi
+    if job_failed || [ "$waited" -ge "$CONVERSION_TIMEOUT" ]; then
+      echo "ERROR: the Strimzi v1 API conversion Job did not succeed; its logs:" >&2
+      kubectl -n "$CONVERSION_NS" logs "job/$CONVERSION_NAME" --all-containers --prefix >&2 || true
+      return 1
+    fi
+    sleep "$POLL_INTERVAL"
+    waited=$((waited + POLL_INTERVAL))
+  done
+  }
+
+# The Job's ClusterRole can patch CRDs and write ConfigMaps everywhere, so
+# none of it outlives the conversion, whichever path reaches here.
+remove_conversion_job() {
+  kubectl -n "$CONVERSION_NS" delete job "$CONVERSION_NAME" --ignore-not-found --wait=true
+  kubectl delete clusterrolebinding "$CONVERSION_NAME" --ignore-not-found
+  kubectl delete clusterrole "$CONVERSION_NAME" --ignore-not-found
+  kubectl -n "$CONVERSION_NS" delete serviceaccount "$CONVERSION_NAME" --ignore-not-found
+  }
+
+# The platform hook can time out while the Job converts, and the retry kills
+# the hook at whatever point it reached. A Job still running then has to
+# finish before anything here touches the CRDs, or the CRD apply below would
+# switch the storage version back under it. Its outcome is read from the CRDs
+# afterwards, not from the Job.
+job_state=$(kubectl -n "$CONVERSION_NS" get job "$CONVERSION_NAME" --ignore-not-found -o jsonpath='{.metadata.name} {.status.succeeded}{.status.failed}{.status.conditions[?(@.type=="Failed")].status}')
+case "$job_state" in
+  "$CONVERSION_NAME ")
+    echo "A conversion Job from an earlier attempt is still running"
+    # backoffLimit is 0, so a Job reporting no failure has not finished.
+    if ! wait_for_conversion; then
+      if ! job_failed; then
+        echo "ERROR: the conversion Job of an earlier attempt is still running; retry once it finishes" >&2
+        exit 1
+      fi
+    fi
+    ;;
+esac
+# A Job failed on its deadline can still have a pod terminating, and
+# convert-resource writes until it is gone. A foreground deletion returns
+# only once the Job's pods are.
+if [ -n "$job_state" ]; then
+  kubectl -n "$CONVERSION_NS" delete job "$CONVERSION_NAME" --ignore-not-found --cascade=foreground --wait=true
+fi
+
+if stored_v1_only; then
+  echo "Every Strimzi CRD already stores only v1; skipping the conversion"
+  # The 0.45 operator can only still be running while the CRDs serve
+  # v1beta2. Once they serve v1 alone the operator is 1.x, and a run by hand
+  # must not stop it: no Helm upgrade would bring it back.
+  served=$(kubectl get crd kafkas.kafka.strimzi.io -o jsonpath='{.spec.versions[*].name}')
+  case " $served " in
+    *" v1beta2 "*) stop_old_operator ;;
+  esac
+  remove_conversion_job
+else
+  # A Kafka that is not KRaft yet still has its ZooKeeper section, or reports a
+  # metadata state other than KRaft while the ZooKeeper to KRaft migration
+  # runs. Read through v1beta2, which every Strimzi this can meet serves.
+  zk=$(kubectl get kafkas.v1beta2.kafka.strimzi.io --all-namespaces -o json | jq -r '
+    .items[]
+    | select(.spec.zookeeper != null or ((.status.kafkaMetadataState // "KRaft") != "KRaft"))
+    | "\(.metadata.namespace)/\(.metadata.name)"')
+  if [ -n "$zk" ]; then
+    echo "ERROR: these Kafka clusters still run on ZooKeeper:" >&2
+    printf '%s\n' "$zk" | sed 's/^/  /' >&2
+    echo "Strimzi 1.x cannot run them. Upgrade through Cozystack v1.7, whose kafka chart migrates every instance to KRaft, and wait until each one reports Ready before upgrading past it." >&2
+    exit 1
+  fi
+
+  # The v1.7 kafka chart freed the shared "kafka" pool name by draining a
+  # migrated cluster onto its own pool through a KafkaRebalance named
+  # <release>-drain-kafka, and removed the rebalance once done. The new chart
+  # no longer drives that drain, so one still in flight would be left half
+  # done, with the brokers spread over two pools.
+  rebalances=$(kubectl get kafkarebalances.v1beta2.kafka.strimzi.io --all-namespaces \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')
+  drains=$(printf '%s\n' "$rebalances" | grep -- '-drain-kafka$' || true)
+  if [ -n "$drains" ]; then
+    echo "ERROR: a ZooKeeper to KRaft migration of Cozystack v1.7 is still draining a shared broker pool:" >&2
+    printf '%s\n' "$drains" | sed 's/^/  /' >&2
+    echo "Let the kafka application upgrade on v1.7 finish, which removes these KafkaRebalances, before upgrading past it." >&2
+    exit 1
+  fi
+
+  if [ ! -r "$STRIMZI_CRD_FILE" ]; then
+    echo "ERROR: $STRIMZI_CRD_FILE is not readable; set STRIMZI_CRD_FILE to strimzi-crds-0.51.0.yaml from the Strimzi 0.51.0 release" >&2
+    exit 1
+  fi
+  stop_old_operator
+  # These CRDs mark v1beta2 as the storage version, so a re-run after a
+  # partial crd-upgrade switches storage back and converts from the start.
+  echo "Applying the Strimzi 0.51.0 CRDs, which serve both v1beta2 and v1"
+  kubectl apply --server-side --force-conflicts --field-manager=cozystack-migration-60 -f "$STRIMZI_CRD_FILE"
+  for c in $STRIMZI_CRDS; do
+    kubectl wait --for=condition=Established --timeout=120s "crd/$c"
+  done
+
+  # Whatever an earlier attempt left has finished by now, and its result was
+  # undone by the CRD apply above, so the conversion starts over.
+  kubectl -n "$CONVERSION_NS" delete job "$CONVERSION_NAME" --ignore-not-found --wait=true
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: $CONVERSION_NAME
+  namespace: $CONVERSION_NS
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: $CONVERSION_NAME
+rules:
+  - apiGroups: ["kafka.strimzi.io"]
+    resources: ["kafkas", "kafkanodepools", "kafkaconnects", "kafkaconnectors", "kafkabridges", "kafkamirrormaker2s", "kafkarebalances", "kafkatopics", "kafkausers"]
+    verbs: ["get", "list", "patch", "update"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
+    verbs: ["get", "list", "patch", "update"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions", "customresourcedefinitions/status"]
+    verbs: ["get", "list", "patch", "update"]
+  # The tool moves a KafkaBridge metrics configuration into a ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: $CONVERSION_NAME
+subjects:
+  - kind: ServiceAccount
+    name: $CONVERSION_NAME
+    namespace: $CONVERSION_NS
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: $CONVERSION_NAME
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: $CONVERSION_NAME
+  namespace: $CONVERSION_NS
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: $CONVERSION_DEADLINE
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: $CONVERSION_NAME
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # crd-upgrade must not start before every object is converted.
+      initContainers:
+        - name: convert-resource
+          image: $CONVERSION_IMAGE
+          command: ["/opt/v1-api-conversion/bin/v1-api-conversion.sh", "convert-resource", "--all-namespaces", "--log-level", "INFO"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: crd-upgrade
+          image: $CONVERSION_IMAGE
+          command: ["/opt/v1-api-conversion/bin/v1-api-conversion.sh", "crd-upgrade"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+EOF
+
+  if ! wait_for_conversion; then
+    exit 1
+  fi
+
+  if ! stored_v1_only; then
+    echo "ERROR: the conversion Job succeeded but a Strimzi CRD still records a stored version other than v1" >&2
+    for c in $STRIMZI_CRDS; do
+      echo "  $c: $(kubectl get crd "$c" --ignore-not-found -o jsonpath='{.status.storedVersions}')" >&2
+    done
+    exit 1
+  fi
+
+  remove_conversion_job
+fi
+
+# Moving the applications off Kafka 3.x first makes the old chart reject
+# their values, so no Helm action can store a new v1beta2 revision behind the
+# rewrite below.
+app_resources=$(kubectl api-resources --api-group=apps.cozystack.io -o name)
+has_kafka_apps() { printf '%s\n' "$app_resources" | grep -q '^kafkas\.'; }
+if has_kafka_apps; then
+  kubectl get kafkas.apps.cozystack.io --all-namespaces \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.spec.version}{"\n"}{end}' |
+  while read -r ns name version; do
+    case "$version" in
+      v3.8|v3.9)
+        echo "Moving Kafka $ns/$name from $version to $KAFKA_TARGET_VERSION"
+        kubectl -n "$ns" patch kafkas.apps.cozystack.io "$name" --type merge \
+          -p "{\"spec\":{\"version\":\"$KAFKA_TARGET_VERSION\"}}"
+        ;;
+    esac
+  done
+fi
+
+# Helm builds the objects of a stored release before it upgrades,
+# uninstalls or rolls back to it, and fails on an API version the server no
+# longer serves, so every Kafka release would be stuck once the v1-only CRDs
+# land. Uninstall reads the latest revision whatever its status, and upgrade
+# falls back to the last failed one, so every revision of each release is
+# rewritten, the way helm-mapkubeapis does: the Secret holds base64 of
+# gzipped JSON, inside the base64 of the Secret data. A release whose install
+# failed has no Kafka CR, so the releases are listed from the applications as
+# well. The chart's hooks carry no Strimzi kinds, so only the manifest needs
+# the rewrite.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+list_releases() {
+  kubectl get kafkas.v1.kafka.strimzi.io --all-namespaces \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{end}' > "$work/releases.all"
+  if has_kafka_apps; then
+    kubectl get kafkas.apps.cozystack.io --all-namespaces \
+      -o jsonpath='{range .items[*]}{.metadata.namespace}{" kafka-"}{.metadata.name}{"\n"}{end}' >> "$work/releases.all"
+  fi
+  sort -u "$work/releases.all" > "$work/releases"
+  }
+
+# scan_releases rewrite|check: rewrite every revision that still names
+# v1beta2, or list the ones that do.
+scan_releases() {
+  list_releases
+  while read -r ns release; do
+    [ -n "$release" ] || continue
+    secrets=$(kubectl -n "$ns" get secret -l "owner=helm,name=$release" -o jsonpath='{.items[*].metadata.name}')
+    for secret in $secrets; do
+      kubectl -n "$ns" get secret "$secret" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gzip -dc > "$work/release.json"
+      if ! jq -e '.manifest | contains("apiVersion: kafka.strimzi.io/v1beta2")' "$work/release.json" > /dev/null; then
+        continue
+      fi
+      if [ "$1" = check ]; then
+        echo "  Helm release $ns/$secret"
+        continue
+      fi
+      echo "Rewriting Helm release $ns/$secret to kafka.strimzi.io/v1"
+      jq -c '.manifest |= gsub("apiVersion: kafka.strimzi.io/v1beta2\n"; "apiVersion: kafka.strimzi.io/v1\n")' "$work/release.json" |
+        gzip -c | base64 | tr -d '\n' | base64 | tr -d '\n' > "$work/release.b64"
+      jq -n --rawfile r "$work/release.b64" '{data: {release: $r}}' > "$work/patch.json"
+      kubectl -n "$ns" patch secret "$secret" --type merge --patch-file "$work/patch.json"
+    done
+  done < "$work/releases"
+  }
+
+# The objects keep managedFields entries recorded under the old API versions,
+# and once the CRDs serve only v1 the API server refuses every server-side
+# apply to such an object ("request to convert CR to an invalid group/version",
+# kubernetes/kubernetes#111937). helm-controller recovers by wiping the
+# entries, and the fields Helm owned pass to "before-first-apply", so a field a
+# later chart drops is never removed. Rewrite the entries to v1 while both
+# versions are still served; the conversion is None, so field paths are
+# spelled the same under either, and an entry for a field v1 dropped only
+# names a field that no longer exists.
+#
+# The patch replaces the whole managedFields list, so a patch built from a
+# stale read could drop an entry a concurrent writer added in between. The
+# patch carries the resourceVersion it was built from: the API server then
+# answers a concurrent change with a conflict, and the object is read again.
+stale_fields='[.metadata.managedFields[]? | select(.apiVersion | test("/v1(alpha1|beta1|beta2)$"))] | length > 0'
+
+# list_stale_managed <crd>: the objects of that kind with entries to rewrite.
+list_stale_managed() {
+  kubectl get "$1" --all-namespaces --show-managed-fields -o json |
+    jq -r ".items[] | select($stale_fields) | \"\\(.metadata.namespace) \\(.metadata.name)\"" > "$work/managed"
+  }
+
+rewrite_managed() {
+  for c in $STRIMZI_CRDS; do
+    list_stale_managed "$c"
+    while read -r ns name; do
+      echo "Moving the managedFields of $c $ns/$name to v1"
+      attempt=0
+      while :; do
+        kubectl -n "$ns" get "$c" "$name" --show-managed-fields -o json > "$work/object.json"
+        if ! jq -e "$stale_fields" "$work/object.json" > /dev/null; then
+          break
+        fi
+        jq '{metadata: {resourceVersion: .metadata.resourceVersion, managedFields: (.metadata.managedFields | map(.apiVersion |= sub("/v1(alpha1|beta1|beta2)$"; "/v1")))}}' \
+          "$work/object.json" > "$work/managed-patch.json"
+        if kubectl -n "$ns" patch "$c" "$name" --type merge --patch-file "$work/managed-patch.json" 2> "$work/patch.err"; then
+          break
+        fi
+        attempt=$((attempt + 1))
+        if ! grep -q 'the object has been modified' "$work/patch.err" || [ "$attempt" -ge 5 ]; then
+          cat "$work/patch.err" >&2
+          exit 1
+        fi
+      done
+    done < "$work/managed"
+  done
+  }
+
+scan_releases rewrite
+rewrite_managed
+
+# A Helm upgrade already running when the releases were rewritten stores its
+# own revision when it finishes, and that one may name v1beta2 again. Scan
+# once more and refuse to stamp the version on any leftover: the hook then
+# fails and runs the migration again.
+scan_releases check > "$work/leftover"
+for c in $STRIMZI_CRDS; do
+  list_stale_managed "$c"
+  sed "s|^|  managedFields of $c |" "$work/managed" >> "$work/leftover"
+done
+if [ -s "$work/leftover" ]; then
+  echo "ERROR: these still name a removed Strimzi API version:" >&2
+  cat "$work/leftover" >&2
+  exit 1
+fi
+
+stamp_cozystack_version 61
