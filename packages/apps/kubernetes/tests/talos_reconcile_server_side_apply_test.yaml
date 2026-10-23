@@ -1,0 +1,75 @@
+suite: worker TalosConfigTemplate is applied server-side
+
+templates:
+  - templates/talos/talos-reconcile-job.yaml
+release:
+  name: test-k8s
+  namespace: tenant-test
+set:
+  _namespace:
+    etcd: etcd
+    ingress: nginx
+    host: example.com
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: applies the TalosConfigTemplate server-side
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply --server-side --force-conflicts -f -'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: never falls back to a client-side apply
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply -f -'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: applies server-side from the Job of every node group
+    set:
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          storageClass: ""
+          roles:
+          - ingress-nginx
+          resources: {}
+          gpus: []
+          kubelet: {}
+        worker1:
+          minReplicas: 0
+          maxReplicas: 5
+          instanceType: u1.medium
+          diskSize: 20Gi
+          storageClass: ""
+          roles: []
+          resources: {}
+          gpus: []
+          kubelet: {}
+    asserts:
+      - hasDocuments:
+          count: 8
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply --server-side --force-conflicts -f -'
+        documentSelector:
+          path: kind
+          value: Job
+          matchMany: true
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply -f -'
+        documentSelector:
+          path: kind
+          value: Job
+          matchMany: true
