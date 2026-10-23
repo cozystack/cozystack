@@ -64,6 +64,15 @@ resources: {}
 ## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "t1.nano"
 
+## @typedef {struct} AffinitySpec - Kubernetes affinity configuration.
+## @field {*object} [redis] - Kubernetes Affinity for Redis pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+## @field {*object} [sentinel] - Kubernetes Affinity for Sentinel pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+
+## @param {AffinitySpec} [affinity] - Kubernetes affinity configuration for Redis and Sentinel pods.
+affinity:
+  redis: {}
+  sentinel: {}
+
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 1Gi
 
