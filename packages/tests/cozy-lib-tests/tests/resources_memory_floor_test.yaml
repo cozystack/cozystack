@@ -1,0 +1,203 @@
+# ./tests/resources_memory_floor_test.yaml
+suite: resources memory floor
+
+# A quantity without a unit counts bytes, so a memory of 8 typed for 8Gi would
+# size the container at 8 bytes. sanitize refuses anything below 1Mi, which
+# every preset clears by far. flatten renders tenant quotas without the floor,
+# because a quota of 0 memory is a valid way to allow none.
+
+templates:
+  - templates/tests/resources.yaml
+  - templates/tests/resources-defaulting.yaml
+  - templates/tests/quota.yaml
+
+release:
+  name: myrelease
+  namespace: default
+
+tests:
+  - it: refuses a quoted number without a unit
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: "8"
+    asserts:
+      - failedTemplate:
+          errorMessage: memory (8) must be at least 1Mi. A value without a unit is read as bytes, so add the unit, such as 512Mi or 8Gi.
+
+  - it: refuses an unquoted number without a unit
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 8
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(8\) must be at least 1Mi\.'
+
+  - it: refuses a zero memory
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(0\) must be at least 1Mi\.'
+
+  - it: refuses a byte count one below 1Mi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: "1048575"
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(1048575\) must be at least 1Mi\.'
+
+  - it: refuses a suffixed value below 1Mi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 1023Ki
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(1023Ki\) must be at least 1Mi\.'
+
+  - it: refuses a negative memory
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: -1Gi
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(-1Gi\) must be at least 1Mi\.'
+
+  - it: renders exactly 1Mi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 1Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 1Mi
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "1048576"
+
+  - it: renders an unquoted byte count of exactly 1Mi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 1048576
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "1048576"
+
+  - it: renders 512Mi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 512Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "536870912"
+
+  - it: renders 8Gi
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        cpu: "1"
+        memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 8Gi
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "8589934592"
+
+  - it: leaves a map without memory alone
+    template: templates/tests/resources.yaml
+    set:
+      resources:
+        ephemeral-storage: 2Gi
+    asserts:
+      - notFailedTemplate: {}
+      - notExists:
+          path: spec.containers[0].resources.limits.memory
+
+  - it: refuses a number without a unit set over a preset
+    template: templates/tests/resources-defaulting.yaml
+    set:
+      defaulting:
+        preset: t1.nano
+        resources:
+          memory: "8"
+    asserts:
+      - failedTemplate:
+          errorPattern: '^memory \(8\) must be at least 1Mi\.'
+
+  - it: renders the smallest preset unchanged
+    template: templates/tests/resources-defaulting.yaml
+    set:
+      defaulting:
+        preset: t1.nano
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 128Mi
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "134217728"
+
+  - it: renders the smallest legacy preset unchanged
+    template: templates/tests/resources-defaulting.yaml
+    set:
+      defaulting:
+        preset: nano
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: renders an explicit memory with a unit over a preset
+    template: templates/tests/resources-defaulting.yaml
+    set:
+      defaulting:
+        preset: t1.nano
+        resources:
+          memory: 8Gi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 8Gi
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: 250m
+
+  - it: still renders a tenant quota of 0 memory
+    template: templates/tests/quota.yaml
+    set:
+      quota:
+        memory: 0
+    asserts:
+      - equal:
+          path: spec.hard["limits.memory"]
+          value: "0"
+      - equal:
+          path: spec.hard["requests.memory"]
+          value: "0"
