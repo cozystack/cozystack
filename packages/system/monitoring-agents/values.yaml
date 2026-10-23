@@ -410,6 +410,7 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+          net.io_timeout 30s
       [OUTPUT]
           Name http
           Match events.*
@@ -421,6 +422,7 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+          net.io_timeout 30s
       [OUTPUT]
           Name http
           Match audit.*
@@ -432,6 +434,7 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+          net.io_timeout 30s
       {{- range $target, $_ := include "monitoring-agents.tenantLogRoutes" . | fromJson }}
       [OUTPUT]
           Name http
@@ -444,6 +447,7 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+          net.io_timeout 30s
       {{- end }}
     filters: |
       [FILTER]
