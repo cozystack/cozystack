@@ -1,0 +1,74 @@
+suite: valkey default render
+templates:
+  - templates/valkeyfailover.yaml
+
+release:
+  name: valkey-test
+  namespace: tenant-test
+
+tests:
+  - it: renders an auth Secret with a generated password
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Secret
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: valkey-test-auth
+        documentIndex: 0
+      - exists:
+          path: data.password
+        documentIndex: 0
+
+  - it: renders a RedisFailover with the default engine, replicas and storage size
+    asserts:
+      - isKind:
+          of: RedisFailover
+        documentIndex: 1
+      - equal:
+          path: spec.engine
+          value: Valkey
+        documentIndex: 1
+      - equal:
+          path: spec.redis.image
+          value: "valkey/valkey:8.1.8"
+        documentIndex: 1
+      - equal:
+          path: spec.redis.replicas
+          value: 2
+        documentIndex: 1
+      - equal:
+          path: spec.redis.storage.persistentVolumeClaim.spec.resources.requests.storage
+          value: 1Gi
+        documentIndex: 1
+      - equal:
+          path: spec.sentinel.replicas
+          value: 3
+        documentIndex: 1
+
+  - it: renders WorkloadMonitors for the valkey and sentinel roles
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: valkey-test-valkey
+        documentIndex: 2
+      - equal:
+          path: spec.replicas
+          value: 2
+        documentIndex: 2
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: valkey-test-sentinel
+        documentIndex: 3
+      - equal:
+          path: spec.replicas
+          value: 3
+        documentIndex: 3
