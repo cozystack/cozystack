@@ -147,7 +147,7 @@ case "$*" in
       exit 1
     fi
     for n in ${STUB_NODES:-srv1 srv2 srv3}; do echo "$n"; done ;;
-  'get storagepools.blockstor.cozystack.io '*freeCapacity*)
+  'get storagepools.blockstor.org '*freeCapacity*)
     # STUB_POOLS_UNREPORTED names nodes whose satellite has not reported its
     # pool yet: the object exists, its free capacity does not.
     for n in ${STUB_NODES:-srv1 srv2 srv3}; do
@@ -688,7 +688,7 @@ run_prep_blockstor() {
 
   [ "$(cat "$tmp/rc")" -eq 0 ]
   grep -q "waiting for every satellite to report its 'data' pool" "$tmp/out"
-  grep -q '^get storagepools.blockstor.cozystack.io .*freeCapacity' "$tmp/calls"
+  grep -q '^get storagepools.blockstor.org .*freeCapacity' "$tmp/calls"
   rm -rf "$tmp"
 }
 

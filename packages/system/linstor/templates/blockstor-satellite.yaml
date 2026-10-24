@@ -64,7 +64,7 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources:
       - controllerconfigs
       - nodes
@@ -75,13 +75,13 @@ rules:
       - snapshots
       - storagepools
     verbs: [get, list, watch]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources: [physicaldevices]
     verbs: [create, update, patch, delete]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources: [nodes, resources, snapshots, storagepools]
     verbs: [update, patch]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources:
       - nodes/status
       - physicaldevices/status

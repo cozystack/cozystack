@@ -45,13 +45,13 @@ tests:
       - contains:
           path: rules
           content:
-            apiGroups: [blockstor.cozystack.io]
+            apiGroups: [blockstor.org]
             resources: [physicaldevices]
             verbs: [create, update, patch, delete]
       - contains:
           path: rules
           content:
-            apiGroups: [blockstor.cozystack.io]
+            apiGroups: [blockstor.org]
             resources: [nodes, resources, snapshots, storagepools]
             verbs: [update, patch]
       - lengthEqual:
@@ -155,17 +155,17 @@ tests:
             - apiGroups: ['']
               resources: [nodes]
               verbs: [get, list, watch]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [controllerconfigs]
               verbs: [get, list, watch]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [nodes, resourcedefinitions, resourcegroups, resources, snapshots, storagepools]
               verbs: [get, list, watch, create, update, patch, delete]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [nodes/finalizers, resourcedefinitions/finalizers, resourcegroups/finalizers,
                 resources/finalizers, snapshots/finalizers, storagepools/finalizers]
               verbs: [update]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [nodes/status, resourcedefinitions/status, resourcegroups/status, resources/status,
                 snapshots/status, storagepools/status]
               verbs: [get, update, patch]
@@ -185,17 +185,17 @@ tests:
             - apiGroups: ['']
               resources: [nodes]
               verbs: [get, list, watch]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [controllerconfigs, nodes, physicaldevices, resourcedefinitions, resourcegroups,
                 resources, snapshots, storagepools]
               verbs: [get, list, watch]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [physicaldevices]
               verbs: [create, update, patch, delete]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [nodes, resources, snapshots, storagepools]
               verbs: [update, patch]
-            - apiGroups: [blockstor.cozystack.io]
+            - apiGroups: [blockstor.org]
               resources: [nodes/status, physicaldevices/status, resources/status, snapshots/status,
                 storagepools/status, nodes/finalizers, physicaldevices/finalizers, resources/finalizers,
                 snapshots/finalizers, storagepools/finalizers]

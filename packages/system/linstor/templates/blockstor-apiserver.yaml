@@ -11,7 +11,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   CRUD on the blockstor.cozystack.io CRDs, named rather than wildcarded so a kind
+   CRUD on the blockstor.org CRDs, named rather than wildcarded so a kind
    added to the group later is not granted by omission. No finalizers,
    events or leases: the REST handlers do not write those. */}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -19,7 +19,7 @@ kind: ClusterRole
 metadata:
   name: blockstor-apiserver
 rules:
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources:
       - controllerconfigs
       - controllerconfigs/status

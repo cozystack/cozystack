@@ -1,7 +1,7 @@
 {{- if eq .Values.backend "blockstor" }}
 ---
 {{- /*
-   blockstor controller — runs the reconcilers for the blockstor.cozystack.io
+   blockstor controller — runs the reconcilers for the blockstor.org
    CRDs (ResourceDefinitions / Resources / Snapshots / StoragePools /
    Nodes). The REST API is split out into the separate apiserver
    Deployment; the controller runs with --enable-rest-api=false. */}}
@@ -12,7 +12,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   Cluster-wide read on Kubernetes Nodes and the blockstor.cozystack.io kinds
+   Cluster-wide read on Kubernetes Nodes and the blockstor.org kinds
    the reconcilers manage, as blockstor's own config/rbac/role.yaml grants
    them, kind by kind so a kind added to the group later is not granted by
    omission. No leases: the controller runs without leader election. */}}
@@ -30,13 +30,13 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources: [controllerconfigs]
     verbs: [get, list, watch]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources: [nodes, resourcedefinitions, resourcegroups, resources, snapshots, storagepools]
     verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources:
       - nodes/finalizers
       - resourcedefinitions/finalizers
@@ -45,7 +45,7 @@ rules:
       - snapshots/finalizers
       - storagepools/finalizers
     verbs: [update]
-  - apiGroups: [blockstor.cozystack.io]
+  - apiGroups: [blockstor.org]
     resources:
       - nodes/status
       - resourcedefinitions/status
