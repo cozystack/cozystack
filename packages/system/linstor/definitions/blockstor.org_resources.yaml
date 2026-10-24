@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: resources.blockstor.cozystack.io
+  name: resources.blockstor.org
 spec:
-  group: blockstor.cozystack.io
+  group: blockstor.org
   names:
     kind: Resource
     listKind: ResourceList

@@ -66,6 +66,6 @@ tests:
       - notContains:
           path: rules
           content:
-            apiGroups: [blockstor.cozystack.io]
+            apiGroups: [blockstor.org]
             resources: ["*"]
             verbs: [get, list, watch, create, update, patch, delete]

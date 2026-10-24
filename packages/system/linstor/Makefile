@@ -20,9 +20,9 @@ update-blockstor-crds:
 	{ curl --fail --silent --show-error --location -o "$$tmpdir/source.tar.gz" \
 		"https://github.com/cozystack/blockstor/archive/refs/tags/v$(BLOCKSTOR_VERSION).tar.gz" && \
 		mkdir "$$tmpdir/src" && tar -xzf "$$tmpdir/source.tar.gz" --strip-components=1 -C "$$tmpdir/src" && \
-		ls "$$tmpdir"/src/config/crd/bases/blockstor.cozystack.io_*.yaml >/dev/null || { rm -rf "$$tmpdir"; exit 1; }; } && \
-	rm -f definitions/blockstor.cozystack.io_*.yaml && \
-	cp "$$tmpdir"/src/config/crd/bases/blockstor.cozystack.io_*.yaml definitions/ && \
+		ls "$$tmpdir"/src/config/crd/bases/blockstor.org_*.yaml >/dev/null || { rm -rf "$$tmpdir"; exit 1; }; } && \
+	rm -f definitions/blockstor.org_*.yaml && \
+	cp "$$tmpdir"/src/config/crd/bases/blockstor.org_*.yaml definitions/ && \
 	rm -rf "$$tmpdir"
 
 test:
