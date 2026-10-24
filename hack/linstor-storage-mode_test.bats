@@ -726,7 +726,7 @@ blockstor_storage_pools_json() {
   kubectl() {
     printf '%s\n' "$*" >>"$calls"
     case "$*" in
-      'get storagepools.blockstor.cozystack.io '*-o\ json*) blockstor_storage_pools_json ;;
+      'get storagepools.blockstor.org '*-o\ json*) blockstor_storage_pools_json ;;
       *) return 1 ;;
     esac
   }
@@ -754,7 +754,7 @@ blockstor_storage_pools_json() {
   COZY_STORAGE_BACKEND=blockstor
   kubectl() {
     case "$*" in
-      'get storagepools.blockstor.cozystack.io '*-o\ json*) blockstor_storage_pools_json 87127923 ;;
+      'get storagepools.blockstor.org '*-o\ json*) blockstor_storage_pools_json 87127923 ;;
       *) printf 'STUB-POOL-TABLE\n' ;;
     esac
   }
@@ -781,7 +781,7 @@ blockstor_storage_pools_json() {
   COZY_STORAGE_BACKEND=blockstor
   kubectl() {
     case "$*" in
-      'get storagepools.blockstor.cozystack.io '*-o\ json*)
+      'get storagepools.blockstor.org '*-o\ json*)
         echo 'Error from server (Forbidden): storagepools is forbidden' >&2
         return 1 ;;
     esac
@@ -813,7 +813,7 @@ blockstor_storage_pools_json() {
   kubectl() {
     printf '%s\n' "$*" >>"$calls"
     case "$*" in
-      'get storagepools.blockstor.cozystack.io '*) blockstor_storage_pools_json ;;
+      'get storagepools.blockstor.org '*) blockstor_storage_pools_json ;;
       *'-l app=blockstor-satellite'*)
         printf 'srv1 blockstor-satellite-a\nsrv2 blockstor-satellite-b\nsrv3 blockstor-satellite-c\n' ;;
       *'--container=satellite -- zfs list'*) printf 'data\n' ;;

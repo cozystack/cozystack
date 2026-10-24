@@ -455,7 +455,7 @@ _cozy_pool_free_rows() {
   if [ "$_backend" = blockstor ]; then
     # Read first and filter second: piped, the read's status is jq's, and jq
     # on empty input succeeds.
-    _pools_json=$(kubectl get storagepools.blockstor.cozystack.io --request-timeout=20s -o json) || return 1
+    _pools_json=$(kubectl get storagepools.blockstor.org --request-timeout=20s -o json) || return 1
     printf '%s\n' "$_pools_json" |
       jq -r '.items[] | select((.spec.providerKind | test("^ZFS")) and .status.freeCapacity != null) | "\(.status.freeCapacity):\(.spec.nodeName)"'
     return
@@ -470,7 +470,7 @@ _cozy_pool_free_rows() {
 
 _cozy_pool_diagnostics() {
   if [ "$(_cozy_storage_backend 2>/dev/null)" = blockstor ]; then
-    kubectl get storagepools.blockstor.cozystack.io -o wide --request-timeout=20s 2>&1
+    kubectl get storagepools.blockstor.org -o wide --request-timeout=20s 2>&1
     return
   fi
   kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1
@@ -570,7 +570,7 @@ _cozy_linstor_pool_baseline_file() {
 _cozy_linstor_pool_datasets() {
   _backend=$(_cozy_storage_backend) || return 1
   if [ "$_backend" = blockstor ]; then
-    _pools_json=$(timeout -k 5 30 kubectl get storagepools.blockstor.cozystack.io --request-timeout=20s -o json 2>/dev/null) || return 1
+    _pools_json=$(timeout -k 5 30 kubectl get storagepools.blockstor.org --request-timeout=20s -o json 2>/dev/null) || return 1
     _pools=$(printf '%s\n' "$_pools_json" |
       jq -r '.items[] | select(.spec.providerKind | test("^ZFS")) | "\(.spec.nodeName) \(.spec.props["StorDriver/StorPoolName"] // .spec.props["StorDriver/ZPoolThin"] // .spec.props["StorDriver/ZPool"] // "")"') || return 1
     _satellite_selector=app=blockstor-satellite

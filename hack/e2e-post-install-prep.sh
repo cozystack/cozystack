@@ -164,7 +164,7 @@ count_lines() {
 
 render_blockstor_node() {
   cat <<EOF
-apiVersion: blockstor.cozystack.io/v1alpha1
+apiVersion: blockstor.org/v1alpha1
 kind: Node
 metadata:
   name: $1
@@ -178,7 +178,7 @@ EOF
 # The CRD's CEL rule pins metadata.name to <poolName>.<nodeName>.
 render_blockstor_storage_pool() {
   cat <<EOF
-apiVersion: blockstor.cozystack.io/v1alpha1
+apiVersion: blockstor.org/v1alpha1
 kind: StoragePool
 metadata:
   name: data.$1
@@ -547,14 +547,14 @@ echo "[post-install-prep] waiting for every satellite to report its 'data' pool"
 pool_deadline=$(( $(date +%s) + 300 ))
 while :; do
   pools_rc=0
-  reported=$(timeout -k 5 30 kubectl get storagepools.blockstor.cozystack.io --request-timeout=20s \
+  reported=$(timeout -k 5 30 kubectl get storagepools.blockstor.org --request-timeout=20s \
     -o jsonpath='{range .items[?(@.spec.poolName=="data")]}{.spec.nodeName} {.status.freeCapacity}{"\n"}{end}') || pools_rc=$?
   if [ "$pools_rc" -eq 0 ] && [ "$(printf '%s\n' "$reported" | awk 'NF == 2' | grep -c .)" -eq "$node_count" ]; then
     break
   fi
   if [ "$(date +%s)" -ge "$pool_deadline" ]; then
     echo "[post-install-prep] timed out after 300s waiting for $node_count reported 'data' pools (read exited $pools_rc): $reported" >&2
-    timeout -k 5 30 kubectl get storagepools.blockstor.cozystack.io -o yaml --request-timeout=20s 2>&1 | tail -n 80 >&2
+    timeout -k 5 30 kubectl get storagepools.blockstor.org -o yaml --request-timeout=20s 2>&1 | tail -n 80 >&2
     exit 1
   fi
   sleep 5
