@@ -64,6 +64,15 @@ resources: {}
 ## @param {ResourcesPreset} resourcesPreset="t1.micro" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "t1.micro"
 
+## @typedef {struct} ResourcesAllocationRatio - Per-instance overcommit for this database: each request is its limit divided by the ratio.
+## @field {*int} [cpu] - CPU ratio for this database; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.
+## @minimum 1
+## @field {*int} [memory] - Memory ratio for this database; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.
+## @minimum 1
+
+## @param {ResourcesAllocationRatio} [resourcesAllocationRatio] - Overrides the cluster-wide allocation ratios for this database only, so its limits (from `resources` or `resourcesPreset`) can stay high while its requests reflect normal use. Unset by default: the cluster-wide ratios apply and the rendered requests are unchanged. A ratio below 1 is refused, since the request would exceed the limit.
+resourcesAllocationRatio: {}
+
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
 

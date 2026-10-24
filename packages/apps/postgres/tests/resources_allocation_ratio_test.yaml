@@ -1,0 +1,51 @@
+suite: resourcesAllocationRatio overrides the cluster-wide ratios for this database only
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+  resources:
+    cpu: "4"
+    memory: 16Gi
+
+tests:
+  - it: unset, the memory request equals the limit (cluster default memory ratio 1)
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.memory
+          value: 16Gi
+      - equal:
+          path: spec.resources.requests.memory
+          value: "17179869184"
+
+  - it: a memory ratio of 8 reserves an eighth of the limit, the limit is unchanged
+    set:
+      resourcesAllocationRatio:
+        memory: 8
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.memory
+          value: 16Gi
+      - equal:
+          path: spec.resources.requests.memory
+          value: "2147483648"
+
+  - it: a ratio below 1 is refused by the schema (cozy-lib also refuses it at render for callers without one)
+    set:
+      resourcesAllocationRatio:
+        memory: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "resourcesAllocationRatio/memory.*minimum: got 0, want 1"
