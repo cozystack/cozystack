@@ -150,6 +150,8 @@ for raw in $(collect_refs); do
   #     ghcr.io/cozystack — see those packages' values.yaml)
   #   - ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/*, which is a
   #     cozystack-org repo but sits outside $REGISTRY's path
+  #   - ghcr.io/cozystack/blockstor-*, released from the blockstor repository
+  #     under its own version (see packages/system/linstor/values.yaml)
   #   - non-ref scalars, e.g. a "--migrate-image=..." arg string
   # Note kilo, kube-ovn and keycloak-operator are NOT in that list: all three
   # are built and pushed to $REGISTRY, and are selected by shapes 3 and 4. An

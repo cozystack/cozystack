@@ -1,0 +1,103 @@
+suite: LinstorCluster external mode (blockstor backend)
+
+# Pins the LinstorCluster surface this package renders on the BLOCKSTOR
+# backend. piraeus-operator runs in EXTERNAL mode there: it deploys no
+# in-cluster linstor-controller and instead points linstor-csi at the blockstor
+# apiserver (spec.externalController.url), issuing the CSI client certs from the
+# blockstor-api-ca Issuer (spec.apiTLS). Controller-level DRBD tuning is carried
+# in spec.properties, which the operator applies to the external controller over
+# the LINSTOR REST API. There must be NO spec.controller block (no in-cluster
+# controller / plunger sidecar) in this mode.
+
+templates:
+  - templates/cluster.yaml
+
+# Blockstor is opt-in. Without this the suite renders the LINSTOR backend,
+# whose LinstorCluster is a different shape entirely.
+set:
+  backend: blockstor
+
+tests:
+  - it: "renders a LinstorCluster pointed at the external blockstor apiserver"
+    asserts:
+      - isKind:
+          of: LinstorCluster
+      - equal:
+          path: spec.externalController.url
+          value: https://blockstor-apiserver.cozy-linstor.svc:3371
+      - equal:
+          path: spec.apiTLS.certManager.name
+          value: blockstor-api-ca
+      - equal:
+          path: spec.apiTLS.certManager.kind
+          value: Issuer
+      # The operator's OWN client, the one that probes
+      # /v1/controller/version, is not provisioned by certManager in
+      # external mode — piraeus-operator emits no controller-side
+      # Certificate there. Left at its default it looks for
+      # linstor-client-tls, finds nothing, and cannot verify a serving
+      # cert signed by blockstor-api-ca; the probe fails and every
+      # satellite reconcile stops behind it.
+      - equal:
+          path: spec.apiTLS.clientSecretName
+          value: blockstor-apiserver-client-tls
+
+  - it: "runs in external mode — no in-cluster linstor-controller / plunger"
+    asserts:
+      - notExists:
+          path: spec.controller
+      - notExists:
+          path: spec.internalTLS
+
+  - it: "carries controller-level DRBD Net tuning as properties"
+    asserts:
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/verify-alg
+            value: "crc32c"
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/timeout
+            value: "100"
+
+  - it: "auto-diskful properties are values-driven"
+    asserts:
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful
+            value: "30"
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful-allow-cleanup
+            value: "true"
+
+  - it: "auto-diskful properties are dropped when disabled"
+    set:
+      linstor:
+        autoDiskful:
+          enabled: false
+    asserts:
+      - notContains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful
+            value: "30"
+      # Net tuning is unconditional and stays regardless of auto-diskful.
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/verify-alg
+            value: "crc32c"
+
+  - it: "the reused linstor-csi image pin is preserved on the CSI podTemplates"
+    asserts:
+      - matchRegex:
+          path: spec.csiController.podTemplate.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/linstor-csi:"
+      - matchRegex:
+          path: spec.csiNode.podTemplate.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/linstor-csi:"

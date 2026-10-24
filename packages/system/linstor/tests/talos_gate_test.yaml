@@ -1,0 +1,35 @@
+suite: Talos satellite patch is gated on the OS, not the backend
+templates:
+  - templates/satellites-talos.yaml
+
+# The patch drops drbd-module-loader, which is what loads DRBD on a node
+# whose kernel does not ship it as a Talos extension. On generic Linux it
+# must not render at all. On Talos it renders under both backends, since
+# piraeus creates the linstor-satellite DaemonSets under blockstor too.
+tests:
+  - it: renders nothing on generic Linux under the linstor backend
+    set:
+      talos.enabled: false
+      backend: linstor
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing on generic Linux under the blockstor backend
+    set:
+      talos.enabled: false
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders on Talos under the blockstor backend
+    set:
+      talos.enabled: true
+      backend: blockstor
+    asserts:
+      - isKind:
+          of: LinstorSatelliteConfiguration
+      - equal:
+          path: metadata.name
+          value: cozystack-talos

@@ -1,0 +1,22 @@
+# The controller records events through events.k8s.io; without the grant
+# its warnings (a definition short of its group's layer stack) are dropped.
+suite: blockstor controller events
+templates:
+  - templates/blockstor-controller.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  - it: lets the controller record events.k8s.io events
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [events.k8s.io]
+            resources: [events]
+            verbs: [create, patch]
