@@ -2433,3 +2433,135 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 		})
 	}
 }
+
+func newBucketClaim(name string, labels map[string]string, class string, ready bool) *cosiv1alpha1.BucketClaim {
+	return &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: labels},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: class,
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{BucketReady: ready},
+	}
+}
+
+func reconcileBucketMonitor(t *testing.T, c client.Client, s *runtime.Scheme, withReader bool) *cozyv1alpha1.WorkloadMonitor {
+	t.Helper()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if withReader {
+		reconciler.DataVolumeReader = c
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "my-bucket", Namespace: "default"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	updated := &cozyv1alpha1.WorkloadMonitor{}
+	if err := c.Get(context.TODO(), req.NamespacedName, updated); err != nil {
+		t.Fatalf("Failed to get updated WorkloadMonitor: %v", err)
+	}
+	if updated.Status.Operational == nil {
+		t.Fatal("Expected Operational to be set, got nil")
+	}
+	return updated
+}
+
+func newBucketMonitorClient(s *runtime.Scheme, objs ...client.Object) client.Client {
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-bucket", Namespace: "default"},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind:        "bucket",
+			Type:        "s3",
+			Selector:    map[string]string{"app.kubernetes.io/instance": "my-bucket"},
+			Replicas:    ptr.To[int32](0),
+			MinReplicas: ptr.To[int32](0),
+		},
+	}
+	return fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append([]client.Object{monitor}, objs...)...).
+		WithStatusSubresource(monitor).
+		Build()
+}
+
+func TestReconcile_BucketClaimDecidesOperational(t *testing.T) {
+	selected := map[string]string{"app.kubernetes.io/instance": "my-bucket"}
+	cases := []struct {
+		name        string
+		claim       *cosiv1alpha1.BucketClaim
+		operational bool
+		message     string
+	}{
+		{"provisioned", newBucketClaim("my-bucket", selected, "tenant-root", true), true, ""},
+		{"not provisioned", newBucketClaim("my-bucket", selected, "tenant-root", false), false, "BucketClaim my-bucket of bucket class tenant-root is not provisioned"},
+		{"not provisioned without a class", newBucketClaim("my-bucket", selected, "", false), false, "BucketClaim my-bucket is not provisioned"},
+		{"outside the selector", newBucketClaim("other", map[string]string{"app.kubernetes.io/instance": "other"}, "tenant-root", false), true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestScheme()
+			got := reconcileBucketMonitor(t, newBucketMonitorClient(s, tc.claim), s, true)
+			if *got.Status.Operational != tc.operational {
+				t.Errorf("Operational = %v, want %v", *got.Status.Operational, tc.operational)
+			}
+			if got.Status.Message != tc.message {
+				t.Errorf("Message = %q, want %q", got.Status.Message, tc.message)
+			}
+			wantReason := ""
+			if tc.message != "" {
+				wantReason = cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady
+			}
+			if got.Status.Reason != wantReason {
+				t.Errorf("Reason = %q, want %q", got.Status.Reason, wantReason)
+			}
+		})
+	}
+}
+
+func TestReconcile_ProvisionedBucketClaimClearsTheVerdict(t *testing.T) {
+	for _, withReader := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dataVolumeReader=%v", withReader), func(t *testing.T) {
+			s := newTestScheme()
+			claim := newBucketClaim("my-bucket", map[string]string{"app.kubernetes.io/instance": "my-bucket"}, "tenant-root", false)
+			c := newBucketMonitorClient(s, claim)
+
+			got := reconcileBucketMonitor(t, c, s, withReader)
+			if *got.Status.Operational || got.Status.Reason != cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady {
+				t.Fatalf("before provisioning: Operational = %v, Reason = %q", *got.Status.Operational, got.Status.Reason)
+			}
+
+			stored := &cosiv1alpha1.BucketClaim{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "my-bucket", Namespace: "default"}, stored); err != nil {
+				t.Fatalf("Failed to get BucketClaim: %v", err)
+			}
+			stored.Status.BucketReady = true
+			if err := c.Update(context.TODO(), stored); err != nil {
+				t.Fatalf("Failed to update BucketClaim: %v", err)
+			}
+
+			got = reconcileBucketMonitor(t, c, s, withReader)
+			if !*got.Status.Operational || got.Status.Message != "" || got.Status.Reason != "" {
+				t.Errorf("after provisioning: Operational = %v, Message = %q, Reason = %q", *got.Status.Operational, got.Status.Message, got.Status.Reason)
+			}
+		})
+	}
+}
+
+func TestReconcile_DataVolumeVerdictOutranksBucketClaim(t *testing.T) {
+	s := newTestScheme()
+	selected := map[string]string{"app.kubernetes.io/instance": "my-bucket"}
+	phase := "ImportInProgress"
+	c := newBucketMonitorClient(s,
+		newBucketClaim("my-bucket", selected, "tenant-root", false),
+		newDataVolume("my-bucket", selected, &phase),
+	)
+	got := reconcileBucketMonitor(t, c, s, true)
+	if *got.Status.Operational {
+		t.Error("Operational = true, want false")
+	}
+	if got.Status.Reason != cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady {
+		t.Errorf("Reason = %q, want %q", got.Status.Reason, cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady)
+	}
+	if got.Status.Message != "DataVolume my-bucket is ImportInProgress" {
+		t.Errorf("Message = %q", got.Status.Message)
+	}
+}

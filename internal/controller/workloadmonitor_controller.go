@@ -374,6 +374,25 @@ func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketCl
 	return bc.Status.BucketReady
 }
 
+// bucketClaimsMessage names every BucketClaim that has not been provisioned,
+// with its bucket class, and is empty when there is none.
+func (r *WorkloadMonitorReconciler) bucketClaimsMessage(claims []cosiv1alpha1.BucketClaim) string {
+	var pending []string
+	for i := range claims {
+		bc := &claims[i]
+		if r.isBucketClaimReady(bc) {
+			continue
+		}
+		entry := fmt.Sprintf("BucketClaim %s is not provisioned", bc.Name)
+		if bc.Spec.BucketClassName != "" {
+			entry = fmt.Sprintf("BucketClaim %s of bucket class %s is not provisioned", bc.Name, bc.Spec.BucketClassName)
+		}
+		pending = append(pending, entry)
+	}
+	sort.Strings(pending)
+	return strings.Join(pending, "; ")
+}
+
 // isServiceReady checks if the service has an external IP bound
 func (r *WorkloadMonitorReconciler) isServiceReady(svc *corev1.Service) bool {
 	return len(svc.Status.LoadBalancer.Ingress) > 0
@@ -1023,6 +1042,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	bucketsMessage := r.bucketClaimsMessage(bucketClaimList.Items)
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -1044,15 +1065,23 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
 			fresh.Status.Operational = pointer.Bool(false)
 		}
-		// Only the DataVolume check writes Message and Reason, so the stored ones
-		// are the last DataVolume verdict: kept while no reader is installed yet, so a
-		// controller restart does not report a stuck disk as ready.
+		// A stored DataVolume verdict is the last one: kept while no reader is
+		// installed yet, so a controller restart does not report a stuck disk as
+		// ready. BucketClaims are listed on every pass, so their verdict is
+		// recomputed and only fills fields no DataVolume verdict holds.
 		if dataVolumesRead {
 			fresh.Status.Message = dataVolumesMessage
 			fresh.Status.Reason = ""
 			if dataVolumesMessage != "" {
 				fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
 			}
+		} else if fresh.Status.Reason == cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady {
+			fresh.Status.Message = ""
+			fresh.Status.Reason = ""
+		}
+		if fresh.Status.Message == "" && bucketsMessage != "" {
+			fresh.Status.Message = bucketsMessage
+			fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady
 		}
 		if fresh.Status.Message != "" {
 			fresh.Status.Operational = pointer.Bool(false)
