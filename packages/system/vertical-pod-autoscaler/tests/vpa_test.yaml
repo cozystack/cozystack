@@ -244,6 +244,12 @@ tests:
           path: spec.template.spec.topologySpreadConstraints[0].topologyKey
           value: kubernetes.io/hostname
       - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].maxSkew
+          value: 1
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+      - equal:
           path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
           value:
             app.kubernetes.io/name: vertical-pod-autoscaler
