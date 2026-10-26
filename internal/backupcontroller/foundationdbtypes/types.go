@@ -159,20 +159,8 @@ type FoundationDBBackupSpec struct {
 	// +optional
 	EncryptionKeyPath string `json:"encryptionKeyPath,omitempty"`
 
-	// BackupDeploymentSpec stamps custom pod-template settings onto the
-	// operator-managed backup_agent Deployment (credentials volumes,
-	// resource overrides, etc.). Only PodTemplateSpec is modelled — other
-	// fields on the operator-side type are preserved on the server.
-	// +optional
-	BackupDeploymentSpec *BackupDeploymentSpec `json:"backupDeploymentSpec,omitempty"`
-}
-
-// BackupDeploymentSpec mirrors apps.foundationdb.org/v1beta2
-// FoundationDBBackup.spec.backupDeploymentSpec. The driver only writes
-// PodTemplateSpec today; other sub-fields stay on the server side.
-type BackupDeploymentSpec struct {
-	// PodTemplateSpec is the PodTemplateSpec the operator stamps onto
-	// the backup_agent Deployment.
+	// PodTemplateSpec customises the operator-managed backup_agent pods
+	// (credentials volumes, environment, resource overrides).
 	// +optional
 	PodTemplateSpec *corev1.PodTemplateSpec `json:"podTemplateSpec,omitempty"`
 }
@@ -181,20 +169,20 @@ type BackupDeploymentSpec struct {
 // apps.foundationdb.org/v1beta2 FoundationDBBackup.status the driver reads
 // to decide when an artefact is ready.
 type FoundationDBBackupStatus struct {
-	AgentCount           int32                  `json:"agentCount,omitempty"`
-	DeploymentConfigured bool                   `json:"deploymentConfigured,omitempty"`
-	BackupDetails        *BackupDetails         `json:"backupDetails,omitempty"`
+	AgentCount           int32                   `json:"agentCount,omitempty"`
+	DeploymentConfigured bool                    `json:"deploymentConfigured,omitempty"`
+	BackupDetails        *BackupDetails          `json:"backupDetails,omitempty"`
 	Generations          *BackupGenerationStatus `json:"generations,omitempty"`
 }
 
 // BackupDetails mirrors apps.foundationdb.org/v1beta2
-// FoundationDBBackupStatus.backupDetails. SnapshotTime > 0 means a full
-// snapshot has been written and the backup is restorable.
+// FoundationDBBackupStatus.backupDetails. Restorable turns true once a
+// full snapshot has been written.
 type BackupDetails struct {
-	Paused       bool   `json:"paused,omitempty"`
-	Running      bool   `json:"running,omitempty"`
-	SnapshotTime int64  `json:"snapshotTime,omitempty"`
-	URL          string `json:"url,omitempty"`
+	Paused     bool   `json:"paused,omitempty"`
+	Running    bool   `json:"running,omitempty"`
+	Restorable bool   `json:"restorable,omitempty"`
+	URL        string `json:"url,omitempty"`
 }
 
 // BackupGenerationStatus mirrors
@@ -202,12 +190,12 @@ type BackupDetails struct {
 // driver reads Reconciled to confirm the operator has observed the latest
 // spec generation before declaring a backup ready.
 type BackupGenerationStatus struct {
-	Reconciled                int64 `json:"reconciled,omitempty"`
-	NeedsBackupStart          int64 `json:"needsBackupStart,omitempty"`
-	NeedsBackupStop           int64 `json:"needsBackupStop,omitempty"`
-	NeedsBackupPauseToggle    int64 `json:"needsBackupPauseToggle,omitempty"`
-	NeedsBackupAgentUpdate    int64 `json:"needsBackupAgentUpdate,omitempty"`
-	NeedsBackupModification   int64 `json:"needsBackupModification,omitempty"`
+	Reconciled              int64 `json:"reconciled,omitempty"`
+	NeedsBackupStart        int64 `json:"needsBackupStart,omitempty"`
+	NeedsBackupStop         int64 `json:"needsBackupStop,omitempty"`
+	NeedsBackupPauseToggle  int64 `json:"needsBackupPauseToggle,omitempty"`
+	NeedsBackupAgentUpdate  int64 `json:"needsBackupAgentUpdate,omitempty"`
+	NeedsBackupModification int64 `json:"needsBackupModification,omitempty"`
 }
 
 // BlobStoreConfiguration mirrors apps.foundationdb.org/v1beta2

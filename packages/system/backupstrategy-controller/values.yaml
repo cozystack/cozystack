@@ -139,6 +139,7 @@ backupStorage:
   # rendering. Tenants are projected lazily during BackupJob reconcile.
   systemNamespaces:
     - cozy-velero
+    - cozy-foundationdb-operator
   # reconcileDefaultObjects enables the controller's DefaultObjectsGate.
   #
   # The Strategy CRs and the Velero BSL below are Helm-templated behind a

@@ -11,30 +11,47 @@ metadata:
 spec:
   template:
     blobStoreConfiguration:
-      # accountName carries the bare host:port — backup_agent looks up the
-      # API key + secret in the JSON file referenced by --blob_credentials
-      # (see CredentialsProjector / blob_credentials.json key). The api_key
-      # therefore never lands in Strategy spec or Backup.status.
-      accountName: {{ $endpointHost | quote }}
+      # The operator requires an "@" in accountName. With nothing before it
+      # FDB reads both the API key and the secret from the credentials file,
+      # under the account "@<host>" (port excluded) that the projector
+      # writes, so the api_key never lands in Strategy spec or Backup.status.
+      accountName: {{ printf "@%s" $endpointHost | quote }}
       bucket: {{ $bucketName | quote }}
-      # BackupName is left to the driver — it picks the BackupJob name so
-      # each Cozystack BackupJob writes to a discrete S3 directory.
+      # BackupName is left to the driver: "<namespace>/<BackupJob name>", so
+      # each Cozystack BackupJob writes to a discrete S3 directory and
+      # tenants sharing the bucket stay apart.
       # secure_connection is computed from the endpoint scheme so an admin
       # switching backupStorage.endpoint to https:// does NOT silently
-      # downgrade FDB to plaintext. CA trust for self-signed S3 endpoints
-      # still has to be plumbed to the operator pod separately — see the
-      # FoundationDB caveat in backupclass-default.yaml.
+      # downgrade FDB to plaintext.
       urlParameters:
         - {{ printf "secure_connection=%s" $secureConn | quote }}
         - {{ printf "region=%s" .Values.backupStorage.region | quote }}
-        - {{ printf "bucket_path={{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
     snapshotPeriodSeconds: 3600
-    customParameters:
-      - "--blob_credentials=/var/fdb-blob-credentials/blob_credentials.json"
+    # FDB sends TLS SNI only from 7.3.78 / 7.4.6, and SNI-routed S3 endpoints
+    # abort the handshake without it, so agents of older clusters run the
+    # same minor's SNI-capable patch. Keep in step with the initContainers
+    # tags in the foundationdb-operator package values.
+    minimumAgentVersions:
+      - "7.3.79"
+      - "7.4.8"
     backupDeploymentPodTemplateSpec:
       spec:
         containers:
           - name: foundationdb
+            # Credentials go through the environment rather than
+            # customParameters: the operator prefixes every custom parameter
+            # with "--", so a "--blob_credentials" entry would reach FDB as
+            # "----blob_credentials" and be rejected.
+            env:
+              - name: FDB_BLOB_CREDENTIALS
+                value: /var/fdb-blob-credentials/blob_credentials.json
+              {{- if eq $secureConn "1" }}
+              # FDB never loads the OS trust store: without FDB_TLS_CA_FILE
+              # every TLS handshake to the blob store fails. Point it at the
+              # image's system bundle so the endpoint's certificate verifies.
+              - name: FDB_TLS_CA_FILE
+                value: /etc/pki/tls/certs/ca-bundle.crt
+              {{- end }}
             volumeMounts:
               - name: blob-credentials
                 mountPath: /var/fdb-blob-credentials

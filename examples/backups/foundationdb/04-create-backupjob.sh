@@ -2,8 +2,8 @@
 # Step 04: Submit a BackupJob and wait for it to land a restorable
 # snapshot. The driver materialises a per-BackupJob FoundationDBBackup CR
 # (one running backup directory per cluster); the BackupJob flips to
-# Succeeded once backupDetails.snapshotTime > 0 and the operator has
-# reconciled the latest spec generation.
+# Succeeded once backupDetails.restorable is true for its own directory and
+# the operator has reconciled the latest spec generation.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,8 +26,8 @@ spec:
 EOF
 
 # 45 minutes max (matches the driver-side deadline). The first snapshot has
-# to do range-file rotation through the backup_agent before snapshotTime
-# advances past zero.
+# to do range-file rotation through the backup_agent before the backup
+# becomes restorable.
 log_substep "Waiting for BackupJob to Succeed (first FoundationDBBackup snapshot)..."
 wait_for_field backupjob "$BACKUPJOB_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 2700
 
