@@ -50,7 +50,8 @@ func TestCheck(t *testing.T) {
 		s.gh.prs = append(s.gh.prs, s.f.batchPR(90, "release-1.1", batchBranch1, body))
 	}
 	l, _ := parseLine("release-1.1")
-	deferred6 := deferredBlock(l, []pick{{v: &verdict{o: &original{number: 6}}, files: []string{"app/six.txt"}}})
+	deferred6 := deferredBlock(l, []pick{{v: &verdict{o: &original{number: 6}}, files: []string{"app/six.txt"}}}, nil)
+	held6 := deferredBlock(l, nil, []pick{{v: &verdict{o: &original{number: 6}}, reason: "fails the app e2e"}})
 
 	cases := []struct {
 		name        string
@@ -90,6 +91,12 @@ func TestCheck(t *testing.T) {
 		{
 			name:        "the missing one is a deferred conflict on the batch",
 			arrange:     func(s *state) { batch(s, "body\n\n"+deferred6+"\n", s.mc5) },
+			code:        0,
+			warnedAbout: "/pull/6 ",
+		},
+		{
+			name:        "the missing one is deferred to the next batch",
+			arrange:     func(s *state) { batch(s, "body\n\n"+held6+"\n", s.mc5) },
 			code:        0,
 			warnedAbout: "/pull/6 ",
 		},
@@ -140,7 +147,7 @@ func TestCheck(t *testing.T) {
 					t.Errorf("stdout lists %q:\n%s", unwanted, stdout)
 				}
 			}
-			if tc.warnedAbout != "" && !strings.Contains(stderr, "deferred conflict") && !strings.Contains(stderr, tc.warnedAbout) {
+			if tc.warnedAbout != "" && (!strings.Contains(stderr, "warning: deferred") || !strings.Contains(stderr, tc.warnedAbout)) {
 				t.Errorf("stderr does not warn about %q:\n%s", tc.warnedAbout, stderr)
 			}
 		})

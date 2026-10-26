@@ -6,7 +6,8 @@ Builds the automatic backport batch for a release line and gates a patch cut on 
 
 ```bash
 go build ./cmd/backport-batch
-./backport-batch run   --line release-1.7 [--onto SHA] [--date YYYY-MM-DD] [--push]
+./backport-batch run   --line release-1.7 [--onto SHA | --continue] [--date YYYY-MM-DD] [--push]
+./backport-batch run   --line release-1.7 --defer 4321[,4322] --reason "fails the e2e of the app" [--push]
 ./backport-batch check --line release-1.7
 ./backport-batch fold  --line release-1.7 --original 4321 --commit SHA
 ```
@@ -23,13 +24,15 @@ Switches the current working tree to `backport-batch/<line>-<yyyymmdd>`, created
 
 The pull request body goes to stdout, built from the line's own `.github/PULL_REQUEST_TEMPLATE.md`: the originals on the branch, the deferred conflicts with their files, the skipped pull requests counted by rule with the lists collapsed, the originals' release notes, and a `backport-batch` block of JSON that lists the deferred conflicts for `check`. The title is `fix(backport): batch for <line>, <date>`. A body that would pass GitHub's 65536-byte limit leaves out its longest skipped lists, and the run prints them on stderr instead.
 
-`--onto SHA` continues a batch already pushed instead of starting a new one. SHA has to be the head the remote has for a batch branch of the line right now, read with `git ls-remote`, so a head someone pushed onto since is refused. What that branch carries stays, and only what it does not carry yet is picked on top, so the next push is a fast-forward.
+`--onto SHA` continues a batch already pushed instead of starting a new one. SHA has to be the head the remote has for a batch branch of the line right now, read with `git ls-remote`, so a head someone pushed onto since is refused. What that branch carries stays, and only what it does not carry yet is picked on top, so the next push is a fast-forward. `--continue` takes SHA from the open batch pull request, and starts a new batch when none is open, which is what the scheduled run does.
 
-`--push` pushes the branch, refusing anything but a fast-forward of what the remote has, then opens the draft pull request against the line with `gh pr create --draft`, or updates the open batch pull request with `gh pr edit`. While a batch pull request is open on another branch it refuses, so a line never has two.
+`--defer N[,N] --reason TEXT` takes originals out of the open batch pull request, usually the ones a failing check was pinned on. It builds the batch branch again off `origin/<line>` without their commits: while the batch still sits on the line's head, the commits before the first one it drops stay as they are, and every later one, a pushed resolution included, is picked again. When dropping one leaves a later commit that no longer applies, the run stops and names that commit's original, to defer as well. It adds no new original. It also takes out an original that got `backport/skip` after the batch picked it, which a run never removes on its own and the body lists as still on the branch. The body records each deferred original with the reason in the `backport-batch` block; a run that continues this batch keeps them out, and the next batch tries them again. A batch that carries a merge commit, as GitHub's update-branch button makes, is refused, since picking a merge again would lose what it resolved.
+
+`--push` pushes the branch, refusing anything but a fast-forward of what the remote has, then opens the draft pull request against the line with `gh pr create --draft`, or updates the open batch pull request with `gh pr edit`. While a batch pull request is open on another branch it refuses, so a line never has two. After `--defer` alone it replaces the branch, with `--force-with-lease=refs/heads/<branch>:<head>`, where head is what `git ls-remote` reads for the branch and has to be the head the rebuild started from: a commit pushed since is never dropped, by the tool's check or, if one lands between that check and the push, by the remote.
 
 ### check
 
-Exits 1 and prints the URL of every pull request the rules take that is neither on the line nor on the open batch pull request, 0 when there is none, and 2 when it cannot tell. A pull request that the open batch lists as a deferred conflict prints as a warning and does not fail the check. Run it before cutting a patch release or an rc from a line.
+Exits 1 and prints the URL of every pull request the rules take that is neither on the line nor on the open batch pull request, 0 when there is none, and 2 when it cannot tell. A pull request that the open batch lists as deferred, a conflict or one taken out with `--defer`, prints as a warning and does not fail the check. Run it before cutting a patch release or an rc from a line.
 
 ### fold
 

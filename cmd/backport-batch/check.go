@@ -24,8 +24,8 @@ import (
 )
 
 // check is the gate before a patch cut: every original the policy takes is on
-// the line, on the open batch pull request, or listed there as a deferred
-// conflict, which warns without failing.
+// the line, on the open batch pull request, or listed there as deferred, a
+// conflict or one taken out with --defer, which warns without failing.
 func (a *app) check(args []string) int {
 	fs := a.flags("check")
 	lineArg := fs.String("line", "", "release line, release-X.Y")
@@ -43,18 +43,21 @@ func (a *app) check(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	deferred := map[int]bool{}
+	deferred := map[int]deferredEntry{}
 	if b.pr != nil {
 		if deferred, err = parseDeferred(b.pr.Body, l); err != nil {
 			return a.fail(fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err))
 		}
 	}
-	var missing, warned []*verdict
+	var missing []*verdict
 	for _, v := range b.qualifying() {
+		e, isDeferred := deferred[v.o.number]
 		switch {
 		case v.onBatch != "":
-		case deferred[v.o.number]:
-			warned = append(warned, v)
+		case isDeferred && e.Reason != "":
+			a.warn("deferred on #%d to the next batch: %s %s (%s)", b.pr.Number, v.o.url(), terminalSafe(v.o.title), terminalSafe(e.Reason))
+		case isDeferred:
+			a.warn("deferred conflict on #%d: %s %s", b.pr.Number, v.o.url(), terminalSafe(v.o.title))
 		default:
 			missing = append(missing, v)
 		}
@@ -62,9 +65,6 @@ func (a *app) check(args []string) int {
 	where := "and no batch pull request is open"
 	if b.pr != nil {
 		where = "nor on batch pull request #" + strconv.Itoa(b.pr.Number)
-	}
-	for _, v := range warned {
-		a.warn("deferred conflict on #%d: %s %s", b.pr.Number, v.o.url(), terminalSafe(v.o.title))
 	}
 	if len(missing) == 0 {
 		fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())

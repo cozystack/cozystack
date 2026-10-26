@@ -35,7 +35,11 @@ import (
 // of which GitHub shows as written, with no mention, reference, link or HTML
 // in them acted on. neutralNote is for a note copied out of that block.
 
-const ourRepoURL = "https://github.com/" + upstreamRepo + "/"
+const (
+	ourRepoURL = "https://github.com/" + upstreamRepo + "/"
+	// tasksURL is where the instructions for the work a batch leaves live.
+	tasksURL = ourRepoURL + "blob/main/docs/release/backport-tasks/"
+)
 
 const (
 	titleLimit = 200
@@ -162,10 +166,13 @@ func releaseNote(body string) string {
 // deferredFence opens the block check reads the deferred conflicts from.
 const deferredFence = "```backport-batch"
 
+// deferredEntry is a conflict, with its files, or an original --defer took
+// out of the batch, with the reason given.
 type deferredEntry struct {
 	Original int      `json:"original"`
 	Files    []string `json:"files"`
 	More     int      `json:"more,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
 }
 
 // How many conflicting files of one original the body names, in the list and
@@ -180,22 +187,25 @@ type deferredRecord struct {
 	Deferred []deferredEntry `json:"deferred"`
 }
 
-// deferredBlock is the machine-readable list of deferred conflicts. One line
-// of JSON: encoding/json escapes newlines and <, > and &, so nothing in a
-// file name can end the fence or open HTML.
-func deferredBlock(l line, conflicts []pick) string {
+// deferredBlock is the machine-readable list of what the batch defers. One
+// line of JSON: encoding/json escapes newlines and <, > and &, so nothing in a
+// file name or a reason can end the fence or open HTML.
+func deferredBlock(l line, conflicts, held []pick) string {
 	rec := deferredRecord{Line: l.branch(), Deferred: []deferredEntry{}}
 	for _, p := range conflicts {
 		files := p.files[:min(len(p.files), filesKept)]
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files)})
+		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more})
+	}
+	for _, p := range held {
+		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: []string{}, Reason: capped(oneLine(clean(p.reason, false)), titleLimit)})
 	}
 	data, _ := json.Marshal(rec)
 	return deferredFence + "\n" + string(data) + "\n```"
 }
 
-// parseDeferred reads the deferred conflicts back from a batch body: exactly
-// one block, for this line.
-func parseDeferred(body string, l line) (map[int]bool, error) {
+// parseDeferred reads what a batch body defers: exactly one block, for this
+// line, naming each original once.
+func parseDeferred(body string, l line) (map[int]deferredEntry, error) {
 	var blocks []string
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
 	for i := 0; i < len(lines); i++ {
@@ -210,7 +220,7 @@ func parseDeferred(body string, l line) (map[int]bool, error) {
 	}
 	switch len(blocks) {
 	case 0:
-		return map[int]bool{}, nil
+		return map[int]deferredEntry{}, nil
 	case 1:
 	default:
 		return nil, fmt.Errorf("the body holds %d %s blocks", len(blocks), deferredFence)
@@ -224,12 +234,15 @@ func parseDeferred(body string, l line) (map[int]bool, error) {
 	if rec.Line != l.branch() {
 		return nil, fmt.Errorf("the %s block is for %q, not %s", deferredFence, rec.Line, l.branch())
 	}
-	out := map[int]bool{}
+	out := map[int]deferredEntry{}
 	for _, d := range rec.Deferred {
 		if d.Original <= 0 {
 			return nil, fmt.Errorf("the %s block names original %d", deferredFence, d.Original)
 		}
-		out[d.Original] = true
+		if _, dup := out[d.Original]; dup {
+			return nil, fmt.Errorf("the %s block names #%d twice", deferredFence, d.Original)
+		}
+		out[d.Original] = d
 	}
 	return out, nil
 }
@@ -247,11 +260,14 @@ type report struct {
 	line     line
 	newer    *line
 	onBranch []*verdict // carried from --onto and picked now, in merge order
-	deferred []pick
+	deferred []pick     // conflicts
+	held     []pick     // what --defer took out, with the reason
 	skipped  map[int][]*verdict
 	other    int
-	// overrides are the originals a backport/ label kept out or let in.
+	// overrides are the originals a backport/ label kept out or let in, and
+	// stale those with backport/skip that are still on the batch.
 	overrides []*verdict
+	stale     []*verdict
 	start     time.Time
 }
 
@@ -277,7 +293,7 @@ func (r *report) ruleTitle(rule int) string {
 // in details written out.
 func (r *report) what(details map[int]bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) and applied with `git cherry-pick -x` in merge order. Each commit keeps the original message and names its original in a `(cherry picked from commit …)` line.\n\n", codeSpan(r.line.branch()), policyURL)
+	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) and applied with `git cherry-pick -x` in merge order. Each commit keeps the original message and names its original in a `(cherry picked from commit …)` line. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, tasksURL)
 	if len(r.onBranch) == 0 {
 		b.WriteString("Nothing is picked yet.\n")
 	}
@@ -285,16 +301,22 @@ func (r *report) what(details map[int]bool) string {
 		fmt.Fprintf(&b, "- %s %s\n", prLink(v.o.number), titleSpan(v.o.title))
 	}
 	if len(r.deferred) > 0 {
-		b.WriteString("\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first.\n\n")
+		fmt.Fprintf(&b, "\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first, as [resolving a conflict](%sresolve-conflict.md) describes.\n\n", tasksURL)
 		for _, p := range r.deferred {
 			var files []string
 			for _, f := range p.files[:min(len(p.files), filesListed)] {
 				files = append(files, codeSpan(f))
 			}
-			if more := len(p.files) - len(files); more > 0 {
+			if more := len(p.files) - len(files) + p.more; more > 0 {
 				files = append(files, fmt.Sprintf("%d more", more))
 			}
 			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
+		}
+	}
+	if len(r.held) > 0 {
+		b.WriteString("\n### Deferred to the next batch\n\nTaken out of this batch with `backport-batch run --defer`, each for the reason given. This pull request keeps them out; the next batch picks them again.\n\n")
+		for _, p := range r.held {
+			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), titleSpan(p.reason))
 		}
 	}
 	if len(r.overrides) > 0 {
@@ -328,19 +350,23 @@ func (r *report) what(details map[int]bool) string {
 			b.WriteString("\n</details>\n")
 		}
 	}
-	b.WriteString("\n" + deferredBlock(r.line, r.deferred) + "\n")
+	b.WriteString("\n" + deferredBlock(r.line, r.deferred, r.held) + "\n")
 	return b.String()
 }
 
 // outcome is what became of an original a label overrode.
 func (r *report) outcome(v *verdict) string {
 	switch {
+	case slices.Contains(r.stale, v):
+		return "still on this branch, picked before the label; take it out with `backport-batch run --defer`"
 	case v.label == labelSkip:
 		return "left out"
 	case slices.Contains(r.onBranch, v):
 		return "on this branch"
 	case slices.ContainsFunc(r.deferred, func(p pick) bool { return p.v == v }):
 		return "a deferred conflict"
+	case slices.ContainsFunc(r.held, func(p pick) bool { return p.v == v }):
+		return "deferred to the next batch"
 	case v.rule != 0:
 		return "skipped by rule " + strconv.Itoa(v.rule) + ", " + titleSpan(v.reason)
 	}

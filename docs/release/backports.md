@@ -28,7 +28,7 @@ The batch takes a pull request from `main` into release line X.Y when all of the
 A maintainer overrides the rules for one pull request with a label on the merged pull request on `main`:
 
 - `backport/include` takes it although rules 2 to 4 keep it out, a `feat` for instance, or although it merged before its line started under this policy. It still has to pick cleanly or have its conflict resolved, pass CI on the batch, and, on an older line, already be on the newer one, and a line that already carries it does not take it again.
-- `backport/skip` keeps it out although the rules take it, and `backport-batch check` stops asking for it.
+- `backport/skip` keeps it out although the rules take it, and `backport-batch check` stops asking for it. An open batch that picked it before the label came keeps it until `backport-batch run --defer` takes it out; the batch pull request says so meanwhile.
 
 `backport/skip` wins when a pull request carries both. Each run reads the labels afresh, and the batch pull request lists every override and what became of it.
 

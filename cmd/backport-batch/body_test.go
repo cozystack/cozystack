@@ -220,14 +220,18 @@ func TestCodeSpan(t *testing.T) {
 func TestDeferredRoundTrip(t *testing.T) {
 	l, _ := parseLine("release-1.6")
 	v := &verdict{o: &original{number: 3735}}
-	block := deferredBlock(l, []pick{{v: v, files: []string{"a\n```\nb", "<c>&d", "e`f"}}})
+	held := &verdict{o: &original{number: 3736}}
+	block := deferredBlock(l, []pick{{v: v, files: []string{"a\n```\nb", "<c>&d", "e`f"}}}, []pick{{v: held, reason: "breaks\n```\n<b>e2e</b>"}})
 	if lines := strings.Split(block, "\n"); len(lines) != 3 {
 		t.Fatalf("the block is %d lines, want 3:\n%s", len(lines), block)
 	}
 	body := "## What this PR does\n\ntext\n\n" + block + "\n\n### Release note\n"
 	got, err := parseDeferred(body, l)
-	if err != nil || len(got) != 1 || !got[3735] {
-		t.Errorf("parseDeferred = %v, %v; want #3735", got, err)
+	if err != nil || len(got) != 2 || len(got[3735].Files) != 3 || got[3735].Reason != "" {
+		t.Errorf("parseDeferred = %v, %v; want the conflict #3735 with its files", got, err)
+	}
+	if e := got[3736]; e.Reason != "breaks ``` <b>e2e</b>" || len(e.Files) != 0 {
+		t.Errorf("parseDeferred = %+v; want #3736 held, for its reason on one line", e)
 	}
 	if strings.ContainsAny(strings.Split(block, "\n")[1], "<>&") {
 		t.Errorf("the JSON line carries raw HTML characters: %s", block)
@@ -240,6 +244,7 @@ func TestDeferredRoundTrip(t *testing.T) {
 		"not JSON":        deferredFence + "\nnot json\n```",
 		"an unknown key":  deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[],\"x\":1}\n```",
 		"a bad number":    deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[{\"original\":-1}]}\n```",
+		"a repeat":        deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[{\"original\":5},{\"original\":5,\"reason\":\"x\"}]}\n```",
 		"a broken fence":  deferredFence + "\n{}\nmore\n```",
 		"an empty fence":  deferredFence + "\n```",
 		"a trailing line": deferredFence,

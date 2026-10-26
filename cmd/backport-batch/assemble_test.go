@@ -89,7 +89,7 @@ func TestRunRecordsConflictsAndGoesOn(t *testing.T) {
 	}
 	l, _ := parseLine("release-1.1")
 	deferred, err := parseDeferred(stdout, l)
-	if err != nil || !deferred[5] || len(deferred) != 1 {
+	if err != nil || len(deferred[5].Files) == 0 || len(deferred) != 1 {
 		t.Errorf("deferred = %v, %v; want #5", deferred, err)
 	}
 	if !strings.Contains(stdout, "### Deferred conflicts") || !strings.Contains(stdout, "`chart/values.yaml`") {

@@ -31,14 +31,21 @@ import (
 const usageText = `Assemble and check the automatic backport batch for a release line.
 
 Usage:
-  backport-batch run   --line release-X.Y [--onto SHA] [--date YYYY-MM-DD] [--push] [--policy REF]
+  backport-batch run   --line release-X.Y [--onto SHA | --continue] [--date YYYY-MM-DD] [--push] [--policy REF]
+  backport-batch run   --line release-X.Y --defer N[,N] --reason TEXT [--push] [--policy REF]
   backport-batch check --line release-X.Y [--policy REF]
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        origin/<line>, or on top of the pushed batch branch whose head is
-       --onto. Prints the pull request body on stdout. --push pushes the
-       branch, fast-forward only, and opens or updates the draft batch PR.
+       --onto. --continue takes that head from the open batch PR, and starts
+       a batch when none is open. Prints the pull request body on stdout.
+       --push pushes the branch, fast-forward only, and opens or updates the
+       draft batch PR.
+       --defer rebuilds the open batch off origin/<line> without those
+       originals and records them as deferred, for --reason: the batch keeps
+       them out, the next one tries them again. --push replaces the branch,
+       leased on the head the rebuild started from.
 check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell.
 fold   Checks a hand-made conflict resolution commit for the open batch PR
