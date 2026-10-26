@@ -20,6 +20,22 @@
 {{- if not .Values.backup.s3SecretKey }}
 {{- fail "backup.s3SecretKey is required when bootstrap.enabled is true" }}
 {{- end }}
+{{- /*
+  The operator passes spec.selective to percona-backup-mongodb without the
+  checks the pbm CLI makes on --ns, so the chart makes them. A "*" turns the
+  restore back into a full one, users included.
+*/}}
+{{- range .Values.bootstrap.databases }}
+{{- if not (regexMatch `^[^/\\. "$*[:space:]]+$` .) }}
+{{- fail (printf "bootstrap.databases has %q, which is not a database name. A name cannot be empty or contain whitespace or any of / \\ . \" $ *" .) }}
+{{- end }}
+{{- if has . (list "admin" "config" "local") }}
+{{- fail (printf "bootstrap.databases cannot list %q, the admin, config and local databases belong to the application itself and are not restored selectively" .) }}
+{{- end }}
+{{- end }}
+{{- if and .Values.bootstrap.databases .Values.bootstrap.recoveryTime .Values.sharding }}
+{{- fail "bootstrap.databases cannot be combined with bootstrap.recoveryTime when sharding is enabled, percona-backup-mongodb restores selected databases to a point in time on replica sets only" }}
+{{- end }}
 ---
 apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDBRestore
@@ -31,6 +47,14 @@ spec:
   pitr:
     type: date
     date: {{ .Values.bootstrap.recoveryTime | quote }}
+  {{- end }}
+  {{- with .Values.bootstrap.databases }}
+  selective:
+    withUsersAndRoles: false
+    namespaces:
+      {{- range . }}
+      - {{ printf "%s.*" . | quote }}
+      {{- end }}
   {{- end }}
   backupSource:
     type: logical
