@@ -5,10 +5,9 @@
 # target arch and verify it against the release's cli-SHA256SUMS.txt. Bump
 # ETCD_OPERATOR_VERSION (and the pinned checksums below) together, keeping it in
 # sync with packages/system/etcd-operator (Chart appVersion).
-# credentials-migrate is built from this repository, because it shares the
-# password format functions with the API: a migrated release and a mint must
-# store the same verifier. The build context is the repository root for that
-# reason, and every other path below is relative to it.
+# credentials-migrate shares the password format functions with the API, so
+# it is built from this repository: the build context is the repository root,
+# and every path below is relative to it.
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
 ARG GOPROXY
 ARG TARGETOS

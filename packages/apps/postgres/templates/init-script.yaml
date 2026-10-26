@@ -141,21 +141,15 @@ stringData:
     echo "== mark users"
     {{- if .Values.users }}
     {{- /*
-      CNPG creates each account from the Cluster's managed roles, with its
-      password from the account Secret, its attributes and its memberships, and
-      reverts what drifts, so this script no longer creates, passwords or
-      alters an account: it would be a second writer. Two things CNPG has no
-      field for stay here. CNPG grants the marker with the default membership
-      options, so an account could SET ROLE to it and inherit whatever it is
-      granted; the re-grant narrows the membership to a record, as the chart
-      always kept it, and CNPG leaves the options of an existing membership
-      alone. And createrole_self_grant, which CREATEROLE needs to be usable on
-      PostgreSQL 16. Both wait for the role to exist: CNPG applies the spec
-      within seconds, but this hook may run first, and the next run finishes
-      what this one skipped. Adoption of a role the chart did not mark is
-      refused in the pre-upgrade hook, which runs before the Cluster reaches
-      CNPG; the flag it reads is still recorded here after an install, where
-      that hook has no cluster to reach.
+      CNPG creates, passwords and alters each account from the Cluster's
+      managed roles; a second writer here would fight it. Two things it has no
+      field for stay: the marker membership, which CNPG grants with the default
+      options and this re-grant narrows to a record, leaving the options of an
+      existing membership alone; and createrole_self_grant. Both wait for the
+      role to exist, since this hook may run before CNPG has created it, and
+      the next run finishes what this one skipped. The createRole flag is
+      recorded here after an install, where the pre-upgrade hook that reads it
+      has no cluster to reach.
     */}}
     {{- $grantsCreateRole := false }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT

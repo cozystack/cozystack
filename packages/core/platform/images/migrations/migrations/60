@@ -1,33 +1,16 @@
 #!/bin/sh
 # Migration 60 --> 61
-# Convert PostgreSQL accounts to platform-minted credentials: the first
-# part of the user secrets API conversion for the Postgres kind.
+# Convert PostgreSQL accounts to platform-minted credentials, first part.
 #
-# This release switches the postgres chart to CloudNativePG managed roles
-# that read each account's SCRAM verifier from an account Secret the
-# Cozystack API writes, and stops rendering <release>-credentials. Until
-# the charts switch, the old chart keeps serving the old passwords from
-# that Secret, so this hook, which runs before any component chart changes
-# version, records the chart version of every Postgres release and writes
-# the account Secrets with the verifiers of the passwords in
-# <release>-credentials, origin Migrated, so clients keep logging in at
-# every point of the upgrade. The API's own format function computes the
-# verifier, compiled into credentials-migrate, so a migrated release and a
-# mint store the same form.
-#
-# The second part, the cozystack-credentials-migration-60 Job the platform
-# release creates once the charts switch, waits per release for the
-# converted chart to be Ready, removes any users.*.password left in the
-# values and deletes <release>-credentials, which no platform account of
-# postgres shares. It is not a hook, can be run again by hand, and exits
-# non-zero while a release is left out; the state is in the
-# credentials-migration-60 ConfigMap in cozy-system.
-#
-# A release whose accounts cannot be resolved, two users mapping to one
-# account name, is left out here with an Event on its HelmRelease and keeps
-# working as before; the Job reports it until the cause is fixed. A release
-# whose <release>-credentials is gone is recorded anyway: its database keeps
-# its passwords, and a tenant mints by name once the chart has switched.
+# The converted postgres chart reads each account's verifier from an account
+# Secret the Cozystack API writes, and the API seeds those Secrets only on a
+# write of the application. This hook runs before any component chart changes
+# version and seeds them for every existing Postgres release from the
+# passwords in <release>-credentials, so clients keep logging in at every
+# point of the upgrade. The second part is the cozystack-credentials-migration-60
+# Job (templates/credentials-migration-job.yaml), which finishes each release
+# once its chart has switched. State: the credentials-migration-60 ConfigMap in
+# cozy-system.
 #
 # Fail-closed: migrations never re-run, so an error here stops the upgrade
 # rather than stamping the version past a release that was not recorded.
