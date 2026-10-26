@@ -10,6 +10,8 @@ go build ./cmd/backport-batch
 ./backport-batch run   --line release-1.7 --defer 4321[,4322] --reason "fails the e2e of the app" [--push]
 ./backport-batch check --line release-1.7
 ./backport-batch fold  --line release-1.7 --original 4321 --commit SHA
+./backport-batch notify --line release-1.7 [--agent ci|manual] [--mention org/team] [--push]
+./backport-batch lines
 ```
 
 Requires `git` and an authenticated `gh` on PATH, and a remote called `origin`. Every command fetches `origin` first. The batch runs only for the two newest `release-X.Y` lines.
@@ -37,6 +39,18 @@ Exits 1 and prints the URL of every pull request the rules take that is neither 
 ### fold
 
 Checks a hand-made resolution of a deferred conflict before it is pushed onto the batch. The commit has to have one parent, the head of the open batch pull request; to touch only files the original touched; to change something; and to name the original's merge commit, or one of its commits, in a `(cherry picked from commit …)` line, and nothing else. `git cherry-pick -x -m 1 <merge commit>` on the batch head, with the conflict resolved, produces exactly that. fold prints `ok` and exits 0, or prints why not and exits 1. It never commits or pushes; push one checked commit at a time, since the next one has to sit on the new head.
+
+### notify
+
+Reads the open batch pull request of the line, trusted as described below, and prints one line for each thing that waits on it: a batch open for three days or more, the shortest gap between two scheduled runs, so one the previous run already saw; and the conflicts it deferred. Nothing open prints nothing.
+
+With `--push`, `--agent ci` starts one task per deferred conflict for the Copilot cloud agent, `POST /agents/repos/{owner}/{repo}/tasks` with the line as `base_ref` and the batch branch as `head_ref`, so the agent commits to the batch branch. The prompt is built from numbers and branch names alone and points the agent at the [conflict task](../../docs/release/backport-tasks/resolve-conflict.md). The call runs with the token in `BACKPORT_AGENT_TOKEN` and that call alone sees it; without it `--agent ci --push` stops before anything. `--agent manual`, the default, lists the conflicts in the comment instead.
+
+The comment starts with `<!-- backport-batch:notify -->` and is one per pull request: a later run edits it in place rather than adding another, and once nothing waits it says so. Only a comment whose author the batch trusts counts as it, so one someone else wrote with the same first line is neither edited nor believed. It mentions `--mention`, `@org/team` or `@login`, only while something waits. A failed batch CI is not among what it reports: the run has no trigger on the batch's CI finishing.
+
+### lines
+
+Prints the release lines the batch runs for, newest first: the two newest `release-X.Y` branches on `origin`.
 
 ## Rule 4 and the API review gate
 

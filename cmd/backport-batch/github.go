@@ -19,6 +19,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 )
@@ -69,6 +70,20 @@ type pullRequest struct {
 	} `json:"base"`
 }
 
+// issueComment is the REST view of a comment on a pull request.
+type issueComment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
+}
+
+// agentTasksAPIVersion is the REST API version the agent tasks endpoint is
+// documented under.
+const agentTasksAPIVersion = "2026-03-10"
+
 // github is the part of GitHub the tool talks to: gh outside tests.
 type github interface {
 	openPulls(base string) ([]pullRequest, error)
@@ -79,6 +94,13 @@ type github interface {
 	labelled(label string) ([]int, error)
 	createPull(base, head, title, bodyFile string) error
 	editPull(number int, title, bodyFile string) error
+	comments(number int) ([]issueComment, error)
+	createComment(number int, bodyFile string) error
+	editComment(id int64, bodyFile string) error
+	// startTask hands prompt to the Copilot cloud agent, to work on head, the
+	// branch of the open pull request into base, with token: the agent tasks
+	// API takes a person's token and no installation token.
+	startTask(token, base, head, prompt string) error
 }
 
 type ghCLI struct{}
@@ -148,24 +170,71 @@ func (ghCLI) editPull(number int, title, bodyFile string) error {
 	return err
 }
 
+func (ghCLI) comments(number int) ([]issueComment, error) {
+	out, err := capture("gh", "api", "--paginate", "--slurp", "repos/{owner}/{repo}/issues/"+strconv.Itoa(number)+"/comments")
+	if err != nil {
+		return nil, err
+	}
+	var pages [][]issueComment
+	if err := json.Unmarshal([]byte(out), &pages); err != nil {
+		return nil, fmt.Errorf("reading the comments on #%d: %w", number, err)
+	}
+	var all []issueComment
+	for _, page := range pages {
+		all = append(all, page...)
+	}
+	return all, nil
+}
+
+func (ghCLI) createComment(number int, bodyFile string) error {
+	_, err := capture("gh", "api", "--method", "POST", "repos/{owner}/{repo}/issues/"+strconv.Itoa(number)+"/comments", "-F", "body=@"+bodyFile)
+	return err
+}
+
+func (ghCLI) editComment(id int64, bodyFile string) error {
+	_, err := capture("gh", "api", "--method", "PATCH", "repos/{owner}/{repo}/issues/comments/"+strconv.FormatInt(id, 10), "-F", "body=@"+bodyFile)
+	return err
+}
+
+func (ghCLI) startTask(token, base, head, prompt string) error {
+	cmd := command("gh", "api", "--method", "POST", "agents/repos/{owner}/{repo}/tasks",
+		"-H", "X-GitHub-Api-Version: "+agentTasksAPIVersion,
+		"-f", "prompt="+prompt, "-f", "base_ref="+base, "-f", "head_ref="+head)
+	// The agent's token goes to this call alone, never to the batch's.
+	cmd.Env = append(os.Environ(), append(commandEnv, "GH_TOKEN="+token, "GITHUB_TOKEN=")...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("starting an agent task on %s: %w: %s", head, err, clean(string(out), false))
+	}
+	return nil
+}
+
 // trusted says why a pull request's author may not speak for the batch, or ""
-// when they may: GitHub Actions' own bot, or a person whose permission on the
+// when they may.
+func trusted(gh github, pr pullRequest) string {
+	if why := trustedAuthor(gh, pr.User.Login, pr.User.Type); why != "" {
+		return "opened by " + why
+	}
+	return ""
+}
+
+// trustedAuthor says why an author may not speak for the batch, or "" when
+// they may: GitHub Actions' own bot, or a person whose permission on the
 // repository is write or admin. The author association is not asked: an
 // organization member or an invited collaborator can hold read access only,
 // and the legacy permission folds maintain into write and triage into read.
-func trusted(gh github, pr pullRequest) string {
+func trustedAuthor(gh github, login, kind string) string {
 	switch {
-	case pr.User.Type == "Bot" && pr.User.Login == "github-actions[bot]":
+	case kind == "Bot" && login == "github-actions[bot]":
 		return ""
-	case pr.User.Type != "User" || !loginRE.MatchString(pr.User.Login):
-		return fmt.Sprintf("opened by %q, which is neither a person nor GitHub Actions", pr.User.Login)
+	case kind != "User" || !loginRE.MatchString(login):
+		return fmt.Sprintf("%q, which is neither a person nor GitHub Actions", login)
 	}
-	perm, err := gh.permission(pr.User.Login)
+	perm, err := gh.permission(login)
 	switch {
 	case err != nil:
-		return fmt.Sprintf("cannot read %s's permission: %v", pr.User.Login, err)
+		return fmt.Sprintf("%s, whose permission cannot be read: %v", login, err)
 	case perm != "write" && perm != "admin":
-		return fmt.Sprintf("opened by %s, whose permission is %q", pr.User.Login, perm)
+		return fmt.Sprintf("%s, whose permission is %q", login, perm)
 	}
 	return ""
 }

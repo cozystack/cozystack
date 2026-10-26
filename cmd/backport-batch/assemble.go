@@ -235,6 +235,12 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	if !push {
 		return 0
 	}
+	if head == b.lineHead && b.pr == nil {
+		// Picking nothing is not a failure of the run; check still reports
+		// whatever the line lacks.
+		fmt.Fprintf(a.stderr, "%s carries nothing beyond %s; nothing to push\n", branch, b.line.branch())
+		return 0
+	}
 	if err := a.publish(b, branch, head, title, body, rebuilt); err != nil {
 		return a.fail(err)
 	}

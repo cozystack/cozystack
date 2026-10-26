@@ -204,4 +204,50 @@ func TestGHCLI(t *testing.T) {
 	if _, err := (ghCLI{}).openPulls("release-1.6"); err == nil {
 		t.Error("a full page of open pull requests was read as all of them")
 	}
+
+	write(`[[{"id":1,"body":"a","user":{"login":"x","type":"User"}}],[{"id":2,"body":"b","user":{"login":"y","type":"Bot"}}]]`)
+	comments, err := ghCLI{}.comments(90)
+	if err != nil || len(comments) != 2 || comments[1].ID != 2 || comments[1].User.Type != "Bot" {
+		t.Errorf("comments = %+v, %v; want both pages", comments, err)
+	}
+	if want := "api --paginate --slurp repos/{owner}/{repo}/issues/90/comments"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	write("{}")
+	if err := (ghCLI{}).createComment(90, "/tmp/body.md"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "api --method POST repos/{owner}/{repo}/issues/90/comments -F body=@/tmp/body.md"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	write("{}")
+	if err := (ghCLI{}).editComment(12345678901, "/tmp/body.md"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "api --method PATCH repos/{owner}/{repo}/issues/comments/12345678901 -F body=@/tmp/body.md"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+
+	// The agent's token reaches the agent task call and nothing else, and no
+	// token of the job's stands in for it.
+	stub = "#!/bin/sh\nprintf 'GH_TOKEN=%s GITHUB_TOKEN=%s %s\\n' \"$GH_TOKEN\" \"$GITHUB_TOKEN\" \"$*\" >> \"" + args + "\"\ncat \"" + out + "\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_TOKEN", "batch-token")
+	t.Setenv("GITHUB_TOKEN", "job-token")
+	write("{}")
+	if err := (ghCLI{}).startTask("agent-token", "release-1.7", batchBranch1, "do it"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "GH_TOKEN=agent-token GITHUB_TOKEN= api --method POST agents/repos/{owner}/{repo}/tasks -H X-GitHub-Api-Version: 2026-03-10 -f prompt=do it -f base_ref=release-1.7 -f head_ref=" + batchBranch1; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	write("{}")
+	if err := (ghCLI{}).createComment(90, "/tmp/body.md"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(called(), "GH_TOKEN=batch-token ") {
+		t.Errorf("a comment went out as %q, want the batch's token", called())
+	}
 }

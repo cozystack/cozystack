@@ -182,6 +182,40 @@ type fakeGH struct {
 	created []string
 	edited  []string
 	bodies  []string
+	// issueComments are the comments on the batch pull request, which
+	// createComment and editComment change; tasks are the agent tasks
+	// started, as token base head prompt.
+	issueComments []issueComment
+	tasks         []string
+}
+
+func (g *fakeGH) comments(int) ([]issueComment, error) {
+	return slices.Clone(g.issueComments), nil
+}
+
+func (g *fakeGH) createComment(number int, bodyFile string) error {
+	data, err := os.ReadFile(bodyFile)
+	var c issueComment
+	c.ID, c.Body = int64(1000+len(g.issueComments)), string(data)
+	c.User.Login, c.User.Type = "maintainer", "User"
+	g.issueComments = append(g.issueComments, c)
+	return err
+}
+
+func (g *fakeGH) editComment(id int64, bodyFile string) error {
+	data, err := os.ReadFile(bodyFile)
+	for i := range g.issueComments {
+		if g.issueComments[i].ID == id {
+			g.issueComments[i].Body = string(data)
+			return err
+		}
+	}
+	return fmt.Errorf("no comment %d", id)
+}
+
+func (g *fakeGH) startTask(token, base, head, prompt string) error {
+	g.tasks = append(g.tasks, token+" "+base+" "+head+" "+prompt)
+	return nil
 }
 
 func (g *fakeGH) labelled(label string) ([]int, error) {

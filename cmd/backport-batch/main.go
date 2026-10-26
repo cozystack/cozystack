@@ -35,6 +35,8 @@ Usage:
   backport-batch run   --line release-X.Y --defer N[,N] --reason TEXT [--push] [--policy REF]
   backport-batch check --line release-X.Y [--policy REF]
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
+  backport-batch notify --line release-X.Y [--agent ci|manual] [--mention @org/team] [--push]
+  backport-batch lines
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        origin/<line>, or on top of the pushed batch branch whose head is
@@ -50,6 +52,12 @@ check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell.
 fold   Checks a hand-made conflict resolution commit for the open batch PR
        and prints ok or why not, exiting 0 or 1. It never commits.
+notify Prints what waits on the open batch PR: a batch open for 3 days or
+       more, and its deferred conflicts. --push hands each conflict to the
+       CI agent with --agent ci, with the token in BACKPORT_AGENT_TOKEN, and
+       keeps one comment on the PR that says what waits, mentioning
+       --mention; with --agent manual the comment lists the conflicts.
+lines  Prints the release lines the batch runs for, newest first.
 
 The policy is docs/release/backports.md. Each command reads the day each line
 started under it from that page on origin/main, or on --policy REF.
@@ -88,6 +96,10 @@ func (a *app) main(args []string) int {
 		return a.check(args[1:])
 	case "fold":
 		return a.fold(args[1:])
+	case "notify":
+		return a.notify(args[1:])
+	case "lines":
+		return a.lines(args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(a.stdout, usageText)
 		return 0
