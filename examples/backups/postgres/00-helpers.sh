@@ -81,14 +81,12 @@ psql_exec() {
         psql -U postgres -d "$db" -tAc "$sql"
 }
 
-# Password of an application user, minted once through the Cozystack
-# credentials API and cached for the rest of the run. The chart no longer
-# renders a <release>-credentials Secret: a tenant obtains a password by a mint
-# on the account's Credential, which returns it once and replaces whatever the
-# account had, so minting on every login would invalidate the previous attempt.
-# The Credential is named <release>.<account>, where <account> is the user name
-# lowercased with every character outside [a-z0-9-] replaced by "-". The chart
-# names the CNPG Cluster after the release, so the cluster IS the release here.
+# Password of an application user, minted once through the credentials API and
+# cached for the rest of the run: a mint replaces the account's password, so
+# minting on every login would invalidate the previous attempt. The Credential
+# is named <release>.<account>, where <account> is the user name lowercased
+# with every character outside [a-z0-9-] replaced by "-", and the chart names
+# the CNPG Cluster after the release, so the cluster IS the release here.
 # Args: <cluster> <user>
 app_password() {
     local cluster="$1" user="$2"
@@ -107,8 +105,7 @@ app_password() {
 # Run a psql statement AS the application user over TCP (via the cluster's -rw
 # Service), forcing password authentication. psql_exec above connects as the
 # in-pod postgres superuser through the local socket (peer auth) and so never
-# exercises a user's password; only this path proves that the password the
-# credentials API minted actually authenticates.
+# exercises a user's password.
 # Args: <cluster> <user> <db> <sql>
 psql_app_exec() {
     local cluster="$1" user="$2" db="$3" sql="$4"

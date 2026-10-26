@@ -1,17 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command credentials-migrate converts the accounts of an application kind
-// to platform-minted credentials, in the two steps the platform migration
-// runs. "seed", from the pre-upgrade hook, records the chart version of every
-// release of the kind and writes an account Secret per account with the
-// verifier of the password the chart-generated <release>-credentials Secret
-// holds, so clients keep logging in while the charts switch. "finish", from a
-// Job after the switch, waits per release until the HelmRelease is Ready on
-// another chart version, removes leftover passwords from the values and the
-// tenant keys from <release>-credentials, and exits non-zero while a release
-// is left out. Both read the kind's credentials block from flags, because the
-// hook runs while the old ApplicationDefinitions are still live. See
-// design-proposals/user-secrets-api in cozystack/community.
+// to platform-minted credentials: "seed" from the pre-upgrade hook, "finish"
+// from a Job once the charts have switched. Both read the kind's credentials
+// block from flags, because the hook runs while the old ApplicationDefinitions
+// are still live. See design-proposals/user-secrets-api in cozystack/community.
 package main
 
 import (
@@ -358,8 +351,7 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 }
 
 // stripPasswords removes a password left under any key of the accounts map in
-// the release's values, which the converted chart ignores and the API warns
-// about on every write.
+// the release's values.
 func (m *migrator) stripPasswords(ctx context.Context, hr *helmv2.HelmRelease) error {
 	if hr.Spec.Values == nil || len(hr.Spec.Values.Raw) == 0 {
 		return nil

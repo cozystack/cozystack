@@ -1,18 +1,12 @@
 {{- /*
-  Pre-upgrade refusal to adopt a role the chart did not mark. A CREATEROLE
-  holder can create a role under a name values will declare later, and CNPG
-  adopts a managed role by name within seconds of the spec reaching it,
-  keeping what the planter left: its ADMIN OPTION and the role's settings. The
-  init-job is a post-upgrade hook and would find the role adopted already, so
-  the check runs here, before the new Cluster reaches CNPG, with the
-  init-script's query for every declared user and for the roles of every
-  declared database, against the flag the init-job records once any user has
-  held createRole. It reads the flag first and then sets it if the new values
-  grant createRole, so the upgrade that first grants it still adopts, since no
-  one has held the attribute before, and the flag is on before CNPG applies it.
-  The check fails closed, since no catalog query tells a planted role from an
-  administrator's. Skipped while bootstrap.recovery renders, for the reason
-  init-job.yaml gives, and on install, where there is no cluster to ask.
+  Refuses to adopt a role the chart did not mark, which a CREATEROLE holder
+  can have planted under a name values declare later. It runs pre-upgrade
+  because CNPG adopts a managed role within seconds of the spec reaching it,
+  so the post-upgrade init-job would find it adopted. The flag is read before
+  it is set, so the upgrade that first grants createRole still adopts and the
+  flag is on before CNPG applies it. Fails closed: no catalog query tells a
+  planted role from an administrator's. Skipped under bootstrap.recovery, for
+  the reason init-job.yaml gives, and on install, where there is no cluster.
 */ -}}
 {{- if and .Release.IsUpgrade (not .Values.bootstrap.enabled) (or .Values.users .Values.databases) }}
 {{- $pgMajor := atoi (trimPrefix "v" .Values.version) }}

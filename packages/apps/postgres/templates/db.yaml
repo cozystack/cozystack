@@ -268,17 +268,13 @@ spec:
   imageName: {{ include "postgres.imageName" $ }}
   enableSuperuserAccess: true
   {{- /*
-    Every role the init-script used to create and password is declared here, so
-    CNPG owns the roles end to end: it creates an account with the verifier in
-    its account Secret, applies a changed Secret live without a Helm run, and
-    reverts an attribute or a membership that drifts. Each role is rendered as
-    the init-script created it, because CNPG reverts what differs, revokes a
-    parent role missing from inRoles and clears a comment the spec leaves
-    unset, while the init-script finds the roles to drop by that comment and
-    by membership in the marker. CNPG grants the marker with the default
-    options; the init-script re-grants it WITH INHERIT FALSE, SET FALSE after
-    each run, which CNPG leaves alone. An account whose Secret is missing is
-    left as it is by CNPG, so nothing here fails the render for it.
+    Each role is rendered as the init-script created it: CNPG reverts an
+    attribute that differs, revokes a parent role missing from inRoles and
+    clears a comment the spec leaves unset, and the init-script finds the roles
+    to drop by that comment and by membership in the marker. CNPG grants the
+    marker with the default options; the init-script narrows them after each
+    run, which CNPG leaves alone. An account whose Secret is missing is left as
+    it is by CNPG, so nothing here fails the render for it.
   */}}
   {{- include "postgres.accountsGuard" $ }}
   managed:

@@ -1,12 +1,8 @@
 suite: pre-upgrade hook refuses to adopt a role the chart did not mark
 
-# A CREATEROLE holder can create a role under a name values will declare later,
-# and CloudNativePG adopts a managed role by name within seconds of the spec
-# reaching it, keeping what the planter left. The init-job runs after the
-# upgrade and would find the role adopted, so the refusal runs in a pre-upgrade
-# hook, before the new Cluster reaches the operator, with the flag the init-job
-# records once any user has held createRole. It reads the flag first and sets
-# it after, so the upgrade that first grants createRole still adopts.
+# Pins the pre-upgrade refusal (see preflight-job.yaml for why it runs before
+# the upgrade): the query per declared user and database role, the gates on
+# install and bootstrap, and that the flag is read before it is set.
 
 templates:
   - templates/preflight-job.yaml

@@ -87,10 +87,9 @@ tests:
           path: stringData["init.sh"]
           pattern: 'INHERIT FALSE'
 
-  # The refusal to adopt an unmarked role moved to the pre-upgrade hook
-  # (preflight_test.yaml): CloudNativePG adopts a managed role within seconds of
-  # the spec reaching it, so a post-upgrade check would find it adopted. The
-  # init-script creates no account any more and marks only a role that exists.
+  # The refusal to adopt an unmarked role lives in the pre-upgrade hook
+  # (preflight_test.yaml); the init-script creates no account and marks only a
+  # role that exists.
   - it: no longer refuses or creates user roles itself
     set:
       users:
@@ -110,9 +109,8 @@ tests:
           path: stringData["init.sh"]
           pattern: "SELECT 'GRANT \"cozystack:managed\" TO \"debezium\" WITH INHERIT FALSE, SET FALSE;'\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'debezium'\\)\\\\gexec"
 
-  # The flag is recorded after the marking pass, so an install that grants
-  # createRole records it once every user is marked, and the pre-upgrade hook
-  # reads it on the next upgrade.
+  # The flag is recorded after the marking pass, for the pre-upgrade hook to
+  # read on the next upgrade.
   - it: records createRole after marking the users
     set:
       users:

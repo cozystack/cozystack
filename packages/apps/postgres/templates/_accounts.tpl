@@ -1,11 +1,9 @@
 {{/*
-  Account Secret naming, shared with the Cozystack API: the API writes one
-  Secret per tenant account at <release>.<account>.account, where <account>
-  is the user name lowercased with every character outside [a-z0-9-] replaced
-  by "-" (pkg/credentials/account.MapName), and the Cluster's managed roles
-  point at it by that name. Two users whose names map to one account are
-  refused by the API before the write, and here for a HelmRelease written
-  around it, because CNPG would otherwise read one Secret for both roles.
+  Account Secret naming, which must match pkg/credentials/account.MapName: the
+  API writes <release>.<account>.account, where <account> is the user name
+  lowercased with every character outside [a-z0-9-] replaced by "-". The API
+  refuses two users that map to one account; the guard here covers a
+  HelmRelease written around it, where CNPG would read one Secret for both.
 */}}
 {{- define "postgres.accountName" -}}
 {{- regexReplaceAll "[^a-z0-9-]" (lower .) "-" -}}
