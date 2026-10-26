@@ -33,6 +33,39 @@
 {{- if and .Values.bootstrap.databases .Values.bootstrap.recoveryTime .Values.sharding }}
 {{- fail "bootstrap.databases cannot be combined with bootstrap.recoveryTime when sharding is enabled, percona-backup-mongodb restores selected databases to a point in time on replica sets only" }}
 {{- end }}
+{{- /*
+  The operator fails a restore for good when it is created before the cluster
+  is ready and reports its backup version (percona-server-mongodb-operator#2243),
+  so the restore is held back until then. The HelmRelease retries the failed
+  render and it goes through once the cluster is ready. A restore that already
+  exists is left alone, so later upgrades never wait here. Offline renders have
+  no psmdb API and skip the check.
+*/}}
+{{- if .Capabilities.APIVersions.Has "psmdb.percona.com/v1" }}
+{{- if not (lookup "psmdb.percona.com/v1" "PerconaServerMongoDBRestore" .Release.Namespace (printf "%s-restore" .Release.Name)) }}
+{{- if not .Values.backup.enabled }}
+{{- fail "bootstrap.enabled needs backup.enabled set to true, the restore runs in the backup agents that the operator starts only while backups are enabled" }}
+{{- end }}
+{{- $cluster := lookup "psmdb.percona.com/v1" "PerconaServerMongoDB" .Release.Namespace .Release.Name }}
+{{- if not $cluster }}
+{{- fail "bootstrap.enabled cannot be set while the application is being created. Create it with bootstrap.enabled false, wait until it is ready, then set bootstrap.enabled to true and the restore starts by itself" }}
+{{- end }}
+{{- $state := dig "status" "state" "" $cluster }}
+{{- $backupVersion := dig "status" "backupVersion" "" $cluster }}
+{{- if eq $state "error" }}
+{{- fail "the bootstrap restore waits for a ready cluster, and the cluster state is error now. Check the cluster, the restore starts by itself once it is ready again" }}
+{{- end }}
+{{- if not (and (eq $state "ready") $backupVersion) }}
+{{- $now := printf "the cluster state is %s now" $state }}
+{{- if not $state }}
+{{- $now = "the cluster has not reported a state yet" }}
+{{- else if eq $state "ready" }}
+{{- $now = "the backup agents have not reported their version yet" }}
+{{- end }}
+{{- fail (printf "the bootstrap restore waits until the database and its backup agents are ready, %s. It starts by itself once they are, nothing has to be changed" $now) }}
+{{- end }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDBRestore

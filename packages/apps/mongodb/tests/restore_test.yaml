@@ -832,3 +832,292 @@ tests:
         documentSelector:
           path: kind
           value: PerconaServerMongoDBRestore
+
+  #####################
+  # Cluster readiness #
+  #####################
+
+  - it: refuses bootstrap on a first install, before the cluster exists
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: &psmdbScheme
+        "psmdb.percona.com/v1/PerconaServerMongoDB":
+          gvr:
+            group: psmdb.percona.com
+            version: v1
+            resource: perconaservermongodbs
+          namespaced: true
+        "psmdb.percona.com/v1/PerconaServerMongoDBRestore":
+          gvr:
+            group: psmdb.percona.com
+            version: v1
+            resource: perconaservermongodbrestores
+          namespaced: true
+      objects: []
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.enabled cannot be set while the application is being created. Create it with bootstrap.enabled false, wait until it is ready, then set bootstrap.enabled to true and the restore starts by itself"
+
+  - it: holds the restore back while the cluster is initializing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: initializing
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the bootstrap restore waits until the database and its backup agents are ready, the cluster state is initializing now. It starts by itself once they are, nothing has to be changed'
+
+  - it: holds the restore back until the backup agents report their version
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: ready
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the bootstrap restore waits until the database and its backup agents are ready, the backup agents have not reported their version yet. It starts by itself once they are, nothing has to be changed'
+
+  - it: says so while the cluster has not reported a state yet
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the bootstrap restore waits until the database and its backup agents are ready, the cluster has not reported a state yet. It starts by itself once they are, nothing has to be changed'
+
+  - it: does not tell the tenant to wait quietly when the cluster is in error
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: error
+            backupVersion: 2.11.0
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'the bootstrap restore waits for a ready cluster, and the cluster state is error now. Check the cluster, the restore starts by itself once it is ready again'
+
+  - it: creates the restore once the cluster is ready
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: ready
+            backupVersion: 2.11.0
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+      - equal:
+          path: metadata.name
+          value: test-mongodb-restore
+
+  - it: leaves a restore that already exists alone, whatever the cluster state
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: initializing
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDBRestore
+          metadata:
+            name: test-mongodb-restore
+            namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: false
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+
+  - it: asks for backups to be enabled before a bootstrap restore
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          status:
+            state: ready
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: false
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.enabled needs backup.enabled set to true, the restore runs in the backup agents that the operator starts only while backups are enabled"
+
+  - it: skips the readiness check on an offline render without the psmdb API
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: false
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
