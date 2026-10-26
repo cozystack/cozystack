@@ -311,7 +311,7 @@ rules:
   - patch
   - delete
 # A mint replaces an account's password and shows the new one once, so it is
-# an admin's write, not a reader's; a custom role can grant revoke alone.
+# an admin's write, not a reader's.
 - apiGroups: ["core.cozystack.io"]
   resources:
   - credentials/mint

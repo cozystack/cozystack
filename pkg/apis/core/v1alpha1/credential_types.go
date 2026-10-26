@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Credential is the account record of one platform-generated credential of a
-// managed application: who can know the live password and who changed it. It
-// is a view over the account Secret the Cozystack API keeps per account, and
-// it never carries the password or the stored verifier. The password is
-// obtained once, through the mint subresource, and replaced through it. See
-// design-proposals/user-secrets-api in cozystack/community.
-
 package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// Credential is one account of a converted application.
+// Credential is the record of one account of a converted application: who can
+// know the live password and who changed it, never the password or its stored
+// form. It is a view over the account Secret the API keeps. See
+// design-proposals/user-secrets-api in cozystack/community.
 type Credential struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -105,8 +101,7 @@ type CredentialList struct {
 // CredentialRequest is the body and the answer of the mint and revoke
 // subresources of a Credential, in the shape of a Kubernetes TokenRequest: a
 // create on the subresource carries the request in spec and is answered with
-// the result in status, and nothing is stored. The password in a mint's answer
-// is the only place it ever exists outside the API's memory.
+// the result in status, and nothing is stored.
 type CredentialRequest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

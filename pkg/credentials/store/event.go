@@ -22,11 +22,9 @@ const (
 	ReasonCredentialRevoked = "CredentialRevoked"
 )
 
-// Emit records an Event on the application, named through the HelmRelease
-// that backs it, saying which account was issued or revoked and by whom. It
-// never carries a value. Events are best effort: a failure to record one is
-// logged and does not fail the operation it describes, which the audit log
-// records in any case.
+// Emit records an Event on the application naming the account and the caller,
+// never a value. Best effort: a failure is logged and does not fail the
+// operation, which the audit log records in any case.
 func Emit(ctx context.Context, c client.Client, hr *helmv2.HelmRelease, reason, username, by string) {
 	now := metav1.NewTime(time.Now())
 	verb := "issued"

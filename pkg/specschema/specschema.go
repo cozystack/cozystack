@@ -15,11 +15,8 @@ limitations under the License.
 */
 
 // Package specschema turns the OpenAPI schema an ApplicationDefinition embeds
-// into a structural schema and applies its defaults to application values
-// the way kube-apiserver defaults a custom resource. The application registry
-// uses it on every read and write; the ApplicationDefinition reconciler uses
-// it to resolve the accounts of a release from values that were stored
-// without defaults.
+// into a structural schema and applies its defaults to application values the
+// way kube-apiserver defaults a custom resource.
 package specschema
 
 import (

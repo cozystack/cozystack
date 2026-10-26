@@ -153,13 +153,11 @@ func expectedValuesFrom() []helmv2.ValuesReference {
 	return store.ValuesFrom(nil, "", nil)
 }
 
-// releaseValuesFrom returns the valuesFrom a release should carry under its
-// definition: the platform values, and for a kind whose block names a
-// valuesPath one entry per account, so a release created before the block
-// appeared gets the entries on its next reconcile. The accounts are resolved
-// from the release's values with the definition's schema defaults applied,
-// as the API resolves them on a write. An error means the values declare
-// accounts the API would refuse, and leaves the release as it is.
+// releaseValuesFrom returns the valuesFrom a release carries under its
+// definition, resolving the accounts with the definition's schema defaults as
+// the API does on a write, so a release created before the block appeared
+// gets its entries on reconcile. An error means values the API would refuse;
+// the release is left as it is.
 func releaseValuesFrom(hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition) ([]helmv2.ValuesReference, error) {
 	block := appDef.Spec.Credentials
 	if block == nil || block.ValuesPath == "" {

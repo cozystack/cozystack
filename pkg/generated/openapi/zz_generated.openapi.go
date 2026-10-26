@@ -312,7 +312,7 @@ func schema_pkg_apis_core_v1alpha1_Credential(ref common.ReferenceCallback) comm
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Credential is one account of a converted application.",
+				Description: "Credential is the record of one account of a converted application: who can know the live password and who changed it, never the password or its stored form. It is a view over the account Secret the API keeps. See design-proposals/user-secrets-api in cozystack/community.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -509,7 +509,7 @@ func schema_pkg_apis_core_v1alpha1_CredentialRequest(ref common.ReferenceCallbac
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CredentialRequest is the body and the answer of the mint and revoke subresources of a Credential, in the shape of a Kubernetes TokenRequest: a create on the subresource carries the request in spec and is answered with the result in status, and nothing is stored. The password in a mint's answer is the only place it ever exists outside the API's memory.",
+				Description: "CredentialRequest is the body and the answer of the mint and revoke subresources of a Credential, in the shape of a Kubernetes TokenRequest: a create on the subresource carries the request in spec and is answered with the result in status, and nothing is stored.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {

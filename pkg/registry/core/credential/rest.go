@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package credential serves core.cozystack.io/credentials: a view over the
-// account Secrets the Cozystack API writes for the accounts of converted
-// applications, with the mint and revoke subresources that are the only way
-// to obtain or retire a password. The view shows the account's record and
-// never the Secret's data. See design-proposals/user-secrets-api in
-// cozystack/community.
+// Package credential serves core.cozystack.io/credentials, a view over the
+// account Secrets the API writes, with the mint and revoke subresources. The
+// view shows the account's record and never the Secret's data. See
+// design-proposals/user-secrets-api in cozystack/community.
 package credential
 
 import (
@@ -53,9 +51,8 @@ const (
 )
 
 // Kind is what the registry knows about one converted application kind: its
-// credentials block, and how to resolve the accounts an application declares
-// from the values its HelmRelease carries, which the application registry
-// does with the kind's schema defaults applied.
+// credentials block, and how to resolve the accounts a HelmRelease declares,
+// which the application registry does with the kind's schema defaults.
 type Kind struct {
 	Block    *cozyv1alpha1.ApplicationDefinitionCredentials
 	Accounts func(ctx context.Context, hr *helmv2.HelmRelease) ([]account.Account, error)
