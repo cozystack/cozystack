@@ -4,12 +4,11 @@ metadata:
   name: kamaji
 spec:
   # https://github.com/clastix/cluster-api-control-plane-provider-kamaji
-  # Pinned to v0.19.0 + a single backport patch
-  # (images/cluster-api-control-plane-provider-kamaji/patches/) because
-  # upstream master ships v1alpha2 only with no v1alpha1 conversion
-  # webhook. Bump along with UPSTREAM_VERSION / COZYSTACK_REV in the
-  # package Makefile.
-  version: v0.19.0-cozystack.0
+  # Upstream release + the v1alpha1 conversion webhook patch
+  # (images/cluster-api-control-plane-provider-kamaji/patches/), see the
+  # Dockerfile there. Bump along with UPSTREAM_VERSION / COZYSTACK_REV in
+  # the package Makefile.
+  version: v0.21.0-cozystack.0
   fetchConfig:
     selector:
       matchLabels:
