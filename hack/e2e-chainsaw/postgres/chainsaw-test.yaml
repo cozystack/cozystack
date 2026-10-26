@@ -127,12 +127,9 @@ spec:
           kind: Job
           name: postgres-test-init-job
 
-  # No second disclosure: a password exists once, in the response of the mint
-  # that issued it. The account Secret the API seeded carries a verifier the
-  # operator applied, so no login works until a mint; the minted password
-  # logs in over TCP as the user; the Credential records the mint and shows
-  # no password; and a second mint replaces the first, which stops logging
-  # in once CloudNativePG applies the new verifier.
+  # No second disclosure: the minted password logs in over TCP as the user,
+  # the Credential records the mint and no read path carries the password,
+  # and a second mint replaces the first once CloudNativePG applies it.
   - name: verify-minted-credential
     try:
     - assert:

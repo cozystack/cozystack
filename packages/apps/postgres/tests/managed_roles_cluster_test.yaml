@@ -1,13 +1,8 @@
 suite: the Cluster declares every role as CloudNativePG managed roles
 
-# Tenant accounts, the per-database roles and the marker are declared on the
-# Cluster, so the operator creates each account with the verifier in its account
-# Secret, applies a changed Secret live, and reverts drift. Each role is rendered
-# as the init-script created it, because the operator reverts an attribute that
-# differs, revokes a parent role missing from inRoles and clears a comment the
-# spec leaves unset, while the init-script finds roles to drop by that comment
-# and by membership in the marker. These tests pin that render and the account
-# Secret naming the API shares.
+# Pins the managed roles render (see the comment in db.yaml for why each role
+# is rendered as the init-script created it) and the account Secret naming the
+# API shares.
 
 templates:
   - templates/db.yaml
@@ -107,9 +102,7 @@ tests:
               name: pg-test.reporter.account
           any: true
 
-  # The API refuses two users that map to one account name; the chart refuses
-  # the same for a HelmRelease written around it, since the operator would read
-  # one Secret for both roles.
+  # The same refusal the API makes, for a HelmRelease written around it.
   - it: refuses two users that map to one account name
     set:
       users:
