@@ -10,8 +10,10 @@
 {{- $emailAlertnames := $email.alertnames | default list }}
 {{- $emailSeverities := $email.severities | default (list "critical" "major") }}
 {{- $emailPasswordSecret := "alertmanager-email-password" }}
+{{- $emailTemplateConfigMap := "alertmanager-email-template" }}
+{{- $emailTemplate := $email.template | default "" }}
 {{- $emailSet := list }}
-{{- range $field := list "to" "from" "smarthost" "authUsername" "repeatInterval" "alertnames" "severities" }}
+{{- range $field := list "to" "from" "smarthost" "authUsername" "repeatInterval" "alertnames" "severities" "template" }}
 {{- if index $email $field }}{{ $emailSet = append $emailSet $field }}{{ end }}
 {{- end }}
 {{- $emailEnabled := gt (len $emailSet) 0 }}
@@ -99,6 +101,14 @@
 {{- range $severity := $emailSeverities }}
 {{- if not (regexMatch "^[a-zA-Z0-9_-]+$" (toString $severity)) }}
 {{- fail (printf "alerta.alerts.email.severities entries must be plain severity names, got %q" (toString $severity)) }}
+{{- end }}
+{{- end }}
+{{- if $emailTemplate }}
+{{- if not (kindIs "string" $emailTemplate) }}
+{{- fail (printf "alerta.alerts.email.template must be the text of an Alertmanager template file, got a %s" (kindOf $emailTemplate)) }}
+{{- end }}
+{{- if not (regexMatch "\\{\\{-?\\s*define\\s" $emailTemplate) }}
+{{- fail "alerta.alerts.email.template must define named templates, such as email.default.subject and email.default.html, because Alertmanager only uses the file through the names it defines" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -408,6 +418,15 @@ stringData:
         {{- end }}
         send_resolved: true
     {{- end }}
+{{- if and $emailEnabled $emailTemplate }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $emailTemplateConfigMap }}
+data:
+  email.tmpl: {{ $emailTemplate | quote }}
+{{- end }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAlertmanager
@@ -424,6 +443,11 @@ spec:
   {{- if and $emailEnabled $email.authUsername }}
   secrets:
   - {{ $emailPasswordSecret | quote }}
+  {{- end }}
+  {{- if and $emailEnabled $emailTemplate }}
+  templates:
+  - name: {{ $emailTemplateConfigMap }}
+    key: email.tmpl
   {{- end }}
   podMetadata:
     labels:
