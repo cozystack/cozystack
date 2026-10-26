@@ -288,9 +288,10 @@ sliced into /24s ever allowed.
 
 {{/*
 Prints "true" when gpu-operator serves GPUs to VirtualMachines: the iaas
-bundle emits it, and its variant is default or vgpu. cozystack-basics renders
-its GPU class and claim admission policies on this alone, so a cluster
-without KubeVirt GPUs runs none of them.
+bundle emits it, and its variant is default or vgpu. cozystack-controller
+switches on its GPU paths that watch KubeVirt objects on this, monitoring-agents
+the scrape of their metrics, and cozystack-basics its GPU class and claim
+admission policies, so a cluster without KubeVirt GPUs runs none of them.
 */}}
 {{- define "cozystack.platform.gpu.vmEnabled" -}}
 {{- $name := "cozystack.gpu-operator" -}}
@@ -300,4 +301,45 @@ without KubeVirt GPUs runs none of them.
 {{- if and $enabled (has ($bundles.iaas.gpuOperatorVariant | default "default") (list "default" "vgpu")) -}}
 true
 {{- end -}}
+{{- end }}
+
+{{/*
+Validated gpu.resourceNames and gpu.rawResourceNames, as YAML. The controller
+publishes the names comma-joined in its settings ConfigMap, so a name carrying
+a comma would arrive as two names. forbidden is enforced only by the raw-name
+policy, which renders only where GPUs serve VMs, so elsewhere it is refused.
+*/}}
+{{- define "cozystack.platform.gpu.settings" -}}
+{{- $gpu := .Values.gpu | default dict -}}
+{{- /* Defaulted only when unset: `default` would also turn false, 0 and ""
+       into allowed, the opposite of what someone writing false meant. */ -}}
+{{- $raw := $gpu.rawResourceNames -}}
+{{- if kindIs "invalid" $raw -}}
+{{- $raw = "allowed" -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $raw) (has $raw (list "allowed" "forbidden"))) -}}
+{{- fail (printf "gpu.rawResourceNames must be \"allowed\" or \"forbidden\", got %v" $raw) -}}
+{{- end -}}
+{{- if and (eq $raw "forbidden") (ne (include "cozystack.platform.gpu.vmEnabled" .) "true") -}}
+{{- fail "gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs (iaas bundle, default or vgpu variant); without them nothing enforces it" -}}
+{{- end -}}
+{{- $names := $gpu.resourceNames | default (list) -}}
+{{- if not (kindIs "slice" $names) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" $names) -}}
+{{- end -}}
+{{- range $names -}}
+{{- if not (kindIs "string" .) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" .) -}}
+{{- end -}}
+{{- if contains "," . -}}
+{{- fail (printf "gpu.resourceNames entry %q contains a comma; the set travels comma-joined and the name would be split" .) -}}
+{{- end -}}
+{{- /* An extended resource always has a domain prefix; a name without one,
+       or under kubernetes.io, is a standard resource such as memory, which
+       the raw-name policy would then refuse on every tenant pod. */ -}}
+{{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$" .)) (regexMatch "(^|\\.)kubernetes\\.io/" .) -}}
+{{- fail (printf "gpu.resourceNames entry %q is not a resource name, such as nvidia.com/gpu" .) -}}
+{{- end -}}
+{{- end -}}
+{{- dict "resourceNames" $names "rawResourceNames" $raw | toYaml -}}
 {{- end }}
