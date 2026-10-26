@@ -111,8 +111,9 @@ one_value_of() {
 @test "every use of the cosign installer is SHA-pinned at one cosign release" {
   # Without cosign-release the action installs its own default, which moves
   # with a digest bump of the action. The release jobs verify their signature
-  # with the cosign docs/release.md asks users for, so the version is named in
-  # each step, and all steps agree on it and on the action's commit.
+  # with the cosign docs/release/signatures-and-sbom.md asks users for, so the
+  # version is named in each step, and all steps agree on it and on the
+  # action's commit.
   uses="$(workflow_code 'uses: sigstore/cosign-installer@')"
   [ -n "$uses" ]
   bad="$(printf '%s\n' "$uses" | grep --invert-match --extended-regexp 'installer@[0-9a-f]{40} # v[0-9.]+$' || true)"

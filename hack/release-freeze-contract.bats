@@ -613,17 +613,19 @@ closed-merged=true"
   # The two conjuncts the label logic hangs off, which the label assertions above
   # would not miss. `base.ref == 'main'` is what stops the bot backporting its own
   # output: its PRs target release-X.Y, so they cannot satisfy it however often a
-  # labeler re-applies `backport` to a `[Backport release-X.Y]` title. docs/release.md
-  # calls that architectural protection, which is only true while the line is here.
+  # labeler re-applies `backport` to a `[Backport release-X.Y]` title.
+  # docs/release/backport-mechanics.md calls that architectural protection,
+  # which is only true while the line is here.
   # With their trailing conjunctions, for the reason the group-key test spells
   # out: flipping either `&&` to `||` turns the guard into a disjunction that
   # fires on every merge to main and on labels applied to open PRs. That one does
   # not produce a wrong backport, because the `backport` job re-checks both
   # independently, but it runs the job when nothing asked for it.
-  # In BOTH jobs, because docs/release.md rests the architectural protection on
-  # both `if:` blocks. Losing either copy alone is survivable (the other still
-  # skips, and `backport` needs `prepare`), so this pins a duplicate rather than
-  # a hole — but an untested duplicate is how a duplicate stops being one.
+  # In BOTH jobs, because docs/release/backport-mechanics.md rests the
+  # architectural protection on both `if:` blocks. Losing either copy alone is
+  # survivable (the other still skips, and `backport` needs `prepare`), so this
+  # pins a duplicate rather than a hole — but an untested duplicate is how a
+  # duplicate stops being one.
   for job in prepare backport; do
     b="$(job_block "$job" "$BACKPORT" | code_lines)"
     [ -n "$b" ]
@@ -634,9 +636,9 @@ closed-merged=true"
 
 @test "the audit accepts exactly the backport labels the bot acts on" {
   # cmd/backport-audit answers "has everything labelled for this line landed on
-  # it" and exits non-zero while anything has not, so docs/release.md gates a
-  # patch cut on it. It reaches its candidates with `gh pr list --label`, which
-  # matches a label by exact name.
+  # it" and exits non-zero while anything has not, so
+  # docs/release/patch-releases.md gates a patch cut on it. It reaches its
+  # candidates with `gh pr list --label`, which matches a label by exact name.
   #
   # Pin the two sets equal rather than pinning either one's contents: the
   # audit must not miss a spelling the bot honours, and must not keep one the

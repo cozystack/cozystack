@@ -43,7 +43,7 @@ When the user asks to generate a changelog, follow these steps in the specified 
   - [ ] **MANDATORY**: Extract PR numbers from commit messages, then use `gh pr view` for each PR to get the PR author. Do NOT use commit author. Only for commits without PR numbers (rare), fall back to `gh api repos/cozystack/cozystack/commits/<hash> --jq '.author.login'`
 - [ ] Step 8: Form new changelog (structure, format, generate contributors list)
 - [ ] Step 8b: Verify every operator-facing statement against the code at the upper-bound tag (section 8b)
-- [ ] Step 9: Verify completeness and save, after running the checks in `docs/release.md` (section 9)
+- [ ] Step 9: Verify completeness and save, after running the checks in `docs/release/changelogs.md` (section 9)
 
 ### 1. Updating information from remote
 
@@ -615,7 +615,7 @@ Feature Highlights, the breaking-changes section (Migration and Upgrades in a pa
 
 ### 9. Verification and saving
 
-**Check the written file.** Once the draft is in `docs/changelogs/v<new_version>.md`, run the checks in `docs/release.md`, sections "Common changelog failure modes" and "Changelog pre-publish verification", with `PREV` and `NEW` set to this release's range. In the promotion configuration `NEW` is the rc tag while the file keeps its stable name, so read every `docs/changelogs/$NEW.md` and `docs/changelogs/v<new>.md` in those checks as `docs/changelogs/v<new_version>.md`. Fix in the changelog every problem they report. A link may answer 404 only if it is the file's own `releases/tag/v<new_version>` or `compare/...v<new_version>` link, whose tag does not exist yet, or, in a minor release, a `https://cozystack.io/docs/v<X.Y>/` link, whose docs go live with the release: check that page under `content/en/docs/next/` in cozystack/website instead. Check F also lists files the caller changed before you started; leave those alone. Then run `hack/validate-changelog.sh docs/changelogs/v<new_version>.md <new_version>` and fix what it reports.
+**Check the written file.** Once the draft is in `docs/changelogs/v<new_version>.md`, run the checks in `docs/release/changelogs.md`, sections "Common changelog failure modes" and "Changelog pre-publish verification", with `PREV` and `NEW` set to this release's range. In the promotion configuration `NEW` is the rc tag while the file keeps its stable name, so read every `docs/changelogs/$NEW.md` and `docs/changelogs/v<new>.md` in those checks as `docs/changelogs/v<new_version>.md`. Fix in the changelog every problem they report. A link may answer 404 only if it is the file's own `releases/tag/v<new_version>` or `compare/...v<new_version>` link, whose tag does not exist yet, or, in a minor release, a `https://cozystack.io/docs/v<X.Y>/` link, whose docs go live with the release: check that page under `content/en/docs/next/` in cozystack/website instead. Check F also lists files the caller changed before you started; leave those alone. Then run `hack/validate-changelog.sh docs/changelogs/v<new_version>.md <new_version>` and fix what it reports.
 
 **Before saving, verify completeness:**
 
