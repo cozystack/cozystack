@@ -10,13 +10,16 @@
 # EVENT_JSON defaults to $GITHUB_EVENT_PATH and is a pull_request or
 # pull_request_target payload. --pr reads the same REST pull request object
 # with `gh api`, because `gh pr view --json` has no author association. Only
-# that JSON is read: nothing from the pull request is checked out or run.
+# JSON is read, that object and the author's repository permission: nothing
+# from the pull request is checked out or run.
 #
 # The pull request is closed only when it is open, targets release-*, its
 # author's association is not OWNER, MEMBER or COLLABORATOR, its author is not
-# a bot, and it carries no `release-only` label. A missing field, or a value
-# this script does not know, leaves it open and exits 0. Exits 1 when the input
-# cannot be read, 2 on a usage error, and with gh's status when the close fails.
+# a bot, it carries no `release-only` label, and GitHub answers that the
+# author's permission and role on the repository are both read or none. A
+# missing field, a failed call, or a value this script does not know leaves it
+# open and exits 0. Exits 1 when the input cannot be read, 2 on a usage error,
+# and with gh's status when the close fails.
 set -eu
 
 usage() {
@@ -69,8 +72,12 @@ fi
 
 # A filter that fails on an unexpected shape prints nothing, which every check
 # below reads as a missing field.
+json_field() {
+  printf '%s' "$1" | jq -r "$2" 2>/dev/null || true
+}
+
 field() {
-  printf '%s' "$pr" | jq -r "$1" 2>/dev/null || true
+  json_field "$pr" "$1"
 }
 
 [ "$(field 'type')" = object ] || leave "the input carries no pull request"
@@ -109,7 +116,29 @@ release_only=$(field 'any(.labels[]; .name == "release-only")')
 [ "$release_only" = false ] || leave "PR #$number carries the release-only label"
 
 repo=$(field '.base.repo.full_name | strings')
-[ -n "$repo" ] || leave "PR #$number names no base repository"
+case "$repo" in
+  */*/* | *[!A-Za-z0-9._/-]* | /* | */) leave "PR #$number names no usable base repository" ;;
+  */*) ;;
+  *) leave "PR #$number names no usable base repository" ;;
+esac
+login=$(field '.user.login | strings')
+case "$login" in
+  '' | *[!A-Za-z0-9-]*) leave "PR #$number carries no usable author login" ;;
+esac
+
+# author_association reports an organization member whose membership is
+# private as a CONTRIBUTOR, so the author's own access to the repository is the
+# check that decides. `permission` folds maintain into write and triage into
+# read, which is why `role_name` has to agree.
+if ! access=$(gh api "repos/$repo/collaborators/$login/permission"); then
+  leave "PR #$number: cannot read $login's permission on $repo"
+fi
+permission=$(json_field "$access" '.permission | strings')
+role=$(json_field "$access" '.role_name | strings')
+case "$permission:$role" in
+  read:read | read:none | none:read | none:none) ;;
+  *) leave "PR #$number is from $login, whose permission on $repo is ${permission:-unknown} (role ${role:-unknown})" ;;
+esac
 
 policy="https://github.com/$repo/blob/main/docs/release/backports.md"
 comment="Thank you for the contribution! Backports are automatic: fixes merged to \`main\` reach the supported release lines on their own, as the [backport policy]($policy) describes, so this pull request is closed. If the fix only makes sense on a release line and has no counterpart on \`main\`, please ask a maintainer to add the \`release-only\` label and reopen it."

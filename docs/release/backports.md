@@ -27,7 +27,7 @@ The batch takes a pull request from `main` into release line X.Y when all of the
 
 A fix that only makes sense on a release line, with no counterpart on `main`, gets the `release-only` label from a maintainer. Only then may a pull request from outside the team stay open against a release branch.
 
-A pull request opened or reopened against a `release-*` branch is closed automatically, with a comment that links to this page, unless its author is a bot or an owner, member or collaborator of the repository, or it carries `release-only`. To keep one that was closed, a maintainer adds the label first and then reopens it; reopening without the label closes it again. [`hack/close-manual-backport.sh`](../../hack/close-manual-backport.sh) does this from [`pr-labeler.yaml`](../../.github/workflows/pr-labeler.yaml); run it with `--pr <number> --dry-run` to see what it would decide for a given pull request.
+A pull request opened or reopened against a `release-*` branch is closed automatically, with a comment that links to this page, only when its author is not a bot, GitHub reports the author's access to the repository as read or none, and it carries no `release-only` label. Anyone with triage access or more keeps their pull request open, and so does everyone when GitHub's answer cannot be read. To keep one that was closed, a maintainer adds the label first and then reopens it; reopening without the label closes it again. [`hack/close-manual-backport.sh`](../../hack/close-manual-backport.sh) does this from [`pr-labeler.yaml`](../../.github/workflows/pr-labeler.yaml); run it with `--pr <number> --dry-run` to see what it would decide for a given pull request.
 
 ### Cadence
 

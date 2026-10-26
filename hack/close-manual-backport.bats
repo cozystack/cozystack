@@ -2,9 +2,10 @@
 # Tests for hack/close-manual-backport.sh, which closes a pull request opened by
 # hand against a release branch by someone outside the team.
 #
-# gh is stubbed: every call is recorded, and `gh api` answers with $PR_JSON. A
-# case that expects the pull request to stay open asserts that gh recorded
-# nothing at all, so a close that slips past a guard cannot go unseen.
+# gh is stubbed: every call is recorded, the permission endpoint answers with
+# $PERM_JSON (or fails under PERM_FAIL), and any other `gh api` with $PR_JSON.
+# A case that expects the pull request to stay open asserts exactly which reads
+# gh recorded, so a close that slips past a guard cannot go unseen.
 #
 # Run with: bats hack/close-manual-backport.bats
 
@@ -14,6 +15,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/close-manual-backport.sh"
 WF="${BATS_TEST_DIRNAME}/../.github/workflows/pr-labeler.yaml"
 LABELS="${BATS_TEST_DIRNAME}/../.github/labels.yml"
 POLICY_URL="https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md"
+PERM_CALL="api repos/cozystack/cozystack/collaborators/someone/permission"
 
 # The close-manual-backport job of pr-labeler.yaml, comment lines dropped so a
 # setting demoted to a comment cannot satisfy an assertion.
@@ -27,9 +29,16 @@ _stub_gh() {
   cat > "$1/gh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$GH_CALLS"
-if [ "$1" = api ]; then
-  cat "$PR_JSON"
-fi
+case "$1 $2" in
+  "api repos/"*/collaborators/*/permission)
+    if [ -n "${PERM_FAIL:-}" ]; then
+      echo 'gh: Not Found (HTTP 404)' >&2
+      exit 1
+    fi
+    cat "$PERM_JSON"
+    ;;
+  "api "*) cat "$PR_JSON" ;;
+esac
 EOF
   chmod +x "$1/gh"
 }
@@ -40,10 +49,18 @@ setup() {
   export PATH="${BATS_TEST_TMPDIR}/bin:$PATH"
   export GH_CALLS="${BATS_TEST_TMPDIR}/calls"
   export PR_JSON="${BATS_TEST_TMPDIR}/pr.json"
+  export PERM_JSON="${BATS_TEST_TMPDIR}/perm.json"
+  unset PERM_FAIL
+  set_permission read read
   EVENT="${BATS_TEST_TMPDIR}/event.json"
   # A run inside GitHub Actions has its own event here; never read it.
   export GITHUB_EVENT_PATH="$EVENT"
   : > "$GH_CALLS"
+}
+
+# The permission endpoint's answer: legacy permission, then role_name.
+set_permission() {
+  printf '{"permission":"%s","role_name":"%s","user":{"login":"someone"}}\n' "$1" "$2" > "$PERM_JSON"
 }
 
 # Writes a pull_request_target event to $EVENT and its pull request object to
@@ -76,14 +93,25 @@ assert_left_open() {
   esac
 }
 
+# Left open after the permission read, which is then the only gh call.
+assert_left_open_after_permission() {
+  [ "$status" -eq 0 ] || { echo "FAIL: exit $status: $output"; false; }
+  [ "$(cat "$GH_CALLS")" = "$PERM_CALL" ] || { echo "FAIL: gh calls:"; cat "$GH_CALLS"; false; }
+  case "$output" in
+    *"leaving it open"*) ;;
+    *) echo "FAIL: no reason given: $output"; false ;;
+  esac
+}
+
 @test "closes a pull request to release-1.6 from outside the team, linking the policy" {
   for assoc in CONTRIBUTOR FIRST_TIME_CONTRIBUTOR FIRST_TIMER NONE; do
     : > "$GH_CALLS"
     make_event release-1.6 "$assoc" User '["kind/bug"]'
     run "$SCRIPT" "$EVENT"
     [ "$status" -eq 0 ] || { echo "FAIL: $assoc: exit $status: $output"; false; }
-    [ "$(wc -l < "$GH_CALLS" | tr -d ' ')" -eq 1 ] || { echo "FAIL: $assoc:"; cat "$GH_CALLS"; false; }
-    grep -q '^pr close 42 --repo cozystack/cozystack --comment Thank you' "$GH_CALLS"
+    [ "$(wc -l < "$GH_CALLS" | tr -d ' ')" -eq 2 ] || { echo "FAIL: $assoc:"; cat "$GH_CALLS"; false; }
+    [ "$(sed -n 1p "$GH_CALLS")" = "$PERM_CALL" ]
+    sed -n 2p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment Thank you'
     grep -qF "$POLICY_URL" "$GH_CALLS"
     grep -qF '`release-only` label' "$GH_CALLS"
     if grep -qF '—' "$GH_CALLS"; then echo "FAIL: the comment carries an em dash"; false; fi
@@ -154,24 +182,86 @@ assert_left_open() {
   mv "$EVENT.tmp" "$EVENT"
   run "$SCRIPT" "$EVENT"
   assert_left_open
+
+  # The login goes into the API path, so only a GitHub login shape is asked about.
+  : > "$GH_CALLS"
+  make_event release-1.6 CONTRIBUTOR User '[]'
+  jq '.pull_request.user.login = "someone/../../orgs/x"' "$EVENT" > "$EVENT.tmp"
+  mv "$EVENT.tmp" "$EVENT"
+  run "$SCRIPT" "$EVENT"
+  assert_left_open
+}
+
+# author_association shows an organization member whose membership is private
+# as a CONTRIBUTOR. `permission` alone would also pass a triage member, which
+# GitHub folds into read.
+@test "a private member reported as CONTRIBUTOR stays open when their access is above read" {
+  for answer in "write write" "admin admin" "write maintain" "read triage" "read some-custom-role"; do
+    : > "$GH_CALLS"
+    set -- $answer
+    set_permission "$1" "$2"
+    make_event release-1.6 CONTRIBUTOR User '[]'
+    run "$SCRIPT" "$EVENT"
+    assert_left_open_after_permission
+    case "$output" in
+      *"permission on cozystack/cozystack is $1 (role $2)"*) ;;
+      *) echo "FAIL: reason does not name the access ($answer): $output"; false ;;
+    esac
+  done
+}
+
+@test "a failed or unexpected permission answer leaves it open" {
+  make_event release-1.6 CONTRIBUTOR User '[]'
+
+  export PERM_FAIL=1
+  run "$SCRIPT" "$EVENT"
+  assert_left_open_after_permission
+  case "$output" in
+    *"cannot read someone's permission"*) ;;
+    *) echo "FAIL: reason does not name the failed read: $output"; false ;;
+  esac
+  unset PERM_FAIL
+
+  for answer in 'not json' '{}' '{"permission":"read"}' '{"role_name":"read"}' '{"permission":"read","role_name":null}' '[]'; do
+    : > "$GH_CALLS"
+    printf '%s\n' "$answer" > "$PERM_JSON"
+    run "$SCRIPT" "$EVENT"
+    assert_left_open_after_permission
+  done
+}
+
+@test "an author with read or no access is closed" {
+  for answer in "read read" "none none" "read none" "none read"; do
+    : > "$GH_CALLS"
+    set -- $answer
+    set_permission "$1" "$2"
+    make_event release-1.6 CONTRIBUTOR User '[]'
+    run "$SCRIPT" "$EVENT"
+    [ "$status" -eq 0 ] || { echo "FAIL: $answer: exit $status: $output"; false; }
+    [ "$(sed -n 1p "$GH_CALLS")" = "$PERM_CALL" ] || { echo "FAIL: $answer:"; cat "$GH_CALLS"; false; }
+    sed -n 2p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment ' \
+      || { echo "FAIL: $answer: not closed:"; cat "$GH_CALLS"; false; }
+  done
 }
 
 @test "--dry-run never calls a write verb" {
   make_event release-1.6 CONTRIBUTOR User '[]'
 
+  # From the event the one gh call allowed is the permission read.
   run "$SCRIPT" --dry-run "$EVENT"
   [ "$status" -eq 0 ]
-  if [ -s "$GH_CALLS" ]; then echo "FAIL: gh was called:"; cat "$GH_CALLS"; false; fi
+  [ "$(cat "$GH_CALLS")" = "$PERM_CALL" ] || { echo "FAIL: gh calls:"; cat "$GH_CALLS"; false; }
   case "$output" in
     *"would close PR #42 in cozystack/cozystack"*"$POLICY_URL"*) ;;
     *) echo "FAIL: dry run did not report the close: $output"; false ;;
   esac
 
-  # By number the one gh call allowed is the read.
+  # By number, the pull request read and the permission read.
+  : > "$GH_CALLS"
   run "$SCRIPT" --dry-run --pr 42
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$GH_CALLS" | tr -d ' ')" -eq 1 ]
-  grep -qx 'api repos/{owner}/{repo}/pulls/42' "$GH_CALLS"
+  [ "$(cat "$GH_CALLS")" = "$(printf 'api repos/{owner}/{repo}/pulls/42\n%s' "$PERM_CALL")" ] \
+    || { echo "FAIL: gh calls:"; cat "$GH_CALLS"; false; }
   case "$output" in
     *"would close PR #42"*) ;;
     *) echo "FAIL: dry run did not report the close: $output"; false ;;
@@ -182,9 +272,10 @@ assert_left_open() {
   make_event release-1.6 CONTRIBUTOR User '[]'
   run "$SCRIPT" --pr 42
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$GH_CALLS" | tr -d ' ')" -eq 2 ]
+  [ "$(wc -l < "$GH_CALLS" | tr -d ' ')" -eq 3 ]
   [ "$(sed -n 1p "$GH_CALLS")" = 'api repos/{owner}/{repo}/pulls/42' ]
-  sed -n 2p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment '
+  [ "$(sed -n 2p "$GH_CALLS")" = "$PERM_CALL" ]
+  sed -n 3p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment '
 }
 
 @test "leaves a pull request that is already closed alone" {
