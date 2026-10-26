@@ -27,6 +27,8 @@ The batch takes a pull request from `main` into release line X.Y when all of the
 
 A fix that only makes sense on a release line, with no counterpart on `main`, gets the `release-only` label from a maintainer. Only then may a pull request from outside the team stay open against a release branch.
 
+A pull request opened or reopened against a `release-*` branch is closed automatically, with a comment that links to this page, unless its author is a bot or an owner, member or collaborator of the repository, or it carries `release-only`. To keep one that was closed, a maintainer adds the label first and then reopens it; reopening without the label closes it again. [`hack/close-manual-backport.sh`](../../hack/close-manual-backport.sh) does this from [`pr-labeler.yaml`](../../.github/workflows/pr-labeler.yaml); run it with `--pr <number> --dry-run` to see what it would decide for a given pull request.
+
 ### Cadence
 
 The batch runs for each supported release line twice a week, on Monday and Thursday. Patch releases ship weekly, and minor releases every four weeks.

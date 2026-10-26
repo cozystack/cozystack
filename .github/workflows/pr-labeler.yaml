@@ -296,3 +296,31 @@ jobs:
               labels: newLabels,
             });
             core.info(`Applied labels: ${newLabels.join(', ')}`);
+
+  # Backports are automatic (docs/release/backports.md), so a pull request
+  # against a release branch from outside the team is closed with a pointer to
+  # the policy, unless a maintainer has labelled it release-only.
+  #
+  # pull_request_target hands a write token to a fork's pull request, so this
+  # job never touches the head: actions/checkout takes the event's own ref,
+  # which is the base repository, the script reads only the event JSON, and no
+  # `${{ }}` expression reaches the shell.
+  close-manual-backport:
+    if: >-
+      (github.event.action == 'opened' || github.event.action == 'reopened') &&
+      startsWith(github.event.pull_request.base.ref, 'release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # check out hack/ from the base repository
+      pull-requests: write  # close the pull request with a comment
+    steps:
+      - name: Check out the base repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: hack
+      - name: Close a backport opened by hand from outside the team
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"

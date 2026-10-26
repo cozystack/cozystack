@@ -11,7 +11,16 @@
 load test_helper
 
 SCRIPT="${BATS_TEST_DIRNAME}/close-manual-backport.sh"
+WF="${BATS_TEST_DIRNAME}/../.github/workflows/pr-labeler.yaml"
+LABELS="${BATS_TEST_DIRNAME}/../.github/labels.yml"
 POLICY_URL="https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md"
+
+# The close-manual-backport job of pr-labeler.yaml, comment lines dropped so a
+# setting demoted to a comment cannot satisfy an assertion.
+guard_job() {
+  awk '/^  close-manual-backport:$/ { f = 1; next } f && /^  [^ ]/ { exit } f' "$WF" \
+    | grep -v '^[[:space:]]*#'
+}
 
 _stub_gh() {
   mkdir -p "$1"
@@ -202,4 +211,42 @@ assert_left_open() {
   run "$SCRIPT" --pr '42; gh pr close 1'
   [ "$status" -eq 2 ]
   if [ -s "$GH_CALLS" ]; then echo "FAIL: gh was called:"; cat "$GH_CALLS"; false; fi
+}
+
+# A renamed or deleted label is not an error anywhere: the guard would close
+# every release-only pull request without a word.
+@test "the release-only label the guard honours is defined in labels.yml" {
+  grep -qF '.name == "release-only"' "$SCRIPT"
+  grep -qx -- '- name: release-only' "$LABELS"
+}
+
+@test "pr-labeler runs the guard on opened and reopened pull requests to release-*" {
+  job="$(guard_job)"
+  [ -n "$job" ]
+  printf '%s\n' "$job" | grep -qF "(github.event.action == 'opened' || github.event.action == 'reopened') &&"
+  printf '%s\n' "$job" | grep -qF "startsWith(github.event.pull_request.base.ref, 'release-')"
+  printf '%s\n' "$job" | grep -qxF '        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"'
+}
+
+# pull_request_target hands a write token to a fork's pull request. The job is
+# safe only while it holds no more than it needs and never reaches the head.
+@test "the guard job holds the least token and never checks out the pull request" {
+  job="$(guard_job)"
+  [ -n "$job" ]
+
+  perms="$(printf '%s\n' "$job" | awk '/^    permissions:$/ { f = 1; next } f && /^    [^ ]/ { exit } f' \
+    | sed 's/[[:space:]]*#.*$//' | sort)"
+  [ "$perms" = "$(printf '      contents: read\n      pull-requests: write')" ] || {
+    echo "FAIL: permissions are:"; printf '%s\n' "$perms"; false
+  }
+
+  # actions/checkout without a ref takes the event's own, which on
+  # pull_request_target is the base repository; a ref is the way to the head.
+  if printf '%s\n' "$job" | grep -qE '^[[:space:]]+ref:'; then echo "FAIL: the checkout names a ref"; false; fi
+  printf '%s\n' "$job" | grep -qxF '          persist-credentials: false'
+
+  # The token is the only expression: event fields reach the script through
+  # the JSON file, never through the shell.
+  [ "$(printf '%s\n' "$job" | grep -oF '${{' | wc -l | tr -d ' ')" -eq 1 ]
+  printf '%s\n' "$job" | grep -qxF '          GH_TOKEN: ${{ github.token }}'
 }

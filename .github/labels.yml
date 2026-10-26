@@ -310,6 +310,12 @@
   color: 'aaaaaa'
   description: Releasing a new Cozystack version
 
+# Read by hack/close-manual-backport.sh: without it, a pull request against
+# release-* from outside the team is closed, because backports are automatic.
+- name: release-only
+  color: 'c5def5'
+  description: A fix that applies only to a release branch, with no counterpart on main; keeps the PR open
+
 - name: automated
   color: 'ededed'
   description: Created by automation
