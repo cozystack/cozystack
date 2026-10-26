@@ -87,6 +87,9 @@ type Bootstrap struct {
 	// Name of backup to restore from.
 	// +kubebuilder:default:=""
 	BackupName string `json:"backupName"`
+	// Databases to restore from the backup, for example when the backup comes from another application. Only the listed databases are restored, and this application keeps its own users, both the system users and the ones from `users`. Users and roles are not restored from the backup, and databases that are not listed are not restored. Names must match the backup exactly, a name the backup does not have restores nothing. Leave empty to restore the whole backup together with its users, which replace the users of this application. `admin`, `config` and `local` cannot be listed.
+	// +kubebuilder:default:={}
+	Databases []string `json:"databases,omitempty"`
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`

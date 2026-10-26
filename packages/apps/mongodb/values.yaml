@@ -180,9 +180,11 @@ backup:
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp for point-in-time recovery; empty means latest.
 ## @field {string} backupName - Name of backup to restore from.
+## @field {[]string} [databases] - Databases to restore from the backup, for example when the backup comes from another application. Only the listed databases are restored, and this application keeps its own users, both the system users and the ones from `users`. Users and roles are not restored from the backup, and databases that are not listed are not restored. Names must match the backup exactly, a name the backup does not have restores nothing. Leave empty to restore the whole backup together with its users, which replace the users of this application. `admin`, `config` and `local` cannot be listed.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
   enabled: false
   recoveryTime: ""
   backupName: ""
+  databases: []

@@ -464,3 +464,371 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "backup.s3SecretKey is required when bootstrap.enabled is true"
+
+  #####################
+  # Selective restore #
+  #####################
+
+  - it: restores only the listed databases and keeps the application's users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop
+          - crm
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+      - equal:
+          path: spec.selective
+          value:
+            withUsersAndRoles: false
+            namespaces:
+              - shop.*
+              - crm.*
+
+  - it: restores the whole backup when databases is empty
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases: []
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+      - notExists:
+          path: spec.selective
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDBRestore
+
+  - it: restores the whole backup when databases is null
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases: null
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+      - notExists:
+          path: spec.selective
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDBRestore
+
+  - it: fails on an empty database name
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - ""
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on a database name with a dot
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop.orders
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "shop.orders", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on a wildcard, which would restore the whole backup with its users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - "*"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "*", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on a database name with a dollar sign
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop$
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "shop$", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on a database name with whitespace
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - "my shop"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "my shop", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on a database name with a slash
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop/orders
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases has "shop/orders", which is not a database name. A name cannot be empty or contain whitespace or any of / \ . " $ *'
+
+  - it: fails on the admin database, which holds the application's users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop
+          - admin
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases cannot list "admin", the admin, config and local databases belong to the application itself and are not restored selectively'
+
+  - it: fails on the config database
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - config
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases cannot list "config", the admin, config and local databases belong to the application itself and are not restored selectively'
+
+  - it: fails on the local database
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - local
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bootstrap.databases cannot list "local", the admin, config and local databases belong to the application itself and are not restored selectively'
+
+  - it: does not check databases when bootstrap is disabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: false
+        databases:
+          - shop.orders
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: restores selected databases to a point in time on a replica set
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        recoveryTime: "2025-01-07 14:30:00"
+        databases:
+          - shop
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.pitr
+          value:
+            type: date
+            date: "2025-01-07 14:30:00"
+      - equal:
+          path: spec.selective.namespaces
+          value:
+            - shop.*
+
+  - it: fails on selected databases with a point in time on a sharded cluster
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      sharding: true
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        recoveryTime: "2025-01-07 14:30:00"
+        databases:
+          - shop
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.databases cannot be combined with bootstrap.recoveryTime when sharding is enabled, percona-backup-mongodb restores selected databases to a point in time on replica sets only"
+
+  - it: restores selected databases on a sharded cluster without a point in time
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      sharding: true
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        databases:
+          - shop
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.selective.namespaces
+          value:
+            - shop.*
+      - notExists:
+          path: spec.pitr
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDBRestore
+
+  - it: keeps a point-in-time restore of the whole backup on a sharded cluster
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      sharding: true
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        recoveryTime: "2025-01-07 14:30:00"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.pitr.date
+          value: "2025-01-07 14:30:00"
+      - notExists:
+          path: spec.selective
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDBRestore
