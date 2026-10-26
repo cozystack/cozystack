@@ -198,6 +198,7 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   dependsOn:
   - name: {{ .Release.Name }}-db
   {{- if eq $ingress .Release.Namespace }}

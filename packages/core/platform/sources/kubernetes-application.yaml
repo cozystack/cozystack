@@ -63,6 +63,7 @@ spec:
           path: system/hami
         - name: kubernetes-vertical-pod-autoscaler
           path: system/vertical-pod-autoscaler
+          libraries: ["cozy-lib"]
         - name: kubernetes-prometheus-operator-crds
           path: system/prometheus-operator-crds
         - name: kubernetes-metrics-server

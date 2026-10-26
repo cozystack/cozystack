@@ -32,6 +32,7 @@ metadata:
   name: tenant-root
   namespace: tenant-root
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-tenant-application-default-tenant
