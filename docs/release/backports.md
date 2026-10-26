@@ -40,7 +40,7 @@ A pull request opened against a `release-*` branch is closed automatically, with
 
 ### Cadence
 
-The batch runs for each supported release line twice a week, on Monday and Thursday. Patch releases ship weekly, and minor releases every four weeks.
+The batch runs for each supported release line twice a week, on Monday and Thursday: often enough that a fix reaches its line within days, rarely enough that nobody spends time on it every day, and early enough in the week that each run leaves working days to cut an rc, run its e2e and promote it before the weekend. Patch releases ship weekly.
 
 ### Running the batch
 
