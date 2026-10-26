@@ -15,7 +15,7 @@ A report on the pull request, nothing else: what in the title the diff contradic
 
 ### What to check
 
-- **Type.** `fix` corrects behaviour that was wrong: a bug, a crash, a wrong default that broke something, a CI or e2e failure. `feat` adds behaviour: a new option, value, component, field or command. `refactor` changes code without changing behaviour, `docs` changes documentation only, `test`, `ci` and `build` change only tests, CI or the build, `chore` changes none of those, and `perf` makes something faster without changing what it does. A new value in `values.yaml` or a new field in an API type is a feature even when the title says it fixes something.
+- **Type.** `fix` corrects behaviour that was wrong: a bug, a crash, a wrong default that broke something, a CI or e2e failure; `security` fixes a vulnerability. `feat` adds behaviour: a new option, value, component, field or command. `refactor` changes code without changing behaviour, `docs` changes documentation only, `test`, `ci` and `build` change only tests, CI or the build, `chore` changes none of those, and `perf` makes something faster without changing what it does. A new value in `values.yaml` or a new field in an API type is a feature even when the title says it fixes something.
 - **Breaking.** The title carries `!`, or the body a `BREAKING CHANGE:` footer, when an existing install can break on upgrade: a removed or renamed value, field, flag, resource or CRD, a default that changes what runs, a required value where there was none.
 - **Scope.** The scope names what the files are: `fix(postgres)` changes the postgres application or its operator, `fix(docs)` changes documentation only, `fix(ci)` changes `.github/` or `hack/` scripts CI runs. A scope that names a different component from the one the files belong to is a mismatch.
 - **One change.** A fix that comes with a feature or a refactor in the same pull request reaches no patch release as one unit: report it, and suggest splitting the fix into its own pull request.
@@ -23,6 +23,10 @@ A report on the pull request, nothing else: what in the title the diff contradic
 ### Check
 
 Nothing is pushed. The report is checked by the maintainer reviewing the pull request, who fixes the title or asks for a split before merge, or overrides the report.
+
+### Where it runs
+
+Copilot code review runs this task on pull requests to `main` from [`.github/instructions/pr-title.instructions.md`](../../../.github/instructions/pr-title.instructions.md), which carries the list above word for word; `hack/copilot-instructions.bats` fails when the two differ. Its review is a comment, never an approval or a request for changes, and it reads the instructions from the pull request's own branch, so a pull request that edits them is reviewed by its own edit; the maintainer's review stays the check. A repository admin turns it on for every pull request with a branch ruleset on `main` that has "Automatically request Copilot code review"; the organization's Copilot code review policy has to allow it, and the repository setting "Use custom instructions when reviewing pull requests" has to stay on, as it is by default. A maintainer's agent or a maintainer runs the same task by hand from this page.
 
 ### Never
 
