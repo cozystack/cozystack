@@ -348,7 +348,7 @@
           }
         },
         "enabled": {
-          "description": "Whether to restore from a backup.",
+          "description": "Restore the backup named in `backupName` into this application. Turn it on once the application is ready, it cannot be set while the application is being created. The restore then starts by itself as soon as the database and its backup agents are ready, and it needs `backup.enabled`.",
           "type": "boolean",
           "default": false
         },
