@@ -13,7 +13,6 @@ load test_helper
 
 SCRIPT="${BATS_TEST_DIRNAME}/close-manual-backport.sh"
 WF="${BATS_TEST_DIRNAME}/../.github/workflows/pr-labeler.yaml"
-LABELS="${BATS_TEST_DIRNAME}/../.github/labels.yml"
 POLICY_URL="https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md"
 PERM_CALL="api repos/cozystack/cozystack/collaborators/someone/permission"
 
@@ -113,7 +112,7 @@ assert_left_open_after_permission() {
     [ "$(sed -n 1p "$GH_CALLS")" = "$PERM_CALL" ]
     sed -n 2p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment Thank you'
     grep -qF "$POLICY_URL" "$GH_CALLS"
-    grep -qF '`release-only` label' "$GH_CALLS"
+    grep -qF 'a maintainer can reopen it.' "$GH_CALLS"
     if grep -qF '—' "$GH_CALLS"; then echo "FAIL: the comment carries an em dash"; false; fi
   done
 }
@@ -133,10 +132,29 @@ assert_left_open_after_permission() {
   assert_left_open
 }
 
-@test "leaves a pull request labeled release-only open" {
-  make_event release-1.6 CONTRIBUTOR User '["kind/bug","release-only"]'
+# No label keeps a pull request open: what keeps one is a maintainer
+# reopening it, which the guard does not act on.
+@test "closes a pull request whatever labels it carries" {
+  make_event release-1.6 CONTRIBUTOR User '["kind/bug","release-only","backport/include"]'
   run "$SCRIPT" "$EVENT"
-  assert_left_open
+  [ "$status" -eq 0 ] || { echo "FAIL: exit $status: $output"; false; }
+  sed -n 2p "$GH_CALLS" | grep -q '^pr close 42 --repo cozystack/cozystack --comment ' \
+    || { echo "FAIL: not closed:"; cat "$GH_CALLS"; false; }
+}
+
+@test "acts only on an opened event, so a maintainer keeps a fix by reopening it" {
+  for action in reopened synchronize edited labeled ''; do
+    : > "$GH_CALLS"
+    make_event release-1.6 CONTRIBUTOR User '[]'
+    jq --arg a "$action" 'if $a == "" then del(.action) else .action = $a end' "$EVENT" > "$EVENT.tmp"
+    mv "$EVENT.tmp" "$EVENT"
+    run "$SCRIPT" "$EVENT"
+    assert_left_open
+    case "$output" in
+      *"not opened"*) ;;
+      *) echo "FAIL: reason does not name the event ($action): $output"; false ;;
+    esac
+  done
 }
 
 @test "leaves pull requests to main and to other branches open" {
@@ -158,28 +176,13 @@ assert_left_open_after_permission() {
   esac
 }
 
-@test "does nothing on an unknown association, a missing author type or no label list" {
+@test "does nothing on an unknown association, a missing author type or an odd login" {
   make_event release-1.6 SOMETHING_NEW User '[]'
   run "$SCRIPT" "$EVENT"
   assert_left_open
 
   : > "$GH_CALLS"
   make_event release-1.6 CONTRIBUTOR - '[]'
-  run "$SCRIPT" "$EVENT"
-  assert_left_open
-
-  : > "$GH_CALLS"
-  make_event release-1.6 CONTRIBUTOR User '[]'
-  jq '.pull_request |= del(.labels)' "$EVENT" > "$EVENT.tmp"
-  mv "$EVENT.tmp" "$EVENT"
-  run "$SCRIPT" "$EVENT"
-  assert_left_open
-
-  # A label whose name cannot be read could be release-only.
-  : > "$GH_CALLS"
-  make_event release-1.6 CONTRIBUTOR User '[]'
-  jq '.pull_request.labels = [{"id": 1}]' "$EVENT" > "$EVENT.tmp"
-  mv "$EVENT.tmp" "$EVENT"
   run "$SCRIPT" "$EVENT"
   assert_left_open
 
@@ -304,17 +307,11 @@ assert_left_open_after_permission() {
   if [ -s "$GH_CALLS" ]; then echo "FAIL: gh was called:"; cat "$GH_CALLS"; false; fi
 }
 
-# A renamed or deleted label is not an error anywhere: the guard would close
-# every release-only pull request without a word.
-@test "the release-only label the guard honours is defined in labels.yml" {
-  grep -qF '.name == "release-only"' "$SCRIPT"
-  grep -qx -- '- name: release-only' "$LABELS"
-}
-
-@test "pr-labeler runs the guard on opened and reopened pull requests to release-*" {
+@test "pr-labeler runs the guard only on opened pull requests to release-*" {
   job="$(guard_job)"
   [ -n "$job" ]
-  printf '%s\n' "$job" | grep -qF "(github.event.action == 'opened' || github.event.action == 'reopened') &&"
+  printf '%s\n' "$job" | grep -qxF "      github.event.action == 'opened' &&"
+  if printf '%s\n' "$job" | grep -qF 'reopened'; then echo "FAIL: the job runs on reopened"; false; fi
   printf '%s\n' "$job" | grep -qF "startsWith(github.event.pull_request.base.ref, 'release-')"
   printf '%s\n' "$job" | grep -qxF '        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"'
 }

@@ -1,8 +1,9 @@
 #!/bin/sh
 # Close a pull request opened by hand against a release branch by someone
 # outside the team. Fixes reach the release lines through the backport batch
-# (docs/release/backports.md), so a hand-made backport is work nobody needs; a
-# fix that exists only on a release line carries the `release-only` label.
+# (docs/release/backports.md), so a hand-made backport is work nobody needs. It
+# acts only on an `opened` event: a maintainer keeps a fix that exists only on
+# a release line by reopening it.
 #
 # Usage: close-manual-backport.sh [--dry-run] [EVENT_JSON]
 #        close-manual-backport.sh [--dry-run] --pr NUMBER
@@ -13,10 +14,11 @@
 # JSON is read, that object and the author's repository permission: nothing
 # from the pull request is checked out or run.
 #
-# The pull request is closed only when it is open, targets release-*, its
-# author's association is not OWNER, MEMBER or COLLABORATOR, its author is not
-# a bot, it carries no `release-only` label, and GitHub answers that the
-# author's permission and role on the repository are both read or none. A
+# The pull request is closed only when the event, if there is one, is
+# `opened`, the pull request is open and targets release-*, its author's
+# association is not OWNER, MEMBER or COLLABORATOR, its author is not a bot,
+# and GitHub answers that the author's permission and role on the repository
+# are both read or none. A
 # missing field, a failed call, or a value this script does not know leaves it
 # open and exits 0. Exits 1 when the input cannot be read, 2 on a usage error,
 # and with gh's status when the close fails.
@@ -68,6 +70,8 @@ else
     echo "close-manual-backport: cannot read the event JSON at $event" >&2
     exit 1
   fi
+  action=$(jq -r '.action | strings' "$event" 2>/dev/null || true)
+  [ "$action" = opened ] || leave "the event is ${action:-missing}, not opened"
 fi
 
 # A filter that fails on an unexpected shape prints nothing, which every check
@@ -110,11 +114,6 @@ case "$user_type" in
   *) leave "PR #$number has an author type this script does not know ($user_type)" ;;
 esac
 
-labels_ok=$(field 'select((.labels | type) == "array" and all(.labels[]; (.name? | type) == "string")) | "yes"')
-[ "$labels_ok" = yes ] || leave "PR #$number carries no readable label list"
-release_only=$(field 'any(.labels[]; .name == "release-only")')
-[ "$release_only" = false ] || leave "PR #$number carries the release-only label"
-
 repo=$(field '.base.repo.full_name | strings')
 case "$repo" in
   */*/* | *[!A-Za-z0-9._/-]* | /* | */) leave "PR #$number names no usable base repository" ;;
@@ -141,7 +140,7 @@ case "$permission:$role" in
 esac
 
 policy="https://github.com/$repo/blob/main/docs/release/backports.md"
-comment="Thank you for the contribution! Backports are automatic: fixes merged to \`main\` reach the supported release lines on their own, as the [backport policy]($policy) describes, so this pull request is closed. If the fix only makes sense on a release line and has no counterpart on \`main\`, please ask a maintainer to add the \`release-only\` label and reopen it."
+comment="Thank you for the contribution! Backports are automatic: fixes merged to \`main\` reach the supported release lines on their own, as the [backport policy]($policy) describes, so this pull request is closed. If the fix only makes sense on a release line and has no counterpart on \`main\`, a maintainer can reopen it."
 
 if [ "$dry_run" = true ]; then
   printf 'close-manual-backport: would close PR #%s in %s with this comment:\n%s\n' "$number" "$repo" "$comment"

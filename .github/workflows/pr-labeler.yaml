@@ -299,7 +299,8 @@ jobs:
 
   # Backports are automatic (docs/release/backports.md), so a pull request
   # against a release branch from outside the team is closed with a pointer to
-  # the policy, unless a maintainer has labelled it release-only.
+  # the policy. Only when it is opened: a maintainer keeps a fix that exists
+  # only on a release line by reopening it.
   #
   # pull_request_target hands a write token to a fork's pull request, so this
   # job never touches the head: actions/checkout takes the event's own ref,
@@ -309,7 +310,7 @@ jobs:
   # a GITHUB_TOKEN always carries and `permissions:` has no key for.
   close-manual-backport:
     if: >-
-      (github.event.action == 'opened' || github.event.action == 'reopened') &&
+      github.event.action == 'opened' &&
       startsWith(github.event.pull_request.base.ref, 'release-')
     runs-on: ubuntu-latest
     timeout-minutes: 5
