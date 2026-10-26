@@ -256,7 +256,17 @@ spec:
       - name: daily-backup
         enabled: true
         schedule: {{ .Values.backup.schedule | quote }}
-        keep: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int }}
+        {{- /*
+          retentionPolicy counts backups, not days, so "30" and the older "30d"
+          both keep the 30 newest. The operator takes keep only as a deprecated
+          alias of this count and honours retention from crVersion 1.21.0 on.
+          A negative count would fail the CRD minimum, keep never did, so it
+          is clamped to 0, which deletes nothing just as keep 0 did.
+        */}}
+        retention:
+          type: count
+          count: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int | max 0 }}
+          deleteFromStorage: true
         storageName: s3-storage
         type: logical
         compressionType: gzip

@@ -72,7 +72,7 @@ type Backup struct {
 	// Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).
 	// +kubebuilder:default:=false
 	InsecureSkipTLSVerify bool `json:"insecureSkipTLSVerify,omitempty"`
-	// Retention policy (e.g. "30d"). Ignored when useSystemBucket is true (no engine-side retention on that flow).
+	// Number of backups to keep, the newest ones. It counts backups, not days, so "30" and the older form "30d" both keep the 30 newest backups, which with an hourly schedule is about 30 hours. "0" keeps every backup. Ignored when useSystemBucket is true (no engine-side retention on that flow).
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
 	// Access key for S3 authentication. Ignored when useSystemBucket is true (credentials come from the projected cozy-backups-creds).

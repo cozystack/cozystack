@@ -293,7 +293,7 @@
           "default": false
         },
         "retentionPolicy": {
-          "description": "Retention policy (e.g. \"30d\"). Ignored when useSystemBucket is true (no engine-side retention on that flow).",
+          "description": "Number of backups to keep, the newest ones. It counts backups, not days, so \"30\" and the older form \"30d\" both keep the 30 newest backups, which with an hourly schedule is about 30 hours. \"0\" keeps every backup. Ignored when useSystemBucket is true (no engine-side retention on that flow).",
           "type": "string",
           "default": "30d"
         },
