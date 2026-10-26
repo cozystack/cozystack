@@ -1,0 +1,276 @@
+suite: keycloak custom trust anchors
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+templates:
+  - templates/sts.yaml
+tests:
+  - it: leaves the default pod without truststore volumes or mounts
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_TRUSTSTORE_PATHS
+          any: true
+
+  - it: mounts only the selected ConfigMap key read-only at a reserved subdirectory
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: truststore-0
+              configMap:
+                name: freeipa-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: truststore-0
+              mountPath: /opt/keycloak/conf/truststores/cozystack-0
+              readOnly: true
+
+  - it: mounts a selected Secret key without changing its PKCS12 extension
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      truststores:
+        - secretName: partner-ca
+          key: trust.p12
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: truststore-0
+              secret:
+                secretName: partner-ca
+                items:
+                  - key: trust.p12
+                    path: trust.p12
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: truststore-0
+              mountPath: /opt/keycloak/conf/truststores/cozystack-0
+              readOnly: true
+
+  - it: keeps themes and multiple CA sources separate even with identical key names
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      themes:
+        - name: custom
+          image: example.com/theme:1
+      truststores:
+        - configMapName: freeipa-ca
+        - secretName: partner-ca
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: themes
+              emptyDir:
+                sizeLimit: 256Mi
+            - name: truststore-0
+              configMap:
+                name: freeipa-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+            - name: truststore-1
+              secret:
+                secretName: partner-ca
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+            - name: truststore-0
+              mountPath: /opt/keycloak/conf/truststores/cozystack-0
+              readOnly: true
+            - name: truststore-1
+              mountPath: /opt/keycloak/conf/truststores/cozystack-1
+              readOnly: true
+      - equal:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          value:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+
+  - it: does not override explicitly configured truststore paths
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+      extraEnv:
+        - name: KC_TRUSTSTORE_PATHS
+          value: /opt/additional-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_TRUSTSTORE_PATHS
+            value: /opt/additional-ca
+
+  - it: rejects a non-list truststores value
+    set:
+      truststores: invalid
+    asserts:
+      - failedTemplate:
+          errorMessage: truststores must be a list
+
+  - it: rejects a non-object source
+    set:
+      truststores: [invalid]
+    asserts:
+      - failedTemplate:
+          errorMessage: truststores[0] must be an object
+
+  - it: rejects an entry without a source
+    set:
+      truststores: [{}]
+    asserts:
+      - failedTemplate:
+          errorMessage: truststores[0] must set exactly one of secretName or configMapName
+
+  - it: rejects ambiguous sources
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          secretName: partner-ca
+    asserts:
+      - failedTemplate:
+          errorMessage: truststores[0] must set exactly one of secretName or configMapName
+
+  - it: rejects unknown fields instead of silently using the default key
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          keys: wrong
+    asserts:
+      - failedTemplate:
+          errorMessage: 'truststores[0]: unknown field keys'
+
+  - it: rejects an empty source name
+    set:
+      truststores:
+        - secretName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'truststores[0]: source name must be a non-empty DNS subdomain'
+
+  - it: rejects a non-string source name
+    set:
+      truststores:
+        - secretName: 123
+    asserts:
+      - failedTemplate:
+          errorMessage: 'truststores[0]: source name must be a non-empty DNS subdomain'
+
+  - it: rejects an invalid source name
+    set:
+      truststores:
+        - configMapName: Bad/Name
+    asserts:
+      - failedTemplate:
+          errorMessage: 'truststores[0]: source name must be a non-empty DNS subdomain'
+
+  - it: rejects a non-string key
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: 123
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
+
+  - it: rejects an empty key
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
+
+  - it: rejects path traversal
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: ../ca.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
+
+  - it: rejects AtomicWriter reserved names
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: ..data
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
+
+  - it: accepts a source name and key of exactly 253 characters
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      truststores:
+        - configMapName: &maxSourceName aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          key: &maxKey aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.crt
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].configMap
+          value:
+            name: *maxSourceName
+            items:
+              - key: *maxKey
+                path: *maxKey
+
+  - it: rejects a source name longer than 253 characters
+    set:
+      truststores:
+        - secretName: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - failedTemplate:
+          errorMessage: 'truststores[0]: source name must be a non-empty DNS subdomain'
+
+  - it: rejects a key longer than 253 characters
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
+
+  - it: rejects a single-dot key
+    set:
+      truststores:
+        - configMapName: freeipa-ca
+          key: "."
+    asserts:
+      - failedTemplate:
+          errorMessage: "truststores[0]: key must contain 1-253 letters, digits, '.', '_' or '-' and cannot be '.' or start with '..'"
