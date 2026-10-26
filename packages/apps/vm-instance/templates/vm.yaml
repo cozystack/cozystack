@@ -20,6 +20,61 @@
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
 {{- $networks := .Values.networks | default .Values.subnets }}
+{{- /* A gpus entry names a raw resource, a held GPUClaim or a claimTemplate.
+       References are rendered only as the reference label and annotation on
+       the VMI template; the GPU webhook resolves them at VMI creation and
+       refuses a VMI that brings GPU entries of its own, so a list holds raw
+       names or references, never both. */}}
+{{- $gpuNames := list }}
+{{- $gpuRefs := list }}
+{{- $gpuClaims := dict }}
+{{- range $i, $gpu := .Values.gpus }}
+{{-   $set := list }}
+{{-   range $key := list "name" "claim" }}
+{{-     if not (empty (get $gpu $key)) }}
+{{-       $set = append $set $key }}
+{{-     end }}
+{{-   end }}
+{{- /* A typed client sends the zero claimTemplate on every entry, since
+         the generated struct field is not a pointer. */}}
+{{-   $tpl := $gpu.claimTemplate | default dict }}
+{{-   if or (not (empty $tpl.className)) (not (empty $tpl.count)) }}
+{{-     $set = append $set "claimTemplate" }}
+{{-   end }}
+{{-   if ne (len $set) 1 }}
+{{-     fail (printf "gpus[%d]: set exactly one of name, claim or claimTemplate" $i) }}
+{{-   end }}
+{{-   if $gpu.name }}
+{{-     $gpuNames = append $gpuNames $gpu.name }}
+{{-   else if $gpu.claim }}
+{{-     $claim := printf "%v" $gpu.claim }}
+{{-     if hasKey $gpuClaims $claim }}
+{{-       fail (printf "gpus[%d]: claim %s is listed twice" $i $claim) }}
+{{-     end }}
+{{-     $_ := set $gpuClaims $claim true }}
+{{-     $gpuRefs = append $gpuRefs (dict "claim" $claim) }}
+{{-   else }}
+{{-     if empty $tpl.className }}
+{{-       fail (printf "gpus[%d].claimTemplate needs className" $i) }}
+{{-     end }}
+{{-     $count := "" }}
+{{-     if not (kindIs "invalid" $tpl.count) }}
+{{-       $count = printf "%v" $tpl.count }}
+{{-     end }}
+{{-     if not (regexMatch "^[1-9][0-9]*$" $count) }}
+{{-       fail (printf "gpus[%d].claimTemplate.count must be a whole number of at least 1" $i) }}
+{{-     end }}
+{{-     $gpuRefs = append $gpuRefs (dict "claimTemplate" (dict "className" (printf "%v" $tpl.className) "count" ($count | atoi))) }}
+{{-   end }}
+{{- end }}
+{{- if and $gpuNames $gpuRefs }}
+{{-   fail "gpus: list either only name entries or only claim and claimTemplate entries" }}
+{{- end }}
+{{- /* Without GPUs for VMs no webhook resolves the references, and the VM
+       would boot without its GPUs. */}}
+{{- if and $gpuRefs (ne (toString (index (.Values._cluster | default dict) "gpu-vm-enabled" | default "false")) "true") }}
+{{-   fail "gpus: claim and claimTemplate entries need GPUs for VMs, which this cluster does not serve; use name entries or ask the hoster to enable GPUs" }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -55,8 +110,14 @@ spec:
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
         {{- end }}
         {{- end }}
+        {{- with $gpuRefs }}
+        gpu.cozystack.io/claims: {{ . | toJson | toYaml }}
+        {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
+        {{- if $gpuRefs }}
+        gpu.cozystack.io/claim-reference: "true"
+        {{- end }}
     spec:
       domain:
         {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
@@ -84,11 +145,11 @@ spec:
             enabled: true
         {{- end }}
         devices:
-          {{- if .Values.gpus }}
+          {{- with $gpuNames }}
           gpus:
-          {{- range $i, $gpu := .Values.gpus }}
+          {{- range $i, $name := . }}
           - name: gpu{{ add $i 1 }}
-            deviceName: {{ $gpu.name }}
+            deviceName: {{ $name }}
           {{- end }}
           {{- end }}
           disks:

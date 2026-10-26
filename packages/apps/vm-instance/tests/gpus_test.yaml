@@ -1,0 +1,219 @@
+suite: vm-instance GPU entries
+
+# A gpus entry is a raw resource name, a held GPUClaim or a claimTemplate.
+# Claim references are not resolved here: the chart renders only the
+# reference, on the VMI template, and the GPU webhook resolves it when the
+# VMI is created. The reference label is what selects a VMI for that webhook,
+# and the annotation carries the references as one JSON list. Where the
+# platform does not serve GPUs to VMs no webhook resolves them, so the chart
+# refuses references there rather than boot the VM without its GPUs.
+
+templates:
+  - templates/vm.yaml
+release:
+  name: test-vm
+  namespace: tenant-test
+set:
+  fullnameOverride: test-vm
+  _cluster:
+    gpu-vm-enabled: "true"
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 8Gi
+tests:
+  - it: renders name entries as KubeVirt gpus with no reference
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+          - name: gpu1
+            deviceName: nvidia.com/GA102GL_A10
+          - name: gpu2
+            deviceName: nvidia.com/GA102GL_A10
+      - notExists:
+          path: spec.template.metadata.labels["gpu.cozystack.io/claim-reference"]
+      - notExists:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/claims"]
+
+  - it: treats a zero-valued claimTemplate next to a name as unset
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+        claimTemplate:
+          className: ""
+          count: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+          - name: gpu1
+            deviceName: nvidia.com/GA102GL_A10
+
+  - it: renders claim entries as a reference only
+    set:
+      gpus:
+      - claim: train-0
+      - claim: train-1
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["gpu.cozystack.io/claim-reference"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/claims"]
+          value: '[{"claim":"train-0"},{"claim":"train-1"}]'
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: renders a claimTemplate entry with its class and count
+    set:
+      gpus:
+      - claimTemplate:
+          className: l40s-24c
+          count: 2
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["gpu.cozystack.io/claim-reference"]
+          value: "true"
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/claims"]
+          value: '[{"claimTemplate":{"className":"l40s-24c","count":2}}]'
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: keeps the order of mixed claim and claimTemplate entries
+    set:
+      gpus:
+      - claimTemplate:
+          className: l40s-24c
+          count: 1
+      - claim: train-0
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["gpu.cozystack.io/claims"]
+          value: '[{"claimTemplate":{"className":"l40s-24c","count":1}},{"claim":"train-0"}]'
+
+  - it: keeps the pod-template labels the chart already renders next to the reference
+    set:
+      gpus:
+      - claim: train-0
+    asserts:
+      - exists:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+      - equal:
+          path: spec.template.metadata.annotations["kubevirt.io/allow-pod-bridge-network-live-migration"]
+          value: "true"
+
+  - it: renders no reference without gpus
+    asserts:
+      - notExists:
+          path: spec.template.metadata.labels["gpu.cozystack.io/claim-reference"]
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  - it: refuses an entry with both name and claim
+    set:
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+        claim: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, claim or claimTemplate'
+
+  - it: refuses an entry with both claim and claimTemplate
+    set:
+      gpus:
+      - claim: train-0
+        claimTemplate:
+          className: l40s-24c
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, claim or claimTemplate'
+
+  - it: refuses an empty entry
+    set:
+      gpus:
+      - {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\]: set exactly one of name, claim or claimTemplate'
+
+  - it: refuses names next to claim references
+    set:
+      gpus:
+      - claim: train-0
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: list either only name entries or only claim and claimTemplate entries'
+
+  # The schema requires className and an integer count; it allows an empty
+  # name and a count below 1.
+  - it: refuses a claimTemplate with an empty className
+    set:
+      gpus:
+      - claimTemplate:
+          className: ""
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\].claimTemplate needs className'
+
+  - it: refuses a claimTemplate count of zero
+    set:
+      gpus:
+      - claimTemplate:
+          className: l40s-24c
+          count: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[0\].claimTemplate.count must be a whole number of at least 1'
+
+  - it: refuses the same claim twice
+    set:
+      gpus:
+      - claim: train-0
+      - claim: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus\[1\]: claim train-0 is listed twice'
+
+  - it: refuses a claim entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - claim: train-0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: claim and claimTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: refuses a claimTemplate entry where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+      - claimTemplate:
+          className: l40s-24c
+          count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpus: claim and claimTemplate entries need GPUs for VMs, which this cluster does not serve'
+
+  - it: keeps name entries where the platform serves no GPUs to VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: null
+      gpus:
+      - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus[0].deviceName
+          value: nvidia.com/GA102GL_A10
