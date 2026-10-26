@@ -24,6 +24,8 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/kustomize"
+
+	"github.com/cozystack/cozystack/api/v1alpha1"
 )
 
 // ReleaseAnnotationPrefix is the prefix shared by every ApplicationDefinition
@@ -195,6 +197,9 @@ type ResourceConfig struct {
 type Resource struct {
 	Application ApplicationConfig `yaml:"application"`
 	Release     ReleaseConfig     `yaml:"release"`
+	// Credentials is the definition's spec.credentials; nil for a kind that is
+	// not converted.
+	Credentials *v1alpha1.ApplicationDefinitionCredentials `yaml:"credentials,omitempty"`
 }
 
 // ApplicationConfig contains the application settings.

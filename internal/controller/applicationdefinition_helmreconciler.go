@@ -7,6 +7,8 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/store"
+	"github.com/cozystack/cozystack/pkg/specschema"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	corev1 "k8s.io/api/core/v1"
@@ -145,14 +147,31 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 	return nil
 }
 
-// expectedValuesFrom returns the expected valuesFrom configuration for HelmReleases
+// expectedValuesFrom returns the valuesFrom a release of a kind without a
+// credentials block carries.
 func expectedValuesFrom() []helmv2.ValuesReference {
-	return []helmv2.ValuesReference{
-		{
-			Kind: "Secret",
-			Name: "cozystack-values",
-		},
+	return store.ValuesFrom(nil, "", nil)
+}
+
+// releaseValuesFrom returns the valuesFrom a release carries under its
+// definition, resolving the accounts with the definition's schema defaults as
+// the API does on a write, so a release created before the block appeared
+// gets its entries on reconcile. An error means values the API would refuse;
+// the release is left as it is.
+func releaseValuesFrom(hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition) ([]helmv2.ValuesReference, error) {
+	block := appDef.Spec.Credentials
+	if block == nil || block.ValuesPath == "" {
+		return store.ValuesFrom(block, hr.Name, nil), nil
 	}
+	schema, err := specschema.Build(appDef.Spec.Application.OpenAPISchema)
+	if err != nil {
+		return nil, fmt.Errorf("build schema: %w", err)
+	}
+	accounts, err := store.ResolveAccounts(block, schema, hr.Spec.Values)
+	if err != nil {
+		return nil, err
+	}
+	return store.ValuesFrom(block, hr.Name, accounts), nil
 }
 
 // valuesFromEqual compares two ValuesReference slices
@@ -205,8 +224,9 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 	}
 
 	// Check and update valuesFrom configuration
-	expected := expectedValuesFrom()
-	if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
+	if expected, err := releaseValuesFrom(hr, appDef); err != nil {
+		logger.Error(err, "Skipping HelmRelease valuesFrom update: accounts cannot be resolved", "name", hr.Name, "namespace", hr.Namespace)
+	} else if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
 		logger.V(4).Info("Updating HelmRelease valuesFrom", "name", hr.Name, "namespace", hr.Namespace)
 		hrCopy.Spec.ValuesFrom = expected
 		updated = true

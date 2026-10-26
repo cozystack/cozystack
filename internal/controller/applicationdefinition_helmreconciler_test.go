@@ -8,7 +8,10 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/account"
+	"github.com/cozystack/cozystack/pkg/credentials/store"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -659,5 +662,52 @@ func TestAppDefHelm_SameKindRequests(t *testing.T) {
 	}
 	if !names["harbor"] || !names["tap-harbor"] || names["pg"] || len(reqs) != 2 {
 		t.Fatalf("requests = %v (%d), want harbor and tap-harbor once each", names, len(reqs))
+	}
+}
+
+// TestAppDefHelm_CredentialsValuesFrom pins that a definition with a
+// credentials block naming a valuesPath gives every release of the kind one
+// valuesFrom entry per account, resolved with the schema defaults applied, so
+// a release created before the block appeared gets them on reconcile.
+func TestAppDefHelm_CredentialsValuesFrom(t *testing.T) {
+	scheme := newAppDefHelmScheme(t)
+	appDef := vmInstanceAppDef(nil)
+	appDef.Spec.Application.OpenAPISchema = `{"type":"object","properties":{"backup":{"type":"object","default":{},"properties":{"enabled":{"type":"boolean","default":true}}}}}`
+	appDef.Spec.Credentials = &cozyv1alpha1.ApplicationDefinitionCredentials{
+		Format:     cozyv1alpha1.CredentialFormat{Name: "scram-sha-256"},
+		ValuesPath: "_accounts",
+		Accounts: []cozyv1alpha1.CredentialAccountSource{
+			{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: "users"},
+			{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: "backup", When: "backup.enabled"},
+		},
+	}
+	hr := vmInstanceRelease(nil, nil)
+	hr.Spec.ValuesFrom = expectedValuesFrom()
+	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"users":{"web":{}}}`)}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, hr).Build()
+
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: appDef.Name}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, got); err != nil {
+		t.Fatalf("get HR: %v", err)
+	}
+	want := store.ValuesFrom(appDef.Spec.Credentials, hr.Name, []account.Account{{Username: "web", Mapped: "web"}, {Username: "backup", Mapped: "backup"}})
+	if !valuesFromEqual(got.Spec.ValuesFrom, want) {
+		t.Fatalf("valuesFrom = %+v, want %+v", got.Spec.ValuesFrom, want)
+	}
+
+	// Idempotent once in line.
+	before := got.ResourceVersion
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: appDef.Name}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, got); err != nil {
+		t.Fatalf("get HR: %v", err)
+	}
+	if got.ResourceVersion != before {
+		t.Fatalf("release rewritten with nothing to change: %q -> %q", before, got.ResourceVersion)
 	}
 }
