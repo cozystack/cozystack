@@ -114,3 +114,20 @@ func TestRawQuotaLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestDeclaredQuotas(t *testing.T) {
+	got, err := DeclaredQuotas([]byte(`{"host":"x","resourceQuotas":{"gpu.cozystack.io/total":"4","cpu":"2"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := corev1.ResourceList{"gpu.cozystack.io/total": resource.MustParse("4"), "cpu": resource.MustParse("2")}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if got, err := DeclaredQuotas(nil); err != nil || len(got) != 0 {
+		t.Fatalf("no values: %v, %v", got, err)
+	}
+	if _, err := DeclaredQuotas([]byte(`{"resourceQuotas":{"gpu.cozystack.io/total":"four"}}`)); err == nil {
+		t.Fatal("a value that is not a quantity must fail the read, not read as no budget")
+	}
+}

@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -28,7 +27,6 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -196,9 +194,9 @@ func (r *Reconciler) load(ctx context.Context) (*world, error) {
 	}
 	var tableGPUs []string
 	for i := range kvs.Items {
-		if kvs.Items[i].GetNamespace() == kubeVirtNamespace && kvs.Items[i].GetName() == kubeVirtName {
-			w.permitted = permittedResourceNames(&kvs.Items[i])
-			tableGPUs = permittedGPUNames(&kvs.Items[i])
+		if kvs.Items[i].GetNamespace() == model.KubeVirtNamespace && kvs.Items[i].GetName() == model.KubeVirtName {
+			w.permitted = model.PermittedResourceNames(&kvs.Items[i])
+			tableGPUs = model.PermittedGPUNames(&kvs.Items[i])
 		}
 	}
 
@@ -296,17 +294,11 @@ func (r *Reconciler) tenantQuotas(ctx context.Context) (map[string]corev1.Resour
 		if hr.Spec.Values == nil {
 			continue
 		}
-		var values struct {
-			ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas"`
-		}
 		ns := tenantNamespace(hr.Namespace, strings.TrimPrefix(hr.Name, tenantNamespacePrefix))
-		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
-			bad[ns] = fmt.Errorf("decode values of tenant %s/%s: %w", hr.Namespace, hr.Name, err)
+		rl, err := model.DeclaredQuotas(hr.Spec.Values.Raw)
+		if err != nil {
+			bad[ns] = fmt.Errorf("tenant %s/%s: %w", hr.Namespace, hr.Name, err)
 			continue
-		}
-		rl := corev1.ResourceList{}
-		for k, v := range values.ResourceQuotas {
-			rl[corev1.ResourceName(k)] = v
 		}
 		out[ns] = rl
 	}
@@ -455,24 +447,18 @@ func (w *world) buildSnapshot(quotas map[string]corev1.ResourceList, pods []core
 	// A Lost claim covers its VMI's pod for budgets, which already count
 	// the claim, but not for node capacity: it holds no units, so the pod
 	// still running on its node holds them itself.
-	coveredForBudget := map[types.NamespacedName]map[corev1.ResourceName]int64{}
+	coveredForBudget := model.CoveredForBudget(w.claims, s.Classes)
 	coveredForCapacity := map[types.NamespacedName]map[corev1.ResourceName]int64{}
-	add := func(m map[types.NamespacedName]map[corev1.ResourceName]int64, k types.NamespacedName, rn corev1.ResourceName, n int64) {
-		if m[k] == nil {
-			m[k] = map[corev1.ResourceName]int64{}
-		}
-		m[k][rn] += n
-	}
 	for _, d := range w.claims {
 		rn := w.resourceName(d.Spec.ClassName)
-		if d.Status.AttachedTo == nil || rn == "" {
+		if d.Status.AttachedTo == nil || rn == "" || !holds(d) {
 			continue
 		}
 		k := key(d.Namespace, d.Status.AttachedTo.VMI)
-		add(coveredForBudget, k, rn, int64(d.Spec.Count))
-		if holds(d) {
-			add(coveredForCapacity, k, rn, int64(d.Spec.Count))
+		if coveredForCapacity[k] == nil {
+			coveredForCapacity[k] = map[corev1.ResourceName]int64{}
 		}
+		coveredForCapacity[k][rn] += int64(d.Spec.Count)
 	}
 	for i := range pods {
 		p := &pods[i]
