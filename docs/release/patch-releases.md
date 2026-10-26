@@ -26,11 +26,11 @@ gitGraph
 ```
 
 
-1. The maintainer cherry-picks patch commits from `main` onto the existing `release-1.2` branch. These must be only patches to features that were present in version `v1.2.0`.
+1. Fixes reach the existing `release-1.2` branch from `main` through the backport batch, which cherry-picks what the [backport policy](./backports.md) admits and nothing else.
 
-   Cherry-picking can be done as soon as each patch is merged into `main`, or directly before the release.
+   The batch runs twice a week, so a fix merged into `main` reaches the line with the next batch that can pick it cleanly, without anyone asking for it.
 
-   The `backport` label automates this: [`backport.yaml`](../../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
+   The `kind/backport` label and [`backport.yaml`](../../.github/workflows/backport.yaml) remain as a manual fallback that maintainers may still use; [Backport mechanics](./backport-mechanics.md) describes them.
 
    ```mermaid
    gitGraph
@@ -48,7 +48,7 @@ gitGraph
        cherry-pick id: "patch 2"
    ```
 
-   When all relevant patch commits are cherry-picked, the branch is ready for release. Build with `go build ./cmd/backport-audit`, then confirm with `./backport-audit release-1.2` — it exits non-zero while anything labeled for the line is still missing from it, and prints the URLs. See [Cherry-pick triage before a patch](./backport-mechanics.md#cherry-pick-triage-before-a-patch).
+   Before the cut, check what the latest batch for the line picked, what it deferred, and why (lands with the batch tool). Anything sent through the manual fallback labels is checked with `./backport-audit release-1.2` (build it with `go build ./cmd/backport-audit`): it exits non-zero while anything labeled for the line is still missing from it, and prints the URLs. See [Cherry-pick triage before a patch](./backport-mechanics.md#cherry-pick-triage-before-a-patch).
 
 2. The maintainer cuts a release candidate (`v1.2.1-rc.N`) via the [`Cut Pre-release Tag`](../../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `release-1.2`**), which tags that branch's `HEAD`. CI builds and publishes the rc, pushes the `release-1.2.1-rc.N` staging branch, and runs the mandatory full `rc-e2e` job against the published tag.
 3. Watch `rc-e2e` and wait for it to pass, then complete the other release checks. A successful manual `e2e-tag.yaml` run for `v1.2.1-rc.N` is also valid evidence if the latest `tags.yaml` run does not carry a green `rc-e2e`. **Optional:** press the `Generate RC Changelog` button ([`changelog-rc.yaml`](../../.github/workflows/changelog-rc.yaml)) to generate `docs/changelogs/v1.2.1.md` at rc time and bank it on the rc staging branch; promotion then reuses it instead of regenerating.

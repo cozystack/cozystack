@@ -1,4 +1,6 @@
-## Backports
+## Backport mechanics
+
+Under the [backport policy](./backports.md) fixes reach a release line through the batch, and nobody labels pull requests for backport. This page covers the mechanics around it: the label-driven bot that maintainers may still use as a manual fallback, cherry-pick triage before a patch, and the trap that keeps migrations out of patch releases.
 
 ### The backport bot
 
@@ -47,7 +49,7 @@ Before [PR #3155](https://github.com/cozystack/cozystack/pull/3155), `conflict_r
 
 ### Cherry-pick triage before a patch
 
-A patch release includes bugfixes for code that shipped in the corresponding minor `vX.Y.0`. Use:
+A patch release includes bugfixes for code that shipped in the corresponding minor `vX.Y.0`. What goes in is decided by the rules in [Backports](./backports.md), not per pull request, and the batch report says what each batch picked and what it deferred (lands with the batch tool). What is left to check by hand before a cut:
 
 ```bash
 # 1. Audit what was labeled for this line and has NOT landed on it.
@@ -58,34 +60,13 @@ go build ./cmd/backport-audit
 # 2. List commits on main since the release branch diverged that are NOT yet on release-X.Y
 git merge-base origin/main origin/release-X.Y
 git log <base>..origin/main --grep="(#" --oneline
-
-# 3. Open PRs that may need labeling before the cut
-gh pr list --state open --base main --label kind/bug
 ```
 
-Step 1 covers the currently labeled work: [`backport-audit`](../../cmd/backport-audit/README.md) assigns each request to the release line selected at merge time, then checks whether its commits reached the branch. Incomplete delivery, open or dropped backports, missing changes and duplicate open claims fail the gate. Late-added labels can disagree with the bot's target, and branch-opening dates are estimated from rc tags; see the audit's documented limits before deciding what to backport. Steps 2 and 3 cover changes that were never labeled.
-
-**Include rule:**
-
-- `kind/bug` — especially destructive (data loss, crash-loop, OOM, eviction).
-- `area/security` / CVE.
-- Narrow chart fixes whose blast radius is contained (e.g. one operator's resources).
-- Patch-line-policy-matching dependency bumps (e.g. cilium 1.X.Y → 1.X.(Y+1) on a `release-A.B` shipping cilium 1.X — never a minor bump, only a patch within the line the branch already ships).
-
-**Skip rule:**
-
-- `kind/feature` — even with `lgtm`. A patch release is not a delivery vehicle for features.
-- CI-only changes (`area/ci`, test infrastructure).
-- Docs-only changes (those land via `update-website-docs` automatically).
-- Large multi-package dependency churn (Dependabot Go-deps bumps).
-- PRs whose conventional-commit type is `!` (breaking) or that mix `feat` with `fix`.
-
-**Borderline cases:**
-
-- Large refactors with `lgtm` AND an obvious bug payload — prefer extracting the bug fix into a narrower commit and backporting only that.
-- PRs labeled both `kind/bug` and `kind/feature` — split them.
+Step 1 covers work sent through the manual fallback labels: [`backport-audit`](../../cmd/backport-audit/README.md) assigns each request to the release line selected at merge time, then checks whether its commits reached the branch. Incomplete delivery, open or dropped backports, missing changes and duplicate open claims fail the gate. Late-added labels can disagree with the bot's target, and branch-opening dates are estimated from rc tags; see the audit's documented limits before relying on it. Step 2 lists everything else on `main` that the line does not carry yet, to compare against the policy.
 
 ### Backporting code that touches monotonic counters
+
+The batch never takes a change like this: rule 4 in [Backports](./backports.md) holds migrations, `targetVersion`, `api/` and CRDs for the next minor. What follows is why, and what a maintainer has to do when a migration must reach a release line anyway.
 
 Migrations are the canonical case. `packages/core/platform/images/migrations/run-migrations.sh` is a linear counter — it runs `seq $CURRENT_VERSION $((TARGET_VERSION - 1))` and stops if `CURRENT >= TARGET`. This creates a forward-upgrade trap. Walking through it with `release-1.2` as the maintenance branch:
 
