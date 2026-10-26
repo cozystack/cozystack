@@ -63,6 +63,21 @@ cozystackOperator:
   # otherwise source-controller will report a failed condition until it is created.
   # See FluxCD source-controller docs for the exact key layout per scheme.
   platformSourceSecret: ''
+  # Replace Flux images by name, for a registry that holds them under other
+  # names than ghcr.io/fluxcd. Same entries as the platform's
+  # registries.imageOverrides (kustomize images: name without tag or digest,
+  # plus at least one of newName, newTag, digest), applied by the operator to
+  # the Flux manifests it installs. Flux cannot take them from
+  # registries.imageOverrides: it is what installs the platform chart that
+  # carries that list. A list the operator cannot read stops it at startup,
+  # before it changes anything in the cluster. Quote every value: an
+  # unquoted newTag such as 1.20 is read as a number and refused.
+  # Example:
+  #   fluxImageOverrides:
+  #     - name: ghcr.io/fluxcd/source-controller
+  #       newName: registry.example.org/flux/source-controller
+  #       newTag: "v1.8.0"
+  fluxImageOverrides: []
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
