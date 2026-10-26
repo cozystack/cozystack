@@ -528,6 +528,18 @@ authentication:
     # it here would put the platform clients, the cluster-admin roles and every
     # end user inside it.
     realmName: "cozy"
+    # Public hostname Keycloak is served on, without scheme or path. Empty means
+    # keycloak.<publishing.host>. It is the host of the OIDC issuer
+    # (https://<keycloakHost>/realms/<realmName>), so the Keycloak Ingress and
+    # KC_HOSTNAME, the dashboard and linstor-gui gatekeepers, Grafana SSO, the
+    # info kubeconfig and tenant Kubernetes clusters in oidc.mode System all
+    # follow it. As with realmName, the apiserver OIDC issuer is set out-of-band
+    # via talm oidcIssuerUrl and must name the same host.
+    #
+    # Changing it on a running cluster changes the issuer of every token minted
+    # afterwards: sessions and refresh tokens issued under the old host stop
+    # being accepted, and the apiserver must trust the new issuer first.
+    keycloakHost: ""
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
     # URL, while browser-facing redirects keep pointing at the external host.

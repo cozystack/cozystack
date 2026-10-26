@@ -285,3 +285,39 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+
+  # The browser-facing issuer, login URL and redirect whitelist follow
+  # _cluster.keycloak-host (authentication.oidc.keycloakHost in the platform),
+  # so moving Keycloak off keycloak.<root-host> keeps dashboard SSO working.
+  - it: builds the browser-facing OIDC URLs on a custom keycloak-host
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://auth.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://auth.example.org/realms/cozy/protocol/openid-connect/auth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --whitelist-domain=auth.example.org
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --whitelist-domain=keycloak.example.org
+
+  - it: builds the external-discovery logout URL on a custom keycloak-host
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+        keycloak-internal-url: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://auth.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}

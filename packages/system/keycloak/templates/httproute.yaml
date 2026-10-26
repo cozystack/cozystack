@@ -1,5 +1,5 @@
 {{- $host := index .Values._cluster "root-host" }}
-{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
+{{- $ingressHost := .Values.ingress.host | default (index .Values._cluster "keycloak-host") | default (printf "keycloak.%s" $host) }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $adminExposeIngress := (index .Values._cluster "expose-ingress-admin") | default $exposeIngress }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
