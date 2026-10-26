@@ -18,8 +18,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -31,6 +33,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
@@ -59,6 +62,7 @@ import (
 	"github.com/cozystack/cozystack/internal/operator"
 	"github.com/cozystack/cozystack/internal/telemetry"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -102,6 +106,7 @@ func main() {
 	var platformSourceSecret string
 	var systemNamespaceMemoryLimit string
 	var systemNamespaceMemoryRequest string
+	var fluxImageOverrides string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -157,6 +162,9 @@ func main() {
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
 			"An empty installer value selects the operator default. See docs/operations/system-memory-limits.md.")
+	flag.StringVar(&fluxImageOverrides, "flux-image-overrides", "",
+		"JSON list of kustomize images entries (name, newName, newTag, digest) applied to the embedded Flux manifests before install. "+
+			"Flux installs the platform chart that carries registries.imageOverrides, so its own images cannot come from there.")
 
 	opts := zap.Options{
 		Development: true,
@@ -250,6 +258,31 @@ func main() {
 	// Set up signal handler early so install phases respect SIGTERM
 	mgrCtx := ctrl.SetupSignalHandler()
 
+	// Parsed before any install step so that a bad value stops the operator
+	// before it has changed anything in the cluster.
+	var images []kustomize.Image
+	if fluxImageOverrides != "" {
+		dec := json.NewDecoder(strings.NewReader(fluxImageOverrides))
+		dec.DisallowUnknownFields()
+
+		if err := dec.Decode(&images); err != nil {
+			setupLog.Error(err, "invalid --flux-image-overrides")
+			os.Exit(1)
+		}
+
+		// Decoder stops after the first value; without this a second list
+		// appended to the flag would be dropped silently.
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			setupLog.Error(err, "invalid --flux-image-overrides: expected a single JSON list")
+			os.Exit(1)
+		}
+
+		if err := imageoverrides.Validate(images); err != nil {
+			setupLog.Error(err, "invalid --flux-image-overrides")
+			os.Exit(1)
+		}
+	}
+
 	// Install Cozystack CRDs before starting reconcile loop
 	if installCRDs {
 		setupLog.Info("Installing Cozystack CRDs before starting reconcile loop")
@@ -270,7 +303,7 @@ func main() {
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
-		if err := fluxinstall.Install(installCtx, directClient, fluxinstall.WriteEmbeddedManifests); err != nil {
+		if err := fluxinstall.Install(installCtx, directClient, fluxinstall.WriteEmbeddedManifests, images); err != nil {
 			setupLog.Error(err, "failed to install Flux")
 			os.Exit(1)
 		}
