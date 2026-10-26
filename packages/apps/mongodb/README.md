@@ -152,16 +152,16 @@ kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 
 ### Backup parameters
 
-| Name                     | Description                                            | Type     | Value                               |
-| ------------------------ | ------------------------------------------------------ | -------- | ----------------------------------- |
-| `backup`                 | Backup configuration.                                  | `object` | `{}`                                |
-| `backup.enabled`         | Enable regular backups.                                | `bool`   | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups.                   | `string` | `0 2 * * *`                         |
-| `backup.retentionPolicy` | Retention policy (e.g. "30d").                         | `string` | `30d`                               |
-| `backup.destinationPath` | Destination path for backups (e.g. s3://bucket/path/). | `string` | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 endpoint URL for uploads.                           | `string` | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.                      | `string` | `""`                                |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.                      | `string` | `""`                                |
+| Name                     | Description                                                                                                                                                                                                         | Type     | Value                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------- |
+| `backup`                 | Backup configuration.                                                                                                                                                                                               | `object` | `{}`                                |
+| `backup.enabled`         | Enable regular backups.                                                                                                                                                                                             | `bool`   | `false`                             |
+| `backup.schedule`        | Cron schedule for automated backups.                                                                                                                                                                                | `string` | `0 2 * * *`                         |
+| `backup.retentionPolicy` | Number of backups to keep, the newest ones. It counts backups, not days, so "30" and the older form "30d" both keep the 30 newest backups, which with an hourly schedule is about 30 hours. "0" keeps every backup. | `string` | `30d`                               |
+| `backup.destinationPath` | Destination path for backups (e.g. s3://bucket/path/).                                                                                                                                                              | `string` | `s3://bucket/path/to/folder/`       |
+| `backup.endpointURL`     | S3 endpoint URL for uploads.                                                                                                                                                                                        | `string` | `http://minio-gateway-service:9000` |
+| `backup.s3AccessKey`     | Access key for S3 authentication.                                                                                                                                                                                   | `string` | `""`                                |
+| `backup.s3SecretKey`     | Secret key for S3 authentication.                                                                                                                                                                                   | `string` | `""`                                |
 
 
 ### Bootstrap (recovery) parameters

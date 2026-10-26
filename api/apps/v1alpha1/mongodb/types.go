@@ -69,7 +69,7 @@ type Backup struct {
 	// S3 endpoint URL for uploads.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
-	// Retention policy (e.g. "30d").
+	// Number of backups to keep, the newest ones. It counts backups, not days, so "30" and the older form "30d" both keep the 30 newest backups, which with an hourly schedule is about 30 hours. "0" keeps every backup.
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
 	// Access key for S3 authentication.
