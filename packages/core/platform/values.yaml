@@ -539,6 +539,11 @@ authentication:
     # Changing it on a running cluster changes the issuer of every token minted
     # afterwards: sessions and refresh tokens issued under the old host stop
     # being accepted, and the apiserver must trust the new issuer first.
+    #
+    # In wildcard mode (publishing.certificates.wildcard or wildcardSecretName)
+    # the Keycloak Ingress relies on the wildcard certificate, which covers
+    # *.<publishing.host> only: pick a host one label under it, or provide a
+    # wildcardSecretName that covers the host.
     keycloakHost: ""
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
