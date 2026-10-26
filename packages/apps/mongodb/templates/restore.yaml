@@ -8,6 +8,11 @@
 {{- if not (include "mongodb.backup.bucket" .) }}
 {{- fail "backup.destinationPath must name a bucket (s3://bucket/path/) when bootstrap.enabled is true" }}
 {{- end }}
+{{- with .Values.bootstrap.destinationPath }}
+{{- if not (and (hasPrefix "s3://" .) (include "mongodb.s3.bucket" .)) }}
+{{- fail "bootstrap.destinationPath must be an s3 path that names a bucket, like s3://bucket/path/" }}
+{{- end }}
+{{- end }}
 {{- if not .Values.backup.endpointURL }}
 {{- fail "backup.endpointURL is required when bootstrap.enabled is true" }}
 {{- end }}
@@ -86,12 +91,13 @@ spec:
       - {{ printf "%s.*" . | quote }}
       {{- end }}
   {{- end }}
+  {{- $source := include "mongodb.bootstrap.path" . }}
   backupSource:
     type: logical
-    destination: {{ .Values.backup.destinationPath | trimSuffix "/" }}/{{ .Values.bootstrap.backupName }}
+    destination: {{ $source | trimSuffix "/" }}/{{ .Values.bootstrap.backupName }}
     s3:
-      bucket: {{ include "mongodb.backup.bucket" . | quote }}
-      prefix: {{ include "mongodb.backup.prefix" . | quote }}
+      bucket: {{ include "mongodb.s3.bucket" $source | quote }}
+      prefix: {{ include "mongodb.s3.prefix" $source | quote }}
       credentialsSecret: {{ .Release.Name }}-s3-creds
       endpointUrl: {{ .Values.backup.endpointURL }}
       insecureSkipTLSVerify: false
