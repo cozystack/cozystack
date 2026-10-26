@@ -23,6 +23,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,6 +46,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/apis/sdn"
 	sdninstall "github.com/cozystack/cozystack/pkg/apis/sdn/install"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
@@ -254,8 +256,15 @@ func (c completedConfig) New() (*CozyServer, error) {
 
 	// --- dynamically-configured, per-tenant resources ---
 	appsV1alpha1Storage := map[string]rest.Storage{}
+	// Read past the cache: a write merges the table into the release it has just
+	// read live, and a lagging cache would hand a conflict retry the same stale
+	// table that caused it.
+	apiReader := mgr.GetAPIReader()
+	loadImageOverrides := func(ctx context.Context) ([]kustomize.Image, bool, error) {
+		return imageoverrides.Load(ctx, apiReader, imageoverrides.DefaultSecret)
+	}
 	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		storage := applicationstorage.NewREST(cli, watchCli, &resConfig).WithImageOverrides(loadImageOverrides)
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
 	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
