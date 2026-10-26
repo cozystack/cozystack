@@ -195,13 +195,14 @@ spec:
   {{- /* Build a map of username -> list of roles from databases config */}}
   {{- $userRoles := dict }}
   {{- range $dbname, $db := .Values.databases }}
-    {{- range $user := $db.roles.admin }}
+    {{- $dbRoles := dig "roles" dict (default dict $db) | default dict }}
+    {{- range $user := $dbRoles.admin }}
       {{- $roles := index $userRoles $user | default list }}
       {{- $roles = append $roles (dict "name" "readWrite" "db" $dbname) }}
       {{- $roles = append $roles (dict "name" "dbAdmin" "db" $dbname) }}
       {{- $_ := set $userRoles $user $roles }}
     {{- end }}
-    {{- range $user := $db.roles.readonly }}
+    {{- range $user := $dbRoles.readonly }}
       {{- $roles := index $userRoles $user | default list }}
       {{- $roles = append $roles (dict "name" "read" "db" $dbname) }}
       {{- $_ := set $userRoles $user $roles }}

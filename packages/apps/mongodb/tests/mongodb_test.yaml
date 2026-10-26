@@ -645,6 +645,55 @@ tests:
           value: mydb
         documentIndex: 0
 
+  - it: renders a database declared without roles next to one with roles
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        appuser: {}
+      databases:
+        archive: {}
+        mydb:
+          roles:
+            admin:
+              - appuser
+    asserts:
+      - equal:
+          path: spec.users[0].roles
+          value:
+            - name: readWrite
+              db: mydb
+            - name: dbAdmin
+              db: mydb
+        documentIndex: 0
+
+  - it: renders a database whose roles name no users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        reader: {}
+      databases:
+        archive:
+          roles: {}
+        mydb:
+          roles:
+            readonly:
+              - reader
+    asserts:
+      - equal:
+          path: spec.users[0].roles
+          value:
+            - name: read
+              db: mydb
+        documentIndex: 0
+
   - it: fails when user is not assigned to any database role
     release:
       name: test-mongodb
