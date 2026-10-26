@@ -76,6 +76,34 @@ tests:
           path: spec.postRenderers[0].kustomize.patches[0].patch
           pattern: 'path: /spec/storageCapacity'
 
+  # The platform's image override table goes after the release's own patch,
+  # so the storageCapacity patch survives an air-gapped install and the
+  # override rewrites what the patched chart renders.
+  - it: keeps the CSIDriver patch ahead of the platform's image overrides
+    template: templates/helmreleases/csi-proxmox.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      <<: *base
+      _cluster:
+        cluster-domain: cozy.local
+        image-overrides:
+          - name: ghcr.io/sergelogvinov/proxmox-csi-node
+            newName: registry.example.org/os/proxmox-csi-node
+    asserts:
+      - lengthEqual:
+          path: spec.postRenderers
+          count: 2
+      - equal:
+          path: spec.postRenderers[0].kustomize.patches[0].target.kind
+          value: CSIDriver
+      - equal:
+          path: spec.postRenderers[1].kustomize.images
+          value:
+            - name: ghcr.io/sergelogvinov/proxmox-csi-node
+              newName: registry.example.org/os/proxmox-csi-node
+
   - it: still gives the tenant its storage classes and its node plugin release
     template: templates/helmreleases/csi-proxmox.yaml
     documentSelector:

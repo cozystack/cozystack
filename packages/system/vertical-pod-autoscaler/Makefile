@@ -20,3 +20,6 @@ update:
 	# reconcile). See patch header + certificate.yaml template comment
 	# for the full rationale.
 	patch --no-backup-if-mismatch -p1 < patches/cert-manager-admission-tls.diff
+	# cozy-lib is a link into the tree rather than a vendored chart, and the
+	# rm -rf above took it with the rest of charts/.
+	ln -sfn ../../../library/cozy-lib charts/cozy-lib
