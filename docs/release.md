@@ -54,4 +54,5 @@ If you are about to generate a changelog only, jump straight to [`agents/changel
 - [`hack/lib/image-refs.sh`](../hack/lib/image-refs.sh) — the single enumeration of ref-bearing files, shared by the promote, retag and mirror tooling.
 - [`.github/workflows/retention.yaml`](../.github/workflows/retention.yaml) — GHCR nightly and abandoned promotion-candidate pruning.
 - [`cmd/backport-batch`](../cmd/backport-batch/README.md) — the backport batch that applies the [backport policy](./release/backports.md).
+- [`.github/workflows/backport-batch.yaml`](../.github/workflows/backport-batch.yaml) — runs the backport batch for each supported line on Monday and Thursday.
 - [`.github/workflows/update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — sync changelog → GitHub Release body.

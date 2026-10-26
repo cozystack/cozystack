@@ -1,0 +1,92 @@
+name: Backport batch
+
+# Builds the backport batch for each supported release line, newest line
+# first, as docs/release/backports.md describes. The steps live in
+# hack/backport-batch-scheduled.sh, which a maintainer can also run by hand.
+#
+# Repository settings it reads; none is created here:
+#   secret   BACKPORT_BATCH_TOKEN  pushes backport-batch/* branches, opens and
+#                                  edits the batch pull requests and comments
+#                                  on them. Required: without it the job fails
+#                                  instead of falling back to GITHUB_TOKEN,
+#                                  whose pushes start no CI on the batch.
+#   secret   BACKPORT_AGENT_TOKEN  with BACKPORT_AGENT=ci, starts Copilot agent
+#                                  tasks for deferred conflicts. The agent
+#                                  tasks API takes a person's token only.
+#   variable BACKPORT_AGENT        ci or manual; manual when unset.
+#   variable BACKPORT_ALERT_TEAM   the team the batch's comment mentions.
+#
+# TODO(backport-agent-ci): with BACKPORT_AGENT=ci a failed batch CI still
+# waits for a maintainer. Handing it to the agent needs a trigger on the batch
+# pull request's CI finishing, which this schedule does not have.
+
+on:
+  schedule:
+    # Monday and Thursday: each run leaves working days to cut an rc, run its
+    # e2e and promote it before the weekend. 06:23 UTC is after the nightly
+    # and the daily sweeps.
+    - cron: '23 6 * * 1,4'
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: backport-batch
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    name: Backport batch
+    if: github.repository == 'cozystack/cozystack'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Require the batch token
+        env:
+          BACKPORT_BATCH_TOKEN: ${{ secrets.BACKPORT_BATCH_TOKEN }}
+        run: |
+          if [ -z "$BACKPORT_BATCH_TOKEN" ]; then
+            echo "::error::The BACKPORT_BATCH_TOKEN secret is not set. The batch pushes and opens pull requests with that token only; see docs/release/backports.md#the-scheduled-run."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build backport-batch
+        run: go build -o "$RUNNER_TEMP/backport-batch" ./cmd/backport-batch
+
+      # git pushes through gh, which reads the token from the environment of
+      # each call, so the token is never written into the checkout.
+      - name: Commit and push as the token's account
+        env:
+          GH_TOKEN: ${{ secrets.BACKPORT_BATCH_TOKEN }}
+        run: |
+          gh auth setup-git
+          login=$(gh api user --jq .login)
+          id=$(gh api user --jq .id)
+          git config --global user.name "$login"
+          git config --global user.email "${id}+${login}@users.noreply.github.com"
+
+      - name: Run the batch
+        env:
+          BACKPORT_BATCH: ${{ runner.temp }}/backport-batch
+          BACKPORT_BATCH_TOKEN: ${{ secrets.BACKPORT_BATCH_TOKEN }}
+          BACKPORT_AGENT_TOKEN: ${{ secrets.BACKPORT_AGENT_TOKEN }}
+          BACKPORT_AGENT: ${{ vars.BACKPORT_AGENT }}
+          BACKPORT_ALERT_TEAM: ${{ vars.BACKPORT_ALERT_TEAM }}
+        run: hack/backport-batch-scheduled.sh

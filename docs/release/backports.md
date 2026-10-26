@@ -53,16 +53,27 @@ The batch runs for each supported release line twice a week, on Monday and Thurs
 
 ### Running the batch
 
-[`backport-batch`](../../cmd/backport-batch/README.md) builds the batch in a clean worktree, newest line first:
+[`backport-batch`](../../cmd/backport-batch/README.md) builds the batch in a clean worktree, newest line first. The scheduled run below does this; by hand it is:
 
 ```bash
 go build ./cmd/backport-batch
-./backport-batch run --line release-1.7 --push
-./backport-batch run --line release-1.6 --push
+./backport-batch run --line release-1.7 --continue --push
+./backport-batch run --line release-1.6 --continue --push
 ```
 
-`run` picks what the rules take onto `backport-batch/<line>-<yyyymmdd>` and opens a draft pull request against the line. Its body lists the originals, the conflicts it deferred with their files, and what it skipped under which rule. While that pull request is open, the next run continues it with `--onto <its head>` rather than opening another. CI on the batch pull request runs the line's build and tests, and a maintainer merges it. Since rule 6 reads the newer line itself, an older line takes a fix in the batch after the newer line's batch with that fix has merged.
+`run` picks what the rules take onto `backport-batch/<line>-<yyyymmdd>` and opens a draft pull request against the line. Its body lists the originals, the conflicts it deferred with their files, and what it skipped under which rule. While that pull request is open, the next run continues it, `--continue` reading its head, rather than opening another. CI on the batch pull request runs the line's build and tests, and a maintainer merges it. Since rule 6 reads the newer line itself, an older line takes a fix in the batch after the newer line's batch with that fix has merged.
 
 A deferred conflict waits for the next batch. To land it sooner, resolve it with `git cherry-pick -x -m 1 <merge commit>` on top of the batch head, check the commit with `./backport-batch fold --line <line> --original <number> --commit <sha>`, and push it onto the batch branch, as [resolving a conflict](./backport-tasks/resolve-conflict.md) describes. When CI on the batch pull request fails, the original it comes from is taken out with `./backport-batch run --line <line> --defer <number> --reason <why> --push` and goes to the next batch, as [attributing a failed batch CI](./backport-tasks/failed-ci.md) describes; the rest of the batch merges without it.
 
-Before a patch release or an rc is cut from a line, `./backport-batch check --line <line>` has to exit 0. It exits 1 and prints the URLs while a pull request the rules take is neither on the line nor on the open batch pull request, and prints the batch's deferred conflicts as warnings.
+Before a patch release or an rc is cut from a line, `./backport-batch check --line <line>` has to exit 0. It exits 1 and prints the URLs while a pull request the rules take is neither on the line nor on the open batch pull request, and prints what the batch deferred as warnings.
+
+### The scheduled run
+
+[`backport-batch.yaml`](../../.github/workflows/backport-batch.yaml) runs [`hack/backport-batch-scheduled.sh`](../../hack/backport-batch-scheduled.sh) on Monday and Thursday. For each line the batch runs for, newest first, it continues the open batch pull request or opens one, runs `check`, and then `backport-batch notify`, which reports what waits on the batch. A batch open for three days or more, so one the previous run already saw, gets a comment on its pull request saying so and a line in the run's summary. The comment is one per pull request, updated in place on every run. Deferred conflicts go to whoever `BACKPORT_AGENT` names. `hack/backport-batch-scheduled.sh --dry-run` does the same in the current worktree and changes nothing on GitHub.
+
+It reads these repository settings, which a repository admin sets up:
+
+- `BACKPORT_BATCH_TOKEN`, a secret, required: the token the batch pushes `backport-batch/*` branches, opens and edits its pull requests and comments with, from an account with write access. A fine-grained token on this repository needs contents, pull requests and workflows read and write; workflows because a fix to CI changes `.github/workflows/`. The job fails without it rather than use its own `GITHUB_TOKEN`, since a push made with that token starts no CI on the batch pull request.
+- `BACKPORT_AGENT`, a variable: `ci` hands each deferred conflict to the Copilot cloud agent as a task on the batch branch, through the agent tasks API, with the [resolving a conflict](./backport-tasks/resolve-conflict.md) instructions; `manual`, the default, lists the conflicts in the batch's comment for a maintainer. A failed batch CI waits for a maintainer in both modes, as [attributing a failed batch CI](./backport-tasks/failed-ci.md) describes.
+- `BACKPORT_AGENT_TOKEN`, a secret, needed with `ci`: the token the agent tasks start with. The agent tasks API takes a person's token only, never an installation token such as `GITHUB_TOKEN`: a fine-grained token on this repository with agent tasks read and write and nothing else, from an account with a Copilot seat and write access.
+- `BACKPORT_ALERT_TEAM`, a variable, optional: the team the comment mentions, as `org/team`. Unset, the comment mentions nobody.
