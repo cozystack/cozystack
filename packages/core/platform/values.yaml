@@ -540,10 +540,14 @@ authentication:
     # afterwards: sessions and refresh tokens issued under the old host stop
     # being accepted, and the apiserver must trust the new issuer first.
     #
-    # In wildcard mode (publishing.certificates.wildcard or wildcardSecretName)
-    # the Keycloak Ingress relies on the wildcard certificate, which covers
-    # *.<publishing.host> only: pick a host one label under it, or provide a
-    # wildcardSecretName that covers the host.
+    # Certificates that cover the whole apex do not stretch to a host outside
+    # it. In wildcard mode (publishing.certificates.wildcard or
+    # wildcardSecretName) the Keycloak Ingress relies on the wildcard
+    # certificate, which covers *.<publishing.host> only; on the Gateway path
+    # the dns01, existingSecret and edge cert modes render listeners for the
+    # apex alone, so the Keycloak HTTPRoute finds no listener. Pick a host one
+    # label under publishing.host, or provide a certificate and listener that
+    # cover it.
     keycloakHost: ""
     # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
     # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
