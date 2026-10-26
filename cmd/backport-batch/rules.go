@@ -18,9 +18,13 @@ package main
 
 import (
 	"fmt"
+	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+
+	"sigs.k8s.io/yaml"
 )
 
 // Rule numbers as docs/release/backports.md numbers them. Rule 5, a clean
@@ -49,9 +53,9 @@ const (
 	// A change under api/ is held back only when the API review gate calls it
 	// sizeable (apisurface.go).
 	apiDir = "api/"
-	// A file declares a CRD when a line of it is this, before or after the
-	// change. ERE for git grep.
-	crdPattern = `^[[:space:]]*kind:[[:space:]]*["']?CustomResourceDefinition["']?[[:space:]]*(#.*)?$`
+	// Only a file holding this text at either end of the change can hold a
+	// CRD document; crdDocs decides document by document.
+	crdKind = "CustomResourceDefinition"
 )
 
 // The title grammar and the breaking footer are pr-labeler.yaml's, so that a
@@ -154,7 +158,6 @@ const (
 // merge touches, or "" when it touches none of them.
 func touchesRule(o *original, changes []fileChange) (string, error) {
 	hit := map[string]bool{}
-	var after, before []string
 	underAPI := false
 	for _, c := range changes {
 		p := c.path
@@ -169,32 +172,14 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 			hit[touchesTargetVersion] = targetVersionRE.MatchString(diff)
 		case strings.HasPrefix(p, apiDir):
 			underAPI = true
-		case strings.Contains("/"+p, "/crds/"):
-			hit[touchesCRD] = true
-		}
-		if c.status != 'D' {
-			after = append(after, p)
-		}
-		if c.status != 'A' {
-			before = append(before, p)
 		}
 	}
-	for _, side := range []struct {
-		rev   string
-		files []string
-	}{{o.merge, after}, {o.merge + "^1", before}} {
-		if hit[touchesCRD] {
-			break
-		}
-		found, err := declaresCRD(side.rev, side.files)
-		if err != nil {
-			return "", err
-		}
-		hit[touchesCRD] = found
+	var err error
+	if hit[touchesCRD], err = changesCRD(o.merge+"^1", o.merge, changes); err != nil {
+		return "", err
 	}
 	apiDetail := ""
 	if underAPI {
-		var err error
 		if apiDetail, err = sizeableAPIChange(o); err != nil {
 			return "", err
 		}
@@ -213,23 +198,141 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 	return strings.Join(why, ", "), nil
 }
 
-// declaresCRD reports whether any of files at rev declares a CRD. Paths are
-// passed literally, so a name such as ":(exclude)x" means only that file.
-func declaresCRD(rev string, files []string) (bool, error) {
+// changesCRD reports whether the change adds, removes or modifies a
+// CustomResourceDefinition document. It looks document by document: an edit to
+// the DaemonSet beside a CRD in one manifest is not a CRD change, and a CRD in
+// a test fixture changes nothing a cluster runs.
+func changesCRD(parent, merge string, changes []fileChange) (bool, error) {
+	var files []string
+	for _, c := range changes {
+		if manifest(c.path) && !testFixture(c.path) {
+			files = append(files, c.path)
+		}
+	}
+	candidates := map[string]bool{}
+	for _, rev := range []string{parent, merge} {
+		found, err := mentionsCRD(rev, files)
+		if err != nil {
+			return false, err
+		}
+		for _, f := range found {
+			candidates[f] = true
+		}
+	}
+	for _, c := range changes {
+		if !candidates[c.path] {
+			continue
+		}
+		var before, after map[string]string
+		if c.status != 'A' {
+			content, err := git("cat-file", "blob", parent+":"+c.path)
+			if err != nil {
+				return false, err
+			}
+			before = crdDocs(content)
+		}
+		if c.status != 'D' {
+			content, err := git("cat-file", "blob", merge+":"+c.path)
+			if err != nil {
+				return false, err
+			}
+			after = crdDocs(content)
+		}
+		if !maps.Equal(before, after) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// manifest reports whether path is a file a chart or a cluster can apply: YAML,
+// JSON or a Helm template. A CRD quoted in documentation or code applies
+// nothing.
+func manifest(path string) bool {
+	switch filepath.Ext(path) {
+	case ".yaml", ".yml", ".json", ".tpl":
+		return true
+	}
+	dirs := strings.Split(path, "/")
+	return slices.ContainsFunc(dirs[:len(dirs)-1], func(d string) bool { return d == "templates" || d == "crds" })
+}
+
+// testFixture reports whether path sits under a tests/ or testdata/ directory.
+func testFixture(path string) bool {
+	dirs := strings.Split(path, "/")
+	return slices.ContainsFunc(dirs[:len(dirs)-1], func(d string) bool { return d == "tests" || d == "testdata" })
+}
+
+// mentionsCRD lists which of files at rev hold the text of the CRD kind. Paths
+// are passed literally, so a name such as ":(exclude)x" means only that file.
+func mentionsCRD(rev string, files []string) ([]string, error) {
 	const chunk = 500
+	var found []string
 	for len(files) > 0 {
 		n := min(chunk, len(files))
-		args := append([]string{"--literal-pathspecs", "grep", "-q", "-I", "-E", "-e", crdPattern, "--end-of-options", rev, "--"}, files[:n]...)
-		_, stderr, code, err := gitStatus(args...)
+		args := append([]string{"--literal-pathspecs", "grep", "-l", "-z", "-I", "-F", "-e", crdKind, "--end-of-options", rev, "--"}, files[:n]...)
+		stdout, stderr, code, err := gitStatus(args...)
 		switch {
 		case err != nil:
-			return false, err
-		case code == 0:
-			return true, nil
-		case code != 1:
-			return false, fmt.Errorf("git grep at %s: exit %d: %s", rev, code, strings.TrimSpace(stderr))
+			return nil, err
+		case code != 0 && code != 1:
+			return nil, fmt.Errorf("git grep at %s: exit %d: %s", rev, code, strings.TrimSpace(stderr))
+		}
+		for _, hit := range splitNUL(stdout) {
+			if path, ok := strings.CutPrefix(hit, rev+":"); ok {
+				found = append(found, path)
+			}
 		}
 		files = files[n:]
 	}
-	return false, nil
+	return found, nil
+}
+
+var (
+	docSeparatorRE = regexp.MustCompile(`(?m)^---[ \t]*(?:#.*)?$`)
+	// A document declares the kind on a line of its own, in YAML or in JSON;
+	// a sentence or a lookup call that names it declares nothing.
+	crdKindLineRE = regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]+)?(?:kind|"kind")[ \t]*:[ \t]*["']?CustomResourceDefinition["']?[ \t]*,?[ \t]*(?:#.*)?$`)
+)
+
+// crdDocs maps the CRD documents of a file to their text, keyed by
+// metadata.name, so a CRD added, removed or edited changes the map. A document
+// that declares the kind but cannot be read as an object, a CRD behind a Helm
+// template guard for one, is kept under its own text, so that any change to it
+// counts: the check fails closed. So does a list holding a CRD.
+func crdDocs(content string) map[string]string {
+	docs := map[string]string{}
+	for _, doc := range docSeparatorRE.Split(content, -1) {
+		if !crdKindLineRE.MatchString(doc) {
+			continue
+		}
+		var head struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Items []struct {
+				Kind string `json:"kind"`
+			} `json:"items"`
+		}
+		key := ""
+		switch err := yaml.Unmarshal([]byte(doc), &head); {
+		case err != nil:
+			key = "unreadable:" + doc
+		case head.Kind == crdKind && head.Metadata.Name != "":
+			key = "crd:" + head.Metadata.Name
+		case head.Kind == crdKind:
+			key = "unnamed:" + doc
+		case strings.HasSuffix(head.Kind, "List") && slices.ContainsFunc(head.Items, func(i struct {
+			Kind string `json:"kind"`
+		}) bool {
+			return i.Kind == crdKind
+		}):
+			key = "list:" + doc
+		default:
+			continue
+		}
+		docs[key] += doc
+	}
+	return docs
 }

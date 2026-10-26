@@ -103,7 +103,57 @@ func TestTouchesRule(t *testing.T) {
 		},
 		{name: "api types the gate sees nothing in", setup: demoAPI, files: map[string]string{"api/apps/v1alpha1/types.go": "package v1alpha1\n"}},
 		{name: "pkg/apis is not api/", files: map[string]string{"pkg/apis/apps/types.go": "package apps\n"}},
-		{name: "a crds directory", files: map[string]string{"packages/system/x/charts/x/crds/a.yaml": "kind: ConfigMap\n"}, want: "a CRD"},
+		{name: "a CRD added under crds/", files: map[string]string{"packages/system/x/charts/x/crds/a.yaml": crdDoc("as.x.io", "a") + "\n"}, want: "a CRD"},
+		{name: "a ConfigMap under crds/ is not a CRD", files: map[string]string{"packages/system/x/charts/x/crds/a.yaml": "kind: ConfigMap\n"}},
+		{
+			name:  "a DaemonSet edit next to an unchanged CRD",
+			setup: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("as.x.io", "a"), daemonSet("1"))},
+			files: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("as.x.io", "a"), daemonSet("2"))},
+		},
+		{
+			name:  "a real CRD edit in a manifest with other documents",
+			setup: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("as.x.io", "a"), daemonSet("1"))},
+			files: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("as.x.io", "b"), daemonSet("1"))},
+			want:  "a CRD",
+		},
+		{
+			name:  "a CRD renamed",
+			setup: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("as.x.io", "a"), daemonSet("1"))},
+			files: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(crdDoc("bs.x.io", "a"), daemonSet("1"))},
+			want:  "a CRD",
+		},
+		{name: "a CRD in a fixture under tests/", files: map[string]string{"packages/system/x/tests/render_test.yaml": crdDoc("as.x.io", "a")}},
+		{name: "a CRD in a fixture under testdata/", files: map[string]string{"hack/testdata/crd.yaml": crdDoc("as.x.io", "a")}},
+		{
+			name:  "a templated CRD edited, which cannot be read",
+			setup: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(templatedCRD("a"), daemonSet("1"))},
+			files: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(templatedCRD("b"), daemonSet("1"))},
+			want:  "a CRD",
+		},
+		{
+			name:  "a DaemonSet edit next to an unchanged templated CRD",
+			setup: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(templatedCRD("a"), daemonSet("1"))},
+			files: map[string]string{"packages/system/x/templates/m.yaml": multiDoc(templatedCRD("a"), daemonSet("2"))},
+		},
+		{
+			name:  "an unparseable file that names the kind, changed",
+			setup: map[string]string{"x/broken.yaml": "kind: CustomResourceDefinition\nspec: [unclosed\n"},
+			files: map[string]string{"x/broken.yaml": "kind: CustomResourceDefinition\nspec: [still unclosed\n"},
+			want:  "a CRD",
+		},
+		{
+			name:  "a lookup that names the kind in a Helm helper",
+			setup: map[string]string{"packages/system/x/templates/_helpers.tpl": "{{- $crd := lookup \"apiextensions.k8s.io/v1\" \"CustomResourceDefinition\" \"\" .crd -}}\n{{- if $crd }}a{{ end }}\n"},
+			files: map[string]string{"packages/system/x/templates/_helpers.tpl": "{{- $crd := lookup \"apiextensions.k8s.io/v1\" \"CustomResourceDefinition\" \"\" .crd -}}\n{{- if $crd }}b{{ end }}\n"},
+		},
+		{
+			name:  "a CRD example in documentation",
+			setup: map[string]string{"docs/crds.md": "Example:\n\n```yaml\nkind: CustomResourceDefinition\nmetadata:\n  name: as.x.io\n```\n"},
+			files: map[string]string{"docs/crds.md": "An example:\n\n```yaml\nkind: CustomResourceDefinition\nmetadata:\n  name: bs.x.io\n```\n"},
+		},
+		{name: "a CRD in a template without a YAML extension", files: map[string]string{"packages/system/x/templates/crd.tmpl": crdDoc("as.x.io", "a")}, want: "a CRD"},
+		{name: "a CRD added as JSON", files: map[string]string{"x/crd.json": `{"apiVersion": "apiextensions.k8s.io/v1",` + "\n" + `  "kind": "CustomResourceDefinition",` + "\n" + `  "metadata": {"name": "as.x.io"}}` + "\n"}, want: "a CRD"},
+		{name: "a List of CRDs", files: map[string]string{"x/list.yaml": "kind: List\nitems:\n- kind: CustomResourceDefinition\n  metadata:\n    name: as.x.io\n"}, want: "a CRD"},
 		{name: "a template declaring a CRD", files: map[string]string{"packages/system/x/templates/crd.yaml": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\n"}, want: "a CRD"},
 		{name: "a quoted declaration", files: map[string]string{"x/crd.yaml": "  kind: \"CustomResourceDefinition\"  # yes\n"}, want: "a CRD"},
 		{
@@ -126,7 +176,7 @@ func TestTouchesRule(t *testing.T) {
 		},
 		{name: "a CRD list is not a CRD", files: map[string]string{"x/list.yaml": "kind: CustomResourceDefinitionList\n"}},
 		{name: "a CRD mentioned in prose", files: map[string]string{"x/README.md": "Set kind: CustomResourceDefinition here.\n"}},
-		{name: "a file named like an option declaring a CRD", files: map[string]string{"-e": "kind: CustomResourceDefinition\n"}, want: "a CRD"},
+		{name: "a file named like an option declaring a CRD", files: map[string]string{"-e.yaml": "kind: CustomResourceDefinition\n"}, want: "a CRD"},
 		// As pathspec magic, :(icase)... would match a file of that name in
 		// another case, and there is none.
 		{name: "a file named like pathspec magic declaring a CRD", files: map[string]string{":(icase)zz-crd.yaml": "kind: CustomResourceDefinition\n"}, want: "a CRD"},
@@ -232,7 +282,7 @@ func TestOnlySupportedLines(t *testing.T) {
 const demoRD = "packages/system/demo-rd/cozyrds/demo.yaml"
 
 var demoAPI = map[string]string{
-	demoRD:                                cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string","description":"Size."}}}`),
+	demoRD:                            cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string","description":"Size."}}}`),
 	"api/apps/v1alpha1/demo/types.go": "package demo\n\n// Size of it.\ntype Spec struct{ Size string }\n",
 }
 
@@ -307,3 +357,18 @@ func TestAPIGateRule(t *testing.T) {
 		})
 	}
 }
+
+func crdDoc(name, version string) string {
+	return "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: " + name +
+		"\nspec:\n  group: x.io\n  versions:\n  - name: v1" + version + "\n"
+}
+
+func daemonSet(replicas string) string {
+	return "apiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: agent\nspec:\n  template:\n    spec:\n      priority: {{ .Values.priority | default " + replicas + " }}\n"
+}
+
+func templatedCRD(version string) string {
+	return "{{- if .Values.crds }}\n" + crdDoc("ts.x.io", version) + "{{- end }}\n"
+}
+
+func multiDoc(docs ...string) string { return "---\n" + strings.Join(docs, "---\n") }
