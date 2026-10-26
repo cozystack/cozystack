@@ -1,0 +1,43 @@
+suite: mariadb-operator package resolves its pods in the platform cluster domain
+release:
+  name: mariadb-operator
+  namespace: cozy-mariadb-operator
+# core/platform hands the cluster domain to this package as
+# mariadb-operator.clusterName in the shared values Secret. Guard that the
+# vendored chart still threads that key into what the operator and the webhook
+# certificate use, so a re-vendor that renames it goes red here.
+tests:
+  - it: sets the operator CLUSTER_NAME from the injected domain
+    templates:
+      - charts/mariadb-operator/templates/operator/deployment.yaml
+    set:
+      mariadb-operator.clusterName: example.test
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_NAME
+            value: example.test
+
+  - it: issues the webhook certificate for the injected domain
+    templates:
+      - charts/mariadb-operator/templates/webhook/certificate.yaml
+    documentSelector:
+      path: kind
+      value: Certificate
+    set:
+      mariadb-operator.clusterName: example.test
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: mariadb-operator-webhook.cozy-mariadb-operator.svc.example.test
+
+  - it: keeps cozy.local as the standalone default
+    templates:
+      - charts/mariadb-operator/templates/operator/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_NAME
+            value: cozy.local
