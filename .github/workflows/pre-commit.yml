@@ -97,8 +97,11 @@ jobs:
     # asks for a backport sits on the original PR, not on the generated one, so
     # a branch name is the only signal a pull_request event carries. That makes
     # the exemption a convention rather than something enforced: anyone can name
-    # a branch this way. Every other PR, fork included, is checked.
-    if: ${{ !(startsWith(github.head_ref, 'backport-') && contains(github.head_ref, '-to-')) }}
+    # a branch this way. The backport batch (cmd/backport-batch) picks the same
+    # way onto backport-batch/<line>-<date>, and is exempt only from a branch of
+    # this repository, which takes write access to push. Every other PR, fork
+    # included, is checked.
+    if: ${{ !(startsWith(github.head_ref, 'backport-') && contains(github.head_ref, '-to-')) && !(startsWith(github.head_ref, 'backport-batch/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - name: Checkout head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
