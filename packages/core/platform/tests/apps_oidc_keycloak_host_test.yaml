@@ -51,3 +51,34 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'authentication.oidc.keycloakHost "auth.example.org:8443" is invalid'
+
+  # `default` treats false and 0 as unset; checking the kind first keeps a
+  # mistyped value from silently falling back to keycloak.<root-host>.
+  - it: rejects a non-string keycloak host instead of falling back to the default
+    set:
+      authentication.oidc.keycloakHost: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'authentication.oidc.keycloakHost must be a string (got bool)'
+
+  - it: rejects a DNS label longer than 63 characters
+    set:
+      authentication.oidc.keycloakHost: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.keycloakHost ".*" is invalid'
+
+  - it: rejects a hostname longer than 253 characters
+    set:
+      authentication.oidc.keycloakHost: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.keycloakHost ".*" is invalid'
+
+  - it: accepts a 63-character label
+    set:
+      authentication.oidc.keycloakHost: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-host:\s*"a{63}\.example\.org"'

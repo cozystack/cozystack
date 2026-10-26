@@ -48,13 +48,15 @@ tests:
           path: spec.hostnames
           content: auth.example.com
 
-  - it: lets ingress.host override the platform keycloak-host
+  # Legacy deployments set only ingress.host; the platform then publishes the
+  # derived keycloak.<root-host>, which is not a competing choice.
+  - it: keeps a legacy ingress.host when the platform host is the derived default
     template: templates/sts.yaml
     documentIndex: 1
     set:
       _cluster:
         root-host: example.com
-        keycloak-host: auth.example.com
+        keycloak-host: keycloak.example.com
       ingress:
         host: sso.example.com
     asserts:
@@ -63,3 +65,15 @@ tests:
           content:
             name: KC_HOSTNAME
             value: https://sso.example.com
+
+  - it: refuses an ingress.host that conflicts with an explicit platform host
+    template: templates/sts.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        keycloak-host: auth.example.com
+      ingress:
+        host: sso.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'ingress.host "sso.example.com" conflicts with the platform authentication.oidc.keycloakHost "auth.example.com"'
