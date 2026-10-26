@@ -5,9 +5,12 @@ _cluster: {}
 image: quay.io/keycloak/keycloak:26.6.3
 
 ingress:
-  # Custom hostname for the Keycloak Ingress.
-  # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
-  # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
+  # Custom hostname for the Keycloak Ingress (e.g., "auth.example.com").
+  # Prefer the platform-wide authentication.oidc.keycloakHost: it moves the
+  # Keycloak Ingress and KC_HOSTNAME together with every OIDC consumer
+  # (dashboard, linstor-gui, Grafana, info kubeconfig, tenant Kubernetes).
+  # This value moves Keycloak alone, so those consumers keep the old issuer.
+  # If left empty, the platform keycloak-host is used, then "keycloak.<root-host>".
   host: ""
   # Optional separate hostname for the Keycloak admin console (opt-in).
   # When set (e.g., "keycloak-admin.example.com"):

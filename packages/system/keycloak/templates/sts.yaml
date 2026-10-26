@@ -3,7 +3,7 @@
 {{- end -}}
 
 {{- $host := index .Values._cluster "root-host" }}
-{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
+{{- $ingressHost := .Values.ingress.host | default (index .Values._cluster "keycloak-host") | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 
 {{- /*

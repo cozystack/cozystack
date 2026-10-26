@@ -345,3 +345,24 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+
+  # Same issuer host as the dashboard: _cluster.keycloak-host.
+  - it: builds the browser-facing OIDC URLs on a custom keycloak-host
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+        expose-services: "linstor-gui"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://auth.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://auth.example.org/realms/cozy/protocol/openid-connect/auth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --whitelist-domain=auth.example.org

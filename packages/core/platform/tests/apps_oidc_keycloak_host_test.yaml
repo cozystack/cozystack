@@ -1,0 +1,53 @@
+suite: apps.yaml OIDC keycloak-host platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# authentication.oidc.keycloakHost is the single source for the host of the
+# Keycloak issuer. It rides the _cluster channel as keycloak-host, already
+# resolved, so the Keycloak chart and every OIDC consumer agree on it without
+# each re-deriving keycloak.<root-host>.
+
+tests:
+  - it: defaults the keycloak host to keycloak.<publishing.host>
+    set:
+      publishing.host: example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-host:\s*"keycloak\.example\.org"'
+
+  - it: propagates a custom keycloak host onto the _cluster channel
+    set:
+      publishing.host: example.org
+      authentication.oidc.keycloakHost: auth.example.org
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-host:\s*"auth\.example\.org"'
+
+  # The host is spliced after "https://" and into --whitelist-domain, so a
+  # scheme would yield https://https://... and a path would shift the realm.
+  - it: rejects a keycloak host carrying a scheme
+    set:
+      authentication.oidc.keycloakHost: https://auth.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.keycloakHost "https://auth.example.org" is invalid'
+
+  - it: rejects a keycloak host carrying a path
+    set:
+      authentication.oidc.keycloakHost: auth.example.org/realms
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.keycloakHost "auth.example.org/realms" is invalid'
+
+  - it: rejects a keycloak host carrying a port
+    set:
+      authentication.oidc.keycloakHost: auth.example.org:8443
+    asserts:
+      - failedTemplate:
+          errorPattern: 'authentication.oidc.keycloakHost "auth.example.org:8443" is invalid'
