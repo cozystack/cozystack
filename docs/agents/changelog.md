@@ -133,11 +133,11 @@ For example, if generating changelog for `v0.37.2`:
 git log v0.37.1..v0.37.2 --pretty=format:"%h - %s (%an, %ar)"
 ```
 
-**⚠️ IMPORTANT: Check for backports:**
-- Look for commits with "[Backport release-X.Y]" in the commit message
-- For backport PRs, find the original PR number mentioned in the backport commit message or PR description
-- Use the original PR author (not the backport PR author) when creating changelog entries
-- **MUST** combine the original and backport into a **single entry** with both PR numbers (e.g. `#1606, backport #1609`). Do NOT list the original and the backport as two separate entries — that produces duplicates in the changelog.
+**⚠️ IMPORTANT: Check for backports.** They reach a release line in two shapes:
+- A backport batch ([`docs/release/backports.md`](../release/backports.md)): a merge commit titled `fix(backport): batch for release-X.Y, <date> (#BATCH_PR)`, whose commits keep each original's own subject, `<original title> (#ORIGINAL_PR)`, and end with a `(cherry picked from commit <sha>)` line. The `(#N)` in such a commit's subject is the original, so read the original's number, title and author from there, and never write an entry for the batch PR itself.
+- A single backport PR, from the label-driven fallback bot or opened by hand: commits with "[Backport release-X.Y]" in the message, whose original PR number is in the backport commit message or PR description.
+- Use the original PR author (not the backport or batch PR author) when creating changelog entries
+- **MUST** combine the original and backport into a **single entry** with both PR numbers (e.g. `#1606, backport #1609`, where a batch's original reads `#1606, backport #BATCH_PR`). Do NOT list the original and the backport as two separate entries — that produces duplicates in the changelog.
 
 **For minor releases (vX.Y.0):**
 Minor releases must include **all changes** from patch releases of the previous minor version. Get commits from the previous minor release tag up to the new tag:
@@ -292,6 +292,7 @@ git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]
 ```
 
 **⚠️ IMPORTANT: Handle backports correctly:**
+- A batch PR has the title `fix(backport): batch for release-X.Y, <date>`. It is not a change of its own: drop its number from the list, and take its originals from the subjects of the commits it merged, `git log <batch merge>^1..<batch merge>^2 --format=%s`, each of which ends in its original's `(#N)`.
 - Backport PRs have format: `[Backport release-X.Y] <original title> (#BACKPORT_PR_NUMBER)`
 - The backport commit message or PR description usually mentions the original PR number
 - For backport entries in changelog, use the original PR author (not the backport PR author)
