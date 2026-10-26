@@ -45,24 +45,20 @@ for n in $(gh pr list --search "label:kind/backport label:kind/backport-previous
 done
 ```
 
-Before [PR #3155](https://github.com/cozystack/cozystack/pull/3155), `conflict_resolution` was passed outside `experimental`, so a conflicting cherry-pick used the `fail` fallback and left only a "Backport failed" comment on the source PR. No draft backport PR was opened. When [`backport-audit`](../../cmd/backport-audit/README.md) reports `MISSING`, check those comments and the workflow logs to establish why the change did not arrive.
+Before [PR #3155](https://github.com/cozystack/cozystack/pull/3155), `conflict_resolution` was passed outside `experimental`, so a conflicting cherry-pick used the `fail` fallback and left only a "Backport failed" comment on the source PR. No draft backport PR was opened. When a labelled pull request never reached its line, check those comments and the workflow logs to establish why.
 
 ### Cherry-pick triage before a patch
 
-A patch release includes bugfixes for code that shipped in the corresponding minor `vX.Y.0`. What goes in is decided by the rules in [Backports](./backports.md), not per pull request, and the batch report says what each batch picked and what it deferred (lands with the batch tool). What is left to check by hand before a cut:
+A patch release includes bugfixes for code that shipped in the corresponding minor `vX.Y.0`. What goes in is decided by the rules in [Backports](./backports.md), not per pull request, and each batch pull request says what it picked, what it deferred and what it skipped under which rule. What is left to check before a cut:
 
 ```bash
-# 1. Audit what was labeled for this line and has NOT landed on it.
-#    Exits non-zero when anything is outstanding; see cmd/backport-audit/README.md.
-go build ./cmd/backport-audit
-./backport-audit release-X.Y
-
-# 2. List commits on main since the release branch diverged that are NOT yet on release-X.Y
-git merge-base origin/main origin/release-X.Y
-git log <base>..origin/main --grep="(#" --oneline
+# Exits 1 and prints the URLs while a pull request the rules take is neither
+# on the line nor on the open batch PR; see cmd/backport-batch/README.md.
+go build ./cmd/backport-batch
+./backport-batch check --line release-X.Y
 ```
 
-Step 1 covers work sent through the manual fallback labels: [`backport-audit`](../../cmd/backport-audit/README.md) assigns each request to the release line selected at merge time, then checks whether its commits reached the branch. Incomplete delivery, open or dropped backports, missing changes and duplicate open claims fail the gate. Late-added labels can disagree with the bot's target, and branch-opening dates are estimated from rc tags; see the audit's documented limits before relying on it. Step 2 lists everything else on `main` that the line does not carry yet, to compare against the policy.
+[`backport-batch check`](../../cmd/backport-batch/README.md) applies the rules to every pull request merged into `main` since the line branched, and looks for each one they take on the line, by an `-x` line naming it, a `Backport of #N` line, or a pick that would change nothing, and then on the open batch pull request. A conflict the batch deferred prints as a warning without failing the check. A change sent through the manual fallback labels counts like any other, by what reached the line rather than by its label.
 
 ### Backporting code that touches monotonic counters
 
