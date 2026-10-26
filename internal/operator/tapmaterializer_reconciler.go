@@ -106,7 +106,24 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// fail-closed on the integrity check.
 		return ctrl.Result{RequeueAfter: tapWaitRequeue}, nil
 	}
+	// Act only on an artifact that reflects the current spec. After a re-connect
+	// changes spec.ref, source-controller must re-resolve before status.artifact
+	// describes the new reference; acting early would materialize and pin the
+	// previous revision (issue #4979).
+	if !r.artifactReady(&repo, art.Revision) {
+		return ctrl.Result{RequeueAfter: tapWaitRequeue}, nil
+	}
 	if repo.Annotations[tapconst.MaterializedRevisionAnnotation] == art.Revision {
+		// Already materialized at this revision. A tap connected before digest
+		// pinning existed still follows its tag (no digest on spec.ref); pin the
+		// current digest now so moving the tag upstream cannot pull new content on
+		// the next revision. A source that already carries a digest needs nothing.
+		if ref := repo.Spec.Reference; ref == nil || ref.Digest == "" {
+			pinTapDigest(&repo, art.Revision)
+			if err := r.Update(ctx, &repo); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -215,6 +232,23 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// artifactReady reports whether status.artifact reflects the current spec
+// generation and, for a tag-only source, the tag the source now follows. It
+// gates materialization and pinning so a re-connect's new spec is never acted on
+// with the previous revision's artifact. source-controller formats a tag
+// revision as '<tag>@<digest>', so a tag-only ref requires that prefix; a source
+// pinned to a digest reports a bare digest revision and needs only the
+// generation check.
+func (r *TapMaterializerReconciler) artifactReady(repo *sourcev1.OCIRepository, revision string) bool {
+	if repo.Status.ObservedGeneration != repo.Generation {
+		return false
+	}
+	if ref := repo.Spec.Reference; ref != nil && ref.Tag != "" && ref.Digest == "" {
+		return strings.HasPrefix(revision, ref.Tag+"@")
+	}
+	return true
 }
 
 // manifestDigestRe matches a full OCI manifest digest (sha256:<64 hex>).
