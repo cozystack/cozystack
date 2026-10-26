@@ -377,7 +377,13 @@ runs its charts in your management cluster: tap only sources you trust.`,
 			if verr != nil {
 				return verr
 			}
-			if ref.Digest == "" && verifiedDigest != "" {
+			// Fail closed: a verified signature with no parseable digest must not
+			// fall back to an unpinned tag pull, which would reopen the tag-mutation
+			// window between verify and pull.
+			if verifiedDigest == "" {
+				return fmt.Errorf("cosign verified %q but returned no manifest digest; refusing to pull by an unpinned tag", ref.pullRef())
+			}
+			if ref.Digest == "" {
 				ref.Digest = verifiedDigest
 			}
 		}

@@ -694,3 +694,46 @@ func TestReconcilePinsPreUpgradeTapBeforeEarlyReturn(t *testing.T) {
 		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
 	}
 }
+
+// artifactReady must also wait when status.observedGeneration lags
+// metadata.generation: the artifact may still describe the spec from before the
+// current re-connect, so pinning from it would pin stale content even when the
+// revision happens to match the tag. This isolates the generation conjunct of the
+// gate (the revision here matches the tag, so only the generation check can block).
+func TestReconcileWaitsWhenObservedGenerationLags(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("d", 64)
+	repo := tapRepo(true)
+	repo.Generation = 2 // spec advanced by a re-connect
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: "v1@" + manifest}
+	live.Status.ObservedGeneration = 1 // source-controller has not caught up to generation 2
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != "" {
+		t.Errorf("must not pin while observedGeneration lags generation, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("must not record a pin while observedGeneration lags, got %v", got.Annotations)
+	}
+}
