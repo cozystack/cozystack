@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1686,6 +1688,13 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			fmt.Sprintf("waiting for target psmdb.percona.com/PerconaServerMongoDB %s/%s to enable backups", target.Namespace, targetPSMDBName))
 	}
 
+	// The operator runs whatever its CR said when it was created, so the checks
+	// below that shape the restore apply only until then.
+	existingRestore, err := r.findMongoDBRestoreForJob(ctx, restoreJob)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
 	// swap applies. On the legacy flow the backupSource carries the SOURCE
 	// release's -s3-creds Secret, which is deleted together with the source app —
@@ -1712,10 +1721,6 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		// pruned mid-replay is its error to report, not grounds to mark a restore
 		// still in progress Failed.
 		if source.S3.CredentialsSecret != "" {
-			existingRestore, err := r.findMongoDBRestoreForJob(ctx, restoreJob)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
 			if existingRestore == nil {
 				if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: source.S3.CredentialsSecret}, &corev1.Secret{}); err != nil {
 					if !apierrors.IsNotFound(err) {
@@ -1734,7 +1739,26 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 	}
 
-	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr)
+	// An in-place restore puts the cluster back as the backup has it, users
+	// included. A to-copy restore must not, see mongodbToCopySelective.
+	var selective *psmdbtypes.SelectiveRestoreOpts
+	if existingRestore == nil && target.AppName != backup.Spec.ApplicationRef.Name {
+		app := &mongodbapp.MongoDB{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+			return r.markRestoreJobFailedReason(ctx, restoreJob, mongodbReasonToCopyRefused, fmt.Sprintf(
+				"target MongoDB application %s/%s not found. A to-copy restore copies the databases the target application declares under spec.databases, so it needs the application and not only its PerconaServerMongoDB",
+				target.Namespace, target.AppName))
+		}
+		sharded := targetCluster.Spec.Sharding != nil && targetCluster.Spec.Sharding.Enabled
+		if selective, err = mongodbToCopySelective(app, sharded, pitr != nil); err != nil {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, mongodbReasonToCopyRefused, err.Error())
+		}
+	}
+
+	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr, selective)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
 	}
@@ -1892,7 +1916,7 @@ func (r *RestoreJobReconciler) findMongoDBRestoreForJob(ctx context.Context, rj 
 // ensureMongoDBRestore creates a PerconaServerMongoDBRestore CR labelled with
 // the RestoreJob, or returns the existing one if a previous reconcile already
 // created it.
-func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, targetClusterName string, source *psmdbtypes.BackupSource, pitr *psmdbtypes.PITRSpec) (*psmdbtypes.PerconaServerMongoDBRestore, error) {
+func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, targetClusterName string, source *psmdbtypes.BackupSource, pitr *psmdbtypes.PITRSpec, selective *psmdbtypes.SelectiveRestoreOpts) (*psmdbtypes.PerconaServerMongoDBRestore, error) {
 	if existing, err := r.findMongoDBRestoreForJob(ctx, rj); err != nil || existing != nil {
 		return existing, err
 	}
@@ -1910,6 +1934,7 @@ func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *bac
 			ClusterName:  targetClusterName,
 			BackupSource: source,
 			PITR:         pitr,
+			Selective:    selective,
 		},
 	}
 	if err := r.Create(ctx, obj); err != nil {
@@ -1919,9 +1944,10 @@ func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *bac
 }
 
 // mongodbRestoreTarget captures the resolved target for a MongoDB restore.
-// In-place and to-copy are treated identically: both create a
-// PerconaServerMongoDBRestore CR pointing (via clusterName) at the named target
-// cluster. Callers infer the mode from AppName != backup.Spec.ApplicationRef.Name.
+// In-place and to-copy both create a PerconaServerMongoDBRestore CR pointing
+// (via clusterName) at the named target cluster, and differ only in what it
+// takes from the backup (see mongodbToCopySelective). Callers infer the mode
+// from AppName != backup.Spec.ApplicationRef.Name.
 type mongodbRestoreTarget struct {
 	Namespace string
 	AppName   string
@@ -1950,6 +1976,58 @@ func (r *RestoreJobReconciler) resolveMongoDBRestoreTarget(restoreJob *backupsv1
 		}
 	}
 	return t
+}
+
+// mongodbReasonToCopyRefused is the Ready reason of a to-copy restore refused
+// before anything reached the operator, so the target is left as it was.
+const mongodbReasonToCopyRefused = "ToCopyRestoreRefused"
+
+// mongodbReservedDatabases belong to the cluster itself. The pbm CLI refuses
+// them in --ns, but the operator passes spec.selective to the agents without
+// that check, so the driver makes it.
+var mongodbReservedDatabases = []string{"admin", "config", "local"}
+
+// mongodbToCopySelective returns the selective restore a to-copy restore runs.
+// A full logical restore replays the source cluster's admin.system.users into
+// the target, after which neither the operator nor the target's own users
+// Secrets authenticate to it. Copying the source's users Secret over instead
+// would hand one application's credentials to another. So the target keeps
+// its users, withUsersAndRoles stays false, and only the databases the target
+// application declares are restored, the ones its users hold roles on. A
+// target that declares none is refused, since restoring nothing and restoring
+// the source's users are both wrong.
+func mongodbToCopySelective(app *mongodbapp.MongoDB, sharded, pitr bool) (*psmdbtypes.SelectiveRestoreOpts, error) {
+	ref := app.Namespace + "/" + app.Name
+	var declared map[string]json.RawMessage
+	if app.Spec.Databases != nil && len(app.Spec.Databases.Raw) > 0 {
+		if err := json.Unmarshal(app.Spec.Databases.Raw, &declared); err != nil {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s is not a map keyed by database name (%v)", ref, err)
+		}
+	}
+	if len(declared) == 0 {
+		return nil, fmt.Errorf("a to-copy restore keeps the users of MongoDB application %s and copies only the databases it declares under spec.databases, and it declares none. Declare every database to copy there, with an empty roles map if no user needs it yet (spec.databases.<name>.roles: {}), and create the RestoreJob again", ref)
+	}
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	namespaces := make([]string, 0, len(names))
+	for _, name := range names {
+		// "*" would make the selection "*.*", which percona-backup-mongodb reads as
+		// a full restore, users included.
+		if name == "" || strings.ContainsAny(name, `/\. "$*`) || strings.ContainsFunc(name, unicode.IsSpace) {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s has %q, which is not a database name. A name cannot be empty or contain whitespace or any of / \\ . \" $ *", ref, name)
+		}
+		if slices.Contains(mongodbReservedDatabases, name) {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s lists %q. The admin, config and local databases belong to the cluster and are not restored selectively, remove it from the target to copy the rest", ref, name)
+		}
+		namespaces = append(namespaces, name+".*")
+	}
+	if pitr && sharded {
+		return nil, fmt.Errorf("MongoDB application %s is sharded, and percona-backup-mongodb restores selected databases to a point in time on replica sets only. Omit recoveryTime to copy the backup as taken", ref)
+	}
+	return &psmdbtypes.SelectiveRestoreOpts{WithUsersAndRoles: false, Namespaces: namespaces}, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -411,11 +412,11 @@ func TestEnsureMongoDBRestore_IdempotentByLabel(t *testing.T) {
 		},
 	}
 
-	first, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	first, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil, nil)
 	if err != nil {
 		t.Fatalf("first ensureMongoDBRestore: %v", err)
 	}
-	second, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	second, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil, nil)
 	if err != nil {
 		t.Fatalf("second ensureMongoDBRestore: %v", err)
 	}
@@ -2737,6 +2738,284 @@ func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testi
 			t.Errorf("an existing credentialsSecret must not be reported missing: %+v", cond)
 		}
 	})
+}
+
+// mongodbToCopyFixture returns the objects a to-copy restore of mongodb-src
+// into mongodb-target needs to get through every precondition in one
+// reconcile: a legacy Backup, a target cluster whose own storage is on the
+// archive's bucket, that storage's Secret, the target application declaring
+// databases (raw JSON, empty for none) and the RestoreJob.
+func mongodbToCopyFixture(t *testing.T, databases string) (*backupsv1alpha1.Backup, *backupsv1alpha1.RestoreJob, []client.Object) {
+	t.Helper()
+	apps := mongodbapp.GroupName
+	snap := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://bkt/mongodb-src/2026-10-26T10:00:00Z",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", CredentialsSecret: "mongodb-mongodb-src-s3-creds"},
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(snap, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-backup"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	cluster := &psmdbtypes.PerconaServerMongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")},
+		Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+			Enabled:  true,
+			Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-target-s3-creds"}}`)}},
+		}},
+	}
+	app := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
+	if databases != "" {
+		app.Spec.Databases = &runtime.RawExtension{Raw: []byte(databases)}
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-target-s3-creds"}}
+	rj := newMongoDBRestoreJob("rj-copy", "tenant")
+	rj.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-target", APIGroup: &apps}
+	rj.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	rj.Status.Phase = backupsv1alpha1.RestoreJobPhaseRunning
+	return backup, rj, []client.Object{backup, rj, cluster, app, secret}
+}
+
+func mongodbRestoresIn(t *testing.T, c client.Client) []psmdbtypes.PerconaServerMongoDBRestore {
+	t.Helper()
+	list := &psmdbtypes.PerconaServerMongoDBRestoreList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list operator restores: %v", err)
+	}
+	return list.Items
+}
+
+// A full logical restore into another application replays the source's
+// admin.system.users over the target's, and the target's own Secrets stop
+// authenticating. A to-copy restore must therefore hand the operator a
+// selective restore of the databases the target declares, with users and
+// roles left out, and must say so explicitly in the CR.
+func TestReconcileMongoDBRestore_ToCopyRestoresDeclaredDatabasesWithoutUsers(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"orders":{"roles":{"admin":["app"]}},"demo":{}}`)
+	c := newMongoDBStrategyTestClient(t, objs...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	restores := mongodbRestoresIn(t, c)
+	if len(restores) != 1 {
+		t.Fatalf("expected one operator restore, got %d", len(restores))
+	}
+	got := restores[0].Spec
+	if got.ClusterName != "mongodb-mongodb-target" {
+		t.Errorf("clusterName: got %q want mongodb-mongodb-target", got.ClusterName)
+	}
+	if got.Selective == nil {
+		t.Fatalf("a to-copy restore must be selective, got a full restore")
+	}
+	if got.Selective.WithUsersAndRoles {
+		t.Errorf("a to-copy restore must not take users and roles from the backup")
+	}
+	if want := []string{"demo.*", "orders.*"}; !slices.Equal(got.Selective.Namespaces, want) {
+		t.Errorf("namespaces: got %v want %v (every declared database, sorted)", got.Selective.Namespaces, want)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal restore spec: %v", err)
+	}
+	if !strings.Contains(string(raw), `"withUsersAndRoles":false`) {
+		t.Errorf("withUsersAndRoles=false must be written into the CR, got %s", raw)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a target that declares its databases must not be refused: %+v", persisted.Status.Conditions)
+	}
+}
+
+// An in-place restore puts the cluster back as the backup has it, users
+// included, and does not depend on what the application declares.
+func TestReconcileMongoDBRestore_InPlaceStaysFullRestore(t *testing.T) {
+	apps := mongodbapp.GroupName
+	for name, targetRef := range map[string]*corev1.TypedLocalObjectReference{
+		"no targetApplicationRef":               nil,
+		"targetApplicationRef names the source": {Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup, rj, _ := mongodbToCopyFixture(t, "")
+			rj.Spec.TargetApplicationRef = targetRef
+			cluster := &psmdbtypes.PerconaServerMongoDB{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-src")},
+				Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+					Enabled:  true,
+					Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-src-s3-creds"}}`)}},
+				}},
+			}
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-src-s3-creds"}}
+			// No application object at all, so a read of it would fail the job.
+			c := newMongoDBStrategyTestClient(t, backup, rj, cluster, secret)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			restores := mongodbRestoresIn(t, c)
+			if len(restores) != 1 {
+				t.Fatalf("expected one operator restore, got %d", len(restores))
+			}
+			if restores[0].Spec.Selective != nil {
+				t.Errorf("an in-place restore must stay a full restore, got selective %+v", restores[0].Spec.Selective)
+			}
+			if restores[0].Spec.ClusterName != "mongodb-mongodb-src" {
+				t.Errorf("clusterName: got %q want mongodb-mongodb-src", restores[0].Spec.ClusterName)
+			}
+		})
+	}
+}
+
+// With nothing declared there is no restore that leaves the target usable, so
+// the RestoreJob fails before the operator sees anything, naming what to add.
+func TestReconcileMongoDBRestore_ToCopyWithoutDeclaredDatabasesFails(t *testing.T) {
+	for name, databases := range map[string]string{
+		"databases unset": "",
+		"databases empty": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup, rj, objs := mongodbToCopyFixture(t, databases)
+			c := newMongoDBStrategyTestClient(t, objs...)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			persisted := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+				t.Fatalf("get restore job: %v", err)
+			}
+			if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("expected Failed, got phase=%q", persisted.Status.Phase)
+			}
+			cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+			if cond == nil || cond.Reason != mongodbReasonToCopyRefused ||
+				!strings.Contains(cond.Message, "declares none") || !strings.Contains(cond.Message, "spec.databases") {
+				t.Errorf("expected a ToCopyRestoreRefused condition naming spec.databases, got %+v", cond)
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 0 {
+				t.Errorf("a refused restore must not reach the operator, found %d operator restores", n)
+			}
+		})
+	}
+}
+
+// The database list comes from the target application, so a target cluster
+// with no application behind it is refused rather than restored in full.
+func TestReconcileMongoDBRestore_ToCopyWithoutTargetApplicationFails(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	var withoutApp []client.Object
+	for _, o := range objs {
+		if _, isApp := o.(*mongodbapp.MongoDB); !isApp {
+			withoutApp = append(withoutApp, o)
+		}
+	}
+	c := newMongoDBStrategyTestClient(t, withoutApp...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+	if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed || cond == nil || cond.Reason != mongodbReasonToCopyRefused {
+		t.Fatalf("expected Failed with ToCopyRestoreRefused, got phase=%q cond=%+v", persisted.Status.Phase, cond)
+	}
+	if n := len(mongodbRestoresIn(t, c)); n != 0 {
+		t.Errorf("a refused restore must not reach the operator, found %d operator restores", n)
+	}
+}
+
+// The shape is decided only until the operator CR exists. A target edited
+// while the operator is already writing into it must not fail that restore.
+func TestReconcileMongoDBRestore_ToCopyShapeIsNotRecheckedAfterHandOver(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, "")
+	inflight := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-abc",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: "mongodb-mongodb-target", Selective: &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateRunning},
+	}
+	c := newMongoDBStrategyTestClient(t, append(objs, inflight)...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a restore already running must not be refused for what the target declares now: %+v", persisted.Status.Conditions)
+	}
+}
+
+func TestMongoDBToCopySelective(t *testing.T) {
+	app := func(databases string) *mongodbapp.MongoDB {
+		a := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
+		a.Spec.Databases = &runtime.RawExtension{Raw: []byte(databases)}
+		return a
+	}
+	refused := []struct {
+		name, databases string
+		sharded, pitr   bool
+		want            string
+	}{
+		{"wildcard would widen to a full restore", `{"*":{}}`, false, false, "not a database name"},
+		{"dot", `{"a.b":{}}`, false, false, "not a database name"},
+		{"whitespace", `{"a b":{}}`, false, false, "not a database name"},
+		{"dollar", `{"a$b":{}}`, false, false, "not a database name"},
+		{"empty name", `{"":{}}`, false, false, "not a database name"},
+		{"admin", `{"admin":{},"demo":{}}`, false, false, "are not restored selectively"},
+		{"config", `{"config":{}}`, false, false, "are not restored selectively"},
+		{"local", `{"local":{}}`, false, false, "are not restored selectively"},
+		{"not a map", `["demo"]`, false, false, "not a map"},
+		{"point in time on a sharded cluster", `{"demo":{}}`, true, true, "replica sets only"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, err := mongodbToCopySelective(app(tc.databases), tc.sharded, tc.pitr)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected a refusal containing %q, got selective=%+v err=%v", tc.want, sel, err)
+			}
+		})
+	}
+	for name, tc := range map[string]struct{ sharded, pitr bool }{
+		"point in time on a replica set": {false, true},
+		"sharded without point in time":  {true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sel, err := mongodbToCopySelective(app(`{"demo":{}}`), tc.sharded, tc.pitr)
+			if err != nil {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+			if sel.WithUsersAndRoles || !slices.Equal(sel.Namespaces, []string{"demo.*"}) {
+				t.Errorf("got %+v, want demo.* without users and roles", sel)
+			}
+		})
+	}
 }
 
 // Opting out (useSystemBucket true→false) stops the injection but leaves the

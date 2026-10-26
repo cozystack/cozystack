@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mongodbapp declares the typed shape of the apps.cozystack.io/v1alpha1
-// MongoDB CR that the MongoDB backup driver reads. It carries only fields the
-// driver touches (currently nothing under spec — the driver drives the
-// downstream psmdb.percona.com CRs directly via psmdbtypes), but the type
+// MongoDB CR that the MongoDB backup driver reads. It carries only the spec
+// fields the driver reads (see MongoDBSpec), since the driver drives the
+// downstream psmdb.percona.com CRs directly via psmdbtypes, but the type
 // still serves as a typed application-side handle so the driver can fetch the
 // CR via the typed client and surface NotFound semantics cleanly. Mirrors
 // mariadbapp.
@@ -59,6 +59,12 @@ type MongoDBList struct {
 // no other spec state here.
 type MongoDBSpec struct {
 	Backup MongoDBBackupSpec `json:"backup,omitempty"`
+	// Databases is read for its keys alone. A to-copy restore copies the
+	// databases the target application declares here, which are the ones the
+	// chart grants the target's own users their roles on. It stays opaque so an
+	// application with an unexpected shape here fails only the restore that
+	// reads it, not the decoding of every MongoDB application in the cache.
+	Databases *runtime.RawExtension `json:"databases,omitempty"`
 }
 
 // MongoDBBackupSpec carries the backup fields the driver reads off the app CR.
