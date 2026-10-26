@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"testing"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -196,15 +197,26 @@ func TestTapVerification(t *testing.T) {
 	if _, err := tapVerification("", "iss"); err == nil {
 		t.Error("issuer without identity must error")
 	}
-	v, err := tapVerification("https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1", "https://token.actions.githubusercontent.com")
+	id := "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"
+	iss := "https://token.actions.githubusercontent.com"
+	v, err := tapVerification(id, iss)
 	if err != nil {
 		t.Fatalf("valid pair: %v", err)
 	}
 	if v == nil || v.Provider != "cosign" || len(v.MatchOIDCIdentity) != 1 {
 		t.Fatalf("unexpected verification: %+v", v)
 	}
-	if v.MatchOIDCIdentity[0].Issuer != "https://token.actions.githubusercontent.com" || v.MatchOIDCIdentity[0].Subject == "" {
-		t.Errorf("identity matcher not set: %+v", v.MatchOIDCIdentity[0])
+	// Flux evaluates the matcher as a regexp. It must be an anchored exact match:
+	// it matches the exact identity and rejects a superstring (a moved tag v10, or
+	// malice@... for an email identity), which an unanchored matcher would accept.
+	m := v.MatchOIDCIdentity[0]
+	subjRe := regexp.MustCompile(m.Subject)
+	if !subjRe.MatchString(id) || subjRe.MatchString(id+"0") {
+		t.Errorf("subject must be an anchored exact match, got %q", m.Subject)
+	}
+	issRe := regexp.MustCompile(m.Issuer)
+	if !issRe.MatchString(iss) || issRe.MatchString(iss+"x") {
+		t.Errorf("issuer must be an anchored exact match, got %q", m.Issuer)
 	}
 }
 

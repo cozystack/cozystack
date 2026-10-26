@@ -101,9 +101,15 @@ func buildVerifySpec(v *corev1alpha1.TapVerify) (map[string]any, error) {
 	if v.Issuer == "" || v.Subject == "" {
 		return nil, fmt.Errorf("verify requires both issuer and subject (keyless cosign identity)")
 	}
+	// Flux treats issuer and subject as Go regexps. Anchor and quote them so an
+	// exact identity matches exactly: an unanchored `alice@example.com` would also
+	// accept `malice@example.com`, and the `.` would match any character.
 	return map[string]any{
-		"provider":          "cosign",
-		"matchOIDCIdentity": []any{map[string]any{"issuer": v.Issuer, "subject": v.Subject}},
+		"provider": "cosign",
+		"matchOIDCIdentity": []any{map[string]any{
+			"issuer":  "^" + regexp.QuoteMeta(v.Issuer) + "$",
+			"subject": "^" + regexp.QuoteMeta(v.Subject) + "$",
+		}},
 	}, nil
 }
 

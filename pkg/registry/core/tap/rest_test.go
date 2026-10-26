@@ -5,6 +5,7 @@ package tap
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -404,8 +405,20 @@ func TestCreateSetsVerify(t *testing.T) {
 		t.Fatalf("expected one matchOIDCIdentity, got %v", ids)
 	}
 	id := ids[0].(map[string]any)
-	if id["issuer"] != "https://token.actions.githubusercontent.com" || id["subject"] == "" {
-		t.Errorf("unexpected identity matcher: %v", id)
+	issuer, _ := id["issuer"].(string)
+	subject, _ := id["subject"].(string)
+	if issuer == "" || subject == "" {
+		t.Fatalf("identity matcher not set: %v", id)
+	}
+	// Flux evaluates these as regexps; they must be anchored exact matches so a
+	// superstring identity (e.g. a moved tag v10) is rejected.
+	wantIssuer := "https://token.actions.githubusercontent.com"
+	wantSubject := "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"
+	if ir := regexp.MustCompile(issuer); !ir.MatchString(wantIssuer) || ir.MatchString(wantIssuer+"x") {
+		t.Errorf("issuer must be an anchored exact match, got %q", issuer)
+	}
+	if sr := regexp.MustCompile(subject); !sr.MatchString(wantSubject) || sr.MatchString(wantSubject+"0") {
+		t.Errorf("subject must be an anchored exact match, got %q", subject)
 	}
 }
 
