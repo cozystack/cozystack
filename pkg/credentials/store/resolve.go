@@ -15,11 +15,9 @@ import (
 )
 
 // ResolveAccounts resolves the tenant accounts an application declares from
-// its values with the kind's schema defaults applied. Stored values carry no
+// its values with the kind's schema defaults applied: stored values carry no
 // defaults, and a Static account switched on by a defaulted flag would
-// otherwise go unseeded. The API resolves accounts this way on every write,
-// and the ApplicationDefinition reconciler when it brings a release's
-// valuesFrom in line with its definition.
+// otherwise go unseeded.
 func ResolveAccounts(block *cozyv1alpha1.ApplicationDefinitionCredentials, schema *structuralschema.Structural, values *apiextv1.JSON) ([]account.Account, error) {
 	if block == nil {
 		return nil, nil

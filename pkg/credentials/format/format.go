@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package format turns a password into the value an engine stores to check
-// it, and generates the passwords. It knows formats and no engines: a kind
-// names one of these in the credentials block of its ApplicationDefinition,
-// and the migration tooling imports the same functions, so the API and the
-// migration write the same bytes.
+// it, and generates the passwords. The migration tooling imports it too, so a
+// migrated release and a mint store the same form.
 package format
 
 import (
@@ -95,9 +93,7 @@ func Encode(name, password string) (string, error) {
 	case MySQLNative:
 		return encodeMySQLNative(password), nil
 	case SHA256:
-		// Unsalted by the engine's choice: ClickHouse checks a login against
-		// password_sha256_hex and accepts no other form. The 32-character
-		// random password behind it is what makes the digest safe to store.
+		// Unsalted: ClickHouse's password_sha256_hex accepts no other form.
 		sum := sha256.Sum256([]byte(password))
 		return hex.EncodeToString(sum[:]), nil
 	case Plaintext:
@@ -133,10 +129,8 @@ func hmacSHA256(key []byte, message string) []byte {
 	return mac.Sum(nil)
 }
 
-// encodeMySQLNative is MariaDB's PASSWORD(): SHA-1 of SHA-1, unsalted, which
-// the mysql_native_password plugin stores and checks against and accepts in no
-// other form. The 32-character random password behind it is what makes the
-// digest safe to store.
+// encodeMySQLNative is MariaDB's PASSWORD(): SHA-1 of SHA-1, unsalted, the
+// only form mysql_native_password accepts.
 func encodeMySQLNative(password string) string {
 	first := sha1.Sum([]byte(password))
 	second := sha1.Sum(first[:])

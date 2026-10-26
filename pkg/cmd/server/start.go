@@ -289,10 +289,8 @@ func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmRelea
 	}
 	resourceConfig := &config.ResourceConfig{}
 	for _, crd := range owned {
-		// A credentials block the API cannot honour, declaring a format or a
-		// source kind that is not built or a format it does not know, leaves
-		// the kind unserved rather than served with passwords it cannot
-		// issue, as a kind with an invalid name schema refuses writes.
+		// A block the API cannot honour leaves the kind unserved; see
+		// account.Validate.
 		if err := account.Validate(crd.Spec.Credentials); err != nil {
 			fmt.Printf("Skipping ApplicationDefinition %q: credentials block cannot be served: %v\n", crd.Name, err)
 			continue

@@ -92,10 +92,9 @@ func SplitCredentialName(name string) (release, mapped string, ok bool) {
 	return release, mapped, true
 }
 
-// Validate reports whether the API can serve a kind with this block. A format
+// Validate reports whether the API can serve a kind with this block: a format
 // or a source kind that is declared but not built, an unknown built-in format,
-// or a source missing the field its kind needs, refuses the whole kind, as a
-// kind with an invalid name schema is refused today.
+// or a source missing the field its kind needs, refuses the whole kind.
 func Validate(c *cozyv1alpha1.ApplicationDefinitionCredentials) error {
 	if c == nil {
 		return nil

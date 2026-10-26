@@ -63,9 +63,7 @@ spec:
                 - singular
                 type: object
               credentials:
-                description: |-
-                  Credentials declares the kind's accounts and how the API stores their
-                  passwords. Its presence converts the kind to platform-minted credentials.
+                description: Credentials converts the kind to platform-minted credentials.
                 properties:
                   accounts:
                     description: |-

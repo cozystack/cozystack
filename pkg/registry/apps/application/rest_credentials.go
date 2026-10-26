@@ -29,11 +29,8 @@ func (r *REST) Credentials() *cozyv1alpha1.ApplicationDefinitionCredentials {
 	return r.credentials
 }
 
-// AccountsOf resolves the tenant accounts a HelmRelease declares, from its
-// values with the kind's schema defaults applied. The stored values carry no
-// defaults, and a Static account switched on by a defaulted flag would
-// otherwise go unseeded. It is what the credentials registry asks on a mint of
-// an account whose Secret is missing.
+// AccountsOf resolves the tenant accounts a HelmRelease declares; the
+// credentials registry asks it on a mint of an account whose Secret is missing.
 func (r *REST) AccountsOf(_ context.Context, hr *helmv2.HelmRelease) ([]account.Account, error) {
 	return r.accountsOf(hr.Spec.Values)
 }
