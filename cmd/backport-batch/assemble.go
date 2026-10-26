@@ -394,6 +394,11 @@ func (a *app) publish(b *batch, branch, head, title, body string, rebuilt bool) 
 	if b.pr != nil && b.pr.Head.Ref != branch {
 		return fmt.Errorf("the open batch pull request #%d is on %s; continue it with --onto %s", b.pr.Number, b.pr.Head.Ref, b.prHead)
 	}
+	// A body without the block was written by hand, and the tool's would
+	// replace it whole, title included; such a batch is the maintainer's.
+	if b.pr != nil && !strings.Contains("\n"+strings.ReplaceAll(b.pr.Body, "\r\n", "\n")+"\n", "\n"+deferredFence+"\n") {
+		return fmt.Errorf("batch pull request #%d has no %s block, so backport-batch did not write it; merge or close it, and the next run opens a batch of its own", b.pr.Number, deferredFence)
+	}
 	if head == b.lineHead {
 		if rebuilt {
 			return fmt.Errorf("without what is deferred, %s carries nothing beyond %s; close batch pull request #%d instead", branch, b.line.branch(), b.pr.Number)

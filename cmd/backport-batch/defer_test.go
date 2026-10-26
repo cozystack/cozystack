@@ -229,7 +229,7 @@ func TestDeferLeasesTheHeadItRebuilt(t *testing.T) {
 	f.git("push", "-q", "origin", "HEAD:refs/heads/"+batchBranch1)
 	f.git("switch", "-q", "main")
 
-	pr := f.batchPR(90, "release-1.1", batchBranch1, "")
+	pr := f.batchPR(90, "release-1.1", batchBranch1, gh.prs[0].Body)
 	a := &app{gh: gh}
 	b := &batch{line: l, lineHead: lineHead, pr: &pr, prHead: head}
 	err := a.publish(b, batchBranch1, rebuilt, "title", "body", true)
@@ -294,6 +294,30 @@ func TestDeferRefusesAMerge(t *testing.T) {
 	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "x", "--push")
 	if code != 2 || !strings.Contains(stderr, "carries merge commit") {
 		t.Errorf("run --defer over a merge = %d, want a refusal:\n%s", code, stderr)
+	}
+}
+
+// A batch pull request whose body backport-batch did not write is never
+// rewritten, nor its branch pushed: it is a maintainer's.
+func TestPublishLeavesAHandWrittenBatch(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	gh := &fakeGH{}
+	head := openBatch(t, f, gh)
+	gh.prs[0].Body = "Picked by hand: #5."
+	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	for _, args := range [][]string{
+		{"--continue", "--push"},
+		{"--defer", "5", "--reason", "x", "--push"},
+	} {
+		code, _, stderr := f.exec(gh, append([]string{"run", "--line", "release-1.1"}, args...)...)
+		if code != 2 || !strings.Contains(stderr, "backport-batch did not write it") {
+			t.Errorf("run %q on a hand-written batch = %d, want a refusal:\n%s", args, code, stderr)
+		}
+	}
+	if got := f.remoteHead(batchBranch1); got != head || len(gh.edited) != 0 {
+		t.Errorf("the batch moved to %.12s and %q were edited, want it left alone", got, gh.edited)
 	}
 }
 
