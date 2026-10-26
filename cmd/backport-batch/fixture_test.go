@@ -70,6 +70,7 @@ func newFixture(t *testing.T) *fixture {
 	f.git("remote", "add", "origin", f.remote)
 	f.write("README.md", "seed\n")
 	f.write("chart/values.yaml", "replicas: 1\nimage: app:1\n")
+	f.write(policyPage, policyWith(""))
 	f.git("add", "-A")
 	f.git("commit", "-q", "-m", "chore: seed")
 	f.git("push", "-q", "origin", "main")
@@ -277,4 +278,15 @@ func (f *fixture) subjects(base, branch string) []string {
 		return nil
 	}
 	return strings.Split(out, "\n")
+}
+
+// policyWith is a policy page whose start block lists entries.
+func policyWith(entries string) string {
+	return "## Backports\n\n" + policyFence + "\n# release-X.Y: YYYY-MM-DD\n" + entries + "```\n"
+}
+
+// setPolicy commits a policy page with entries onto main.
+func (f *fixture) setPolicy(entries string) {
+	f.t.Helper()
+	f.squash(9000, "docs(release): set the policy", "", map[string]string{policyPage: policyWith(entries)})
 }

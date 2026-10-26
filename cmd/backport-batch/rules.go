@@ -33,6 +33,9 @@ const (
 	ruleNewer    = 6
 	// Not a rule of the policy: the backport/skip override.
 	ruleSkipLabel = 100
+	// Rule 1 for a line that started under the policy after it branched:
+	// merged before that start.
+	ruleBeforeStart = 101
 )
 
 // Rule 4 as paths in this tree.
@@ -87,10 +90,10 @@ func typeRule(s string) string {
 	switch {
 	case !ok:
 		return "the title is not a Conventional Commits title"
-	case t.typ != "fix" && t.typ != "security":
+	case !slices.Contains(takenTypes, t.typ):
 		return "type " + t.typ
-	case slices.Contains(t.scopes, "deps"):
-		return "scope deps"
+	case slices.ContainsFunc(t.scopes, func(s string) bool { return slices.Contains(excludedScopes, s) }):
+		return "an excluded scope"
 	}
 	return ""
 }

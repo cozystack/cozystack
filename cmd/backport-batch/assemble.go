@@ -96,7 +96,7 @@ func (a *app) run(args []string) int {
 		return a.fail(err)
 	}
 
-	r := &report{line: l, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other)}
+	r := &report{line: l, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other), start: b.start}
 	for _, v := range b.verdicts {
 		if v.rule != 0 {
 			r.skipped[v.rule] = append(r.skipped[v.rule], v)

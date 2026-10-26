@@ -174,7 +174,7 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sources := xSources(msgs[commit])
+	sources := xSources(msgs[commit].message)
 	if len(sources) == 0 {
 		return fmt.Sprintf("%.12s carries no (cherry picked from commit %s) line in its trailers", commit, v.o.merge), nil
 	}

@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -239,7 +240,7 @@ func prTitle(l line, date string) string {
 }
 
 // skipRules are the rules a skipped original is reported under, in order.
-var skipRules = []int{ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer}
+var skipRules = []int{ruleBeforeStart, ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer}
 
 // report is what one run put on the batch branch and what it left out.
 type report struct {
@@ -251,10 +252,13 @@ type report struct {
 	other    int
 	// overrides are the originals a backport/ label kept out or let in.
 	overrides []*verdict
+	start     time.Time
 }
 
 func (r *report) ruleTitle(rule int) string {
 	switch rule {
+	case ruleBeforeStart:
+		return "Rule 1, merged before " + codeSpan(r.line.branch()) + " started under the policy on " + r.start.Format(time.DateOnly)
 	case ruleOnLine:
 		return "Rule 1, already on " + codeSpan(r.line.branch())
 	case ruleType:

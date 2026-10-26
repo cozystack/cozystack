@@ -152,7 +152,7 @@ func readPicks(head, base string) (*history, error) {
 		return nil, err
 	}
 	for _, oid := range oids {
-		msg := msgs[oid]
+		msg := msgs[oid].message
 		for _, source := range xSources(msg) {
 			h.picks = append(h.picks, pickRef{source: source, commit: oid})
 		}

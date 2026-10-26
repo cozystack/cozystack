@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -139,13 +140,20 @@ func revList(args ...string) ([]string, error) {
 	return shas, nil
 }
 
-// commitMessages reads the messages of commits through one cat-file --batch,
-// whose output gives each object's length before its content: nothing inside
-// a message, a NUL or a line shaped like a header included, can pass for the
-// start of the next commit. A message ends at its first NUL, where git log
-// ends it, so nothing hidden from a reader of the log counts here.
-func commitMessages(shas []string) (map[string]string, error) {
-	msgs := map[string]string{}
+// commitObject is what the batch reads of a commit: its message, and when it
+// was committed, which for a merge GitHub made is when it merged.
+type commitObject struct {
+	message   string
+	committed time.Time
+}
+
+// commitMessages reads commits through one cat-file --batch, whose output
+// gives each object's length before its content: nothing inside a message, a
+// NUL or a line shaped like a header included, can pass for the start of the
+// next commit. A message ends at its first NUL, where git log ends it, so
+// nothing hidden from a reader of the log counts here.
+func commitMessages(shas []string) (map[string]commitObject, error) {
+	msgs := map[string]commitObject{}
 	if len(shas) == 0 {
 		return msgs, nil
 	}
@@ -173,9 +181,34 @@ func commitMessages(shas []string) (map[string]string, error) {
 		if _, err := io.ReadFull(r, body); err != nil || body[size] != '\n' {
 			return nil, fmt.Errorf("git cat-file --batch: short object %s", want)
 		}
-		_, msg, _ := strings.Cut(string(body[:size]), "\n\n")
+		headers, msg, _ := strings.Cut(string(body[:size]), "\n\n")
 		msg, _, _ = strings.Cut(msg, "\x00")
-		msgs[want] = msg
+		committed, err := committerTime(headers)
+		if err != nil {
+			return nil, fmt.Errorf("commit %s: %w", want, err)
+		}
+		msgs[want] = commitObject{message: msg, committed: committed}
 	}
 	return msgs, nil
+}
+
+// committerTime reads the committer line of a commit's headers:
+// "committer Name <email> <unix seconds> <zone>".
+func committerTime(headers string) (time.Time, error) {
+	for ln := range strings.Lines(headers) {
+		rest, ok := strings.CutPrefix(strings.TrimRight(ln, "\n"), "committer ")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(rest[strings.LastIndexByte(rest, '>')+1:])
+		if len(f) != 2 {
+			break
+		}
+		secs, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil {
+			break
+		}
+		return time.Unix(secs, 0).UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("no readable committer line")
 }

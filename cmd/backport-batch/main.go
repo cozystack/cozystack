@@ -31,9 +31,9 @@ import (
 const usageText = `Assemble and check the automatic backport batch for a release line.
 
 Usage:
-  backport-batch run   --line release-X.Y [--onto SHA] [--date YYYY-MM-DD] [--push]
-  backport-batch check --line release-X.Y
-  backport-batch fold  --line release-X.Y --original N --commit SHA
+  backport-batch run   --line release-X.Y [--onto SHA] [--date YYYY-MM-DD] [--push] [--policy REF]
+  backport-batch check --line release-X.Y [--policy REF]
+  backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        origin/<line>, or on top of the pushed batch branch whose head is
@@ -44,7 +44,8 @@ check  Exits 1 while a change the policy takes is neither on the line nor on
 fold   Checks a hand-made conflict resolution commit for the open batch PR
        and prints ok or why not, exiting 0 or 1. It never commits.
 
-The policy is docs/release/backports.md.
+The policy is docs/release/backports.md. Each command reads the day each line
+started under it from that page on origin/main, or on --policy REF.
 `
 
 const (
@@ -58,6 +59,8 @@ type app struct {
 	stdout io.Writer
 	stderr io.Writer
 	now    func() time.Time
+	// policyRef is where the policy page is read from; origin/main when empty.
+	policyRef string
 }
 
 func main() {
@@ -102,6 +105,7 @@ func (a *app) flags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	fs.Usage = func() { fmt.Fprint(a.stderr, usageText) }
+	fs.StringVar(&a.policyRef, "policy", "", "ref to read "+policyPage+" from (default: origin/main)")
 	return fs
 }
 
@@ -152,6 +156,8 @@ type batch struct {
 	verdicts []*verdict
 	pr       *pullRequest
 	prHead   string
+	// start is when the line started under the policy, zero for its fork point.
+	start time.Time
 }
 
 func fetch() error {
@@ -173,6 +179,20 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.mainHead, err = resolve("refs/remotes/" + remote + "/main"); err != nil {
 		return nil, err
 	}
+	policyAt := b.mainHead
+	if a.policyRef != "" {
+		if strings.HasPrefix(a.policyRef, "-") {
+			return nil, fmt.Errorf("--policy %q is not a ref", a.policyRef)
+		}
+		if policyAt, err = resolve(a.policyRef); err != nil {
+			return nil, err
+		}
+	}
+	lineStarts, err := readPolicy(policyAt)
+	if err != nil {
+		return nil, err
+	}
+	b.start = lineStarts[l.branch()]
 	out, err := git("merge-base", "--end-of-options", b.mainHead, b.lineHead)
 	if err != nil {
 		return nil, fmt.Errorf("%s shares no history with main: %w", l.branch(), err)
@@ -223,7 +243,7 @@ func (a *app) prepare(l line) (*batch, error) {
 		}
 	}
 	for _, o := range merges {
-		v, err := judge(o, labels[o.number], lineHist, b.newer, newerHist)
+		v, err := judge(o, labels[o.number], b.start, lineHist, b.newer, newerHist)
 		if err != nil {
 			return nil, err
 		}
@@ -252,13 +272,19 @@ func overrides(gh github) (map[int]string, error) {
 }
 
 // judge applies rules 2, 3, 4, 1 and 6, in the order of what each costs to
-// read; the first that keeps the original out is the one reported.
-// backport/skip keeps it out whatever the rules say, and backport/include
-// lifts rules 2 to 4 but not what the line or the newer line carries.
-func judge(o *original, label string, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
+// read; the first that keeps the original out is the one reported. A line that
+// started under the policy after it branched takes nothing merged before that
+// start. backport/skip keeps an original out whatever the rules say, and
+// backport/include lifts the start and rules 2 to 4, but not what the line or
+// the newer line carries.
+func judge(o *original, label string, start time.Time, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
 	v := &verdict{o: o, label: label}
 	if label == labelSkip {
 		v.rule, v.reason = ruleSkipLabel, labelSkip
+		return v, nil
+	}
+	if o.merged.Before(start) && label != labelInclude {
+		v.rule, v.reason = ruleBeforeStart, "merged "+o.merged.Format(time.DateOnly)
 		return v, nil
 	}
 	if r := typeRule(o.title); r != "" && label != labelInclude {

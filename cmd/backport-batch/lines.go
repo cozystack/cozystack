@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -112,6 +113,7 @@ type original struct {
 	body    string
 	merge   string
 	parents int
+	merged  time.Time
 }
 
 func (o *original) url() string {
@@ -152,10 +154,10 @@ func mainMerges(base, mainHead string) ([]*original, []string, error) {
 	var other []string
 	for _, m := range list {
 		// The subject is the first paragraph, its lines joined, as git reads it.
-		msg := strings.TrimRight(msgs[m.oid], "\n")
+		msg := strings.TrimRight(msgs[m.oid].message, "\n")
 		subject, body, _ := strings.Cut(msg, "\n\n")
 		subject = strings.ReplaceAll(subject, "\n", " ")
-		o := &original{merge: m.oid, parents: m.parents}
+		o := &original{merge: m.oid, parents: m.parents, merged: msgs[m.oid].committed}
 		if pr := mergePRRE.FindStringSubmatch(subject); pr != nil {
 			o.number, _ = strconv.Atoi(pr[1])
 			body = strings.TrimLeft(body, "\n")

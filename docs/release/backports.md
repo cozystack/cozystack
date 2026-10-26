@@ -12,7 +12,7 @@ The batch takes a pull request's type from its title alone, so a fix that ships 
 
 The batch takes a pull request from `main` into release line X.Y when all of these hold:
 
-1. It merged into `main` after `release-X.Y` branched, and the line does not carry it yet.
+1. It merged into `main` after `release-X.Y` branched, or after the line started under this policy if that is later (see [Where each line starts](#where-each-line-starts)), and the line does not carry it yet.
 2. Its title type is `fix` or `security`. CI and e2e fixes count, because they keep the line's own CI working.
 3. It is not breaking: no `!` after the type or scope, and no `BREAKING CHANGE` footer.
 4. It touches no platform migrations, no `targetVersion`, nothing under `api/` and no CRDs. Those wait for the next minor. [Backporting code that touches monotonic counters](./backport-mechanics.md#backporting-code-that-touches-monotonic-counters) shows what a migration on a release line breaks.
@@ -27,10 +27,19 @@ The batch takes a pull request from `main` into release line X.Y when all of the
 
 A maintainer overrides the rules for one pull request with a label on the merged pull request on `main`:
 
-- `backport/include` takes it although rules 2 to 4 keep it out, a `feat` for instance. It still has to pick cleanly or have its conflict resolved, pass CI on the batch, and, on an older line, already be on the newer one, and a line that already carries it does not take it again.
+- `backport/include` takes it although rules 2 to 4 keep it out, a `feat` for instance, or although it merged before its line started under this policy. It still has to pick cleanly or have its conflict resolved, pass CI on the batch, and, on an older line, already be on the newer one, and a line that already carries it does not take it again.
 - `backport/skip` keeps it out although the rules take it, and `backport-batch check` stops asking for it.
 
 `backport/skip` wins when a pull request carries both. Each run reads the labels afresh, and the batch pull request lists every override and what became of it.
+
+### Where each line starts
+
+The policy applies in full from `release-1.7` on: a line released before it took effect keeps the patch content its users chose it with, so it takes only fixes merged after the policy started, and an older one only with `backport/include`. The batch reads the block below from this page, on `main`: a line it lists starts on that day, and any other line starts where it branched from `main`.
+
+```backport-policy
+# release-X.Y: YYYY-MM-DD, the day the line started under this policy
+release-1.6: 2026-10-26
+```
 
 ### Fixes that exist only on a release line
 

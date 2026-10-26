@@ -13,6 +13,8 @@ go build ./cmd/backport-batch
 
 Requires `git` and an authenticated `gh` on PATH, and a remote called `origin`. Every command fetches `origin` first. The batch runs only for the two newest `release-X.Y` lines.
 
+Every command reads the `backport-policy` block of the policy page from `origin/main`, or from the ref `--policy` names, which is how a change to the page is tried before it merges. A line the block lists takes nothing merged into `main` before the day it gives, unless the original carries `backport/include`; any other line starts at its fork point. A page without exactly one readable block stops the run with exit 2.
+
 Build the binary wherever an exit code matters: `go run` turns any non-zero exit into its own `1`, so under it a check that could not be completed looks the same as one that found something missing.
 
 ### run
