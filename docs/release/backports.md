@@ -1,6 +1,6 @@
 ## Backports
 
-Backports are automatic. Everything that can go into a patch release goes in, and nobody decides it pull request by pull request: nobody requests a backport, nobody labels for one, and contributors never open backport pull requests. A batch job takes the fixes merged into `main` and cherry-picks them onto each supported `release-X.Y` line, following the rules on this page.
+Backports are automatic. Everything that can go into a patch release goes in, and nobody decides it pull request by pull request: nobody requests a backport, and contributors never open backport pull requests. The one exception is a maintainer override, below. A batch job takes the fixes merged into `main` and cherry-picks them onto each supported `release-X.Y` line, following the rules on this page.
 
 ### Getting a fix into a patch release
 
@@ -21,7 +21,16 @@ The batch takes a pull request from `main` into release line X.Y when all of the
 
 ### What never goes into a patch release
 
-`feat`, `chore` and `docs` pull requests, and dependency bumps (scope `deps`), never go into a patch release. They ship with the next minor. If a class of fixes should also wait for a minor, it gets a new rule on this page; nobody decides it per pull request.
+`feat`, `chore` and `docs` pull requests, and dependency bumps (scope `deps`), never go into a patch release. They ship with the next minor. If a class of fixes should also wait for a minor, it gets a new rule on this page; a single pull request that the rules get wrong is what the overrides below are for.
+
+### Maintainer overrides
+
+A maintainer overrides the rules for one pull request with a label on the merged pull request on `main`:
+
+- `backport/include` takes it although rules 2 to 4 keep it out, a `feat` for instance. It still has to pick cleanly or have its conflict resolved, pass CI on the batch, and, on an older line, already be on the newer one, and a line that already carries it does not take it again.
+- `backport/skip` keeps it out although the rules take it, and `backport-batch check` stops asking for it.
+
+`backport/skip` wins when a pull request carries both. Each run reads the labels afresh, and the batch pull request lists every override and what became of it.
 
 ### Fixes that exist only on a release line
 

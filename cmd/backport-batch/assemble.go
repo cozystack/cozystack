@@ -126,6 +126,11 @@ func (a *app) run(args []string) int {
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
 		}
 	}
+	for _, v := range b.verdicts {
+		if v.label != "" {
+			r.overrides = append(r.overrides, v)
+		}
+	}
 	head, err := resolve("HEAD")
 	if err != nil {
 		return a.fail(err)

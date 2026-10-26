@@ -175,10 +175,16 @@ type fakeGH struct {
 	err     error
 	perms   map[string]string
 	permErr error
+	labels  map[string][]int
+	listErr error
 	asked   []string
 	created []string
 	edited  []string
 	bodies  []string
+}
+
+func (g *fakeGH) labelled(label string) ([]int, error) {
+	return g.labels[label], g.listErr
 }
 
 // permission answers write for the fixture's maintainer and read for anyone

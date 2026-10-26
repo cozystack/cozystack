@@ -31,6 +31,8 @@ const (
 	ruleBreaking = 3
 	ruleTouches  = 4
 	ruleNewer    = 6
+	// Not a rule of the policy: the backport/skip override.
+	ruleSkipLabel = 100
 )
 
 // Rule 4 as paths in this tree.

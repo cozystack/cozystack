@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -248,6 +249,8 @@ type report struct {
 	deferred []pick
 	skipped  map[int][]*verdict
 	other    int
+	// overrides are the originals a backport/ label kept out or let in.
+	overrides []*verdict
 }
 
 func (r *report) ruleTitle(rule int) string {
@@ -290,6 +293,12 @@ func (r *report) what(details map[int]bool) string {
 			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
 		}
 	}
+	if len(r.overrides) > 0 {
+		b.WriteString("\n### Maintainer overrides\n\n")
+		for _, v := range r.overrides {
+			fmt.Fprintf(&b, "- %s %s: %s, %s\n", prLink(v.o.number), titleSpan(v.o.title), codeSpan(v.label), r.outcome(v))
+		}
+	}
 	b.WriteString("\n### Skipped\n\n")
 	for _, rule := range skipRules {
 		items := r.skipped[rule]
@@ -317,6 +326,21 @@ func (r *report) what(details map[int]bool) string {
 	}
 	b.WriteString("\n" + deferredBlock(r.line, r.deferred) + "\n")
 	return b.String()
+}
+
+// outcome is what became of an original a label overrode.
+func (r *report) outcome(v *verdict) string {
+	switch {
+	case v.label == labelSkip:
+		return "left out"
+	case slices.Contains(r.onBranch, v):
+		return "on this branch"
+	case slices.ContainsFunc(r.deferred, func(p pick) bool { return p.v == v }):
+		return "a deferred conflict"
+	case v.rule != 0:
+		return "skipped by rule " + strconv.Itoa(v.rule) + ", " + titleSpan(v.reason)
+	}
+	return "not picked"
 }
 
 func (r *report) notes() string {

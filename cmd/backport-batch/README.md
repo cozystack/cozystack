@@ -33,6 +33,10 @@ Exits 1 and prints the URL of every pull request the rules take that is neither 
 
 Checks a hand-made resolution of a deferred conflict before it is pushed onto the batch. The commit has to have one parent, the head of the open batch pull request; to touch only files the original touched; to change something; and to name the original's merge commit, or one of its commits, in a `(cherry picked from commit …)` line, and nothing else. `git cherry-pick -x -m 1 <merge commit>` on the batch head, with the conflict resolved, produces exactly that. fold prints `ok` and exits 0, or prints why not and exits 1. It never commits or pushes; push one checked commit at a time, since the next one has to sit on the new head.
 
+## Maintainer overrides
+
+Every command reads the merged pull requests that carry `backport/include` or `backport/skip`, through GitHub search, which answers at most 1000 per label; a listing that long is an error rather than a complete answer. `backport/skip` keeps a pull request out whatever the rules say, and wins over `backport/include`, which lifts rules 2 to 4 and nothing else: what the line already carries and, on the older line, what the newer one does not carry yet still decide. The batch pull request lists every overridden original and what became of it. Adding a label takes triage access to the repository, which is the trust the labels rest on; who added one is not checked.
+
 ## What counts as already there
 
 An original is on a line when any of these holds, and the batch does not pick it again:

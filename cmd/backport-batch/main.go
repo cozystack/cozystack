@@ -137,6 +137,8 @@ type verdict struct {
 	changes []fileChange
 	// onBatch is the commit of the open batch pull request that picks it.
 	onBatch string
+	// label is the maintainer override the original carries, if any.
+	label string
 }
 
 // batch is everything read about a line before anything is written.
@@ -195,6 +197,10 @@ func (a *app) prepare(l line) (*batch, error) {
 			return nil, err
 		}
 	}
+	labels, err := overrides(a.gh)
+	if err != nil {
+		return nil, err
+	}
 	prs, err := a.gh.openPulls(l.branch())
 	if err != nil {
 		return nil, err
@@ -217,7 +223,7 @@ func (a *app) prepare(l line) (*batch, error) {
 		}
 	}
 	for _, o := range merges {
-		v, err := judge(o, lineHist, b.newer, newerHist)
+		v, err := judge(o, labels[o.number], lineHist, b.newer, newerHist)
 		if err != nil {
 			return nil, err
 		}
@@ -229,15 +235,37 @@ func (a *app) prepare(l line) (*batch, error) {
 	return b, nil
 }
 
+// overrides maps each pull request merged into main that carries a backport/
+// label to the one that decides; backport/skip wins over backport/include.
+func overrides(gh github) (map[int]string, error) {
+	labels := map[int]string{}
+	for _, label := range []string{labelInclude, labelSkip} {
+		numbers, err := gh.labelled(label)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range numbers {
+			labels[n] = label
+		}
+	}
+	return labels, nil
+}
+
 // judge applies rules 2, 3, 4, 1 and 6, in the order of what each costs to
 // read; the first that keeps the original out is the one reported.
-func judge(o *original, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
-	v := &verdict{o: o}
-	if r := typeRule(o.title); r != "" {
+// backport/skip keeps it out whatever the rules say, and backport/include
+// lifts rules 2 to 4 but not what the line or the newer line carries.
+func judge(o *original, label string, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
+	v := &verdict{o: o, label: label}
+	if label == labelSkip {
+		v.rule, v.reason = ruleSkipLabel, labelSkip
+		return v, nil
+	}
+	if r := typeRule(o.title); r != "" && label != labelInclude {
 		v.rule, v.reason = ruleType, r
 		return v, nil
 	}
-	if r := breakingRule(o.title, o.body); r != "" {
+	if r := breakingRule(o.title, o.body); r != "" && label != labelInclude {
 		v.rule, v.reason = ruleBreaking, r
 		return v, nil
 	}
@@ -245,13 +273,15 @@ func judge(o *original, lineHist *history, newer *line, newerHist *history) (*ve
 	if v.changes, err = changedFiles(o.merge+"^1", o.merge); err != nil {
 		return nil, err
 	}
-	r, err := touchesRule(o, v.changes)
-	if err != nil {
-		return nil, err
-	}
-	if r != "" {
-		v.rule, v.reason = ruleTouches, r
-		return v, nil
+	if label != labelInclude {
+		r, err := touchesRule(o, v.changes)
+		if err != nil {
+			return nil, err
+		}
+		if r != "" {
+			v.rule, v.reason = ruleTouches, r
+			return v, nil
+		}
 	}
 	if v.commits, err = commitsOf(o); err != nil {
 		return nil, err

@@ -22,6 +22,7 @@
 #   do-not-merge/ PR merge blockers
 #   security/     security-finding severity and status (Cozystack-specific)
 #   size/         PR size (auto-applied)
+#   backport/     maintainer overrides of the backport batch rules (Cozystack-specific)
 #
 # `aliases:` lets EndBug/label-sync rename existing labels without losing
 # references on already-tagged issues and PRs.
@@ -411,3 +412,17 @@
 - name: security/fixed
   color: '0e8a16'
   description: Fix released
+
+# ──────────────────────────────────────────────
+# backport/ — maintainer overrides of the backport batch rules
+# ──────────────────────────────────────────────
+
+# Read by cmd/backport-batch from the merged pull request on main;
+# docs/release/backports.md describes both.
+- name: backport/include
+  color: 'c2e0c6'
+  description: The backport batch takes this PR though rules 2-4 keep it out; it must still pick and pass CI
+
+- name: backport/skip
+  color: 'f9d0c4'
+  description: The backport batch keeps this PR out although the rules take it

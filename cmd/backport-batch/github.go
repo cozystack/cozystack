@@ -23,9 +23,20 @@ import (
 	"strconv"
 )
 
-// openPullsCap is the page size of the one listing the tool makes. The REST
+// openPullsCap is the page size of the open pull request listing. The REST
 // listing stops at it in silence, so a full page is an error, not an answer.
 const openPullsCap = 100
+
+// searchResultCap is the most results GitHub search returns for one query,
+// however far it is paginated. gh pr list answers a --label filter through
+// search, so a listing that long has to be taken as cut short.
+const searchResultCap = 1000
+
+// The maintainer overrides of the rules, read from the original pull request.
+const (
+	labelInclude = "backport/include"
+	labelSkip    = "backport/skip"
+)
 
 var (
 	batchBranchRE = regexp.MustCompile(`^backport-batch/(release-\d+\.\d+)-(\d{8})$`)
@@ -64,6 +75,8 @@ type github interface {
 	// permission is login's permission on the repository as GitHub's
 	// legacy field gives it: admin, write, read or none.
 	permission(login string) (string, error)
+	// labelled lists the pull requests merged into main that carry label.
+	labelled(label string) ([]int, error)
 	createPull(base, head, title, bodyFile string) error
 	editPull(number int, title, bodyFile string) error
 }
@@ -101,6 +114,28 @@ func (ghCLI) permission(login string) (string, error) {
 		return "", fmt.Errorf("reading %s's permission: %w", login, err)
 	}
 	return answer.Permission, nil
+}
+
+func (ghCLI) labelled(label string) ([]int, error) {
+	out, err := capture("gh", "pr", "list", "--base", "main", "--state", "merged", "--label", label,
+		"--limit", strconv.Itoa(searchResultCap), "--json", "number")
+	if err != nil {
+		return nil, err
+	}
+	var prs []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return nil, fmt.Errorf("reading the pull requests labelled %s: %w", label, err)
+	}
+	if len(prs) >= searchResultCap {
+		return nil, fmt.Errorf("%d pull requests carry %s, as many as GitHub search returns, so the list may be cut short", len(prs), label)
+	}
+	numbers := make([]int, 0, len(prs))
+	for _, pr := range prs {
+		numbers = append(numbers, pr.Number)
+	}
+	return numbers, nil
 }
 
 func (ghCLI) createPull(base, head, title, bodyFile string) error {
