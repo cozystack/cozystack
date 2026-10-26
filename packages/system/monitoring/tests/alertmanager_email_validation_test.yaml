@@ -251,3 +251,10 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are template"
+
+  - it: rejects a template given as a boolean instead of being dropped by the default
+    set:
+      alerta.alerts.email.template: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.template must be the text of an Alertmanager template file, got a bool"

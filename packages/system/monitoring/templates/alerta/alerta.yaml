@@ -11,7 +11,11 @@
 {{- $emailSeverities := $email.severities | default (list "critical" "major") }}
 {{- $emailPasswordSecret := "alertmanager-email-password" }}
 {{- $emailTemplateConfigMap := "alertmanager-email-template" }}
-{{- $emailTemplate := $email.template | default "" }}
+{{- $emailTemplateRaw := index $email "template" }}
+{{- if not (or (kindIs "string" $emailTemplateRaw) (kindIs "invalid" $emailTemplateRaw)) }}
+{{- fail (printf "alerta.alerts.email.template must be the text of an Alertmanager template file, got a %s" (kindOf $emailTemplateRaw)) }}
+{{- end }}
+{{- $emailTemplate := $emailTemplateRaw | default "" }}
 {{- $emailSet := list }}
 {{- range $field := list "to" "from" "smarthost" "authUsername" "repeatInterval" "alertnames" "severities" "template" }}
 {{- if index $email $field }}{{ $emailSet = append $emailSet $field }}{{ end }}
@@ -104,9 +108,6 @@
 {{- end }}
 {{- end }}
 {{- if $emailTemplate }}
-{{- if not (kindIs "string" $emailTemplate) }}
-{{- fail (printf "alerta.alerts.email.template must be the text of an Alertmanager template file, got a %s" (kindOf $emailTemplate)) }}
-{{- end }}
 {{- if not (regexMatch "\\{\\{-?\\s*define\\s" $emailTemplate) }}
 {{- fail "alerta.alerts.email.template must define named templates, such as email.default.subject and email.default.html, because Alertmanager only uses the file through the names it defines" }}
 {{- end }}
