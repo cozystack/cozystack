@@ -116,6 +116,13 @@ The `resourceQuotas` parameter allows you to limit resources available to the te
 - `secrets` - Maximum number of Secrets
 - `persistentvolumeclaims` - Maximum number of PVCs
 
+**GPU budgets** (limit the GPUClaims of the tenant and its whole subtree; never rendered into the namespace `ResourceQuota`):
+
+- `gpu.cozystack.io/<class>` - GPUs of one GPUClass, such as `gpu.cozystack.io/l40s-24c`
+- `gpu.cozystack.io/total` - GPUs of every class together; `total` cannot be a class name
+
+A child tenant's GPU key only adds a limit: it never lifts an ancestor's. A tenant whose `resourceQuotas` holds only GPU budgets gets no `ResourceQuota` or `LimitRange`. vGPU classes also need the `gpu.vgpu` entitlement.
+
 **Example:**
 ```yaml
 resourceQuotas:
