@@ -21,11 +21,8 @@ import (
 )
 
 // ApplicationDefinitionCredentials declares the accounts of an application
-// kind and how the Cozystack API stores their passwords. Its presence is what
-// converts the kind: the API seeds one account Secret per account when an
-// application is written, serves a core.cozystack.io Credential per account,
-// and mints a password on request. The chart renders only references to the
-// account Secrets and never a password. See
+// kind and how the Cozystack API stores their passwords. Its presence converts
+// the kind to platform-minted credentials. See
 // design-proposals/user-secrets-api in cozystack/community.
 type ApplicationDefinitionCredentials struct {
 	// Format is how a password is stored in the account Secret: the verifier the
@@ -62,8 +59,7 @@ const (
 	// CredentialFormatBuiltIn names a function compiled into the API.
 	CredentialFormatBuiltIn CredentialFormatKind = "BuiltIn"
 	// CredentialFormatWebhook names an endpoint the API calls with the
-	// plaintext. Declared so a block can carry it without a schema change; the
-	// API refuses to serve a kind that uses it until the call is implemented.
+	// plaintext. Declared, not served yet.
 	CredentialFormatWebhook CredentialFormatKind = "Webhook"
 )
 

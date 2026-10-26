@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package store writes and removes account Secrets for the Cozystack API: it
-// seeds one per account when an application is written, prunes the ones a
-// write removes, and builds the valuesFrom entries that carry a stored value
-// into a chart whose operator cannot read a Secret. The mint itself lives in
-// the credential registry; this package is what the application registry
-// needs around a HelmRelease write.
+// Package store writes and removes account Secrets around a HelmRelease write:
+// it seeds one per account, prunes the ones a write removes, and builds the
+// valuesFrom entries that carry a stored value into a chart whose operator
+// cannot read a Secret.
 package store
 
 import (
@@ -88,11 +86,10 @@ func SeedSecret(app App, acc account.Account, owner *metav1.OwnerReference, now 
 }
 
 // Theirs reports whether an existing Secret is the application's own account
-// Secret for the account: it carries the account marker, holds the same
-// username, and is owned by the live HelmRelease. On a create no HelmRelease
-// exists yet, so a Secret that any HelmRelease owns is left over from a
-// deleted application of the same name and is replaced, so the account gets a
-// new identity, while one nobody owns is from a create that did not finish.
+// Secret: marker, same username, owned by the live HelmRelease. With no
+// HelmRelease yet (a create), one any HelmRelease owns is left from a deleted
+// application of the same name and is replaced, so the account gets a new
+// identity; one nobody owns is from a create that did not finish.
 func Theirs(sec *corev1.Secret, acc account.Account, owner *metav1.OwnerReference) bool {
 	if !account.IsAccountSecret(sec) || string(sec.Data[account.UsernameKey]) != acc.Username {
 		return false
@@ -214,12 +211,10 @@ func DigestKey(username string) string {
 	return "u" + hex.EncodeToString(sum[:])
 }
 
-// ValuesFrom returns the HelmRelease valuesFrom entries of an application:
-// the platform values first, as every release has them, then one entry per
-// account for a kind with a valuesPath, reading the Secret's stored value into
-// <valuesPath>.<DigestKey>. The API and the ApplicationDefinition reconciler
-// both build the list here, so a release created before the block appeared
-// gets the same entries on its next reconcile.
+// ValuesFrom returns the HelmRelease valuesFrom entries of an application: the
+// platform values, then for a kind with a valuesPath one entry per account
+// reading the Secret's stored value into <valuesPath>.<DigestKey>. The API and
+// the ApplicationDefinition reconciler must build the same list.
 func ValuesFrom(block *cozyv1alpha1.ApplicationDefinitionCredentials, release string, accounts []account.Account) []helmv2.ValuesReference {
 	refs := []helmv2.ValuesReference{{Kind: "Secret", Name: "cozystack-values"}}
 	if block == nil || block.ValuesPath == "" {
