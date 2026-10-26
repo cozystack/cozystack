@@ -62,7 +62,7 @@ go build ./cmd/backport-batch
 
 ### Backporting code that touches monotonic counters
 
-The batch never takes a change like this: rule 4 in [Backports](./backports.md) holds migrations, `targetVersion`, `api/` and CRDs for the next minor. What follows is why, and what a maintainer has to do when a migration must reach a release line anyway.
+The batch never takes a change like this: rule 4 in [Backports](./backports.md) holds migrations, `targetVersion`, sizeable API changes and CRDs for the next minor. What follows is why, and what a maintainer has to do when a migration must reach a release line anyway.
 
 Migrations are the canonical case. `packages/core/platform/images/migrations/run-migrations.sh` is a linear counter — it runs `seq $CURRENT_VERSION $((TARGET_VERSION - 1))` and stops if `CURRENT >= TARGET`. This creates a forward-upgrade trap. Walking through it with `release-1.2` as the maintenance branch:
 

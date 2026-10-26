@@ -266,7 +266,7 @@ func (r *report) ruleTitle(rule int) string {
 	case ruleBreaking:
 		return "Rule 3, a breaking change"
 	case ruleTouches:
-		return "Rule 4, touches platform migrations, `targetVersion`, `api/` or a CRD"
+		return "Rule 4, touches platform migrations, `targetVersion` or a CRD, or makes a sizeable API change"
 	case ruleNewer:
 		return "Rule 6, not on " + codeSpan(r.newer.branch()) + " yet"
 	}

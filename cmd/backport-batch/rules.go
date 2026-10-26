@@ -46,7 +46,9 @@ const (
 	// Where migrations.targetVersion is set; hack/check-migrations-target.sh
 	// reads it from here.
 	platformValues = "packages/core/platform/values.yaml"
-	apiDir         = "api/"
+	// A change under api/ is held back only when the API review gate calls it
+	// sizeable (apisurface.go).
+	apiDir = "api/"
 	// A file declares a CRD when a line of it is this, before or after the
 	// change. ERE for git grep.
 	crdPattern = `^[[:space:]]*kind:[[:space:]]*["']?CustomResourceDefinition["']?[[:space:]]*(#.*)?$`
@@ -144,7 +146,7 @@ func paths(changes []fileChange) []string {
 const (
 	touchesMigrations    = "platform migrations"
 	touchesTargetVersion = "targetVersion"
-	touchesAPI           = "api/"
+	touchesAPI           = "a sizeable API change"
 	touchesCRD           = "a CRD"
 )
 
@@ -153,6 +155,7 @@ const (
 func touchesRule(o *original, changes []fileChange) (string, error) {
 	hit := map[string]bool{}
 	var after, before []string
+	underAPI := false
 	for _, c := range changes {
 		p := c.path
 		switch {
@@ -165,7 +168,7 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 			}
 			hit[touchesTargetVersion] = targetVersionRE.MatchString(diff)
 		case strings.HasPrefix(p, apiDir):
-			hit[touchesAPI] = true
+			underAPI = true
 		case strings.Contains("/"+p, "/crds/"):
 			hit[touchesCRD] = true
 		}
@@ -189,9 +192,21 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 		}
 		hit[touchesCRD] = found
 	}
+	apiDetail := ""
+	if underAPI {
+		var err error
+		if apiDetail, err = sizeableAPIChange(o); err != nil {
+			return "", err
+		}
+		hit[touchesAPI] = apiDetail != ""
+	}
 	var why []string
 	for _, r := range []string{touchesMigrations, touchesTargetVersion, touchesAPI, touchesCRD} {
-		if hit[r] {
+		switch {
+		case !hit[r]:
+		case r == touchesAPI:
+			why = append(why, r+" ("+apiDetail+")")
+		default:
 			why = append(why, r)
 		}
 	}

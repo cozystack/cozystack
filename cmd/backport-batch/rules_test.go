@@ -101,7 +101,7 @@ func TestTouchesRule(t *testing.T) {
 			setup: map[string]string{platformValues: "migrations:\n  enabled: false\n  targetVersion: 60\n"},
 			files: map[string]string{platformValues: "migrations:\n  enabled: true\n  targetVersion: 60\n"},
 		},
-		{name: "api types", files: map[string]string{"api/apps/v1alpha1/types.go": "package v1alpha1\n"}, want: "api/"},
+		{name: "api types the gate sees nothing in", setup: demoAPI, files: map[string]string{"api/apps/v1alpha1/types.go": "package v1alpha1\n"}},
 		{name: "pkg/apis is not api/", files: map[string]string{"pkg/apis/apps/types.go": "package apps\n"}},
 		{name: "a crds directory", files: map[string]string{"packages/system/x/charts/x/crds/a.yaml": "kind: ConfigMap\n"}, want: "a CRD"},
 		{name: "a template declaring a CRD", files: map[string]string{"packages/system/x/templates/crd.yaml": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\n"}, want: "a CRD"},
@@ -131,9 +131,10 @@ func TestTouchesRule(t *testing.T) {
 		// another case, and there is none.
 		{name: "a file named like pathspec magic declaring a CRD", files: map[string]string{":(icase)zz-crd.yaml": "kind: CustomResourceDefinition\n"}, want: "a CRD"},
 		{
-			name:  "migration and api together",
-			files: map[string]string{migrationsDir + "61": "x\n", "api/x.go": "package x\n"},
-			want:  "platform migrations, api/",
+			name:  "a migration and a sizeable API change together",
+			setup: demoAPI,
+			files: map[string]string{migrationsDir + "61": "x\n", "api/x.go": "package x\n", demoRD: cozyrd("demo", `{"type":"object","properties":{}}`)},
+			want:  "platform migrations, a sizeable API change (breaking-change: [v1alpha1] spec: field \"size\" was removed)",
 		},
 	}
 	for i, tc := range cases {
@@ -223,5 +224,86 @@ func TestOnlySupportedLines(t *testing.T) {
 	code, _, stderr := f.exec(nil, "check", "--line", "release-0.9")
 	if code != 2 || !strings.Contains(stderr, "not a supported line") {
 		t.Errorf("check on release-0.9 = %d (%s), want 2 and a refusal", code, stderr)
+	}
+}
+
+// demoRD is an ApplicationDefinition where apigate looks for one, and demoAPI
+// the tree the API cases start from.
+const demoRD = "packages/system/demo-rd/cozyrds/demo.yaml"
+
+var demoAPI = map[string]string{
+	demoRD:                                cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string","description":"Size."}}}`),
+	"api/apps/v1alpha1/demo/types.go": "package demo\n\n// Size of it.\ntype Spec struct{ Size string }\n",
+}
+
+func cozyrd(name, schema string) string {
+	return "apiVersion: cozystack.io/v1alpha1\nkind: ApplicationDefinition\nmetadata:\n  name: " + name +
+		"\nspec:\n  application:\n    kind: " + strings.ToUpper(name[:1]) + name[1:] + "\n    plural: " + name + "s\n    singular: " + name +
+		"\n    openAPISchema: '" + schema + "'\n"
+}
+
+// Rule 4 holds back a change under api/ only when the API review gate calls it
+// sizeable: a new or removed resource or group, or a breaking schema change.
+func TestAPIGateRule(t *testing.T) {
+	typesGo := "api/apps/v1alpha1/demo/types.go"
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{name: "a description reworded", files: map[string]string{
+			demoRD:  cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string","description":"The size."}}}`),
+			typesGo: "package demo\n\n// The size.\ntype Spec struct{ Size string }\n",
+		}},
+		{name: "an optional field added", files: map[string]string{
+			demoRD:  cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string"},"zone":{"type":"string"}}}`),
+			typesGo: "package demo\n\ntype Spec struct{ Size, Zone string }\n",
+		}},
+		{name: "a field removed", files: map[string]string{
+			demoRD:  cozyrd("demo", `{"type":"object","properties":{}}`),
+			typesGo: "package demo\n\ntype Spec struct{}\n",
+		}, want: "breaking-change"},
+		{name: "a field's type changed", files: map[string]string{
+			demoRD:  cozyrd("demo", `{"type":"object","properties":{"size":{"type":"integer"}}}`),
+			typesGo: "package demo\n\ntype Spec struct{ Size int }\n",
+		}, want: "breaking-change"},
+		{name: "a field made required", files: map[string]string{
+			demoRD:  cozyrd("demo", `{"type":"object","required":["size"],"properties":{"size":{"type":"string"}}}`),
+			typesGo: "package demo\n\n// +required\ntype Spec struct{ Size string }\n",
+		}, want: "breaking-change"},
+		{name: "a resource added", files: map[string]string{
+			"packages/system/other-rd/cozyrds/other.yaml": cozyrd("other", `{"type":"object"}`),
+			"api/apps/v1alpha1/other/types.go":            "package other\n",
+		}, want: "new-resource"},
+		{name: "a resource removed", files: map[string]string{
+			demoRD:  "",
+			typesGo: "",
+		}, want: "removed"},
+		{name: "a breaking schema change that does not touch api/", files: map[string]string{
+			demoRD: cozyrd("demo", `{"type":"object","properties":{}}`),
+		}},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			setup := map[string]string{"packages/system/keep-rd/cozyrds/keep.yaml": cozyrd("keep", `{"type":"object"}`)}
+			for k, v := range demoAPI {
+				setup[k] = v
+			}
+			f.squash(1000, "chore: setup", "", setup)
+			mc := f.pr(10+i, "fix(x): y", "", tc.files)
+			o := &original{number: 10 + i, merge: mc, parents: 2}
+			changes, err := changedFiles(mc+"^1", mc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := touchesRule(o, changes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got != "") != (tc.want != "") || !strings.Contains(got, tc.want) {
+				t.Errorf("touchesRule = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

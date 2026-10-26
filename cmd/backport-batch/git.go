@@ -147,31 +147,30 @@ type commitObject struct {
 	committed time.Time
 }
 
-// commitMessages reads commits through one cat-file --batch, whose output
-// gives each object's length before its content: nothing inside a message, a
+// readObjects reads objects of one type through one cat-file --batch, whose
+// output gives each object's length before its content: nothing inside one, a
 // NUL or a line shaped like a header included, can pass for the start of the
-// next commit. A message ends at its first NUL, where git log ends it, so
-// nothing hidden from a reader of the log counts here.
-func commitMessages(shas []string) (map[string]commitObject, error) {
-	msgs := map[string]commitObject{}
-	if len(shas) == 0 {
-		return msgs, nil
+// next.
+func readObjects(ids []string, kind string) (map[string][]byte, error) {
+	objects := map[string][]byte{}
+	if len(ids) == 0 {
+		return objects, nil
 	}
 	cmd := command("git", "cat-file", "--batch")
-	cmd.Stdin = strings.NewReader(strings.Join(shas, "\n") + "\n")
+	cmd.Stdin = strings.NewReader(strings.Join(ids, "\n") + "\n")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git cat-file --batch: %w", err)
 	}
 	r := bufio.NewReader(bytes.NewReader(out))
-	for _, want := range shas {
+	for _, want := range ids {
 		header, err := r.ReadString('\n')
 		if err != nil {
 			return nil, fmt.Errorf("git cat-file --batch: no answer for %s", want)
 		}
 		f := strings.Fields(header)
-		if len(f) != 3 || f[0] != want || f[1] != "commit" {
-			return nil, fmt.Errorf("git cat-file --batch: %q is not commit %s", strings.TrimSpace(header), want)
+		if len(f) != 3 || f[0] != want || f[1] != kind {
+			return nil, fmt.Errorf("git cat-file --batch: %q is not %s %s", strings.TrimSpace(header), kind, want)
 		}
 		size, err := strconv.Atoi(f[2])
 		if err != nil || size < 0 {
@@ -181,13 +180,28 @@ func commitMessages(shas []string) (map[string]commitObject, error) {
 		if _, err := io.ReadFull(r, body); err != nil || body[size] != '\n' {
 			return nil, fmt.Errorf("git cat-file --batch: short object %s", want)
 		}
-		headers, msg, _ := strings.Cut(string(body[:size]), "\n\n")
+		objects[want] = body[:size]
+	}
+	return objects, nil
+}
+
+// commitMessages reads commits through readObjects. A message ends at its
+// first NUL, where git log ends it, so nothing hidden from a reader of the log
+// counts here.
+func commitMessages(shas []string) (map[string]commitObject, error) {
+	raw, err := readObjects(shas, "commit")
+	if err != nil {
+		return nil, err
+	}
+	msgs := map[string]commitObject{}
+	for sha, data := range raw {
+		headers, msg, _ := strings.Cut(string(data), "\n\n")
 		msg, _, _ = strings.Cut(msg, "\x00")
 		committed, err := committerTime(headers)
 		if err != nil {
-			return nil, fmt.Errorf("commit %s: %w", want, err)
+			return nil, fmt.Errorf("commit %s: %w", sha, err)
 		}
-		msgs[want] = commitObject{message: msg, committed: committed}
+		msgs[sha] = commitObject{message: msg, committed: committed}
 	}
 	return msgs, nil
 }

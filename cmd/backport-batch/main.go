@@ -160,8 +160,17 @@ type batch struct {
 	start time.Time
 }
 
+// fetch moves to the top of the working tree first: every path the batch
+// hands git is relative to it.
 func fetch() error {
-	_, err := git("fetch", "--quiet", "--end-of-options", remote)
+	top, err := git("rev-parse", "--show-toplevel")
+	if err != nil {
+		return err
+	}
+	if err := os.Chdir(strings.TrimSpace(top)); err != nil {
+		return err
+	}
+	_, err = git("fetch", "--quiet", "--end-of-options", remote)
 	return err
 }
 
