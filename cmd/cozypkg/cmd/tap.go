@@ -210,9 +210,15 @@ func tapVerification(identity, issuer string) (*sourcev1.OCIRepositoryVerificati
 	if identity == "" || issuer == "" {
 		return nil, fmt.Errorf("keyless signature verification needs both --certificate-identity and --certificate-oidc-issuer")
 	}
+	// Flux treats Issuer and Subject as Go regexps, so anchor and quote them for
+	// an exact match: an unanchored identity would also accept a superstring
+	// (e.g. alice@example.com matching malice@example.com).
 	return &sourcev1.OCIRepositoryVerification{
-		Provider:          "cosign",
-		MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{Issuer: issuer, Subject: identity}},
+		Provider: "cosign",
+		MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{
+			Issuer:  "^" + regexp.QuoteMeta(issuer) + "$",
+			Subject: "^" + regexp.QuoteMeta(identity) + "$",
+		}},
 	}, nil
 }
 
@@ -350,11 +356,30 @@ runs its charts in your management cluster: tap only sources you trust.`,
 			return err
 		}
 		if tapCmdFlags.tag != "" {
+			if ref.Digest != "" {
+				return fmt.Errorf("--tag cannot override the digest in %q; drop the digest or the --tag flag", args[0])
+			}
 			ref.Tag = tapCmdFlags.tag
 		}
 		verify, err := tapVerification(tapCmdFlags.certIdentity, tapCmdFlags.certIssuer)
 		if err != nil {
 			return err
+		}
+
+		// With verification flags set, verify the signature now and pin the verified
+		// digest, so the artifact we pull and the PackageSources we apply are the
+		// exact content a trusted identity signed. Without this the CLI would apply
+		// an unverified tag pull (only the Flux source would carry the policy), so a
+		// moved tag could land unsigned PackageSource content in the cluster before
+		// the operator re-materialized.
+		if verify != nil {
+			verifiedDigest, verr := verifyCosignSignature(ref.pullRef(), tapCmdFlags.certIdentity, tapCmdFlags.certIssuer)
+			if verr != nil {
+				return verr
+			}
+			if ref.Digest == "" && verifiedDigest != "" {
+				ref.Digest = verifiedDigest
+			}
 		}
 
 		// Pull first: an unreachable/invalid ref must fail before any cluster
