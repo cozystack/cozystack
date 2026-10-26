@@ -1,0 +1,7 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-postrenderers
+spec:
+  interval: 5m
+  {{- include "cozy-lib.postRenderers" (list (.Values.ownPostRenderers | default list) $) | nindent 2 }}

@@ -33,6 +33,7 @@ spec:
             releaseName: monitoring
         - name: vertical-pod-autoscaler
           path: system/vertical-pod-autoscaler
+          libraries: ["cozy-lib"]
         - name: postgres-operator
           path: system/postgres-operator
         - name: grafana-operator
