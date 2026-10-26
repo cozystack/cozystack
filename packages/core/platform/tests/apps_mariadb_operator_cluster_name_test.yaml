@@ -1,0 +1,33 @@
+suite: apps.yaml networking.clusterDomain reaches the mariadb-operator cluster name
+
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The operator dials <primary>.<ns>.svc.<CLUSTER_NAME> to set up replication and
+# to reconcile User, Database and Grant, and the vendored subchart fills
+# CLUSTER_NAME from clusterName. A cluster whose domain is not cozy.local got
+# NXDOMAIN on every such lookup while the literal was pinned in the package.
+# Every pattern anchors clusterName to its mariadb-operator parent, so a sibling
+# block carrying the same domain cannot satisfy the assertion on its own.
+
+tests:
+  - it: carries the cozy.local default under the subchart key
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^mariadb-operator:\n  clusterName: "cozy\.local"$'
+
+  - it: tracks a non-default networking.clusterDomain
+    set:
+      networking.clusterDomain: example.test
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^mariadb-operator:\n  clusterName: "example\.test"$'
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^mariadb-operator:\n  clusterName: "cozy\.local"$'
