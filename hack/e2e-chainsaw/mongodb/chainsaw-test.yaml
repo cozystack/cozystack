@@ -157,7 +157,7 @@ spec:
           kind: Role
           metadata:
             name: mongodb-test-dashboard-resources
-          (length(rules)): 3
+          (length(rules)): 6
           (length(rules[?contains(resources, 'secrets')])): 1
           (rules[?contains(resources, 'secrets')].resourceNames[]):
           - mongodb-test-credentials
