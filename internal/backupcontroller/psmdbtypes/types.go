@@ -139,6 +139,10 @@ type PerconaServerMongoDBStatus struct {
 	State              string                          `json:"state,omitempty"`
 	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
 	Conditions         []PerconaServerMongoDBCondition `json:"conditions,omitempty"`
+	// Message is the operator's last reconcile error, empty while the cluster
+	// reconciles cleanly. The restore path quotes it when a target does not come
+	// back after a restore.
+	Message string `json:"message,omitempty"`
 }
 
 // PerconaServerMongoDBCondition mirrors the operator's ClusterCondition down

@@ -112,6 +112,25 @@ const (
 	// terminate. Tenants override via spec.options.restoreTimeoutSeconds.
 	psmdbDefaultRestoreDeadline = 30 * time.Minute
 
+	// psmdbRestoreTargetSettle is how long after the operator restore is first
+	// seen ready the driver waits before it believes the target cluster's own
+	// state. The operator rewrites PerconaServerMongoDB status only at the end of
+	// a reconcile that changes it, and by default requeues each cluster every 5s
+	// through one worker shared by all clusters, so a ready read right after the
+	// replay can predate the reconcile that finds the cluster unreachable. A
+	// minute covers a dozen such reconciles of an idle operator.
+	psmdbRestoreTargetSettle = time.Minute
+
+	// psmdbRestoreCondReplayed latches on the RestoreJob when the operator
+	// restore is first seen ready. psmdbRestoreTargetSettle runs from its
+	// LastTransitionTime, so the wait survives requeues and controller restarts.
+	psmdbRestoreCondReplayed = "OperatorRestoreCompleted"
+
+	psmdbReasonFullReplayed      = "FullRestoreReplayed"
+	psmdbReasonSelectiveReplayed = "SelectiveRestoreReplayed"
+	psmdbReasonWaitingForTarget  = "WaitingForTargetReady"
+	psmdbReasonTargetNotReady    = "TargetNotReadyAfterRestore"
+
 	// psmdbLiveReadGrace bounds how long past the backup deadline the driver keeps
 	// deferring a cancel it cannot confirm: the live re-read of the operator CR
 	// keeps failing (throttle, revoked verb, removed CRD). After it the job fails
@@ -1694,6 +1713,12 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// A latched replay has done its work. If its CR is deleted while the job
+	// waits for the target, creating it again would replay the backup over what
+	// the target took in since, so the wait goes on without it.
+	if existingRestore == nil && apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, psmdbRestoreCondReplayed) {
+		return r.awaitMongoDBTargetReady(ctx, restoreJob, nil, targetCluster, options)
+	}
 
 	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
 	// swap applies. On the legacy flow the backupSource carries the SOURCE
@@ -1765,19 +1790,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 
 	switch state := mdbRestore.Status.State; {
 	case state == psmdbtypes.StateReady:
-		now := metav1.Now()
-		restoreJob.Status.CompletedAt = &now
-		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
-		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionTrue,
-			Reason:  "RestoreCompleted",
-			Message: fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s completed", mdbRestore.Namespace, mdbRestore.Name),
-		})
-		if err := r.Status().Update(ctx, restoreJob); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.awaitMongoDBTargetReady(ctx, restoreJob, mdbRestore, targetCluster, options)
 
 	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
 		message := mdbRestore.Status.Error
@@ -1814,6 +1827,95 @@ func (r *RestoreJobReconciler) requeueMongoDBRestoreWaiting(ctx context.Context,
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+}
+
+// awaitMongoDBTargetReady finishes a restore the operator reports ready. That
+// verdict covers pbm's replay alone. A logical restore that replaced the
+// target's system users reaches it too, while the operator, which logs in with
+// the target's users Secret, has lost the cluster it just restored. So the
+// RestoreJob succeeds only once the target cluster reports ready again, read no
+// earlier than psmdbRestoreTargetSettle after the replay, and fails at the
+// restore deadline otherwise with the likely cause. A replay that ends close to
+// the deadline still gets the whole settle window before it can fail.
+//
+// The first call latches the replay on the RestoreJob, with what the operator
+// restore did, and every later call reads that latch alone. mdbRestore is nil
+// once the operator CR is gone after the latch.
+func (r *RestoreJobReconciler) awaitMongoDBTargetReady(ctx context.Context, rj *backupsv1alpha1.RestoreJob, mdbRestore *psmdbtypes.PerconaServerMongoDBRestore, cluster *psmdbtypes.PerconaServerMongoDB, options MongoDBRestoreOptions) (ctrl.Result, error) {
+	clusterRef := fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDB %s/%s", cluster.Namespace, cluster.Name)
+	state := cluster.Status.State
+	if state == "" {
+		state = "unset"
+	}
+
+	if !apimeta.IsStatusConditionTrue(rj.Status.Conditions, psmdbRestoreCondReplayed) {
+		reason, note := psmdbReasonFullReplayed, ""
+		if mdbRestore.Spec.Selective != nil {
+			reason, note = psmdbReasonSelectiveReplayed, mongodbRestoredDatabasesNote(mdbRestore.Spec.Selective)
+		}
+		apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+			Type:    psmdbRestoreCondReplayed,
+			Status:  metav1.ConditionTrue,
+			Reason:  reason,
+			Message: fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s completed%s", mdbRestore.Namespace, mdbRestore.Name, note),
+		})
+	}
+	replayed := apimeta.FindStatusCondition(rj.Status.Conditions, psmdbRestoreCondReplayed)
+
+	settled := time.Since(replayed.LastTransitionTime.Time) >= psmdbRestoreTargetSettle
+	if settled && cluster.Status.State == psmdbtypes.StateReady {
+		now := metav1.Now()
+		rj.Status.CompletedAt = &now
+		rj.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+		apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "RestoreCompleted",
+			Message: fmt.Sprintf("%s, and %s reports ready", replayed.Message, clusterRef),
+		})
+		if err := r.Status().Update(ctx, rj); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	deadline := options.effectiveRestoreDeadline()
+	if settled && rj.Status.StartedAt != nil && time.Since(rj.Status.StartedAt.Time) > deadline {
+		return r.markRestoreJobFailedReason(ctx, rj, psmdbReasonTargetNotReady,
+			mongodbTargetNotReadyMessage(replayed.Message, clusterRef, cluster, replayed.Reason == psmdbReasonSelectiveReplayed, deadline))
+	}
+	return r.requeueMongoDBRestoreWaiting(ctx, rj, psmdbReasonWaitingForTarget, fmt.Sprintf(
+		"%s, waiting for %s to report ready at least %s after that (state now %s)", replayed.Message, clusterRef, psmdbRestoreTargetSettle, state))
+}
+
+// mongodbRestoredDatabasesNote names what a selective restore copied.
+func mongodbRestoredDatabasesNote(selective *psmdbtypes.SelectiveRestoreOpts) string {
+	dbs := make([]string, 0, len(selective.Namespaces))
+	for _, ns := range selective.Namespaces {
+		dbs = append(dbs, strings.TrimSuffix(ns, ".*"))
+	}
+	return fmt.Sprintf(", it copied the databases %s and kept the target's own users", strings.Join(dbs, ", "))
+}
+
+// mongodbTargetNotReadyMessage names what most likely keeps a target down after
+// a restore the operator called done. A full restore replays the backup's
+// system users, which match the target's users Secret only while the target is
+// the cluster the backup was taken from and that Secret has not changed since.
+func mongodbTargetNotReadyMessage(replayed, clusterRef string, cluster *psmdbtypes.PerconaServerMongoDB, selective bool, deadline time.Duration) string {
+	state := cluster.Status.State
+	if state == "" {
+		state = "unset"
+	}
+	detail := "state " + state
+	if cluster.Status.Message != "" {
+		detail += ", operator message " + strconv.Quote(cluster.Status.Message)
+	}
+	cause := "The restore replayed the backup's system users, so the likely cause is that they no longer match the target's users Secret and the operator cannot authenticate to the cluster. That happens when the backup predates a change of that Secret, for example when the application was deleted and created again under the same name"
+	if selective {
+		cause = "The restore left the target's users as they were, so look at the operator message and at the target's mongod pods"
+	}
+	return fmt.Sprintf("%s, but %s did not report ready again before the restore deadline of %s, which spec.options.restoreTimeoutSeconds overrides (%s). %s",
+		replayed, clusterRef, deadline, detail, cause)
 }
 
 // errTransientRestoreSource marks a backup-source resolution failure that a

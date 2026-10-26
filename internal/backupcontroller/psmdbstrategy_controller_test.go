@@ -2972,6 +2972,204 @@ func TestReconcileMongoDBRestore_ToCopyShapeIsNotRecheckedAfterHandOver(t *testi
 	}
 }
 
+// mongodbGateHarness keeps a to-copy RestoreJob whose operator restore has
+// finished in a fake client, so a test can let one pass latch the replay, move
+// the clock on the stored job and run the next pass over it.
+type mongodbGateHarness struct {
+	c      client.Client
+	r      *RestoreJobReconciler
+	backup *backupsv1alpha1.Backup
+	name   string
+}
+
+func newMongoDBGateHarness(t *testing.T, clusterState, clusterMessage string, selective *psmdbtypes.SelectiveRestoreOpts) *mongodbGateHarness {
+	t.Helper()
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	for _, o := range objs {
+		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
+			cluster.Status.State = clusterState
+			cluster.Status.Message = clusterMessage
+		}
+	}
+	done := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-done",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: mongodbNameForApp("mongodb-target"), Selective: selective},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateReady},
+	}
+	c := newMongoDBStrategyTestClient(t, append(objs, done)...)
+	return &mongodbGateHarness{
+		c:      c,
+		r:      &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)},
+		backup: backup,
+		name:   rj.Name,
+	}
+}
+
+func (h *mongodbGateHarness) job(t *testing.T) *backupsv1alpha1.RestoreJob {
+	t.Helper()
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: h.name}, rj); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	return rj
+}
+
+func (h *mongodbGateHarness) reconcile(t *testing.T) (ctrl.Result, *backupsv1alpha1.RestoreJob) {
+	t.Helper()
+	res, err := h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup)
+	if err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	return res, h.job(t)
+}
+
+// age puts the latched replay and the job's start that far in the past.
+func (h *mongodbGateHarness) age(t *testing.T, sinceReplay, sinceStart time.Duration) {
+	t.Helper()
+	rj := h.job(t)
+	cond := apimeta.FindStatusCondition(rj.Status.Conditions, psmdbRestoreCondReplayed)
+	if cond == nil {
+		t.Fatalf("no %s condition to age", psmdbRestoreCondReplayed)
+	}
+	cond.LastTransitionTime = metav1.NewTime(time.Now().Add(-sinceReplay))
+	rj.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-sinceStart)}
+	if err := h.c.Status().Update(context.Background(), rj); err != nil {
+		t.Fatalf("age restore job: %v", err)
+	}
+}
+
+// The operator calls a restore done once pbm has replayed it, and says the same
+// after a replay that replaced the target's system users and locked the
+// operator out. The RestoreJob succeeds only once the target cluster itself
+// reports ready, read at least psmdbRestoreTargetSettle after the replay,
+// because the operator writes cluster status only when a reconcile changes it.
+func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testing.T) {
+	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
+
+	t.Run("the finished replay is latched and the job waits", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		res, got := h.reconcile(t)
+		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatalf("must not succeed on the operator's verdict alone")
+		}
+		latch := apimeta.FindStatusCondition(got.Status.Conditions, psmdbRestoreCondReplayed)
+		if latch == nil || latch.Status != metav1.ConditionTrue || latch.Reason != psmdbReasonSelectiveReplayed || !strings.Contains(latch.Message, "copied the databases demo") {
+			t.Errorf("expected %s=True %s naming the copied databases, got %+v", psmdbRestoreCondReplayed, psmdbReasonSelectiveReplayed, latch)
+		}
+		if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != psmdbReasonWaitingForTarget {
+			t.Errorf("expected Ready=False %s, got %+v", psmdbReasonWaitingForTarget, cond)
+		}
+		if res.RequeueAfter == 0 {
+			t.Errorf("a waiting job must requeue, got %+v", res)
+		}
+	})
+
+	t.Run("a ready read inside the settle window is not believed", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		h.age(t, psmdbRestoreTargetSettle/6, 0)
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatalf("a ready state read %s after the replay can predate the operator noticing the target is gone", psmdbRestoreTargetSettle/6)
+		}
+	})
+
+	t.Run("ready after the settle window succeeds", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		_, got := h.reconcile(t)
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded || got.Status.CompletedAt == nil {
+			t.Fatalf("expected Succeeded with CompletedAt, got phase=%q completedAt=%v", got.Status.Phase, got.Status.CompletedAt)
+		}
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+		if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "RestoreCompleted" ||
+			!strings.Contains(cond.Message, "copied the databases demo") || !strings.Contains(cond.Message, "reports ready") {
+			t.Errorf("expected Ready=True RestoreCompleted naming the copied databases and the ready target, got %+v", cond)
+		}
+	})
+
+	t.Run("not ready before the deadline keeps waiting", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, "error", "Error: dial: auth error", selective)
+		h.reconcile(t)
+		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		res, got := h.reconcile(t)
+		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed || got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatalf("must keep waiting until the deadline, got phase=%q", got.Status.Phase)
+		}
+		if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != psmdbReasonWaitingForTarget || !strings.Contains(cond.Message, "state now error") {
+			t.Errorf("expected the wait to name the target's state, got %+v", cond)
+		}
+		if res.RequeueAfter == 0 {
+			t.Errorf("a waiting job must requeue, got %+v", res)
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		selective *psmdbtypes.SelectiveRestoreOpts
+		cause     string
+	}{
+		"full restore names the replayed users":  {nil, "no longer match the target's users Secret"},
+		"selective restore does not blame users": {selective, "left the target's users as they were"},
+	} {
+		t.Run("never ready by the deadline fails, "+name, func(t *testing.T) {
+			h := newMongoDBGateHarness(t, "error", "Error: dial: (AuthenticationFailed) SCRAM authentication failed, storedKey mismatch", tc.selective)
+			h.reconcile(t)
+			h.age(t, 2*psmdbRestoreTargetSettle, 2*psmdbDefaultRestoreDeadline)
+			_, got := h.reconcile(t)
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("expected Failed past the deadline, got phase=%q", got.Status.Phase)
+			}
+			cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if cond == nil || cond.Reason != psmdbReasonTargetNotReady {
+				t.Fatalf("expected Ready=False %s, got %+v", psmdbReasonTargetNotReady, cond)
+			}
+			for _, want := range []string{"did not report ready again", "storedKey mismatch", "state error", tc.cause} {
+				if !strings.Contains(cond.Message, want) {
+					t.Errorf("message must contain %q, got %q", want, cond.Message)
+				}
+			}
+		})
+	}
+
+	t.Run("a replay that ends past the deadline still gets the settle window", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, "error", "", selective)
+		h.reconcile(t)
+		h.age(t, time.Second, 2*psmdbDefaultRestoreDeadline)
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("a target must get the settle window to come back before the deadline can fail it: %+v", got.Status.Conditions)
+		}
+	})
+
+	// The operator restore can be deleted while the job waits. Creating it again
+	// would replay the backup over whatever the target took in since.
+	t.Run("a finished restore whose CR is deleted is not run again", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		for _, restore := range mongodbRestoresIn(t, h.c) {
+			if err := h.c.Delete(context.Background(), &restore); err != nil {
+				t.Fatalf("delete operator restore: %v", err)
+			}
+		}
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("a missing CR after the replay must not fail the job: %+v", got.Status.Conditions)
+		}
+		h.age(t, 2*psmdbRestoreTargetSettle, 0)
+		_, got := h.reconcile(t)
+		if n := len(mongodbRestoresIn(t, h.c)); n != 0 {
+			t.Fatalf("the restore was handed to the operator again, %d operator restores exist", n)
+		}
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Errorf("the wait must go on to Succeeded without the CR, got phase=%q", got.Status.Phase)
+		}
+	})
+}
+
 func TestMongoDBToCopySelective(t *testing.T) {
 	app := func(databases string) *mongodbapp.MongoDB {
 		a := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
