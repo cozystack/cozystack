@@ -92,8 +92,8 @@ resolve_kafka_image() {
     # is being assumed. On an air-gapped or operator-less cluster - the persona
     # the README's override note is for - that literal is unreachable, so the
     # run must set KAFKA_IMAGE to an image the nodes can actually pull.
-    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
-    echo "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1"
+    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:1.2.0-kafka-4.3.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
+    echo "quay.io/strimzi/kafka:1.2.0-kafka-4.3.1"
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
@@ -215,7 +215,7 @@ seed_topic() {
             printf "k-%s\torder-%s\n" "$i" "$i"
             i=$((i + 1))
         done | "$BIN"/kafka-console-producer.sh --bootstrap-server "$BOOT" \
-            --topic "$TOPIC" --property parse.key=true
+            --topic "$TOPIC" --reader-property parse.key=true
     '
 }
 
@@ -231,7 +231,7 @@ seed_decoy_topic() {
             printf "d-%s\tdecoy-%s\n" "$i" "$i"
             i=$((i + 1))
         done | "$BIN"/kafka-console-producer.sh --bootstrap-server "$BOOT" \
-            --topic "$DECOY_TOPIC" --property parse.key=true
+            --topic "$DECOY_TOPIC" --reader-property parse.key=true
     '
 }
 
@@ -287,7 +287,7 @@ topic_dump() {
             [ "${end:-0}" -gt 0 ] || continue
             "$BIN"/kafka-console-consumer.sh --bootstrap-server "$BOOT" --topic "$TOPIC" \
                 --partition "$p" --offset 0 --max-messages "$end" --timeout-ms 60000 \
-                --property print.key=true --property print.timestamp=false \
+                --formatter-property print.key=true --formatter-property print.timestamp=false \
                 | sed "s/^/$p\t/"
         done
     '

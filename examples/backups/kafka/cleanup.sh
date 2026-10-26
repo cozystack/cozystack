@@ -33,7 +33,7 @@ kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not
 kubectl delete job.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 
 # `kubectl delete` returns as soon as deletionTimestamp is set, while the
-# HelmRelease uninstall behind each Kafka app (two StatefulSets, ZooKeeper and
+# HelmRelease uninstall behind each Kafka app (its broker and controller pods and
 # their PVCs) is still draining. Returning here lets the next suite start into a
 # namespace whose predecessor is still uninstalling - the neighbouring
 # chainsaw/kafka Test's PVC-reclaim step contends with exactly that. Wait for

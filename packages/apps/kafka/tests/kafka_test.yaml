@@ -8,7 +8,7 @@ tests:
   # KRaft mode (new inst.) #
   ##########################
 
-  - it: renders Kafka CR with KRaft annotations for new instance
+  - it: renders a v1 Kafka CR without the KRaft annotations Strimzi ignores
     release:
       name: test-kafka
       namespace: tenant-test
@@ -17,12 +17,12 @@ tests:
           count: 1
       - isKind:
           of: Kafka
-      - equal:
+      - isAPIVersion:
+          of: kafka.strimzi.io/v1
+      - notExists:
           path: metadata.annotations["strimzi.io/kraft"]
-          value: enabled
-      - equal:
+      - notExists:
           path: metadata.annotations["strimzi.io/node-pools"]
-          value: enabled
 
   - it: sets correct name and labels
     release:
@@ -40,25 +40,35 @@ tests:
   # Version                #
   ##########################
 
-  - it: sets Kafka version from version map (default v3.9)
+  - it: sets Kafka version from version map (default v4.3)
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - equal:
           path: spec.kafka.version
-          value: "3.9.0"
+          value: "4.3.1"
 
-  - it: resolves v3.8 version
+  - it: resolves v4.2 version
     release:
       name: test-kafka
       namespace: tenant-test
     set:
-      version: "v3.8"
+      version: "v4.2"
     asserts:
       - equal:
           path: spec.kafka.version
-          value: "3.8.1"
+          value: "4.2.1"
+
+  - it: refuses a Kafka 3.x version the operator no longer runs
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      version: "v3.9"
+    asserts:
+      - failedTemplate:
+          errorPattern: "value must be one of 'v4.3', 'v4.2'"
 
   ##########################
   # No ZooKeeper / node-pool managed fields #
@@ -283,3 +293,14 @@ tests:
       - equal:
           path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.key
           value: kafka-metrics-config.yml
+
+  # Strimzi 1.x Kafka nodes read their certificates from Secrets through the
+  # Kubernetes API, which tenant network policy opens only to labelled pods.
+  - it: lets the Kafka pods reach the Kubernetes API
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.kafka.template.pod.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
