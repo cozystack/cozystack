@@ -12,6 +12,7 @@ metadata:
     apps.cozystack.io/application.group: apps.cozystack.io
     apps.cozystack.io/application.name: info
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-info-application-default-info

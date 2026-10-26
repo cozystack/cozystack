@@ -34,6 +34,7 @@ spec:
         # into the tenant namespace by the tenant chart when the module is on.
         - name: computeplane
           path: extra/computeplane
+          libraries: ["cozy-lib"]
         # The ordinary managed-kubernetes app, re-declared source-only under
         # this package's own scope (cozystack-computeplane-application-kubevirt-kubernetes)
         # so the module is self-contained and does not reach into another
