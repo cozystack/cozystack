@@ -531,12 +531,15 @@ func cloneData(in map[string][]byte) map[string][]byte {
 // manager must apply to corev1.Secret so this controller does not cache
 // every Secret in the cluster. It caches only what must be WATCHED:
 // managed replicas (CopyLabel, in any namespace) and the platform values
-// channel (cozy-system/cozystack-values). The operator source Secret is
-// deliberately NOT cached — its name is dynamic, so it cannot be scoped by
-// selector; it is read via the uncached APIReader and its rotation is
-// picked up by the periodic resync. The values channel carries no tenant
-// private keys, so the only key material the cache holds is the replicas',
-// which already exist in tenant namespaces.
+// channel (cozy-system/cozystack-values). The ApplicationDefinition release
+// reconciler also reads and watches the platform values Secret through this
+// cache to sync image overrides.
+//
+// The operator source Secret is deliberately NOT cached — its name is
+// dynamic, so it cannot be scoped by selector; it is read via the uncached
+// APIReader and its rotation is picked up by the periodic resync. The
+// values channel carries no tenant private keys, so the only key material
+// the cache holds is the replicas', which already exist in tenant namespaces.
 func SecretCacheByObject() cache.ByObject {
 	return cache.ByObject{
 		Namespaces: map[string]cache.Config{
