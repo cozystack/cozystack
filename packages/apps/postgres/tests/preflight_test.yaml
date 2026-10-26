@@ -1,0 +1,116 @@
+suite: pre-upgrade hook refuses to adopt a role the chart did not mark
+
+# Pins the pre-upgrade refusal (see preflight-job.yaml for why it runs before
+# the upgrade): the query per declared user and database role, the gates on
+# install and bootstrap, and that the flag is read before it is set.
+
+templates:
+  - templates/preflight-job.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: renders nothing on install
+    set:
+      users:
+        app: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing while bootstrap.recovery is in effect
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+      bootstrap:
+        enabled: true
+        oldName: pg-old
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for a release without users or databases
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: runs the refusal query for every declared user and database role on upgrade
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        debezium: {}
+      databases:
+        newdb: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "'role \"debezium\" already exists and this chart did not create it; [^']*'\\)\\nFROM pg_catalog.pg_roles r\\nWHERE r.rolname = 'debezium'\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec"
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "WHERE r.rolname IN \\('newdb_admin', 'newdb_readonly'\\)\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'"
+      - notMatchRegex:
+          path: data["preflight.sh"]
+          pattern: "cozystack.createrole_granted = 'on'"
+
+  - it: records createRole after the check when the new values grant it
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      version: v18
+      users:
+        migrator:
+          createRole: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "(?s)\\\\gexec\\nEOT\\npsql -v ON_ERROR_STOP=1 --echo-all -c \"ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';\""
+
+  - it: runs as a bounded pre-upgrade Job before the Cluster is applied
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: pg-test-rw

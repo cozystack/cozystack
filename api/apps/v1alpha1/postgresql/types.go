@@ -55,7 +55,7 @@ type ConfigSpec struct {
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
-	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
+	// Users configuration map. Each user is a PostgreSQL role the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SCRAM verifier, and a revoke retires the password without issuing one. A `password` key here is ignored and draws an admission warning. A password set inside PostgreSQL is reverted by the operator.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map.

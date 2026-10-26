@@ -81,40 +81,49 @@ psql_exec() {
         psql -U postgres -d "$db" -tAc "$sql"
 }
 
+# Password of an application user, minted once through the credentials API and
+# cached for the rest of the run: a mint replaces the account's password, so
+# minting on every login would invalidate the previous attempt. The Credential
+# is named <release>.<account>, where <account> is the user name lowercased
+# with every character outside [a-z0-9-] replaced by "-", and the chart names
+# the CNPG Cluster after the release, so the cluster IS the release here.
+# Args: <cluster> <user>
+app_password() {
+    local cluster="$1" user="$2"
+    local acct cache
+    acct=$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+    cache="${TMPDIR:-/tmp}/cozy-pw-${NAMESPACE}-${cluster}-${acct}"
+    if [[ ! -s "$cache" ]]; then
+        kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/${NAMESPACE}/credentials/${cluster}.${acct}/mint" \
+            -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+            | jq -r '.status.password // empty' > "$cache"
+    fi
+    [[ -s "$cache" ]] || { log_error "no password minted for user '${user}' of ${cluster}"; return 1; }
+    cat "$cache"
+}
+
 # Run a psql statement AS the application user over TCP (via the cluster's -rw
 # Service), forcing password authentication. psql_exec above connects as the
 # in-pod postgres superuser through the local socket (peer auth) and so never
-# exercises a user's password; only this path proves the password the
-# <release>-credentials Secret advertises actually authenticates. The password is
-# read from that chart-managed Secret with jq, not a jsonpath: a username may
-# contain a '.', and jsonpath's `{.data['a.b']}` treats the dot as a path step
-# and returns nothing, so a dotted user would read an empty password and time out
-# on a credential that is fine. jq indexes the key as a literal string. The chart
-# names the CNPG Cluster, the -rw Service and the credentials Secret all after the
-# release, so the cluster IS the release here - derive the Secret from it rather
-# than taking a separate name that a caller can get wrong (a release/app-name
-# mix-up read a Secret that never exists and made every login time out).
+# exercises a user's password.
 # Args: <cluster> <user> <db> <sql>
 psql_app_exec() {
     local cluster="$1" user="$2" db="$3" sql="$4"
     local pod pw
     pod=$(cnpg_primary_pod "$cluster")
     [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
-    pw=$(kubectl -n "$NAMESPACE" get secret "${cluster}-credentials" -o json \
-        | jq -r --arg u "$user" '.data[$u] // empty' | base64 -d)
-    [[ -n "$pw" ]] || { log_error "no password for user '${user}' in ${cluster}-credentials"; return 1; }
+    pw=$(app_password "$cluster" "$user") || return 1
     kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
         env PGPASSWORD="$pw" psql -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
 }
 
 # Block until the application user can authenticate against a cluster, or fail
-# after <timeout>s. Needed after a to-copy restore: the driver clears
-# bootstrap.enabled once recovery converges so the chart's init-job re-runs
-# ALTER ROLE ... WITH PASSWORD, converging the recovered roles (which carry the
-# source's password hashes) onto the freshly generated <release>-credentials
-# Secret. That convergence is asynchronous - a HelmRelease upgrade plus its
-# post-upgrade init-job hook - so this is a readiness wait on an eventually
-# consistent property, not a retry over a deterministic step.
+# after <timeout>s. Needed after a to-copy restore: the recovered roles carry
+# the source's password hashes until CloudNativePG applies the verifier from
+# the account Secret, which it does once the restored primary is up and the
+# release has left bootstrap. That convergence is asynchronous, so this is a
+# readiness wait on an eventually consistent property, not a retry over a
+# deterministic step.
 # Args: <cluster> <user> <db> <timeout>
 wait_for_app_login() {
     local cluster="$1" user="$2" db="$3" timeout="${4:-300}"
@@ -134,7 +143,7 @@ wait_for_app_login() {
             return 0
         fi
         if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for user '${user}' to authenticate against ${cluster}: the credentials Secret advertises a password the roles never received (bootstrap not cleared, or the init-job did not reconcile). Last attempt: $(cat "$errfile")"
+            log_error "Timeout waiting for user '${user}' to authenticate against ${cluster}: the minted password never reached the role (bootstrap not cleared, or CloudNativePG did not apply the account Secret). Last attempt: $(cat "$errfile")"
             rm -f "$errfile"
             return 1
         fi

@@ -1,34 +1,18 @@
-{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
-{{- $passwords := dict }}
-
-{{- with (index $existingSecret "data") }}
-  {{- range $k, $v := . }}
-    {{- $_ := set $passwords $k (b64dec $v) }}
-  {{- end }}
-{{- end }}
-
 {{/*
-  Reject a username outside the Secret-key charset before it is interpolated
-  into the credentials Secret key, the init-script shell (pw=$(cat "/credentials/<user>"))
-  and the role SQL. The charset mirrors k8s IsConfigMapKey (rejecting ".", any name
-  starting with "..", and the metacharacters that would reach the shell). The
-  length cap is 63, NOT the 253-char Secret-key limit: the username is also a
-  PostgreSQL role name, and an identifier over NAMEDATALEN-1 (63 bytes) is silently
-  TRUNCATED by CREATE ROLE with a NOTICE, not an error, so ON_ERROR_STOP never sees
-  it: the role exists under its 63-byte prefix, two long names sharing that prefix
-  become one role, and the stored name is not the one the tenant declared. Cap at
-  63 so a too-long name is named here instead. A release that installed before the
-  cap still carries such a user's key in the credentials Secret read above and its
-  role under the truncated name; failing its upgrade would wedge the whole release,
-  so on upgrade the cap applies only to a user that Secret does not already carry,
-  i.e. a new one. The charset holds on both paths: a name
-  outside it is not a valid Secret key, so it never installed. The charset is
-  ASCII-only, so len (bytes) equals characters.
+  Reject a username outside the charset before it is interpolated into the role
+  SQL and the Cluster's managed roles. The charset mirrors k8s IsConfigMapKey
+  (rejecting ".", any name starting with "..", and the metacharacters that would
+  reach the shell). The length cap is 63: the username is a PostgreSQL role name,
+  and an identifier over NAMEDATALEN-1 (63 bytes) is silently TRUNCATED by CREATE
+  ROLE with a NOTICE, not an error, so the role exists under its 63-byte prefix,
+  two long names sharing that prefix become one role, and the stored name is not
+  the one the tenant declared. The account name the API derives from it is a DNS
+  label with the same cap, so the API refuses such a user before the chart sees
+  it. The charset is ASCII-only, so len (bytes) equals characters.
 */}}
 {{- range $user, $u := .Values.users }}
-  {{- $tooLong := and (gt (len $user) 63) (or $.Release.IsInstall (not (hasKey $passwords $user))) }}
-  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $user)) (eq $user ".") (hasPrefix ".." $user) $tooLong }}
-    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)" $user) }}
+  {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $user)) (eq $user ".") (hasPrefix ".." $user) (gt (len $user) 63) }}
+    {{- fail (printf "invalid username %q: a username may contain only letters, digits and the characters -._ , must not be \".\" or start with \"..\", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and the account name derived from it is a Kubernetes object name)" $user) }}
   {{- end }}
 {{- end }}
 
@@ -79,57 +63,12 @@
 {{- end }}
 
 {{/*
-  Unlike MariaDB (secret.yaml carries the same lookup with a guard), postgres does
-  NOT reject an upgrade whose credentials lookup came back empty. The credentials
-  Secret here is gated on .Values.users, so a release installed with the default
-  `users: {}` has no Secret at all; adding its FIRST user is an upgrade whose
-  lookup is legitimately empty, and a guard on `IsUpgrade and not $existingSecret`
-  cannot tell that apart from a deleted Secret (both are empty). Postgres also has
-  no equivalent of MariaDB's bootstrap-only root: every role's password is applied
-  by the post-upgrade init-job (ALTER ROLE), so a re-mint on a genuinely deleted
-  Secret self-heals on the next reconcile rather than desyncing forever. So mint on
-  an empty lookup, and let the common first-user-on-upgrade path through.
-*/}}
-
-{{/*
-  Passwords are always chart-generated and preserved across reconciles via the
-  lookup above: a user keeps whatever password is already stored in the Secret,
-  and only a user without one yet gets a freshly generated value.
-*/}}
-{{- range $user, $u := .Values.users }}
-  {{- if not (index $passwords $user) }}
-    {{- $_ := set $passwords $user (randAlphaNum 16) }}
-  {{- end }}
-{{- end }}
-
-{{- if .Values.users }}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-credentials
-  {{- if .Values.bootstrap.enabled }}
-  annotations:
-    # During a restore the roles recovered from the backup keep their original
-    # password hashes, but this Secret holds freshly generated passwords and the
-    # init-job that would apply them (ALTER ROLE) is skipped while bootstrap is
-    # on. So the values below do NOT authenticate yet; they converge once the app
-    # leaves bootstrap and the init-job runs. Flag it so a reader (dashboard,
-    # tenant) does not treat the advertised password as usable mid-restore.
-    postgres.cozystack.io/credentials-pending: "true"
-  {{- end }}
-stringData:
-  {{- range $user, $u := .Values.users }}
-  {{ quote $user }}: {{ quote (index $passwords $user) }}
-  {{- end }}
-{{- end }}
-{{/*
   Skip the init-script Secret while bootstrap.recovery is in effect.
   It only feeds the init-job Job, which is also skipped in that mode
   (see init-job.yaml header comment). Keeping it would leave a stale
   Secret without a consumer; dropping it keeps the chart output minimal.
 */}}
 {{- if not .Values.bootstrap.enabled }}
----
 apiVersion: v1
 kind: Secret
 metadata:
@@ -199,19 +138,18 @@ stringData:
     END$$;
     EOT
 
-    echo "== create users"
+    echo "== mark users"
     {{- if .Values.users }}
     {{- /*
-      A CREATEROLE holder can create a role under a name values will declare later,
-      plant objects owned by it, role settings and default privileges, then drop the
-      intermediate role it did this through, so the squatted role shows no member at
-      all by the time it is declared. No catalog check can tell that apart from a
-      role a platform administrator created, so once any user has held createRole
-      the chart refuses to adopt a role it did not mark. Before that, adopting is
-      safe, and it is what a declared users.app does on install with the role CNPG
-      bootstraps. The flag is read at the start of this session and set only after
-      it, so the run that first grants createRole still adopts, and every user is
-      created and marked before any of them holds CREATEROLE.
+      CNPG creates, passwords and alters each account from the Cluster's
+      managed roles; a second writer here would fight it. Two things it has no
+      field for stay: the marker membership, which CNPG grants with the default
+      options and this re-grant narrows to a record, leaving the options of an
+      existing membership alone; and createrole_self_grant. Both wait for the
+      role to exist, since this hook may run before CNPG has created it, and
+      the next run finishes what this one skipped. The createRole flag is
+      recorded here after an install, where the pre-upgrade hook that reads it
+      has no cluster to reach.
     */}}
     {{- $grantsCreateRole := false }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
@@ -222,53 +160,19 @@ stringData:
     {{- if default false $u.createRole }}
     {{- $grantsCreateRole = true }}
     {{- end }}
-    SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', 'role "{{ $user }}" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and users.{{ $user }} will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the user under another name')
-    FROM pg_catalog.pg_roles r
-    WHERE r.rolname = '{{ $user }}'
-      AND current_setting('cozystack.createrole_granted', true) = 'on'
-      AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
-    SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
-    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    GRANT "cozystack:managed" TO "{{ $user }}"{{ $markOptions }};
+    SELECT 'GRANT "cozystack:managed" TO "{{ $user }}"{{ $markOptions }};'
+    WHERE EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
+    {{- if default false $u.createRole }}
+    SELECT 'ALTER ROLE "{{ $user }}" SET createrole_self_grant = ''set, inherit'';'
+    WHERE EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
+    {{- else }}
+    SELECT 'ALTER ROLE "{{ $user }}" RESET createrole_self_grant;'
+    WHERE EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
+    {{- end }}
     {{- end }}
     EOT
     {{- if $grantsCreateRole }}
     psql -v ON_ERROR_STOP=1 --echo-all -c "ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';"
-    {{- end }}
-    {{- /*
-      Each password is read from the mounted <release>-credentials Secret at run
-      time rather than rendered into this script: the init-script Secret is stored
-      verbatim in the Helm release manifest and kept for MaxHistory revisions, so a
-      literal password here would linger in cleartext history a tenant cannot scrub.
-      psql's :'pw' quotes and escapes the value, so it applies safely whatever
-      characters it holds. The password does reach psql through -v, i.e. its argv,
-      readable via /proc/<pid>/cmdline to a process sharing this container's PID
-      namespace -- but this init container runs alone, and any code with that reach
-      can already read the mounted /credentials/* files directly, so the argv path
-      widens no exposure. This rationale is a template comment so it ships ONCE, not
-      once per user, into the rendered init.sh.
-    */}}
-    {{- range $user, $u := .Values.users }}
-    pw=$(cat "/credentials/{{ $user }}")
-    psql -v ON_ERROR_STOP=1 -v pw="$pw" <<\EOT
-    ALTER ROLE "{{ $user }}" WITH PASSWORD :'pw' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }} {{ ternary "CREATEROLE" "NOCREATEROLE" (default false $u.createRole) }} {{ ternary "BYPASSRLS" "NOBYPASSRLS" (default false $u.bypassRls) }};
-    {{- /*
-      PostgreSQL 16 grants a CREATEROLE holder only ADMIN OPTION on the roles it
-      creates, governed by createrole_self_grant, whose default is empty. ADMIN
-      OPTION alone allows granting the role onward but not SET ROLE to it, and
-      creating an object owned by another role requires SET. Without this the
-      attribute looks functional — CREATE ROLE succeeds — yet the very next
-      statement a tenant writes, CREATE SCHEMA ... AUTHORIZATION <new role>,
-      fails with "must be able to SET ROLE". Set as a role-level default so it
-      applies to every session, and reset when the attribute is withdrawn.
-    */}}
-    {{- if default false $u.createRole }}
-    ALTER ROLE "{{ $user }}" SET createrole_self_grant = 'set, inherit';
-    {{- else }}
-    ALTER ROLE "{{ $user }}" RESET createrole_self_grant;
-    {{- end }}
-    COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
-    EOT
     {{- end }}
     {{- end }}
 
@@ -393,17 +297,13 @@ stringData:
     echo "== create databases and roles"
     {{- if .Values.databases }}
     {{- /*
-      The same adoption check as for users. This session starts after the create
-      users pass has recorded createRole, so the run that first grants it already
-      refuses: its CREATEROLE holders exist from that pass on.
+      The database roles are declared in the Cluster's managed roles as well,
+      but ALTER DATABASE ... OWNER below needs them in this run, so they are
+      still created here, idempotently, and CNPG then finds them as its spec
+      says. The refusal to adopt an unmarked role runs in the pre-upgrade hook.
     */}}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
     {{- range $database, $d := .Values.databases }}
-    SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', format('role "%s" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and databases.{{ $database }} will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the database under another name', r.rolname))
-    FROM pg_catalog.pg_roles r
-    WHERE r.rolname IN ('{{ $database }}_admin', '{{ $database }}_readonly')
-      AND current_setting('cozystack.createrole_granted', true) = 'on'
-      AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
     SELECT 'CREATE DATABASE "{{ $database }}"'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ $database }}')\gexec
     COMMENT ON DATABASE "{{ $database }}" IS 'database managed by helm';
@@ -497,25 +397,6 @@ stringData:
     EXECUTE PROCEDURE auto_grant_schema_privileges();
     EOT
     {{- end }}
-
-    echo "== assign roles to users"
-    psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
-    {{- range $database, $d := .Values.databases }}
-    {{- $roles := $d.roles | default dict }}
-    {{- range $user, $u := $.Values.users }}
-    {{- if has $user $roles.admin }}
-    GRANT "{{ $database }}_admin" TO "{{ $user }}";
-    {{- else }}
-    REVOKE "{{ $database }}_admin" FROM "{{ $user }}";
-    {{- end }}
-    {{- if has $user $roles.readonly }}
-    GRANT "{{ $database }}_readonly" TO "{{ $user }}";
-    {{- else }}
-    REVOKE "{{ $database }}_readonly" FROM "{{ $user }}";
-    {{- end }}
-    {{- end }}
-    {{- end }}
-    EOT
 
     echo "== create extensions"
     {{- range $database, $d := .Values.databases }}

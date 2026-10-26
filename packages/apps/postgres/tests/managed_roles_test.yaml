@@ -87,7 +87,10 @@ tests:
           path: stringData["init.sh"]
           pattern: 'INHERIT FALSE'
 
-  - it: refuses to adopt an unmarked user role once createRole has been granted, before creating it
+  # The refusal to adopt an unmarked role lives in the pre-upgrade hook
+  # (preflight_test.yaml); the init-script creates no account and marks only a
+  # role that exists.
+  - it: no longer refuses or creates user roles itself
     set:
       users:
         debezium:
@@ -96,27 +99,19 @@ tests:
       path: metadata.name
       value: pg-test-init-script
     asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'already exists and this chart did not create it'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE ROLE "debezium"'
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "SELECT format\\('DO \\$\\$BEGIN RAISE EXCEPTION %L; END\\$\\$', 'role \"debezium\" already exists and this chart did not create it; [^']*'\\)\\nFROM pg_catalog.pg_roles r\\nWHERE r.rolname = 'debezium'\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec\\nSELECT 'CREATE ROLE \"debezium\" LOGIN INHERIT;'"
+          pattern: "SELECT 'GRANT \"cozystack:managed\" TO \"debezium\" WITH INHERIT FALSE, SET FALSE;'\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'debezium'\\)\\\\gexec"
 
-  - it: refuses to adopt unmarked database roles once createRole has been granted, before creating the database
-    set:
-      databases:
-        newdb: {}
-    documentSelector:
-      path: metadata.name
-      value: pg-test-init-script
-    asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: "WHERE r.rolname IN \\('newdb_admin', 'newdb_readonly'\\)\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec\\nSELECT 'CREATE DATABASE \"newdb\"'"
-
-  # The flag is set after every user is created and marked, so the run that first
-  # grants createRole still adopts a role that predates it, such as the one CNPG
-  # bootstraps for users.app, and before any CREATEROLE is granted, so no holder
-  # exists while it is unset.
-  - it: records createRole after creating and marking the users and before granting the attribute
+  # The flag is recorded after the marking pass, for the pre-upgrade hook to
+  # read on the next upgrade.
+  - it: records createRole after marking the users
     set:
       users:
         app: {}
@@ -128,7 +123,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "(?s)GRANT \"cozystack:managed\" TO \"migrator\" WITH INHERIT FALSE, SET FALSE;\\nEOT\\npsql -v ON_ERROR_STOP=1 --echo-all -c \"ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';\".*ALTER ROLE \"migrator\" WITH PASSWORD :'pw' LOGIN INHERIT NOREPLICATION CREATEROLE"
+          pattern: "(?s)WHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'migrator'\\)\\\\gexec\nEOT\npsql -v ON_ERROR_STOP=1 --echo-all -c \"ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';\""
 
   - it: does not record createRole when no user holds it
     set:

@@ -127,6 +127,66 @@ spec:
           kind: Job
           name: postgres-test-init-job
 
+  # No second disclosure: the minted password logs in over TCP as the user,
+  # the Credential records the mint and no read path carries the password,
+  # and a second mint replaces the first once CloudNativePG applies it.
+  - name: verify-minted-credential
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: core.cozystack.io/v1alpha1
+          kind: Credential
+          metadata:
+            name: postgres-test.testuser
+          spec:
+            application:
+              kind: Postgres
+              name: test
+            user: testuser
+          status:
+            password:
+              origin: NotIssued
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          mint() {
+            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/postgres-test.testuser/mint" \
+              -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+              | jq -r '.status.password'
+          }
+          login() {
+            kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+              env PGPASSWORD="$1" psql -h postgres-test-rw -U testuser -d testdb -tAc 'SELECT 1' 2>/dev/null | tr -d '[:space:]'
+          }
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary -o name | head -n1)
+
+          first=$(mint)
+          [ "${#first}" -eq 32 ] || { echo "minted password has ${#first} characters, want 32" >&2; exit 1; }
+          # CloudNativePG applies the changed account Secret live; a readiness
+          # wait on that eventually consistent property, not a retry.
+          until [ "$(login "$first")" = "1" ]; do sleep 5; done
+
+          cred=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io postgres-test.testuser -o json)
+          [ "$(printf '%s' "$cred" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $cred" >&2; exit 1; }
+          [ "$(printf '%s' "$cred" | jq -r '.status.history[0].operation')" = "Mint" ] || { echo "history lacks the mint: $cred" >&2; exit 1; }
+          if printf '%s' "$cred" | grep -q -- "$first"; then echo "the Credential carries the password" >&2; exit 1; fi
+          if kubectl -n "$NAMESPACE" get secret postgres-test.testuser.account -o json | grep -q -- "$first"; then
+            echo "the account Secret carries the plaintext" >&2; exit 1
+          fi
+          if kubectl -n "$NAMESPACE" get events -o json | grep -q -- "$first"; then
+            echo "an Event carries the password" >&2; exit 1
+          fi
+
+          second=$(mint)
+          [ "$second" != "$first" ] || { echo "a second mint returned the same password" >&2; exit 1; }
+          until [ "$(login "$second")" = "1" ]; do sleep 5; done
+          if [ "$(login "$first")" = "1" ]; then echo "the replaced password still logs in" >&2; exit 1; fi
+        check:
+          ($error == null): true
+
   # The trust anchor a client verifies against, checked against the live
   # operator rather than against our own beliefs about it.
   #
