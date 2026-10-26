@@ -1,0 +1,31 @@
+suite: gpu-operator source carries the GPU node agent
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: installs the agent next to gpu-operator in every variant
+    template: templates/sources.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - lengthEqual:
+          path: spec.variants
+          count: 3
+      - contains: &agent
+          path: spec.variants[0].components
+          content:
+            name: gpu-node-agent
+            path: system/gpu-node-agent
+            install:
+              privileged: true
+              namespace: cozy-gpu-operator
+              releaseName: gpu-node-agent
+      - contains:
+          <<: *agent
+          path: spec.variants[1].components
+      - contains:
+          <<: *agent
+          path: spec.variants[2].components

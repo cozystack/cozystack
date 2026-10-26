@@ -1,0 +1,107 @@
+suite: gpu-node-agent DaemonSet
+templates:
+  - templates/daemonset.yaml
+release:
+  name: gpu-node-agent
+  namespace: cozy-gpu-operator
+tests:
+  - it: runs the agent image on NVIDIA nodes, tainted ones included
+    set:
+      image: registry.example/gpu-node-agent:test
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/gpu-node-agent:test
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            operator: Exists
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            feature.node.kubernetes.io/pci-10de.present: "true"
+
+  - it: names the node from the downward API, the only GPUNode it writes
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+
+  - it: mounts sysfs and the pod-resources directory read-only from the host
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sys
+            hostPath:
+              path: /sys
+              type: Directory
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: pod-resources
+            hostPath:
+              path: /var/lib/kubelet/pod-resources
+              type: Directory
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: sys
+            mountPath: /host/sys
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: pod-resources
+            mountPath: /var/lib/kubelet/pod-resources
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --sysfs=/host/sys
+
+  - it: passes the sync interval
+    set:
+      interval: 1m
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --interval=1m
+
+  - it: runs without privilege or capabilities
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      - notExists:
+          path: spec.template.spec.hostNetwork
+      - notExists:
+          path: spec.template.spec.hostPID
+
+  - it: probes health and readiness
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
+  - it: takes another node selector
+    set:
+      nodeSelector:
+        gpu: "yes"
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.gpu
+          value: "yes"

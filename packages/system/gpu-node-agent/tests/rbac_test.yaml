@@ -1,0 +1,45 @@
+suite: gpu-node-agent RBAC
+templates:
+  - templates/rbac.yaml
+release:
+  name: gpu-node-agent
+  namespace: cozy-gpu-operator
+tests:
+  - it: grants only what the agent does
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [gpu.cozystack.io]
+              resources: [gpunodes]
+              verbs: [create]
+            - apiGroups: [gpu.cozystack.io]
+              resources: [gpunodes/status]
+              verbs: [patch]
+            - apiGroups: [""]
+              resources: [nodes]
+              verbs: [get]
+            - apiGroups: [""]
+              resources: [pods]
+              verbs: [list]
+
+  - it: binds the role to the agent's service account
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cozy-gpu-node-agent
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: gpu-node-agent
+              namespace: cozy-gpu-operator

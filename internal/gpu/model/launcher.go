@@ -1,0 +1,58 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package model
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
+)
+
+// ActivePods is a VMI's status.activePods: the UIDs of the pods KubeVirt
+// runs it in, scheduled or not.
+func ActivePods(vmi *unstructured.Unstructured) sets.Set[types.UID] {
+	out := sets.New[types.UID]()
+	active, _, _ := unstructured.NestedMap(vmi.Object, "status", "activePods")
+	for uid := range active {
+		out.Insert(types.UID(uid))
+	}
+	return out
+}
+
+// LauncherVMI returns the VMI a pod is the launcher of: the KubeVirt VMI
+// its owner reference names, and only when that VMI lists the pod in
+// status.activePods. Whoever creates a pod sets its owner references and
+// labels, while no tenant role can write a VMI's status. activePods returns
+// the named VMI's active pods, nil when there is no such VMI.
+func LauncherVMI(p *corev1.Pod, activePods func(types.NamespacedName) (sets.Set[types.UID], error)) (types.NamespacedName, bool, error) {
+	for _, ref := range p.OwnerReferences {
+		if ref.Kind != "VirtualMachineInstance" || ref.APIVersion != "kubevirt.io/v1" {
+			continue
+		}
+		k := types.NamespacedName{Namespace: p.Namespace, Name: ref.Name}
+		active, err := activePods(k)
+		if err != nil {
+			return types.NamespacedName{}, false, err
+		}
+		if !active.Has(p.UID) {
+			return types.NamespacedName{}, false, nil
+		}
+		return k, true, nil
+	}
+	return types.NamespacedName{}, false, nil
+}
