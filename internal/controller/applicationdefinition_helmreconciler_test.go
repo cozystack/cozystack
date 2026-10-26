@@ -814,7 +814,7 @@ func TestAppDefHelm_HealthCheckExprsInSyncSkipsUpdate(t *testing.T) {
 			hr.Spec.HealthCheckExprs = tc.hrExprs
 
 			r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
-			if err := r.updateHelmReleaseChart(context.TODO(), hr, vmDiskAppDef("", tc.defExprs...)); err != nil {
+			if err := r.updateHelmReleaseChart(context.TODO(), hr, vmDiskAppDef("", tc.defExprs...), nil, false); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
