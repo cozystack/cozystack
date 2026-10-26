@@ -27,6 +27,7 @@ If you are about to generate a changelog only, jump straight to [`agents/changel
 - [Nightly builds](./release/nightly-builds.md): how a nightly mirrors `main` to GHCR, and how to install one.
 - [Backports](./release/backports.md): the policy that decides what goes into a patch release, and how a contributor gets a fix there.
 - [Backport mechanics](./release/backport-mechanics.md): cherry-pick triage before a patch, and the monotonic-counter trap.
+- [Backport tasks](./release/backport-tasks/README.md): resolving a batch conflict, deferring the original a failed batch CI comes from, and checking a pull request title, with the check each has to pass.
 - [Changelogs](./release/changelogs.md): changelog failure modes and the pre-publish checks.
 - [Release-time fires](./release/release-time-fires.md): regressions that escaped to users, and the verification gaps they expose.
 - [Pre-release verification checklist](./release/pre-release-checklist.md): what to verify before merging a release PR.

@@ -18,6 +18,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -343,5 +345,23 @@ func TestPRTitle(t *testing.T) {
 	l, _ := parseLine("release-1.6")
 	if got := prTitle(l, "2026-10-23"); got != "fix(backport): batch for release-1.6, 2026-10-23" {
 		t.Errorf("prTitle = %q", got)
+	}
+}
+
+// Every task page the body links to is in the tree, under the path the link
+// names on main.
+func TestBodyLinksTaskPagesThatExist(t *testing.T) {
+	l, _ := parseLine("release-1.6")
+	v := &verdict{o: &original{number: 9, title: "fix(x): conflict"}}
+	r := &report{line: l, deferred: []pick{{v: v, files: []string{"a"}}}, held: []pick{{v: &verdict{o: &original{number: 10}}, reason: "r"}}, skipped: map[int][]*verdict{}}
+	body, _ := r.body("")
+	links := regexp.MustCompile(regexp.QuoteMeta(tasksURL)+`([\w.-]+)`).FindAllStringSubmatch(body, -1)
+	if len(links) < 2 {
+		t.Fatalf("the body links %d task pages, want the index and the conflict task:\n%s", len(links), body)
+	}
+	for _, m := range links {
+		if _, err := os.Stat(filepath.Join("..", "..", "docs", "release", "backport-tasks", m[1])); err != nil {
+			t.Errorf("the body links %s, which is not in the tree: %v", m[0], err)
+		}
 	}
 }
