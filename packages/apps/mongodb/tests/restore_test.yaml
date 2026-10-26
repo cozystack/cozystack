@@ -1138,3 +1138,99 @@ tests:
           count: 1
       - isKind:
           of: PerconaServerMongoDBRestore
+
+  #####################
+  # Source path       #
+  #####################
+
+  - it: reads the backup from bootstrap.destinationPath when it is set
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        destinationPath: "s3://srcbucket/apps/source/"
+      backup:
+        destinationPath: "s3://mybucket/apps/target/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://srcbucket/apps/source/backup
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: srcbucket
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: apps/source/
+      - equal:
+          path: spec.backupSource.s3.endpointUrl
+          value: http://minio:9000
+      - equal:
+          path: spec.backupSource.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+
+  - it: keeps a numeric bucket and prefix of bootstrap.destinationPath as strings
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        destinationPath: "s3://2024/10"
+      backup:
+        destinationPath: "s3://mybucket/apps/target/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.bucket
+          value: "2024"
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: "10"
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://2024/10/backup
+
+  - it: fails when bootstrap.destinationPath names no bucket
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        destinationPath: "s3://"
+      backup:
+        destinationPath: "s3://mybucket/apps/target/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.destinationPath must be an s3 path that names a bucket, like s3://bucket/path/"
+
+  - it: fails when bootstrap.destinationPath is not an s3 path
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+        destinationPath: "srcbucket/apps/source/"
+      backup:
+        destinationPath: "s3://mybucket/apps/target/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.destinationPath must be an s3 path that names a bucket, like s3://bucket/path/"
