@@ -388,12 +388,14 @@ func main() {
 	}
 	// With GPU enabled, a replica is ready only once the GPU, Node,
 	// ConfigMap and Namespace informers have synced. Every replica starts
-	// them, because one that is not the leader starts no controller and GPU
-	// admission has to answer from a warm cache rather than LIST inside its
-	// deadline. Readiness does not wait for KubeVirt, whose kinds a fresh
-	// install can serve only after this controller starts: packages that
-	// depend on cozystack-controller wait for its readiness. The VMI and
-	// KubeVirt informers start once their kinds are served.
+	// them, so a replica that takes the lease starts the GPU controller on
+	// synced caches. The GPU webhooks read none of them: they serve on every
+	// replica while only the leader binds, so they read from the API, where
+	// a lagging watch cannot make them admit what the cluster refuses.
+	// Readiness does not wait for KubeVirt, whose kinds a fresh install can
+	// serve only after this controller starts: packages that depend on
+	// cozystack-controller wait for its readiness. The VMI and KubeVirt
+	// informers start once their kinds are served.
 	readyz := healthz.Ping
 	if gpuCfg.Enabled {
 		vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}

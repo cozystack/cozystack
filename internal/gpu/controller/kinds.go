@@ -48,8 +48,8 @@ func WaitForKinds(ctx context.Context, mapper meta.RESTMapper, interval time.Dur
 }
 
 // Warmup is a manager runnable that, on every replica, starts the
-// informers the GPU webhooks read and serves Ready as a readiness check that
-// fails until Objects have synced. Readiness gates webhook traffic and,
+// informers the GPU controller reads and serves Ready as a readiness check
+// that fails until Objects have synced. Readiness gates webhook traffic and,
 // through the packages that depend on cozystack-controller, the platform
 // install, so it does not wait for KubeVirt: KubeVirtObjects start in the
 // background once Kinds are served.
