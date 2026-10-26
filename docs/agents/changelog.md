@@ -135,7 +135,7 @@ git log v0.37.1..v0.37.2 --pretty=format:"%h - %s (%an, %ar)"
 
 **⚠️ IMPORTANT: Check for backports.** They reach a release line in two shapes:
 - A backport batch ([`docs/release/backports.md`](../release/backports.md)): a merge commit titled `fix(backport): batch for release-X.Y, <date> (#BATCH_PR)`, whose commits keep each original's own subject, `<original title> (#ORIGINAL_PR)`, and end with a `(cherry picked from commit <sha>)` line. The `(#N)` in such a commit's subject is the original, so read the original's number, title and author from there, and never write an entry for the batch PR itself.
-- A single backport PR, from the label-driven fallback bot or opened by hand: commits with "[Backport release-X.Y]" in the message, whose original PR number is in the backport commit message or PR description.
+- A single backport PR, from before the batch (the retired label-driven bot) or a release-only fix: commits with "[Backport release-X.Y]" in the message, whose original PR number is in the backport commit message or PR description.
 - Use the original PR author (not the backport or batch PR author) when creating changelog entries
 - **MUST** combine the original and backport into a **single entry** with both PR numbers (e.g. `#1606, backport #1609`, where a batch's original reads `#1606, backport #BATCH_PR`). Do NOT list the original and the backport as two separate entries — that produces duplicates in the changelog.
 

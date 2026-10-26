@@ -30,8 +30,6 @@ gitGraph
 
    The batch runs twice a week, so a fix merged into `main` reaches the line with the next batch that can pick it cleanly, without anyone asking for it.
 
-   The `kind/backport` label and [`backport.yaml`](../../.github/workflows/backport.yaml) remain as a manual fallback that maintainers may still use; [Backport mechanics](./backport-mechanics.md) describes them.
-
    ```mermaid
    gitGraph
        commit id: "feature 3" tag: "v1.2.0-rc.1"

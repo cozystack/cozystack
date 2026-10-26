@@ -26,7 +26,7 @@ If you are about to generate a changelog only, jump straight to [`agents/changel
 - [Release signatures and SBOM](./release/signatures-and-sbom.md): the SBOM, checksums and cosign signature on each release, and how to verify them.
 - [Nightly builds](./release/nightly-builds.md): how a nightly mirrors `main` to GHCR, and how to install one.
 - [Backports](./release/backports.md): the policy that decides what goes into a patch release, and how a contributor gets a fix there.
-- [Backport mechanics](./release/backport-mechanics.md): the label-driven bot kept as a manual fallback, its failure modes, cherry-pick triage before a patch, and the monotonic-counter trap.
+- [Backport mechanics](./release/backport-mechanics.md): cherry-pick triage before a patch, and the monotonic-counter trap.
 - [Changelogs](./release/changelogs.md): changelog failure modes and the pre-publish checks.
 - [Release-time fires](./release/release-time-fires.md): regressions that escaped to users, and the verification gaps they expose.
 - [Pre-release verification checklist](./release/pre-release-checklist.md): what to verify before merging a release PR.
@@ -52,5 +52,5 @@ If you are about to generate a changelog only, jump straight to [`agents/changel
 - [`agents/image-refs.md`](./agents/image-refs.md) — where image references live, what their tags mean, and the invariants promotion and mirroring rely on.
 - [`hack/lib/image-refs.sh`](../hack/lib/image-refs.sh) — the single enumeration of ref-bearing files, shared by the promote, retag and mirror tooling.
 - [`.github/workflows/retention.yaml`](../.github/workflows/retention.yaml) — GHCR nightly and abandoned promotion-candidate pruning.
-- [`.github/workflows/backport.yaml`](../.github/workflows/backport.yaml) — label-driven cherry-pick bot, kept as a manual fallback to the [backport policy](./release/backports.md).
+- [`cmd/backport-batch`](../cmd/backport-batch/README.md) — the backport batch that applies the [backport policy](./release/backports.md).
 - [`.github/workflows/update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — sync changelog → GitHub Release body.

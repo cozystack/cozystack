@@ -66,7 +66,3 @@ go build ./cmd/backport-batch
 A deferred conflict waits for the next batch. To land it sooner, resolve it with `git cherry-pick -x -m 1 <merge commit>` on top of the batch head, check the commit with `./backport-batch fold --line <line> --original <number> --commit <sha>`, and push it onto the batch branch.
 
 Before a patch release or an rc is cut from a line, `./backport-batch check --line <line>` has to exit 0. It exits 1 and prints the URLs while a pull request the rules take is neither on the line nor on the open batch pull request, and prints the batch's deferred conflicts as warnings.
-
-### The label-driven bot
-
-[`backport.yaml`](../../.github/workflows/backport.yaml) still cherry-picks a merged pull request that carries `kind/backport` or `kind/backport-previous`. It is no longer how a backport is requested, but maintainers may still use it as a manual fallback for a single pull request. [Backport mechanics](./backport-mechanics.md) describes how it works and what to do when it fails.
