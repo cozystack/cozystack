@@ -15,3 +15,14 @@ cozystackController:
   # Empty by default: no resources block is rendered, so requests and limits are
   # opt-in. Idle usage (measured) is ~69Mi — keep a limit above that.
   resources: {}
+  # GPUClaim placement and its admission webhooks. The platform enables it
+  # only where KubeVirt serves GPUs; it then runs two replicas, since the
+  # webhooks fail closed and would block GPU VM starts during a rollout.
+  gpu:
+    enabled: false
+    # Hoster's gpu.resourceNames: GPU resource names besides those of
+    # GPUClasses and node agents.
+    resourceNames: []
+    # allowed or forbidden: whether VMs and pods may request GPU resource
+    # names directly.
+    rawResourceNames: allowed

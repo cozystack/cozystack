@@ -17,8 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"strings"
-
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,12 +30,6 @@ var (
 	vmiGVK      = schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
 	vmGVK       = schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachine"}
 	kubeVirtGVK = schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "KubeVirt"}
-)
-
-// The KubeVirt CR the platform renders permittedHostDevices into.
-const (
-	kubeVirtNamespace = "cozy-kubevirt"
-	kubeVirtName      = "kubevirt"
 )
 
 // vmi is the part of a VirtualMachineInstance the controller reads.
@@ -133,69 +125,6 @@ func vmFrom(u *unstructured.Unstructured) *vm {
 	for _, r := range refs {
 		if r.Claim != "" {
 			out.Claims = append(out.Claims, r.Claim)
-		}
-	}
-	return out
-}
-
-type permittedEntry struct {
-	resourceName, vendorSelector string
-	mediated                     bool
-}
-
-// permittedEntries reads the KubeVirt CR's PCI and mediated
-// permittedHostDevices lists, where GPUs are declared, and false when the
-// table is unset.
-func permittedEntries(kv *unstructured.Unstructured) ([]permittedEntry, bool) {
-	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
-	if !ok || table == nil {
-		return nil, false
-	}
-	var out []permittedEntry
-	for _, list := range []string{"pciHostDevices", "mediatedDevices"} {
-		entries, _, _ := unstructured.NestedSlice(table, list)
-		for _, e := range entries {
-			m, ok := e.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, ok := m["resourceName"].(string)
-			if !ok {
-				continue
-			}
-			selector, _ := m["pciVendorSelector"].(string)
-			out = append(out, permittedEntry{resourceName: name, vendorSelector: selector, mediated: list == "mediatedDevices"})
-		}
-	}
-	return out, true
-}
-
-// permittedResourceNames returns the resource names of the KubeVirt CR's
-// permittedHostDevices table, or nil when the table is unset: KubeVirt
-// checks GPU entries against it only when it is non-nil
-// (renderresources.go validatePermittedHostDevices in v1.9.0).
-func permittedResourceNames(kv *unstructured.Unstructured) sets.Set[string] {
-	entries, ok := permittedEntries(kv)
-	if !ok {
-		return nil
-	}
-	out := sets.New[string]()
-	for _, e := range entries {
-		out.Insert(e.resourceName)
-	}
-	return out
-}
-
-// permittedGPUNames returns the table's GPU names: its NVIDIA (vendor
-// 10DE) PCI entries and its mediated entries. They join the effective GPU
-// resource-name set besides the hoster's list; a NIC in the table, such as
-// nvidia.com/hostdev of a ConnectX VF, is not a GPU.
-func permittedGPUNames(kv *unstructured.Unstructured) []string {
-	entries, _ := permittedEntries(kv)
-	var out []string
-	for _, e := range entries {
-		if e.mediated || strings.HasPrefix(strings.ToUpper(e.vendorSelector), "10DE:") {
-			out = append(out, e.resourceName)
 		}
 	}
 	return out

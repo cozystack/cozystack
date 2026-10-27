@@ -1,0 +1,17 @@
+{{- if (.Values.cozystackController.gpu).enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozystack-controller-webhook
+  labels:
+    app: cozystack-controller
+spec:
+  type: ClusterIP
+  ports:
+  - name: webhook
+    port: 443
+    targetPort: webhook
+    protocol: TCP
+  selector:
+    app: cozystack-controller
+{{- end }}

@@ -7,11 +7,12 @@ release:
   name: cozystack-basics
   namespace: cozy-system
 
-# Tenant roles read GPUClaim orders in their namespaces; no tenant role writes
-# them yet, since nothing checks an order's budget or entitlement here.
-# GPUClass is cluster-scoped, and tenant roles are bound per namespace, so its
-# read goes to every authenticated user through a ClusterRoleBinding. GPUNode,
-# which names physical devices, is granted to no tenant role.
+# Tenants with admin or above manage GPUClaim orders in their namespaces
+# where GPUs are on, and lower roles read them. GPUClass is cluster-scoped,
+# and tenant roles are bound per namespace, so its read goes to every
+# authenticated user through a ClusterRoleBinding. Neither the status of a
+# claim, which holds its binding, nor GPUNode, which names physical devices,
+# is granted to any tenant role.
 tests:
   # The filter returns the rule itself when exactly one rule names the group
   # and a list otherwise, so equal pins both the rule and that it is the only
@@ -28,10 +29,27 @@ tests:
             resources: ["gpuclaims"]
             verbs: ["get", "list", "watch"]
 
-  - it: cozy:tenant:admin:base grants nothing in gpu.cozystack.io
+  - it: cozy:tenant:admin:base grants only write on gpuclaims when GPUs are on
     set:
       gpu:
         enabled: true
+    capabilities:
+      apiVersions:
+        - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]
+          value:
+            apiGroups: ["gpu.cozystack.io"]
+            resources: ["gpuclaims"]
+            verbs: ["create", "update", "patch", "delete"]
+
+  # The write ships with the GPU policies that guard it, which render only
+  # where GPUs are on.
+  - it: cozy:tenant:admin:base grants nothing in gpu.cozystack.io while GPUs are off
     documentSelector:
       path: metadata.name
       value: cozy:tenant:admin:base

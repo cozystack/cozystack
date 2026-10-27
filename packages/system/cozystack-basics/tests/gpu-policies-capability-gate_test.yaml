@@ -2,6 +2,7 @@ suite: cozystack-basics GPU policies are gated on the ValidatingAdmissionPolicy 
 templates:
   - templates/gpu-class-policy.yaml
   - templates/gpu-claim-tamper-policy.yaml
+  - templates/gpu-raw-names-policy.yaml
 release:
   name: cozystack-basics
   namespace: cozy-system
@@ -12,6 +13,7 @@ tests:
     set:
       gpu:
         enabled: true
+        rawResourceNames: forbidden
     asserts:
       - hasDocuments:
           count: 0

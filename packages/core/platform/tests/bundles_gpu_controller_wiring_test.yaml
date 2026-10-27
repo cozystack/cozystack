@@ -1,0 +1,453 @@
+suite: bundles.system GPU feature → cozystack-controller and monitoring-agents wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+
+# cozystack-controller runs on every cluster, KubeVirt or not, so its GPU
+# paths that watch KubeVirt objects, and the scrape of the metrics they serve,
+# are switched on only where gpu-operator serves GPUs to VMs: enabled through
+# the iaas bundle in the default or vgpu variant. The container variant serves
+# GPUs to pods and never to VMs.
+tests:
+  - it: enables the controller's GPU paths under the default variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu
+          value:
+            enabled: true
+            resourceNames: []
+            rawResourceNames: allowed
+
+  - it: enables the controller's GPU paths under the vgpu variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu.enabled
+          value: true
+
+  - it: enables the controller's GPU paths on isp-full-generic next to the generic cozystack-api override
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu.enabled
+          value: true
+      - exists:
+          path: spec.components.cozystack-api.values.cozystackAPI.nodeSelector
+
+  - it: threads the hoster's resource names and raw-name policy
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        resourceNames:
+        - nvidia.com/gpu
+        - nvidia.com/GA102GL_A10
+        rawResourceNames: forbidden
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.cozystack-engine
+        equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu
+          value:
+            enabled: true
+            resourceNames:
+            - nvidia.com/gpu
+            - nvidia.com/GA102GL_A10
+            rawResourceNames: forbidden
+      # The raw-name policy in cozystack-basics enforces forbidden.
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.cozystack-basics
+        equal:
+          path: spec.components.cozystack-basics.values.gpu
+          value:
+            enabled: true
+            rawResourceNames: forbidden
+
+  - it: keeps the telemetry opt-out next to the GPU values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      telemetry:
+        disabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
+          value: true
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu.enabled
+          value: true
+
+  - it: enables the controller's GPU paths on the oidc engine variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      authentication:
+        oidc:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.variant
+          value: oidc
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu.enabled
+          value: true
+
+  - it: switches the controller's metrics scrape on with the GPU paths
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-agents
+    asserts:
+      - equal:
+          path: spec.components.monitoring-agents.values
+          value:
+            global:
+              target: tenant-root
+            gpu:
+              enabled: true
+
+  - it: leaves the monitoring-agents values unchanged under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-agents
+    asserts:
+      - equal:
+          path: spec.components.monitoring-agents.values
+          value:
+            global:
+              target: tenant-root
+
+  - it: leaves the controller untouched under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: leaves the controller untouched when gpu-operator is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: leaves the controller untouched when gpu-operator is also disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+        disabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components
+
+  # gpu-operator is emitted by the iaas bundle, so without it nothing serves
+  # GPUs whatever enabledPackages lists.
+  - it: leaves the controller untouched without the iaas bundle
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: refuses an unknown raw-name policy even with the feature off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: deny
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames must be "allowed" or "forbidden"'
+
+  - it: refuses a resource name carrying a comma
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - nvidia.com/a,nvidia.com/b
+    asserts:
+      - failedTemplate:
+          errorPattern: 'contains a comma'
+
+  - it: refuses a resource name that is not a string
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames must be a list of resource names'
+
+  - it: does not fail on a null gpu block
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu
+          value:
+            enabled: true
+            resourceNames: []
+            rawResourceNames: allowed
+
+  # Without GPUs for VMs neither the controller nor the raw-name policy runs,
+  # so forbidden would promise a guarantee nothing keeps.
+  - it: refuses forbidden without GPUs for VMs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs'
+
+  - it: refuses forbidden under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        rawResourceNames: forbidden
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames: forbidden needs gpu-operator serving GPUs to VMs'
+
+  - it: refuses a false raw-name policy instead of reading it as allowed
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames must be "allowed" or "forbidden"'
+
+  - it: refuses an empty raw-name policy
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        rawResourceNames: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.rawResourceNames must be "allowed" or "forbidden"'
+
+  - it: refuses an empty resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+  - it: refuses a resource name with spaces
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - "nvidia.com/a b"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+  # Every extended resource has a domain prefix; names without one, and the
+  # kubernetes.io ones, are standard resources and never a GPU.
+  - it: refuses a resource name without a domain
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - gpu
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+
+  - it: refuses a standard resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - memory
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+
+
+  - it: refuses a kubernetes.io resource name
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gpu:
+        resourceNames:
+        - kubernetes.io/batch
+    asserts:
+      - failedTemplate:
+          errorPattern: 'gpu.resourceNames entry .* is not a resource name'
+

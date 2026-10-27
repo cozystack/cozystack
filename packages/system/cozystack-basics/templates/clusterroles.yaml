@@ -293,6 +293,15 @@ rules:
   - update
   - patch
   - delete
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+{{/* Rendered under the same conditions as cozystack-gpu-claim-tamper, which
+     keeps tenants off a claim's finalizers and template mark. Status, which
+     carries the binding and attachment, is a subresource and stays the
+     controller's. */}}
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclaims"]
+  verbs: ["create", "update", "patch", "delete"]
+{{- end }}
 ---
 # == super admin cluster role ==
 # Aggregates admin + all roles labeled for super-admin access

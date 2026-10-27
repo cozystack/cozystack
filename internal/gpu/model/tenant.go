@@ -69,3 +69,18 @@ func InSubtree(ns, root string) bool {
 func Entitled(namespaceLabels map[string]string) bool {
 	return namespaceLabels[gpu.LabelNamespaceVGPU] == gpu.LabelValueTrue
 }
+
+// TenantReleaseRef returns the name and namespace of the HelmRelease of
+// the tenant that owns ns, the inverse of the tenant namespace naming in
+// cozystack-api: tenant-root is its own, tenant-foo lives in tenant-root
+// as tenant-foo, and tenant-foo-bar lives in tenant-foo as tenant-bar.
+func TenantReleaseRef(ns string) (name, namespace string, ok bool) {
+	parent := ParentNamespace(ns)
+	switch {
+	case ns == rootTenantNamespace:
+		return rootTenantNamespace, rootTenantNamespace, true
+	case parent == "":
+		return "", "", false
+	}
+	return tenantNamespacePrefix + ns[strings.LastIndex(ns, "-")+1:], parent, true
+}

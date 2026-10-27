@@ -87,3 +87,21 @@ func TestEntitled(t *testing.T) {
 		}
 	}
 }
+
+func TestTenantReleaseRef(t *testing.T) {
+	for _, c := range []struct {
+		ns, name, namespace string
+		ok                  bool
+	}{
+		{"tenant-root", "tenant-root", "tenant-root", true},
+		{"tenant-foo", "tenant-foo", "tenant-root", true},
+		{"tenant-foo-bar", "tenant-bar", "tenant-foo", true},
+		{"tenant-foo-bar-baz", "tenant-baz", "tenant-foo-bar", true},
+		{"cozy-system", "", "", false},
+	} {
+		name, namespace, ok := TenantReleaseRef(c.ns)
+		if name != c.name || namespace != c.namespace || ok != c.ok {
+			t.Errorf("TenantReleaseRef(%q) = %q, %q, %v; want %q, %q, %v", c.ns, name, namespace, ok, c.name, c.namespace, c.ok)
+		}
+	}
+}

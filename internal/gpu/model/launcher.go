@@ -21,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 )
 
 // ActivePods is a VMI's status.activePods: the UIDs of the pods KubeVirt
@@ -55,4 +57,25 @@ func LauncherVMI(p *corev1.Pod, activePods func(types.NamespacedName) (sets.Set[
 		return k, true, nil
 	}
 	return types.NamespacedName{}, false, nil
+}
+
+// CoveredForBudget maps a VMI to the units, per resource name, that its
+// attached claims account for, so its launcher pod does not count them
+// against a raw budget key a second time. Every attached claim counts, a
+// Lost one included, since it still counts against budgets itself; node
+// capacity needs another rule, where a Lost claim holds nothing.
+func CoveredForBudget(claims []*gpuv1alpha1.GPUClaim, classes map[string]Class) map[types.NamespacedName]map[corev1.ResourceName]int64 {
+	out := map[types.NamespacedName]map[corev1.ResourceName]int64{}
+	for _, d := range claims {
+		rn := classes[d.Spec.ClassName].ResourceName
+		if d.Status.AttachedTo == nil || rn == "" {
+			continue
+		}
+		k := types.NamespacedName{Namespace: d.Namespace, Name: d.Status.AttachedTo.VMI}
+		if out[k] == nil {
+			out[k] = map[corev1.ResourceName]int64{}
+		}
+		out[k][rn] += int64(d.Spec.Count)
+	}
+	return out
 }

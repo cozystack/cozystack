@@ -17,9 +17,12 @@ limitations under the License.
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/cozystack/cozystack/internal/gpu"
 )
@@ -86,4 +89,25 @@ func RawQuotaLimit(quota corev1.ResourceList, name corev1.ResourceName) (int64, 
 		found = true
 	}
 	return limit, found
+}
+
+// DeclaredQuotas reads resourceQuotas from a tenant HelmRelease's values,
+// every key as written: GPU keys are never rendered into a namespace
+// ResourceQuota, so the release is where budgets are declared. A value
+// that is not a quantity fails the read rather than reading as no budget.
+func DeclaredQuotas(values []byte) (corev1.ResourceList, error) {
+	out := corev1.ResourceList{}
+	if len(values) == 0 {
+		return out, nil
+	}
+	var v struct {
+		ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas"`
+	}
+	if err := json.Unmarshal(values, &v); err != nil {
+		return nil, fmt.Errorf("decode tenant resourceQuotas: %w", err)
+	}
+	for k, q := range v.ResourceQuotas {
+		out[corev1.ResourceName(k)] = q
+	}
+	return out, nil
 }

@@ -1,0 +1,51 @@
+suite: cozystack-controller scrape for the GPU binder metrics
+templates:
+  - templates/cozystack-controller-scrape.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: renders nothing without GPU
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the controller's authenticated metrics port
+    set:
+      gpu.enabled: true
+    documentSelector:
+      path: kind
+      value: VMServiceScrape
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: cozystack-controller
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value: [cozy-system]
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: https
+      - equal:
+          path: spec.endpoints[0].bearerTokenFile
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+
+  # controller-runtime's metrics filter asks the API server whether the
+  # scraper may GET /metrics.
+  - it: lets vmagent read the controller's metrics
+    set:
+      gpu.enabled: true
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: vmagent-vmagent
+              namespace: cozy-monitoring

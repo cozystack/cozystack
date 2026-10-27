@@ -1,0 +1,11 @@
+{{- if (.Values.cozystackController.gpu).enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cozystack-controller
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: cozystack-controller
+{{- end }}

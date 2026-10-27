@@ -123,12 +123,37 @@
       "default": [],
       "items": {
         "type": "object",
-        "required": [
-          "name"
-        ],
         "properties": {
+          "claim": {
+            "description": "GPUClaim in this namespace to attach.",
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "gpuclaim"
+            }
+          },
+          "claimTemplate": {
+            "description": "GPU claim to order for this VM while it runs.",
+            "type": "object",
+            "required": [
+              "className",
+              "count"
+            ],
+            "properties": {
+              "className": {
+                "description": "GPUClass to order the claim from.",
+                "type": "string",
+                "x-cozystack-options": {
+                  "source": "gpuclass"
+                }
+              },
+              "count": {
+                "description": "GPUs of the class, all on one node.",
+                "type": "integer"
+              }
+            }
+          },
           "name": {
-            "description": "The name of the GPU resource to attach.",
+            "description": "Resource name of the GPU to request directly.",
             "type": "string",
             "x-cozystack-options": {
               "source": "gpu"

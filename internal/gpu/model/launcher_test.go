@@ -17,6 +17,7 @@ limitations under the License.
 package model
 
 import (
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 )
 
 func TestLauncherVMI(t *testing.T) {
@@ -63,5 +66,28 @@ func TestActivePods(t *testing.T) {
 	_ = unstructured.SetNestedMap(vmi.Object, map[string]any{"pod-a": "node-1", "pod-b": ""}, "status", "activePods")
 	if got := ActivePods(vmi); !got.Equal(sets.New[types.UID]("pod-a", "pod-b")) {
 		t.Fatalf("ActivePods = %v", got)
+	}
+}
+
+func TestCoveredForBudget(t *testing.T) {
+	claim := func(name, class string, count int32, phase gpuv1alpha1.GPUClaimPhase, vmi string) *gpuv1alpha1.GPUClaim {
+		d := &gpuv1alpha1.GPUClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-a", Name: name},
+			Spec: gpuv1alpha1.GPUClaimSpec{ClassName: class, Count: count}, Status: gpuv1alpha1.GPUClaimStatus{Phase: phase}}
+		if vmi != "" {
+			d.Status.AttachedTo = &gpuv1alpha1.GPUClaimAttachment{VMI: vmi}
+		}
+		return d
+	}
+	classes := map[string]Class{"h100": {Name: "h100", ResourceName: "nvidia.com/H100"}, "dra": {Name: "dra"}}
+	got := CoveredForBudget([]*gpuv1alpha1.GPUClaim{
+		claim("a", "h100", 2, gpuv1alpha1.GPUClaimAttached, "vm"),
+		claim("b", "h100", 1, gpuv1alpha1.GPUClaimLost, "vm"),
+		claim("c", "h100", 4, gpuv1alpha1.GPUClaimBound, ""),
+		claim("d", "dra", 1, gpuv1alpha1.GPUClaimAttached, "vm"),
+		claim("e", "gone", 1, gpuv1alpha1.GPUClaimAttached, "vm"),
+	}, classes)
+	want := map[types.NamespacedName]map[corev1.ResourceName]int64{{Namespace: "tenant-a", Name: "vm"}: {"nvidia.com/H100": 3}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v: attached claims of a device-plugin class, a Lost one included", got, want)
 	}
 }

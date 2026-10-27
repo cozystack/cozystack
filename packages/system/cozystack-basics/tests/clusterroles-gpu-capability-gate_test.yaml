@@ -1,0 +1,21 @@
+suite: cozystack-basics GPUClaim write follows the policies that guard it
+templates:
+  - templates/clusterroles.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+# The GPU policies render only where the API server serves
+# ValidatingAdmissionPolicy, so the write they guard does too.
+capabilities:
+  apiVersions: []
+tests:
+  - it: grants no GPUClaim write without the ValidatingAdmissionPolicy API
+    set:
+      gpu:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[*] == "gpu.cozystack.io")]

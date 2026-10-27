@@ -2,6 +2,7 @@ suite: cozystack-basics GPU admission policies follow the platform's GPU switch
 templates:
   - templates/gpu-class-policy.yaml
   - templates/gpu-claim-tamper-policy.yaml
+  - templates/gpu-raw-names-policy.yaml
 release:
   name: cozystack-basics
   namespace: cozy-system
@@ -9,11 +10,17 @@ capabilities:
   apiVersions:
     - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
 # The decisions of each policy are pinned in internal/gpu/policytest, which
-# reads these templates. This suite pins when they render: only where the
-# platform switched GPUs for VMs on.
+# reads these templates. This suite pins when they render: the class and
+# claim policies only where the platform switched GPUs for VMs on, and the
+# raw-name policy only where the hoster also forbade raw names, since its
+# bindings refuse everything they match until the controller publishes the
+# GPU resource names.
 tests:
   - it: renders no GPU policy by default
     asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-raw-names-policy.yaml
       - hasDocuments:
           count: 0
         template: templates/gpu-class-policy.yaml
@@ -21,7 +28,7 @@ tests:
           count: 0
         template: templates/gpu-claim-tamper-policy.yaml
 
-  - it: renders every GPU policy when GPUs are on
+  - it: renders the class and claim policies when GPUs are on
     set:
       gpu:
         enabled: true
@@ -32,6 +39,9 @@ tests:
       - hasDocuments:
           count: 2
         template: templates/gpu-claim-tamper-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-raw-names-policy.yaml
 
   - it: accepts the switch as a string
     set:
@@ -64,3 +74,22 @@ tests:
       - hasDocuments:
           count: 0
         template: templates/gpu-claim-tamper-policy.yaml
+
+  - it: renders the raw-name policy when raw names are forbidden
+    set:
+      gpu:
+        enabled: true
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders no raw-name policy while GPUs are off
+    set:
+      gpu:
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -921,6 +921,21 @@ gpu:
   # only when its own Tenant sets gpu.vgpu and its parent is entitled, so
   # vGPU reaches no tenant until this is on.
   vgpu: false
+  # Resource names that count as GPUs, such as nvidia.com/gpu of the container
+  # variant, besides those of GPUClass objects, those the node agent reports
+  # and the NVIDIA and mediated entries of the KubeVirt permittedHostDevices
+  # table. Under forbidden, the raw-name policy refuses every gpus entry of
+  # a VM whatever its name, and matches hostDevices device names and resource
+  # keys of VMs and pods against the GPU resource names: this list, the
+  # classes' names, the node agents' names and the table's GPU names.
+  resourceNames: []
+  # allowed or forbidden. Under forbidden, a VM takes a GPU only through a
+  # GPUClaim reference, and a pod in a tenant namespace requests a GPU
+  # resource name only as a virt-launcher pod of KubeVirt. Set it only once no
+  # raw GPU name is in use: no worker pools with raw GPU names, ComputePlane
+  # GPU groups included, no GPU instance types in use and no raw GPU quota
+  # keys.
+  rawResourceNames: allowed
 
 # VM import from external virtualization platforms (opt-in; see the iaas bundle).
 vmImport:

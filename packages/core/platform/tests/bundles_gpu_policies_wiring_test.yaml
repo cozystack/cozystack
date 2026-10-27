@@ -28,6 +28,7 @@ tests:
           path: spec.components.cozystack-basics.values.gpu
           value:
             enabled: true
+            rawResourceNames: allowed
 
   - it: enables the GPU policies under the vgpu variant
     set:
@@ -65,24 +66,6 @@ tests:
       - equal:
           path: spec.components.cozystack-basics.values.gpu.enabled
           value: true
-
-  # The controller's GPU switch is threaded with the chart code that reads it.
-  - it: leaves the controller untouched when GPUs are on
-    set:
-      bundles:
-        system:
-          enabled: true
-          variant: isp-full
-        iaas:
-          enabled: true
-        enabledPackages:
-        - cozystack.gpu-operator
-    documentSelector:
-      path: metadata.name
-      value: cozystack.cozystack-engine
-    asserts:
-      - notExists:
-          path: spec.components
 
   - it: renders no GPU switch under the container variant
     set:
