@@ -54,7 +54,7 @@ In VictoriaLogs, the stream fields of the audit output include `verb` and `user_
 objectRef.subresource:mint AND objectRef.resource:credentials
 ```
 
-The matching record names the Credential in `objectRef.name`, the caller in `user.username`, the impersonated user where Kubernetes impersonation was used, the source address, the response code and the authorization decision. The user is a person only when the dashboard signs in through OIDC; without it, the dashboard acts as the tenant ServiceAccount.
+The matching record names the Credential in `objectRef.name`, the caller in `user_username`, the impersonated user where Kubernetes impersonation was used, the source address, the response code and the authorization decision. The user is a person only when the dashboard signs in through OIDC; without it, the dashboard acts as the tenant ServiceAccount.
 
 ## Shipping the log to a SIEM
 

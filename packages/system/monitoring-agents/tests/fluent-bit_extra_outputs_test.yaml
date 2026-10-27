@@ -28,6 +28,12 @@ tests:
               Host siem.example.org
               Port 24224
     asserts:
+      # The added section sits at the indent of the existing ones: sections at
+      # column 0 and keys at 4 in the ConfigMap value. fluent-bit refuses a
+      # config whose indentation is inconsistent and then ships no logs at all.
       - matchRegex:
           path: data["fluent-bit.conf"]
-          pattern: 'Match audit\.\*\n\s+Host vlinsert-generic\.cozy-monitoring\.svc[\s\S]*\[OUTPUT\]\n\s+Name forward\n\s+Match audit\.\*\n\s+Host siem\.example\.org\n\s+Port 24224'
+          pattern: '\n\[OUTPUT\]\n    Name http\n    Match audit\.\*\n'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\n\[OUTPUT\]\n    Name forward\n    Match audit\.\*\n    Host siem\.example\.org\n    Port 24224\n'

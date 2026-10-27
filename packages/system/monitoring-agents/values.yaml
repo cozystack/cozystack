@@ -439,7 +439,7 @@ fluent-bit:
           header AccountID 0
           header ProjectID 0
       {{- with .Values.extraOutputs }}
-      {{ . | nindent 6 }}
+      {{ . }}
       {{- end }}
       {{- range $target, $_ := include "monitoring-agents.tenantLogRoutes" . | fromJson }}
       [OUTPUT]
