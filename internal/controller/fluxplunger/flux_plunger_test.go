@@ -1193,24 +1193,35 @@ func TestReconcile_EmitsEventOnExternalSuspension(t *testing.T) {
 	}
 }
 
-// A suspension flux-plunger does not own on a release flux-plunger has recovered
-// before is most likely one an earlier flux-plunger left mid-recovery under the
-// shared field manager: it stays suspended for good unless someone acts, so it
-// is a Warning, while one on a release flux-plunger never touched stays Normal.
-func TestReconcile_ExternalSuspensionOnARecoveredReleaseWarns(t *testing.T) {
+// A suspension flux-plunger does not own is most likely one an earlier
+// flux-plunger left mid-recovery, under the shared field manager, when the
+// release is frozen in the failure recovery starts from: helm-controller
+// rewrites no condition of a suspended release, so a release suspended
+// mid-recovery keeps "has no deployed releases" for good unless someone acts,
+// and that is a Warning. The processed-version annotation is no sign of it: it
+// stays on every release flux-plunger ever recovered, so a later restore,
+// migration or operator suspension of a healthy release would be told to resume
+// it, and a first recovery left mid-flight had not written it yet.
+func TestReconcile_ExternalSuspensionOnAStuckReleaseWarns(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		recovered bool
+		stuck     bool
 		want      string
 	}{
-		{"recovered before", true, corev1.EventTypeWarning},
-		{"never recovered", false, corev1.EventTypeNormal},
+		{"stuck, recovered before", true, true, corev1.EventTypeWarning},
+		{"stuck, first recovery", false, true, corev1.EventTypeWarning},
+		{"healthy, recovered before", true, false, corev1.EventTypeNormal},
+		{"healthy, never recovered", false, false, corev1.EventTypeNormal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hr := noDeployedReleasesHR()
 			hr.Spec.Suspend = true
 			if tc.recovered {
 				hr.Annotations = map[string]string{annotationLastProcessedVersion: "3"}
+			}
+			if !tc.stuck {
+				hr.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "InstallSucceeded", Message: "Helm install succeeded"}}
 			}
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(hr).
 				WithInterceptorFuncs(interceptor.Funcs{Patch: ssaModelApply}).Build()
@@ -1750,6 +1761,7 @@ func TestReconcile_LiftsFenceOnlyOnceUninstallReached(t *testing.T) {
 func TestReconcile_TerminatingForeignSuspensionReleasesFence(t *testing.T) {
 	hr := terminatingFixture(fencedFixture(noDeployedReleasesHR()))
 	hr.Spec.Suspend = true // not flux-plunger's
+	hr.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "UpgradeSucceeded", Message: "Helm upgrade succeeded"}}
 
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(hr).
 		WithInterceptorFuncs(interceptor.Funcs{Patch: ssaModelApply}).Build()
@@ -1775,6 +1787,52 @@ func TestReconcile_TerminatingForeignSuspensionReleasesFence(t *testing.T) {
 		}
 	default:
 		t.Fatalf("expected a TerminatingWhileSuspended event, got none")
+	}
+}
+
+// A release deleted under a suspension flux-plunger does not own loses its
+// resources either way; that is an accident, and a Warning, when the suspension
+// is most likely one an earlier flux-plunger left mid-recovery, which freezes
+// the release in the failure recovery starts from. A migration that suspends
+// then deletes a healthy release meant it, whatever annotation an earlier
+// recovery left on it.
+func TestReconcile_TerminatingForeignSuspensionWarnsOnlyOnAStuckRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovered bool
+		stuck     bool
+		want      string
+	}{
+		{"stuck, recovered before", true, true, corev1.EventTypeWarning},
+		{"stuck, first recovery", false, true, corev1.EventTypeWarning},
+		{"healthy, recovered before", true, false, corev1.EventTypeNormal},
+		{"healthy, never recovered", false, false, corev1.EventTypeNormal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hr := terminatingFixture(fencedFixture(noDeployedReleasesHR()))
+			hr.Spec.Suspend = true
+			if tc.recovered {
+				hr.Annotations = map[string]string{annotationLastProcessedVersion: "3"}
+			}
+			if !tc.stuck {
+				hr.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "UpgradeSucceeded", Message: "Helm upgrade succeeded"}}
+			}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(hr).
+				WithInterceptorFuncs(interceptor.Funcs{Patch: ssaModelApply}).Build()
+			rec := record.NewFakeRecorder(8)
+			r := &FluxPlunger{Client: c, owns: testOwns, Recorder: rec}
+
+			reconcile(t, r)
+
+			select {
+			case e := <-rec.Events:
+				if !strings.HasPrefix(e, tc.want+" TerminatingWhileSuspended ") {
+					t.Fatalf("want a %s TerminatingWhileSuspended event, got %q", tc.want, e)
+				}
+			default:
+				t.Fatal("no event")
+			}
+		})
 	}
 }
 
@@ -1830,48 +1888,6 @@ func TestReconcile_HeldFenceRequeuesAndWarnsPastTheDeadline(t *testing.T) {
 			}
 			if _, ok := hrExists(t, c); !ok {
 				t.Fatalf("the fence must keep holding the release; warning is not lifting it")
-			}
-		})
-	}
-}
-
-// The same terminating-under-a-foreign-suspension state is two different things.
-// A migration that suspends then deletes chose to keep the resources, so it is
-// Normal. A release flux-plunger has recovered before (it carries the
-// processed-version annotation: an operator suspended it by hand and deleted it,
-// or an earlier flux-plunger release left it suspended) is losing its uninstall by
-// accident, the failure this controller exists to prevent, so it is a Warning.
-func TestReconcile_TerminatingForeignSuspensionWarnsOnlyForAPreviouslyRecoveredRelease(t *testing.T) {
-	cases := []struct {
-		name      string
-		annotated bool
-		wantType  string
-	}{
-		{"never recovered by flux-plunger (migration)", false, corev1.EventTypeNormal},
-		{"recovered by flux-plunger before", true, corev1.EventTypeWarning},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			hr := terminatingFixture(noDeployedReleasesHR())
-			hr.Spec.Suspend = true // not flux-plunger's
-			if tc.annotated {
-				hr.Annotations = map[string]string{annotationLastProcessedVersion: "3"}
-			}
-
-			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(hr).
-				WithInterceptorFuncs(interceptor.Funcs{Patch: ssaModelApply}).Build()
-			rec := record.NewFakeRecorder(8)
-			r := &FluxPlunger{Client: c, owns: testOwns, Recorder: rec}
-
-			reconcile(t, r)
-
-			select {
-			case e := <-rec.Events:
-				if !strings.HasPrefix(e, tc.wantType+" TerminatingWhileSuspended ") {
-					t.Fatalf("expected a %s TerminatingWhileSuspended event, got %q", tc.wantType, e)
-				}
-			default:
-				t.Fatalf("expected a TerminatingWhileSuspended event, got none")
 			}
 		})
 	}

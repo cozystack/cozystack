@@ -258,8 +258,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		// Update only the fields this API owns (spec, the tap label and name
 		// annotation) on the FETCHED object, so the operator's finalizer survives.
 		// Clear the materialized-revision annotation so a re-connect re-materializes
-		// and recovers a registration Package (or PackageSource) removed out-of-band
-		// since the last materialization, the same recovery `cozypkg tap` performs.
+		// and recovers a PackageSource removed out-of-band since the last
+		// materialization, the same recovery `cozypkg tap` performs. Connecting
+		// installs nothing, so this does not re-install an app removed with
+		// `cozypkg del`.
 		cur.Object["spec"] = repo.Object["spec"]
 		labels := cur.GetLabels()
 		if labels == nil {

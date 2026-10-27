@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -10,6 +11,7 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -133,16 +135,20 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 
 	logger.V(4).Info("Found HelmReleases to update", "appDef", appDef.Name, "kind", applicationKind, "count", len(hrList.Items))
 
-	// Update each HelmRelease
+	// Update each HelmRelease. Only definition events and the manager's
+	// hours-long resync enqueue this reconciler, so a release whose update
+	// failed (a conflict with helm-controller writing it, say) would stay out
+	// of sync until then unless the failure is returned and retried.
+	var errs []error
 	for i := range hrList.Items {
 		hr := &hrList.Items[i]
 		if err := r.updateHelmReleaseChart(ctx, hr, appDef); err != nil {
 			logger.Error(err, "failed to update HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
-			continue
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // expectedValuesFrom returns the expected valuesFrom configuration for HelmReleases
@@ -246,6 +252,31 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 		if hrCopy.Spec.Upgrade != nil && hrCopy.Spec.Upgrade.DisableWait != disableWait {
 			logger.V(4).Info("Updating HelmRelease upgrade wait", "name", hr.Name, "namespace", hr.Namespace, "disableWait", disableWait)
 			hrCopy.Spec.Upgrade.DisableWait = disableWait
+			updated = true
+		}
+	}
+
+	// Check and update the health checks the wait applies. cozystack-api writes
+	// healthCheckExprs and the wait strategy only when it builds a release, so
+	// a release created before the definition exempted an object would keep
+	// waiting on it at every upgrade, and fail for good on one that never
+	// settles. Both are derived the way the API derives them, in both
+	// directions, so the release matches what a fresh write would produce. A
+	// release another chart renders carries Flux's origin label and takes its
+	// gate from that chart.
+	if _, rendered := hr.Labels["helm.toolkit.fluxcd.io/name"]; !rendered {
+		exprs := appDef.Spec.Release.HealthCheckExprs
+		// Semantic equality treats nil and empty as equal, so a release
+		// already in sync is not rewritten.
+		if !equality.Semantic.DeepEqual(hrCopy.Spec.HealthCheckExprs, exprs) {
+			logger.V(4).Info("Updating HelmRelease healthCheckExprs", "name", hr.Name, "namespace", hr.Namespace)
+			hrCopy.Spec.HealthCheckExprs = exprs
+			updated = true
+		}
+		waitStrategy := config.ResolveWaitStrategy(appDef.Spec.Release.WaitStrategy, len(exprs) > 0)
+		if !equality.Semantic.DeepEqual(hrCopy.Spec.WaitStrategy, waitStrategy) {
+			logger.V(4).Info("Updating HelmRelease waitStrategy", "name", hr.Name, "namespace", hr.Namespace, "waitStrategy", waitStrategy)
+			hrCopy.Spec.WaitStrategy = waitStrategy
 			updated = true
 		}
 	}

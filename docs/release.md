@@ -540,7 +540,7 @@ git diff --name-only $PREV..$NEW -- 'packages/*/charts/*/Chart.yaml' 'packages/*
 done
 
 # B. Out-of-Chart.yaml pins (Talos, tenant K8s, vendored images)
-for path in packages/core/talos/values.yaml packages/core/installer/values.yaml packages/apps/kubernetes/values.yaml; do
+for path in packages/core/talos/images/talos/profiles/installer.yaml packages/core/installer/values.yaml packages/apps/kubernetes/values.yaml; do
   git diff $PREV..$NEW -- "$path" | head -40
 done
 git diff --name-only $PREV..$NEW -- 'images/*/Dockerfile'

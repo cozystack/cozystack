@@ -61,6 +61,13 @@ type JobSpec struct {
 	//   - `.Parameters` — the resolved BackupClass strategy parameters.
 	//   - `.Backup` — only on restore runs: `.Backup.Name`, `.Backup.Namespace`
 	//     and `.Backup.ApplicationRef` describing the source backup.
+	//
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
+	//
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
 	Template corev1.PodTemplateSpec `json:"template"`
 }
 

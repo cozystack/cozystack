@@ -299,24 +299,6 @@ func TestDeleteRegistrationPackageLosesRaceToHandover(t *testing.T) {
 	}
 }
 
-func TestHasDefaultVariant(t *testing.T) {
-	with := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
-		Variants: []cozyv1alpha1.Variant{{Name: "big"}, {Name: "default"}},
-	}}
-	if !hasDefaultVariant(with) {
-		t.Error("expected a default variant to be detected")
-	}
-	without := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
-		Variants: []cozyv1alpha1.Variant{{Name: "only"}, {Name: "second"}},
-	}}
-	if hasDefaultVariant(without) {
-		t.Error("expected no default variant")
-	}
-	if hasDefaultVariant(&cozyv1alpha1.PackageSource{}) {
-		t.Error("expected no default variant for an empty source")
-	}
-}
-
 func TestPrivilegedInstallComponents(t *testing.T) {
 	ps := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
 		Variants: []cozyv1alpha1.Variant{{
@@ -337,18 +319,20 @@ func TestPrivilegedInstallComponents(t *testing.T) {
 	}
 }
 
-// TestReconcileRegistersApps asserts the happy path: a materialized tap creates
-// a tap-managed registration Package so the repository's apps register in the
-// catalog on connect, without a manual `cozypkg add`.
-func TestReconcileRegistersApps(t *testing.T) {
+// TestReconcileCreatesNoPackageOnConnect asserts that connecting a repository
+// materializes its PackageSource and nothing else: no Package (and so no
+// HelmRelease or ApplicationDefinition) is created on connect. Auto-registering
+// on connect ran a publisher's install chart under Flux's cluster-admin account
+// with no operator step (issue #4978); installing is now explicit via
+// `cozypkg add`.
+func TestReconcileCreatesNoPackageOnConnect(t *testing.T) {
 	scheme := tapScheme(t)
 	data, digest := tarGz(t, map[string]string{
 		// samplePS declares PackageSource "example.hello" with a default variant.
 		"packages/core/platform/sources/hello.yaml": samplePS,
 	})
-	repo := tapRepo(true)
 	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(repo).
+		WithObjects(tapRepo(true)).
 		WithStatusSubresource(&sourcev1.OCIRepository{}).
 		Build()
 
@@ -374,25 +358,57 @@ func TestReconcileRegistersApps(t *testing.T) {
 	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.PackageSource{}); err != nil {
 		t.Fatalf("PackageSource not materialized: %v", err)
 	}
-	// A tap-managed registration Package was created for it.
+	// No Package is created: connect installs nothing.
 	var pkg cozyv1alpha1.Package
-	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); err != nil {
-		t.Fatalf("registration Package not created: %v", err)
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); !apierrors.IsNotFound(err) {
+		t.Fatalf("connect must create no Package, got err=%v pkg=%+v", err, pkg)
 	}
-	if pkg.GetLabels()[tapconst.Label] != "true" {
-		t.Errorf("registration Package must be tap-managed (labelled), got %v", pkg.GetLabels())
+}
+
+// TestReconcileDoesNotRecreateDeletedPackage asserts that a Package the admin
+// removed (e.g. with `cozypkg del`) stays removed across a new source revision.
+// Auto-registration used to re-create it on every revision (the second effect in
+// issue #4978); with it gone the materializer never creates a Package at all.
+func TestReconcileDoesNotRecreateDeletedPackage(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{
+		"packages/core/platform/sources/hello.yaml": samplePS,
+	})
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true)).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	// Connect (rev1): materializes the PackageSource, creates no Package.
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev1: %v", err)
 	}
-	if pkg.GetAnnotations()[tapconst.SourceAnnotation] != repo.Name {
-		t.Errorf("registration Package must record its source, got %v", pkg.GetAnnotations())
+
+	// Admin installs then removes the app: a plain user Package appears and is
+	// then deleted with `cozypkg del`.
+	userPkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "example.hello"}}
+	if err := cl.Create(context.Background(), userPkg); err != nil {
+		t.Fatalf("create user Package: %v", err)
 	}
-	// Variant is left empty so the Package reconciler resolves it to "default"
-	// deterministically, rather than pinning whichever variant was listed first.
-	if pkg.Spec.Variant != "" {
-		t.Errorf("registration Package must leave Variant empty, got %q", pkg.Spec.Variant)
+	if err := cl.Delete(context.Background(), userPkg); err != nil {
+		t.Fatalf("delete user Package: %v", err)
 	}
-	// Owned by its PackageSource so a direct delete of the PackageSource GCs it.
-	if len(pkg.OwnerReferences) != 1 || pkg.OwnerReferences[0].Kind != "PackageSource" || pkg.OwnerReferences[0].Name != "example.hello" {
-		t.Errorf("registration Package must own-ref its PackageSource, got %+v", pkg.OwnerReferences)
+
+	// A new revision must not resurrect the deleted Package.
+	data2, digest2 := tarGz(t, map[string]string{
+		"packages/core/platform/sources/hello.yaml": samplePS,
+	})
+	cur = data2
+	setArtifact(t, cl, digest2, "rev2")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev2: %v", err)
+	}
+	var pkg cozyv1alpha1.Package
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); !apierrors.IsNotFound(err) {
+		t.Fatalf("a removed Package must stay removed across revisions, got err=%v pkg=%+v", err, pkg)
 	}
 }
 
@@ -422,10 +438,10 @@ func setArtifact(t *testing.T, cl client.Client, digest, rev string) {
 }
 
 // TestReconcileLeavesUnmarkedPackage: an unmarked Package of the same name (a
-// user's `cozypkg add`, or one from before this version) means registration is
-// already satisfied. The reconcile must NOT error (which would hot-loop the whole
-// tap and re-pull the artifact every backoff), NOT adopt it, and NOT delete it;
-// the revision is stamped so the loop does not recur.
+// user's `cozypkg add`, or one from before this version) must be left untouched
+// by materialization. The reconcile must NOT error (which would hot-loop the
+// whole tap and re-pull the artifact every backoff), NOT adopt it, and NOT delete
+// it; the revision is stamped so the loop does not recur.
 func TestReconcileLeavesUnmarkedPackage(t *testing.T) {
 	scheme := tapScheme(t)
 	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})

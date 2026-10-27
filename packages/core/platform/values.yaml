@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 60
+  targetVersion: 61
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -169,7 +169,7 @@ networking:
   # When on, the plugins are written every time the Multus pod is recreated,
   # replacing files of the same name. 14 of the upstream reference plugins are
   # installed; loopback, dhcp, dummy and tap are left alone. See
-  # docs/vm-external-vlan.md.
+  # packages/system/multus/README.md.
   #
   # On a running cluster this is set on the `platform` component of the
   # `cozystack.cozystack-platform` Package CR, the same path as backupStorage

@@ -183,9 +183,9 @@ func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, sourceName, sour
 
 // clearMaterializedRevision removes the operator's materialized-revision
 // annotation from the tap's OCIRepository, so the next reconcile does not
-// short-circuit on the unchanged artifact revision and re-materializes (which
-// re-creates a registration removed out-of-band). A no-op when the source or the
-// annotation is absent.
+// short-circuit on the unchanged artifact revision and re-materializes its
+// PackageSources (recovering one removed out-of-band). A no-op when the source or
+// the annotation is absent.
 func clearMaterializedRevision(ctx context.Context, k8sClient client.Client, srcName string) error {
 	reg := &sourcev1.OCIRepository{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, reg); err != nil {
@@ -228,12 +228,11 @@ var tapCmd = &cobra.Command{
 creates a Flux OCIRepository pointing at the artifact and the PackageSource(s)
 the artifact carries, under the names the repository declares. A name that
 clashes with a core component (or another tap) is rejected, so an external
-package can never silently shadow an official one. The repository's applications
-register in the catalog automatically, unless the repository declares no default
-variant (then nothing is registered). A privileged install component of a
-registered app is not installed until the operator confirms it with 'cozypkg add
---allow-privileged'. Tapping is idempotent. Creating cluster-scoped resources
-requires cluster-admin.
+package can never silently shadow an official one. Tapping installs nothing: it
+makes the repository's apps available as PackageSources. Install an app with
+'cozypkg add <name>'; a privileged install component is not installed until you
+confirm it with 'cozypkg add --allow-privileged'. Tapping is idempotent. Creating
+cluster-scoped resources requires cluster-admin.
 
 With --secret the OCIRepository is given a pull-credential secretRef (the
 admin pre-creates the Secret in cozy-system), so a private repository taps in
@@ -243,8 +242,8 @@ Trust: tap validates the artifact's structure but does NOT verify its cosign
 signature. Signature verification is the community index's job at publication
 time ('cozypkg validate --require-signature' in the index CI gate, pinned to
 the entry's recorded identity), and can additionally be enforced at pull time
-via Flux OCIRepository verification. Tapping a third-party repository runs its
-charts in your management cluster: tap only sources you trust.`,
+via Flux OCIRepository verification. Installing an app from a tapped repository
+runs its charts in your management cluster: tap only sources you trust.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -348,13 +347,10 @@ charts in your management cluster: tap only sources you trust.`,
 		// Force a fresh materialization on this tap: clear the materialized-revision
 		// annotation so the operator does not short-circuit on the unchanged
 		// artifact revision. This makes a re-tap the supported recovery for a
-		// registration Package (or PackageSource) removed out-of-band since the last
-		// materialization -- e.g. garbage-collected when its PackageSource was
-		// deleted. Note this re-registers ANY currently-absent app the artifact
-		// declares, so a re-tap also undoes a `cozypkg del` of a tap-registered app;
-		// the two are indistinguishable (both leave the registration absent), and
-		// there is no per-app opt-out. A first tap has no such annotation, so this is
-		// a no-op then.
+		// PackageSource removed out-of-band since the last materialization. Tapping
+		// no longer installs anything, so a re-tap does NOT re-install an app removed
+		// with `cozypkg del`; re-install it with `cozypkg add`. A first tap has no
+		// such annotation, so this is a no-op then.
 		if err := clearMaterializedRevision(ctx, k8sClient, srcName); err != nil {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
 		}
@@ -363,7 +359,11 @@ charts in your management cluster: tap only sources you trust.`,
 		for _, n := range names {
 			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "The repository's applications register in the dashboard catalog automatically. A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'. Check the source's events if an app does not appear.\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tapping installs nothing. Install an app with:\n")
+		for _, n := range names {
+			fmt.Fprintf(cmd.OutOrStdout(), "  cozypkg add %s\n", n)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'.\n")
 		return nil
 	},
 }
@@ -371,11 +371,13 @@ charts in your management cluster: tap only sources you trust.`,
 var untapCmd = &cobra.Command{
 	Use:   "untap <packagesource-name>",
 	Short: "Remove a tapped repository",
-	Long: `Untap removes a tapped PackageSource, its Flux source, and the
-tap-managed registration Package that de-registers the repository's apps from
-the catalog. Running application instances are left in place but become
-unmanaged until the repository is tapped again. Only tapped sources (marked
-with the marketplace-tap label) can be untapped; official sources are refused.`,
+	Long: `Untap removes a tapped PackageSource and its Flux source. A tap-managed
+registration Package left by an older Cozystack (one that registered apps on
+connect) is removed too, de-registering those apps. An app you installed yourself
+with 'cozypkg add' is left installed: untap refuses without --yes while such a
+Package is present. Running application instances are left in place but become
+unmanaged until the repository is tapped again. Only tapped sources (marked with
+the marketplace-tap label) can be untapped; official sources are refused.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
@@ -404,13 +406,13 @@ func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYe
 		srcName = ps.Spec.SourceRef.Name
 	}
 
-	// The registration Package (auto-created on connect, tap-managed)
-	// de-registers the repository's apps and is removed with the untap. Deleting
-	// it garbage-collects its registration HelmReleases and the
-	// ApplicationDefinitions they render. It is removed only when it belongs to
-	// THIS source (label AND source annotation); a Package a later tap created
-	// under a reused name, or a foreign Package, is left in place and blocks the
-	// untap without --yes.
+	// A tap-managed registration Package (left by an older Cozystack that
+	// registered apps on connect) de-registers the repository's apps and is
+	// removed with the untap. Deleting it garbage-collects its registration
+	// HelmReleases and the ApplicationDefinitions they render. It is removed only
+	// when it belongs to THIS source (label AND source annotation); a Package a
+	// later tap created under a reused name, or a foreign Package, is left in place
+	// and blocks the untap without --yes.
 	//
 	// The Package is handled BEFORE the PackageSource: a transient error here must
 	// abort the untap, not fall through to delete the PackageSource and OCIRepository

@@ -1,0 +1,29 @@
+suite: ingress-nginx renders no Cilium resource without the Cilium API
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+# No templates: filter on purpose. The capability suite next to this one selects
+# only the clusterwide policy template, so a Cilium resource added in any other
+# template would escape it, and the ingress application is installed on clusters
+# that serve no Cilium API at all.
+capabilities:
+  apiVersions: []
+tests:
+  - it: emits no CiliumNetworkPolicy
+    asserts:
+      - hasDocuments:
+          count: 0
+        documentSelector:
+          path: kind
+          value: CiliumNetworkPolicy
+          matchMany: true
+          skipEmptyTemplates: true
+  - it: emits no CiliumClusterwideNetworkPolicy
+    asserts:
+      - hasDocuments:
+          count: 0
+        documentSelector:
+          path: kind
+          value: CiliumClusterwideNetworkPolicy
+          matchMany: true
+          skipEmptyTemplates: true

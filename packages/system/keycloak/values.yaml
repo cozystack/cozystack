@@ -102,6 +102,28 @@ extraEnv: []
 #       name: my-secret
 #       key: my-key
 
+# Additional system trust anchors (LDAPS, external IdPs, SMTP).
+# Each entry selects one key from an existing Secret or ConfigMap in the
+# release namespace; key defaults to ca.crt. Supply only public certificates:
+# PEM bundles or unencrypted PKCS12 (.p12, .pfx, .pkcs12), without private keys.
+# Keycloak scans /opt/keycloak/conf/truststores recursively on startup;
+# its Java default roots and certificates baked into the image stay trusted.
+# The chart reserves the cozystack-* subdirectories there for these mounts.
+# These CAs apply to the whole Keycloak server, across all realms, so restrict
+# writes to the referenced objects to administrators who manage that trust.
+# They also verify incoming client certificates when https-client-auth is
+# request or required and no separate https-trust-store-file is configured.
+# Set that file explicitly if incoming mTLS needs a different trust boundary.
+# Changing an object's contents does not restart Keycloak: restart both pods
+# after rotation, or change the referenced object name to trigger a rollout.
+# Missing objects/keys prevent the pod from starting. Certificate
+# loading is handled by Keycloak, not Helm; no API read permissions are added.
+truststores: []
+# - configMapName: freeipa-ca
+#   key: ca.crt
+# - secretName: partner-ca
+#   key: certificates.pem
+
 # Transparent column-level PII encryption for the Keycloak database.
 # When enabled, a keycloak-kms-proxy Deployment is placed on the wire
 # between Keycloak and its CloudNativePG database: Keycloak's DB endpoint

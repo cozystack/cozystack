@@ -163,10 +163,18 @@ jobs:
       # detached rc-tag checkout is exactly that, so a COMPLIANT agent would
       # silently decline to generate on every promotion of an existing rc.
       # Overlay the current instructions so the agent reads today's contract.
+      # changelog.md sends the agent to the checks in docs/release.md and to
+      # hack/validate-changelog.sh, so those are overlaid too: the rc tag's
+      # copies predate any check added since. docs/release.md reaches
+      # .release-tooling only because the sparse checkout above is in cone
+      # mode (the action's default), which carries the files of every parent
+      # directory of docs/agents.
       - name: Refresh agent instructions
         run: |
           cp .release-tooling/docs/agents/changelog.md docs/agents/changelog.md
-          echo "Refreshed docs/agents/changelog.md from ${GITHUB_REF_NAME}."
+          cp .release-tooling/docs/release.md docs/release.md
+          cp .release-tooling/hack/validate-changelog.sh hack/validate-changelog.sh
+          echo "Refreshed docs/agents/changelog.md, docs/release.md and hack/validate-changelog.sh from ${GITHUB_REF_NAME}."
 
       # Skip-priority + validate-then-fall-through: use a pre-existing changelog
       # only if it is USABLE, so an invalid higher-priority source can never

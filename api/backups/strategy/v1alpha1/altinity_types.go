@@ -66,6 +66,13 @@ type AltinitySpec struct {
 	//                  exposes .Name, .Namespace, and
 	//                  .ApplicationRef.{APIGroup,Kind,Name} so to-copy
 	//                  restores can address the source release.
+	//
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
+	//
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
 	Template corev1.PodTemplateSpec `json:"template"`
 }
 

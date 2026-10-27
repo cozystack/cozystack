@@ -529,12 +529,13 @@ func installPackage(ctx context.Context, k8sClient client.Client, packageSourceN
 			return fmt.Errorf("failed to create Package %s: %w", pkgName, err)
 		}
 		if !created {
-			// The materializer auto-created the registration Package between the
-			// List above and this Create, so this run did not take ownership of it
-			// (its markers are not shed). Re-run so the reopen path pins it -- for a
-			// non-default variant to apply the choice, and for the default variant so
-			// a later privileged flip does not de-register this deliberate install.
-			_, _ = fmt.Fprintf(os.Stderr, "Package %s was just auto-registered; re-run 'cozypkg add %s' to install variant %q as your own\n", pkgName, pkgName, variant)
+			// A Package of this name appeared between the List above and this Create
+			// (a concurrent add, or a tap-managed registration left by an older
+			// Cozystack), so this run did not take ownership of it (its markers are
+			// not shed). Re-run so the reopen path pins it -- for a non-default
+			// variant to apply the choice, and for the default variant so a later
+			// privileged flip does not de-register this deliberate install.
+			_, _ = fmt.Fprintf(os.Stderr, "Package %s already exists; re-run 'cozypkg add %s' to install variant %q as your own\n", pkgName, pkgName, variant)
 			continue
 		}
 
