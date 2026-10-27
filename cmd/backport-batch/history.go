@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // A reference to a PR, optionally qualified by its repository, and a list of
@@ -103,6 +104,52 @@ func trailerValues(message string, re *regexp.Regexp) []string {
 // xSources lists the commits the -x lines of a message name.
 func xSources(message string) []string { return trailerValues(message, xLineRE) }
 
+// lastParagraph is the last paragraph of a message, line by line, or nil for
+// a message of one paragraph.
+func lastParagraph(message string) []string {
+	var paras []string
+	for _, p := range paragraphRE.Split(strings.ReplaceAll(message, "\r\n", "\n"), -1) {
+		if strings.TrimSpace(p) != "" {
+			paras = append(paras, p)
+		}
+	}
+	if len(paras) < 2 {
+		return nil
+	}
+	return strings.Split(paras[len(paras)-1], "\n")
+}
+
+// appendedSource is the commit the -x line git appends when it picks names:
+// the last -x line of the message's last paragraph, where git writes it, with
+// nothing after it but trailers, such as the sign-off --signoff adds. The
+// picked commit's own message comes before it, so nothing a pull request's
+// author wrote can stand in for it. "" when there is none.
+func appendedSource(message string) string {
+	lines := lastParagraph(message)
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if m := xLineRE.FindStringSubmatch(t); m != nil {
+			return m[1]
+		}
+		if t != "" && !strings.HasPrefix(lines[i], " ") && !strings.HasPrefix(lines[i], "\t") && !trailerRE.MatchString(lines[i]) {
+			return ""
+		}
+	}
+	return ""
+}
+
+// claimedSources lists what every -x line of a message's last paragraph
+// names, the appended one and any the picked commit's message already had.
+func claimedSources(message string) []string {
+	var sources []string
+	for _, ln := range lastParagraph(message) {
+		if m := xLineRE.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+			sources = append(sources, m[1])
+		}
+	}
+	return sources
+}
+
 // batchedFrom lists the merge commits on main a batch merge says it carries.
 func batchedFrom(message string) []string { return trailerValues(message, batchLineRE) }
 
@@ -140,20 +187,27 @@ type pickRef struct{ source, commit string }
 
 // history is what a branch carries beyond a base it shares with main.
 //
-// Only the commits outside the base supply -x, batch and "Backport of"
-// evidence: shared history can name an original without carrying it on this
-// branch.
+// Only the commits outside the base supply evidence: shared history can name
+// an original without carrying it on this branch. What a commit's text says
+// counts only for commits from before the batch-only day: a picked commit
+// keeps its message and a batch merge carries the original's, so after that
+// day a pull request's author could write any of it. From then on only the
+// -x line git appends to a pick counts, which names the commit picked.
 type history struct {
 	head      string
 	reachable map[string]bool
+	// appended maps a commit to a pick on the branch whose appended -x line
+	// names it.
+	appended map[string]string
+	// What text says, from commits before the batch-only day: every -x line
+	// of a trailer block, the Backported-from trailers and "Backport of".
 	picks     []pickRef
-	// batches maps a merge commit on main to the batch merge that names it.
 	batches   map[string]string
 	backports map[int]string
 }
 
-func readHistory(head, base string) (*history, error) {
-	h, err := readPicks(head, base)
+func readHistory(head, base string, textUntil time.Time) (*history, error) {
+	h, err := readPicks(head, base, textUntil)
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +222,9 @@ func readHistory(head, base string) (*history, error) {
 }
 
 // readPicks reads only the messages of head's commits outside base, which is
-// all a batch branch is asked about.
-func readPicks(head, base string) (*history, error) {
-	h := &history{head: head, reachable: map[string]bool{}, batches: map[string]string{}, backports: map[int]string{}}
+// all a batch branch is asked about; textUntil is the batch-only day.
+func readPicks(head, base string, textUntil time.Time) (*history, error) {
+	h := &history{head: head, reachable: map[string]bool{}, appended: map[string]string{}, batches: map[string]string{}, backports: map[int]string{}}
 	oids, err := revList("--end-of-options", head, "^"+base)
 	if err != nil {
 		return nil, err
@@ -181,6 +235,16 @@ func readPicks(head, base string) (*history, error) {
 	}
 	for _, oid := range oids {
 		msg := msgs[oid].message
+		if len(msgs[oid].parents) == 1 {
+			if source := appendedSource(msg); source != "" {
+				if _, ok := h.appended[source]; !ok {
+					h.appended[source] = oid
+				}
+			}
+		}
+		if !msgs[oid].committed.Before(textUntil) {
+			continue
+		}
 		for _, source := range xSources(msg) {
 			h.picks = append(h.picks, pickRef{source: source, commit: oid})
 		}
@@ -209,27 +273,50 @@ func (h *history) pickOf(source string) string {
 }
 
 // found returns the commit that carries an original on the branch and how,
-// or "" when none does: a batch merge that names its merge commit, an -x line
-// naming that merge commit, which is how a batch picked a merged pull request
-// with -m 1 before and how a hand backport does, or -x lines naming every one
-// of commits, the commits of its own.
+// or "" when none does. A pick counts when the -x line git appended to it
+// names the original's merge commit, as for a squash or a pick with -m 1, or
+// when such lines name every commit of its own, as a batch merge's picks do.
+// From before the batch-only day, text counts too: a Backported-from trailer
+// naming the merge commit, or -x lines anywhere in a trailer block naming it
+// or every commit of its own.
 func (h *history) found(o *original, commits []string) (string, string) {
-	if c, ok := h.batches[o.merge]; ok {
-		return c, "batched in " + c[:12]
-	}
-	if c := h.pickOf(o.merge); c != "" {
+	if c := h.appended[o.merge]; c != "" {
 		return c, "picked in " + c[:12]
 	}
+	if c := coveredBy(h.appended, o, commits); c != "" {
+		return c, fmt.Sprintf("its %d %s picked, the last in %s", len(commits), plural(len(commits), "commit"), c[:12])
+	}
+	if c, ok := h.batches[o.merge]; ok {
+		return c, "named by a " + batchTrailer + " trailer in " + c[:12]
+	}
+	if c := h.pickOf(o.merge); c != "" {
+		return c, "named by an -x line in " + c[:12]
+	}
+	named := map[string]string{}
+	for _, r := range h.picks {
+		if _, ok := named[r.source]; !ok {
+			named[r.source] = r.commit
+		}
+	}
+	if c := coveredBy(named, o, commits); c != "" {
+		return c, fmt.Sprintf("its %d %s named by -x lines, the last in %s", len(commits), plural(len(commits), "commit"), c[:12])
+	}
+	return "", ""
+}
+
+// coveredBy returns the commit in by that names the last of a merged pull
+// request's own commits when by names every one of them, or "".
+func coveredBy(by map[string]string, o *original, commits []string) string {
 	if o.parents < 2 || len(commits) == 0 {
-		return "", ""
+		return ""
 	}
 	last := ""
 	for _, source := range commits {
-		if last = h.pickOf(source); last == "" {
-			return "", ""
+		if last = by[source]; last == "" {
+			return ""
 		}
 	}
-	return last, fmt.Sprintf("its %d %s picked, the last in %s", len(commits), plural(len(commits), "commit"), last[:12])
+	return last
 }
 
 // carries says how the branch carries an original, or "" when it does not.

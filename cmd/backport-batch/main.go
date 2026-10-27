@@ -187,6 +187,9 @@ type batch struct {
 	prHead   string
 	// start is when the line started under the policy, zero for its fork point.
 	start time.Time
+	// textUntil is the batch-only day: what a commit's text says counts as
+	// evidence only on commits from before it.
+	textUntil time.Time
 }
 
 // fetch moves to the top of the working tree first: every path the batch
@@ -226,11 +229,11 @@ func (a *app) prepare(l line) (*batch, error) {
 			return nil, err
 		}
 	}
-	lineStarts, err := readPolicy(policyAt)
+	pol, err := readPolicy(policyAt)
 	if err != nil {
 		return nil, err
 	}
-	b.start = lineStarts[l.branch()]
+	b.start, b.textUntil = pol.starts[l.branch()], pol.batchOnly
 	out, err := git("merge-base", "--end-of-options", b.mainHead, b.lineHead)
 	if err != nil {
 		return nil, fmt.Errorf("%s shares no history with main: %w", l.branch(), err)
@@ -241,7 +244,7 @@ func (a *app) prepare(l line) (*batch, error) {
 		return nil, err
 	}
 	b.other = other
-	lineHist, err := readHistory(b.lineHead, b.mainHead)
+	lineHist, err := readHistory(b.lineHead, b.mainHead, b.textUntil)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +254,7 @@ func (a *app) prepare(l line) (*batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if newerHist, err = readHistory(newerHead, b.mainHead); err != nil {
+		if newerHist, err = readHistory(newerHead, b.mainHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}
@@ -276,7 +279,7 @@ func (a *app) prepare(l line) (*batch, error) {
 		if b.prHead, err = batchHead(pr); err != nil {
 			return nil, err
 		}
-		if prPicks, err = readPicks(b.prHead, b.lineHead); err != nil {
+		if prPicks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}

@@ -36,9 +36,13 @@ A maintainer overrides the rules for one pull request with a label on the merged
 
 The policy applies in full from `release-1.7` on: a line released before it took effect keeps the patch content its users chose it with, so it takes only fixes merged after the policy started, and an older one only with `backport/include`. The batch reads the block below from this page, on `main`: a line it lists starts on that day, and any other line starts where it branched from `main`.
 
+From the `batch-only` day in the block, the batch is the only way a change reaches a line, and only what it does shows that a line carries a change: a pick whose `(cherry picked from commit …)` line, the one git appends, names the original's merge commit or every commit of its own. A picked commit keeps its message and a batch merge carries the original's, so text in them, a `Backport of #N`, a `Backported-from:` trailer or an `-x` line the commit's author wrote, counts only on commits from before that day, where it records the hand backports and earlier batches.
+
 ```backport-policy
 # release-X.Y: YYYY-MM-DD, the day the line started under this policy
 release-1.6: 2026-10-26
+# batch-only: YYYY-MM-DD, the day from which only the batch's picks show what a line carries
+batch-only: 2026-10-26
 ```
 
 ### Fixes that exist only on a release line

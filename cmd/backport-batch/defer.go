@@ -69,7 +69,7 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 			hold[n] = e.Reason
 		}
 	}
-	carried, err := readPicks(b.prHead, b.lineHead)
+	carried, err := readPicks(b.prHead, b.lineHead, b.textUntil)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -106,7 +106,7 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	picks, err := readPicks(head, b.lineHead)
+	picks, err := readPicks(head, b.lineHead, b.textUntil)
 	if err != nil {
 		return a.fail(err)
 	}

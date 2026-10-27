@@ -26,26 +26,32 @@ import (
 )
 
 func TestParsePolicy(t *testing.T) {
-	got, err := parsePolicy("text\n\n" + policyFence + "\n# comment\n\nrelease-1.6: 2026-10-26\nrelease-1.5:2026-01-02\n```\n")
+	got, err := parsePolicy("text\n\n" + policyFence + "\n# comment\n\nrelease-1.6: 2026-10-26\nrelease-1.5:2026-01-02\nbatch-only: 2026-10-20\n```\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || !got["release-1.6"].Equal(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)) {
+	if len(got.starts) != 2 || !got.starts["release-1.6"].Equal(time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("parsePolicy = %v", got)
 	}
-	if got, err := parsePolicy(policyFence + "\n```\n"); err != nil || len(got) != 0 {
-		t.Errorf("an empty block = %v, %v; want no starts", got, err)
+	if !got.batchOnly.Equal(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("the batch-only day = %v, want 2026-10-20", got.batchOnly)
+	}
+	if got, err := parsePolicy(policyFence + "\nbatch-only: 2026-10-20\n```\n"); err != nil || len(got.starts) != 0 {
+		t.Errorf("a block with no line = %v, %v; want no starts", got, err)
 	}
 	for name, page := range map[string]string{
-		"no block":       "## Backports\n",
-		"two blocks":     policyFence + "\n```\n" + policyFence + "\n```\n",
-		"unclosed":       policyFence + "\nrelease-1.6: 2026-10-26\n",
-		"a bad line":     policyFence + "\nrelease 1.6 on 2026-10-26\n```\n",
-		"a bad date":     policyFence + "\nrelease-1.6: 2026-13-40\n```\n",
-		"a padded line":  policyFence + "\nrelease-01.6: 2026-10-26\n```\n",
-		"listed twice":   policyFence + "\nrelease-1.6: 2026-10-26\nrelease-1.6: 2026-10-27\n```\n",
-		"not a line":     policyFence + "\nmain: 2026-10-26\n```\n",
-		"trailing words": policyFence + "\nrelease-1.6: 2026-10-26 or so\n```\n",
+		"no batch-only day":    policyFence + "\nrelease-1.6: 2026-10-26\n```\n",
+		"two batch-only days":  policyFence + "\nbatch-only: 2026-10-26\nbatch-only: 2026-10-27\n```\n",
+		"a bad batch-only day": policyFence + "\nbatch-only: soon\n```\n",
+		"no block":             "## Backports\n",
+		"two blocks":           policyFence + "\n```\n" + policyFence + "\n```\n",
+		"unclosed":             policyFence + "\nrelease-1.6: 2026-10-26\n",
+		"a bad line":           policyFence + "\nrelease 1.6 on 2026-10-26\n```\n",
+		"a bad date":           policyFence + "\nrelease-1.6: 2026-13-40\n```\n",
+		"a padded line":        policyFence + "\nrelease-01.6: 2026-10-26\n```\n",
+		"listed twice":         policyFence + "\nrelease-1.6: 2026-10-26\nrelease-1.6: 2026-10-27\n```\n",
+		"not a line":           policyFence + "\nmain: 2026-10-26\n```\n",
+		"trailing words":       policyFence + "\nrelease-1.6: 2026-10-26 or so\n```\n",
 	} {
 		if _, err := parsePolicy(page); err == nil {
 			t.Errorf("%s: parsePolicy accepted it", name)
@@ -135,12 +141,15 @@ func TestPolicyPageMatchesCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := string(data)
-	lineStarts, err := parsePolicy(page)
+	pol, err := parsePolicy(page)
 	if err != nil {
-		t.Fatalf("the page's start block does not parse: %v", err)
+		t.Fatalf("the page's policy block does not parse: %v", err)
 	}
-	if day, ok := lineStarts["release-1.6"]; !ok || day.Format(time.DateOnly) != "2026-10-26" {
-		t.Errorf("release-1.6 starts %v, want 2026-10-26", lineStarts["release-1.6"])
+	if day, ok := pol.starts["release-1.6"]; !ok || day.Format(time.DateOnly) != "2026-10-26" {
+		t.Errorf("release-1.6 starts %v, want 2026-10-26", pol.starts["release-1.6"])
+	}
+	if day := pol.batchOnly.Format(time.DateOnly); day != "2026-10-26" {
+		t.Errorf("the batch-only day is %s, want 2026-10-26", day)
 	}
 
 	rule2 := regexp.MustCompile("(?m)^2\\. Its title type is (.*)$").FindStringSubmatch(page)

@@ -104,7 +104,7 @@ func (a *app) run(args []string) int {
 		if branch, err = ontoBranch(l, *onto, *dateArg != "", branch); err != nil {
 			return a.fail(err)
 		}
-		if carried, err = readPicks(*onto, b.lineHead); err != nil {
+		if carried, err = readPicks(*onto, b.lineHead, b.textUntil); err != nil {
 			return a.fail(err)
 		}
 		start = *onto

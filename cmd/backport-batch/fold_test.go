@@ -174,7 +174,7 @@ func TestFold(t *testing.T) {
 				r3 := w.commit(r2, "fix up the port", map[string]string{"app/five.txt": "5, tidied\n"})
 				return w.merge(w.head, r3, batchMessage(w.mc5))
 			},
-			refusal: "carries 0 (cherry picked from commit",
+			refusal: "ends in no (cherry picked from commit",
 		},
 		{
 			name: "a file #5 does not touch", original: 5,
@@ -192,7 +192,7 @@ func TestFold(t *testing.T) {
 				r2 := w.pick(r1, w.c2, resolved2)
 				return w.merge(w.head, r2, batchMessage(w.mc5))
 			},
-			refusal: "carries 0 (cherry picked from commit",
+			refusal: "ends in no (cherry picked from commit",
 		},
 		{
 			name: "an abbreviated -x line", original: 5,
@@ -201,7 +201,7 @@ func TestFold(t *testing.T) {
 				r2 := w.pick(r1, w.c2, resolved2)
 				return w.merge(w.head, r2, batchMessage(w.mc5))
 			},
-			refusal: "carries 0 (cherry picked from commit",
+			refusal: "ends in no (cherry picked from commit",
 		},
 		{
 			name: "an -x line in the body, not in the trailers", original: 5,
@@ -210,7 +210,7 @@ func TestFold(t *testing.T) {
 				r2 := w.pick(r1, w.c2, resolved2)
 				return w.merge(w.head, r2, batchMessage(w.mc5))
 			},
-			refusal: "carries 0 (cherry picked from commit",
+			refusal: "ends in no (cherry picked from commit",
 		},
 		{
 			name: "both commits in one pick", original: 5,
@@ -218,7 +218,7 @@ func TestFold(t *testing.T) {
 				both := w.commit(w.head, "port\n\n(cherry picked from commit "+w.c1+")\n(cherry picked from commit "+w.c2+")", map[string]string{"chart/values.yaml": "replicas: 5\nimage: app:1\n", "app/five.txt": "5\n"})
 				return w.merge(w.head, both, batchMessage(w.mc5))
 			},
-			refusal: "carries 2 (cherry picked from commit",
+			refusal: "claims more than one commit of #5",
 		},
 		{
 			name: "the commits in the wrong order", original: 5,

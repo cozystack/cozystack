@@ -65,10 +65,11 @@ func TestRunConflictInAMiddleCommit(t *testing.T) {
 	}
 }
 
-// What counts as carrying a merged pull request of several commits: a batch
-// merge naming its merge commit, an -x line naming the merge commit, or -x
-// lines naming every one of its own commits; not some of them, and not a
-// trailer outside the trailer block.
+// What counts as carrying a merged pull request of several commits: picks
+// whose appended -x lines name every commit of its own, as a batch merge's do,
+// or a pick whose appended -x line names its merge commit; not some of its
+// commits. A Backported-from trailer counts only on a commit from before the
+// batch-only day, and only in its trailer block.
 func TestPresenceOfAMultiCommitOriginal(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -76,21 +77,29 @@ func TestPresenceOfAMultiCommitOriginal(t *testing.T) {
 		carried string
 	}{
 		{
-			name: "a batch merge naming it",
-			land: func(f *fixture, mc string, _ []string) {
-				f.onLine("release-1.1", "fix(app): five (#5)\n\n"+batchTrailer+": "+mc, map[string]string{"app/a.txt": "a\n"})
+			name: "a batch merge of its commits",
+			land: func(f *fixture, mc string, own []string) {
+				f.git("fetch", "-q", "origin")
+				base := f.git("rev-parse", "origin/release-1.1")
+				f.git("switch", "-q", "--detach", base)
+				for _, c := range own {
+					f.git("cherry-pick", "-x", c)
+				}
+				f.git("switch", "-q", "--detach", f.joined(base, f.git("rev-parse", "HEAD"), "fix(app): five (#5)\n\n"+batchTrailer+": "+mc))
+				f.git("push", "-q", "origin", "HEAD:refs/heads/release-1.1")
+				f.git("switch", "-q", "main")
 			},
-			carried: "batched in",
+			carried: "its 2 commits picked",
 		},
 		{
-			name: "an -x line naming the merge commit",
+			name: "a pick whose -x line names the merge commit",
 			land: func(f *fixture, mc string, _ []string) {
 				f.onLine("release-1.1", "port\n\n(cherry picked from commit "+mc+")", map[string]string{"app/a.txt": "a\n"})
 			},
 			carried: "picked in",
 		},
 		{
-			name: "-x lines naming every commit of its own",
+			name: "picks whose -x lines name every commit of its own",
 			land: func(f *fixture, _ string, own []string) {
 				f.onLine("release-1.1", "a\n\n(cherry picked from commit "+own[0]+")", map[string]string{"app/a.txt": "a\n"})
 				f.onLine("release-1.1", "b\n\n(cherry picked from commit "+own[1]+")", map[string]string{"app/b.txt": "b, half\n"})
@@ -98,21 +107,31 @@ func TestPresenceOfAMultiCommitOriginal(t *testing.T) {
 			carried: "its 2 commits picked",
 		},
 		{
-			name: "an -x line naming one of its two commits",
+			name: "a pick of one of its two commits",
 			land: func(f *fixture, _ string, own []string) {
 				f.onLine("release-1.1", "a\n\n(cherry picked from commit "+own[0]+")", map[string]string{"app/a.txt": "a\n"})
 			},
 		},
 		{
-			name: "the batch trailer in the body",
+			name: "the trailer alone, from before the batch-only day",
 			land: func(f *fixture, mc string, _ []string) {
-				f.onLine("release-1.1", "port\n\n"+batchTrailer+": "+mc+"\n\nMore to say.", map[string]string{"app/a.txt": "a\n"})
+				f.t.Setenv("GIT_COMMITTER_DATE", "2026-10-01T00:00:00Z")
+				f.onLine("release-1.1", "fix(app): five (#5)\n\n"+batchTrailer+": "+mc, map[string]string{"app/a.txt": "a\n"})
+			},
+			carried: "named by a " + batchTrailer + " trailer",
+		},
+		{
+			name: "the trailer alone, after the batch-only day",
+			land: func(f *fixture, mc string, _ []string) {
+				f.t.Setenv("GIT_COMMITTER_DATE", "2026-10-27T00:00:00Z")
+				f.onLine("release-1.1", "fix(app): five (#5)\n\n"+batchTrailer+": "+mc, map[string]string{"app/a.txt": "a\n"})
 			},
 		},
 		{
-			name: "the batch trailer naming another merge commit",
-			land: func(f *fixture, _ string, _ []string) {
-				f.onLine("release-1.1", "port\n\n"+batchTrailer+": 0123456789abcdef0123456789abcdef01234567", map[string]string{"app/a.txt": "a\n"})
+			name: "the trailer in the body, from before the batch-only day",
+			land: func(f *fixture, mc string, _ []string) {
+				f.t.Setenv("GIT_COMMITTER_DATE", "2026-10-01T00:00:00Z")
+				f.onLine("release-1.1", "port\n\n"+batchTrailer+": "+mc+"\n\nMore to say.", map[string]string{"app/a.txt": "a\n"})
 			},
 		},
 	}
@@ -133,6 +152,79 @@ func TestPresenceOfAMultiCommitOriginal(t *testing.T) {
 				t.Errorf("verdict = rule %d (%s), want rule 1 with %q", v.rule, v.reason, tc.carried)
 			}
 		})
+	}
+}
+
+// What a pull request's author writes reaches the line with every commit the
+// batch picks and with the merge message it carries. None of it makes another
+// original count as carried: not an -x line, a Backported-from trailer or a
+// Backport of naming it, not at the end of the message where the line git
+// appends lands in the same trailer block, and not an -x line naming one of
+// the other original's own commits. The line is read as after the batch-only
+// day, as a batch made after it leaves it.
+func TestPresenceCannotBeClaimedByText(t *testing.T) {
+	type world struct {
+		f       *fixture
+		mc5, c5 string
+	}
+	claims := []struct {
+		name  string
+		claim func(w *world) string
+	}{
+		{"an -x line naming the merge commit", func(w *world) string { return "(cherry picked from commit " + w.mc5 + ")" }},
+		{"an -x line naming its own commit", func(w *world) string { return "(cherry picked from commit " + w.c5 + ")" }},
+		{"a Backported-from trailer", func(w *world) string { return batchTrailer + ": " + w.mc5 }},
+		{"a Backport of", func(w *world) string { return "Backport of #5" }},
+		{"all of them after a sign-off", func(w *world) string {
+			return "Signed-off" + "-by: " + contributor + "\n(cherry picked from commit " + w.mc5 + ")\n(cherry picked from commit " + w.c5 + ")\n" + batchTrailer + ": " + w.mc5
+		}},
+	}
+	for _, where := range []string{"commit message", "pull request body"} {
+		for _, tc := range claims {
+			t.Run(where+": "+tc.name, func(t *testing.T) {
+				f := newFixture(t)
+				f.lines()
+				// #5 conflicts on the line, so the batch defers it.
+				f.onLine("release-1.1", "fix(chart): a line-only value", map[string]string{"chart/values.yaml": "replicas: 3\nimage: app:1\n"})
+				w := &world{f: f}
+				w.mc5 = f.pr(5, "fix(chart): five", "", map[string]string{"chart/values.yaml": "replicas: 5\nimage: app:1\n"})
+				w.c5 = f.git("rev-parse", w.mc5+"^2")
+				claim := tc.claim(w)
+				msg, body := "fix(app): six\n\n"+claim, ""
+				if where == "pull request body" {
+					msg, body = "fix(app): six", "Six.\n\n"+claim
+				}
+				f.prCommits(6, "fix(app): six", body, change{files: map[string]string{"app/six.txt": "6\n"}, message: msg})
+				t.Setenv("GIT_COMMITTER_DATE", "2026-10-27T06:00:00Z")
+
+				// The batch picks #6; on the open batch pull request the text
+				// claims nothing for #5.
+				gh := &fakeGH{}
+				if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--push"); code != 0 {
+					t.Fatalf("run --push = %d\n%s", code, stderr)
+				}
+				f.git("switch", "-q", "main")
+				gh.prs = []pullRequest{f.batchPR(90, "release-1.1", batchBranch1, gh.bodies[0])}
+				if v := verdictOn(t, f, gh, "release-1.1", 6); v.onBatch == "" {
+					t.Fatal("#6 is not on the batch")
+				}
+				if v := verdictOn(t, f, gh, "release-1.1", 5); v.onBatch != "" {
+					t.Errorf("#5 is on the batch in %.12s, want nowhere", v.onBatch)
+				}
+
+				// Nor on the line, once the line takes the batch.
+				f.git("push", "-q", "origin", f.remoteHead(batchBranch1)+":refs/heads/release-1.1")
+				if v := verdictOn(t, f, nil, "release-1.1", 6); v.rule != ruleOnLine {
+					t.Fatalf("#6 = rule %d (%s), want it on the line", v.rule, v.reason)
+				}
+				if v := verdictOn(t, f, nil, "release-1.1", 5); v.rule != 0 {
+					t.Errorf("#5 = rule %d (%s), want it still to qualify", v.rule, v.reason)
+				}
+				if code, stdout, stderr := f.exec(nil, "check", "--line", "release-1.1"); code != 1 || !strings.Contains(stdout, "/pull/5 ") {
+					t.Errorf("check = %d, want #5 missing:\n%s\n%s", code, stdout, stderr)
+				}
+			})
+		}
 	}
 }
 
@@ -186,7 +278,7 @@ func TestVerify(t *testing.T) {
 			head: func(w *world) string {
 				return on(w, "fix(ci): adjust for the line", map[string]string{"ci.txt": "x\n"})
 			},
-			refusal: "carries 0 (cherry picked from commit",
+			refusal: "ends in no (cherry picked from commit",
 		},
 		{
 			name: "an original carried twice",

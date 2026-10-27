@@ -30,7 +30,11 @@ const policyPage = "docs/release/backports.md"
 
 const policyFence = "```backport-policy"
 
-var policyLineRE = regexp.MustCompile(`^(release-\d+\.\d+):[ \t]*(\d{4}-\d{2}-\d{2})[ \t]*$`)
+var policyLineRE = regexp.MustCompile(`^(release-\d+\.\d+|` + batchOnlyKey + `):[ \t]*(\d{4}-\d{2}-\d{2})[ \t]*$`)
+
+// batchOnlyKey names the day from which the batch is the only way onto a
+// line, so that from then on only its picks show what a line carries.
+const batchOnlyKey = "batch-only"
 
 // The rule 2 types and the scopes that never go into a patch release, as the
 // policy page lists them; policy_test.go holds the page to these.
@@ -43,9 +47,17 @@ var (
 // that is not listed started at its fork point from main.
 type starts map[string]time.Time
 
+// policy is what the backport-policy block says: when each line started, and
+// the batch-only day.
+type policy struct {
+	starts    starts
+	batchOnly time.Time
+}
+
 // parsePolicy reads the one backport-policy block of the page: a line per
-// release line, `release-X.Y: YYYY-MM-DD`, and comments starting with #.
-func parsePolicy(page string) (starts, error) {
+// release line, `release-X.Y: YYYY-MM-DD`, exactly one `batch-only:
+// YYYY-MM-DD`, and comments starting with #.
+func parsePolicy(page string) (*policy, error) {
 	var blocks [][]string
 	var cur []string
 	in := false
@@ -67,32 +79,41 @@ func parsePolicy(page string) (starts, error) {
 	if len(blocks) != 1 {
 		return nil, fmt.Errorf("%s holds %d %s blocks, not one", policyPage, len(blocks), policyFence)
 	}
-	out := starts{}
+	out := &policy{starts: starts{}}
+	seen := map[string]bool{}
 	for _, t := range blocks[0] {
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue
 		}
 		m := policyLineRE.FindStringSubmatch(t)
 		if m == nil {
-			return nil, fmt.Errorf("%s: %q in the %s block is not `release-X.Y: YYYY-MM-DD`", policyPage, t, policyFence)
-		}
-		if _, err := parseLine(m[1]); err != nil {
-			return nil, fmt.Errorf("%s: %w", policyPage, err)
+			return nil, fmt.Errorf("%s: %q in the %s block is not `release-X.Y: YYYY-MM-DD` or `%s: YYYY-MM-DD`", policyPage, t, policyFence, batchOnlyKey)
 		}
 		day, err := time.Parse(time.DateOnly, m[2])
 		if err != nil {
 			return nil, fmt.Errorf("%s: %q is not a date: %w", policyPage, m[2], err)
 		}
-		if _, dup := out[m[1]]; dup {
+		if seen[m[1]] {
 			return nil, fmt.Errorf("%s: %s is listed twice", policyPage, m[1])
 		}
-		out[m[1]] = day
+		seen[m[1]] = true
+		if m[1] == batchOnlyKey {
+			out.batchOnly = day
+			continue
+		}
+		if _, err := parseLine(m[1]); err != nil {
+			return nil, fmt.Errorf("%s: %w", policyPage, err)
+		}
+		out.starts[m[1]] = day
+	}
+	if !seen[batchOnlyKey] {
+		return nil, fmt.Errorf("%s: the %s block gives no %s day", policyPage, policyFence, batchOnlyKey)
 	}
 	return out, nil
 }
 
 // readPolicy reads the block from the policy page at commit.
-func readPolicy(commit string) (starts, error) {
+func readPolicy(commit string) (*policy, error) {
 	page, err := git("show", "--end-of-options", commit+":"+policyPage)
 	if err != nil {
 		return nil, fmt.Errorf("reading the policy at %.12s: %w", commit, err)

@@ -170,7 +170,7 @@ func batchUnits(head, base string) ([]unit, error) {
 }
 
 // unitOriginal is the original a unit says it carries, or nil: the one its
-// Backported-from trailer names, or the one its -x line picks.
+// Backported-from trailer names, or the one its appended -x line picks.
 func (b *batch) unitOriginal(u unit) *verdict {
 	if u.merge() {
 		if merges := batchedFrom(u.message); len(merges) == 1 {
@@ -178,13 +178,11 @@ func (b *batch) unitOriginal(u unit) *verdict {
 		}
 		return nil
 	}
-	sources := xSources(u.message)
-	for _, s := range sources {
-		if v := b.findMerge(s); v != nil {
-			return v
-		}
+	source := appendedSource(u.message)
+	if v := b.findMerge(source); v != nil {
+		return v
 	}
-	return b.pickedBy(sources)
+	return b.pickedBy([]string{source})
 }
 
 // ownerOf is the original one of whose own commits source is, or nil. It reads
@@ -211,7 +209,9 @@ func (b *batch) ownerOf(source string) (*verdict, error) {
 // commits in their order, each with the -x line of the commit it came from,
 // that names the original's merge commit in its trailer; or for a squash one
 // pick of its commit on main. Either changes something, and only files the
-// original changes.
+// original changes. A pick is known by the -x line git appended, not by
+// lines its message brought along, and one that also claims another commit
+// of the same original is refused.
 func checkUnit(b *batch, u unit) (string, *verdict, error) {
 	switch len(u.parents) {
 	case 1:
@@ -223,20 +223,20 @@ func checkUnit(b *batch, u unit) (string, *verdict, error) {
 }
 
 func checkPick(b *batch, u unit) (string, *verdict, error) {
-	sources := xSources(u.message)
-	if len(sources) != 1 {
-		return fmt.Sprintf("%.12s carries %d (cherry picked from commit …) lines in its trailers, not one; a batch carries originals only", u.commit, len(sources)), nil, nil
+	source := appendedSource(u.message)
+	if source == "" {
+		return fmt.Sprintf("%.12s ends in no (cherry picked from commit …) line; a batch carries originals only", u.commit), nil, nil
 	}
-	v := b.findMerge(sources[0])
+	v := b.findMerge(source)
 	if v == nil {
-		owner, err := b.ownerOf(sources[0])
+		owner, err := b.ownerOf(source)
 		if err != nil {
 			return "", nil, err
 		}
 		if owner != nil {
 			return fmt.Sprintf("%.12s picks one commit of #%d on its own; a merged pull request goes in as a merge of all its commits", u.commit, owner.o.number), owner, nil
 		}
-		return fmt.Sprintf("%.12s picks %s, which merged no pull request into main after %s branched", u.commit, sources[0], b.line.branch()), nil, nil
+		return fmt.Sprintf("%.12s picks %s, which merged no pull request into main after %s branched", u.commit, source, b.line.branch()), nil, nil
 	}
 	if v.o.parents > 1 {
 		return fmt.Sprintf("%.12s picks the merge commit of #%d as one commit; a merged pull request goes in as a merge of its own commits", u.commit, v.o.number), v, nil
@@ -272,23 +272,28 @@ func checkMerge(b *batch, u unit) (string, *verdict, error) {
 		if len(ps) != 1 || ps[0] != prev {
 			return fmt.Sprintf("%.12s is not on a straight line of picks from %.12s", c, u.parents[0]), v, nil
 		}
-		sources := xSources(msgs[c].message)
-		if len(sources) != 1 {
-			return fmt.Sprintf("%.12s carries %d (cherry picked from commit …) lines in its trailers, not one", c, len(sources)), v, nil
+		source := appendedSource(msgs[c].message)
+		if source == "" {
+			return fmt.Sprintf("%.12s ends in no (cherry picked from commit …) line", c), v, nil
 		}
-		i := slices.Index(v.commits, sources[0])
+		i := slices.Index(v.commits, source)
 		if i < 0 {
-			owner, err := b.ownerOf(sources[0])
+			owner, err := b.ownerOf(source)
 			switch {
 			case err != nil:
 				return "", nil, err
 			case owner != nil:
 				return fmt.Sprintf("%.12s picks a commit of #%d into the merge of #%d", c, owner.o.number, v.o.number), v, nil
 			}
-			return fmt.Sprintf("%.12s picks %s, which is not a commit of #%d", c, sources[0], v.o.number), v, nil
+			return fmt.Sprintf("%.12s picks %s, which is not a commit of #%d", c, source, v.o.number), v, nil
 		}
 		if i <= last {
-			return fmt.Sprintf("%.12s picks %.12s out of the order of #%d's commits", c, sources[0], v.o.number), v, nil
+			return fmt.Sprintf("%.12s picks %.12s out of the order of #%d's commits", c, source, v.o.number), v, nil
+		}
+		for _, claimed := range claimedSources(msgs[c].message) {
+			if claimed != source && (claimed == v.o.merge || slices.Contains(v.commits, claimed)) {
+				return fmt.Sprintf("%.12s claims more than one commit of #%d", c, v.o.number), v, nil
+			}
 		}
 		prev, last = c, i
 	}
@@ -378,11 +383,11 @@ func summarize(b *batch, head string, on []*verdict) (map[*verdict]string, error
 		}
 		var changed []string
 		for _, c := range picks {
-			sources := xSources(msgs[c].message)
-			if len(sources) != 1 {
+			source := appendedSource(msgs[c].message)
+			if source == "" {
 				continue
 			}
-			same, err := samePatch(sources[0], c)
+			same, err := samePatch(source, c)
 			if err != nil {
 				return nil, err
 			}

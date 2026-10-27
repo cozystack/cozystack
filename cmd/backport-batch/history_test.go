@@ -95,11 +95,32 @@ func TestPresenceOnTheLine(t *testing.T) {
 			},
 		},
 		{
-			name: "a squash-merged hand port that says Backport of",
+			name: "a squash-merged hand port that says Backport of, from before the batch-only day",
 			land: func(f *fixture, _, _ string) {
+				f.t.Setenv("GIT_COMMITTER_DATE", "2026-10-01T00:00:00Z")
 				f.onLine("release-1.1", "[Backport release-1.1] fix(app): the change (#77)\n\n# Description\nBackport of #5 to `release-1.1`.", map[string]string{"app/x.txt": "fixed\n"})
 			},
 			carried: `named by "Backport of"`,
+		},
+		{
+			name: "the same after the batch-only day",
+			land: func(f *fixture, _, _ string) {
+				f.t.Setenv("GIT_COMMITTER_DATE", "2026-10-27T00:00:00Z")
+				f.onLine("release-1.1", "[Backport release-1.1] fix(app): the change (#77)\n\n# Description\nBackport of #5 to `release-1.1`.", map[string]string{"app/x.txt": "fixed\n"})
+			},
+		},
+		{
+			name: "an -x line followed by prose in its paragraph",
+			land: func(f *fixture, mc, _ string) {
+				f.onLine("release-1.1", "port\n\n(cherry picked from commit "+mc+")\nand more words", map[string]string{"app/x.txt": "fixed\n"})
+			},
+		},
+		{
+			name: "an -x line in a paragraph git reads as trailers that holds prose too",
+			land: func(f *fixture, mc, _ string) {
+				f.onLine("release-1.1", "port\n\nFixes the thing.\nSigned-off-by: A <a@example.invalid>\n(cherry picked from commit "+mc+")\nSigned-off-by: B <b@example.invalid>", map[string]string{"app/x.txt": "fixed\n"})
+			},
+			carried: "picked in",
 		},
 		{
 			name: "Backport of another repository's number",

@@ -129,6 +129,13 @@ func (f *fixture) pr(n int, title, body string, files map[string]string) string 
 	return f.git("rev-parse", "HEAD")
 }
 
+// joined makes a merge of tip onto base with tip's tree, whatever a merge of
+// the two would make.
+func (f *fixture) joined(base, tip, message string) string {
+	f.t.Helper()
+	return f.git("commit-tree", "-p", base, "-p", tip, "-m", message, tip+"^{tree}")
+}
+
 // contributor writes the commits of the pull requests that say so.
 const contributor = "Contributor One <one@example.invalid>"
 
@@ -360,8 +367,16 @@ func (f *fixture) subjects(base, branch string) []string {
 	return strings.Split(out, "\n")
 }
 
-// policyWith is a policy page whose start block lists entries.
+// batchOnlyDay is the fixture's batch-only day: commits a test makes carry
+// the clock's date, later than it, unless the test dates them.
+const batchOnlyDay = "2026-10-26"
+
+// policyWith is a policy page whose block lists entries, and the fixture's
+// batch-only day unless entries give one.
 func policyWith(entries string) string {
+	if !strings.Contains(entries, batchOnlyKey+":") {
+		entries += batchOnlyKey + ": " + batchOnlyDay + "\n"
+	}
 	return "## Backports\n\n" + policyFence + "\n# release-X.Y: YYYY-MM-DD\n" + entries + "```\n"
 }
 
