@@ -117,7 +117,7 @@ tests:
       users:
         app:
           createRole: true
-    template: templates/init-script.yaml
+    template: templates/db.yaml
     asserts:
       - failedTemplate:
           errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
@@ -128,10 +128,46 @@ tests:
       users:
         app:
           createRole: true
-    template: templates/init-script.yaml
+    template: templates/db.yaml
     asserts:
       - failedTemplate:
           errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+
+  # The init-script does not render while the chart restores, but the managed
+  # roles do, so the guard sits with them.
+  - it: "createRole on PostgreSQL 15 fails on recovery too"
+    set:
+      version: v15
+      bootstrap:
+        enabled: true
+        oldName: pg-old
+      backup:
+        s3AccessKey: a
+        s3SecretKey: b
+      users:
+        migrator:
+          createRole: true
+    template: templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "SECURITY: users.migrator.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+
+  - it: "createRole on PostgreSQL 13 fails on recovery too"
+    set:
+      version: v13
+      bootstrap:
+        enabled: true
+        oldName: pg-old
+      backup:
+        s3AccessKey: a
+        s3SecretKey: b
+      users:
+        migrator:
+          createRole: true
+    template: templates/db.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "SECURITY: users.migrator.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
 
   - it: "PostgreSQL 15 renders fine as long as createRole is not requested"
     set:

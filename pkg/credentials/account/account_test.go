@@ -15,6 +15,9 @@ import (
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
+// The rows from "web" to "x." are pinned for the postgres chart's account-name
+// helper too (packages/apps/postgres/tests/managed_roles_cluster_test.yaml):
+// the chart names each managed role's Secret and must name it as the API does.
 func TestMapName(t *testing.T) {
 	tests := []struct {
 		in, want string
@@ -23,6 +26,12 @@ func TestMapName(t *testing.T) {
 		{in: "web", want: "web"},
 		{in: "Bob.Smith", want: "bob-smith"},
 		{in: "app_user", want: "app-user"},
+		{in: "UPPER", want: "upper"},
+		{in: "x-1", want: "x-1"},
+		{in: "db.user_2", want: "db-user-2"},
+		{in: "app_", wantErr: true},
+		{in: "_svc", wantErr: true},
+		{in: "x.", wantErr: true},
 		{in: "-leading", wantErr: true},
 		{in: "", wantErr: true},
 		{in: strings.Repeat("a", 64), wantErr: true},

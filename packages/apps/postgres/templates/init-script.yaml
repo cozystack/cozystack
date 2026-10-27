@@ -154,9 +154,6 @@ stringData:
     {{- $grantsCreateRole := false }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
     {{- range $user, $u := .Values.users }}
-    {{- if and (default false $u.createRole) (lt $pgMajor 16) }}
-    {{- fail (printf "SECURITY: users.%s.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance." $user) }}
-    {{- end }}
     {{- if default false $u.createRole }}
     {{- $grantsCreateRole = true }}
     {{- end }}
