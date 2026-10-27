@@ -58,8 +58,11 @@ export function keysOrderToUiSchema(
  * Schema validators don't understand. The ones we care about:
  *
  *   - `x-kubernetes-int-or-string` together with `anyOf: [{integer},{string}]`
- *     — the field accepts either; we let the form render a text input and
- *     cast on submit.
+ *     — the field accepts either. We drop the anyOf (RJSF would render it as a
+ *     variant selector) and set `type: ["integer", "string"]`, which keeps a
+ *     single text input while letting RJSF coerce a bare number (`cpu: 1`) to a
+ *     number and leave a suffixed value (`cpu: 500m`) a string — the same way
+ *     the YAML editor and kubectl parse them.
  *   - `x-kubernetes-preserve-unknown-fields: true` on an object without
  *     properties — arbitrary nested values allowed. Left as a "raw" object
  *     (handled via additionalProperties: true).
@@ -85,7 +88,12 @@ export function sanitizeSchema(schema: any): any {
   }
 
   if (schema["x-kubernetes-int-or-string"]) {
-    out.type = "string"
+    // Two-type array, not a bare "string": collapsing to "string" rejected the
+    // numeric form of a quantity — including the schema's own numeric default
+    // (`default: 1`) — so the form refused values the YAML editor and the API
+    // both accept. ["integer", "string"] validates both and still renders one
+    // text input (see the header comment).
+    out.type = ["integer", "string"]
   }
   if (schema["x-kubernetes-preserve-unknown-fields"] && !schema.properties) {
     out.type = "object"

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
+import validator from "@rjsf/validator-ajv8"
 import { keysOrderToUiSchema, sanitizeSchema } from "./keys-order.ts"
+
+// The quantity pattern cozystack emits for int-or-string resource fields.
+const QUANTITY_PATTERN =
+  "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
 
 describe("keysOrderToUiSchema", () => {
   it("returns empty object for missing/empty input", () => {
@@ -50,13 +55,37 @@ describe("sanitizeSchema", () => {
     expect(sanitizeSchema(input)).toEqual(input)
   })
 
-  it("coerces x-kubernetes-int-or-string to string type and drops anyOf", () => {
+  it("coerces x-kubernetes-int-or-string to [integer, string] and drops anyOf", () => {
     const out = sanitizeSchema({
       "x-kubernetes-int-or-string": true,
+      pattern: QUANTITY_PATTERN,
       anyOf: [{ type: "integer" }, { type: "string" }],
     })
-    expect(out.type).toBe("string")
+    expect(out.type).toEqual(["integer", "string"])
     expect(out.anyOf).toBeUndefined()
+    // The pattern survives so junk strings are still rejected.
+    expect(out.pattern).toBe(QUANTITY_PATTERN)
+  })
+
+  it("int-or-string field validates a bare number and a quantity string, rejects junk", () => {
+    // Oracle is ajv via @rjsf/validator-ajv8, not hand-rolled assertions: the
+    // sanitised schema is what the form actually validates against at submit.
+    const schema = sanitizeSchema({
+      description: "CPU limit.",
+      default: 1,
+      "x-kubernetes-int-or-string": true,
+      pattern: QUANTITY_PATTERN,
+      anyOf: [{ type: "integer" }, { type: "string" }],
+    })
+    const errors = (v: unknown) =>
+      validator.validateFormData(v, schema as never).errors.map((e) => e.message)
+    // Bare integer (the field's own default) must be accepted — this is the bug.
+    expect(errors(1)).toEqual([])
+    // Suffixed quantity string stays valid.
+    expect(errors("500m")).toEqual([])
+    expect(errors("1")).toEqual([])
+    // Nonsense is still rejected by the pattern.
+    expect(errors("bad!!").length).toBeGreaterThan(0)
   })
 
   it("coerces x-kubernetes-preserve-unknown-fields on a propertyless object", () => {
