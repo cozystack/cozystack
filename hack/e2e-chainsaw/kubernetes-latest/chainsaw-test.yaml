@@ -80,7 +80,9 @@ spec:
         # wait, all on the passing path. Raising the ceiling to cover them is not
         # available -- the guard in hack/run-kubernetes-serial-console_test.bats
         # holds COZY_OP_CEILING equal to BOTH suites' `timeout:`, and two suites
-        # at 79m plus their 22m teardowns exceed the job's own 215-minute cap.
+        # at 79m plus their 22m teardowns come to 202m, which with the Kairos
+        # pool op's 35m below and an install of about 28m (27m52s on run
+        # 39163455078) exceeds the job's own 255-minute cap.
         # What is available is a measurement: on the green run of this branch
         # (33724179053) the whole Test took 569.72s against this 4020s op, with
         # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
@@ -100,6 +102,43 @@ spec:
           # the 5th folds the System -> CustomConfig OIDC lifecycle onto the same
           # ready workers. Neither feature needs another tenant-cluster bringup.
           run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
+        check:
+          ($error == null): true
+    # A Kairos worker pool on the cluster the op above left running and
+    # healthy, on the built-in `kairos` NodeGroupClass. Chainsaw skips it when
+    # that op failed, and the `finally` below reaps it with the cluster.
+    #
+    # It runs inside the E2E job's cap, so its ceiling is sized against it.
+    # Its waits, on the slowest path through them (every wait passing just
+    # under its bound until the pod wait expires), add up to
+    #     1 + 2  child HelmRelease existence + readiness
+    #   + 1 + 2  MachineDeployment existence + replicas
+    #   + 1 + 15 Machine existence + Running (disk import, boot, reset, join)
+    #   + 1 + 1.5 + 1  tenant API LoadBalancer delete, address, healthz
+    #   + 3 + 2  Node Ready + probe pod Ready
+    #   + 3.5    bounded reads, diagnostics and describes, 20s each
+    #   = 34m, under the 35m below. A Machine that never joins ends earlier,
+    # at about 27m with its diagnostics. The job ran under a 215m cap before
+    # this step existed, and the step can add at most its own ceiling, since
+    # it runs only after the op above passed, which then cost less than that
+    # op's own 67m: 215 + 35 = 250m, under the job's 255m.
+    # Not in that sum: kubectl_wait_retry re-attempting a wait after a
+    # transient apiserver error, a Chainsaw op overrunning its ceiling when a
+    # child it orphaned holds the pipe open (see .chainsaw.yaml), and the 215m
+    # itself being an envelope rather than a computed bound, since the install
+    # and prepare steps carry no ceilings of their own and the computeplane
+    # suite's red path was never counted in it.
+    - script:
+        timeout: 35m
+        env:
+        - name: COZY_SNAPSHOT_NAME
+          value: ($test.metadata.name)
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          . hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh
+          run_kairos_pool_test 'test-latest-version'
         check:
           ($error == null): true
     finally:
