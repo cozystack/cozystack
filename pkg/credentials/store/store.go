@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -85,30 +86,55 @@ func SeedSecret(app App, acc account.Account, owner *metav1.OwnerReference, now 
 	return sec, nil
 }
 
+// ErrLiveOwner is returned by Ensure on a create when a Secret at an account's
+// name is owned by a HelmRelease that still exists: the application exists
+// already, and its Secrets must not be touched.
+var ErrLiveOwner = errors.New("account Secret is owned by a live HelmRelease")
+
 // Theirs reports whether an existing Secret is the application's own account
-// Secret: marker, same username, owned by the live HelmRelease. With no
-// HelmRelease yet (a create), one any HelmRelease owns is left from a deleted
-// application of the same name and is replaced, so the account gets a new
-// identity; one nobody owns is from a create that did not finish.
+// Secret: the account marker, the same username, and owned by owner.
 func Theirs(sec *corev1.Secret, acc account.Account, owner *metav1.OwnerReference) bool {
-	if !account.IsAccountSecret(sec) || string(sec.Data[account.UsernameKey]) != acc.Username {
+	if owner == nil || !account.IsAccountSecret(sec) || string(sec.Data[account.UsernameKey]) != acc.Username {
 		return false
 	}
 	for _, ref := range sec.OwnerReferences {
-		if owner == nil && ref.Kind == helmv2.HelmReleaseKind {
-			return false
-		}
-		if owner != nil && ref.UID == owner.UID {
+		if ref.UID == owner.UID {
 			return true
 		}
 	}
-	return owner == nil
+	return false
+}
+
+// liveOwner reports whether a HelmRelease the Secret names as its owner still
+// exists under the same UID.
+func liveOwner(ctx context.Context, c client.Reader, sec *corev1.Secret) (bool, error) {
+	for _, ref := range sec.OwnerReferences {
+		if ref.Kind != helmv2.HelmReleaseKind {
+			continue
+		}
+		hr := &helmv2.HelmRelease{}
+		err := c.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: ref.Name}, hr)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return false, err
+		case hr.UID == ref.UID:
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Ensure writes an account Secret for every account that has none, or whose
 // Secret is not the application's, and returns the names of the Secrets it
 // wrote. It never touches a Secret that is the application's own, so a
 // password already minted survives every later write of the application.
+//
+// With owner nil (a create, before the HelmRelease exists) every existing
+// Secret at an account's name is a leftover and is replaced, so the account
+// gets a new identity and the Secret is among those to be owned; one a live
+// HelmRelease owns stops the create with ErrLiveOwner.
 func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Account, owner *metav1.OwnerReference, now metav1.Time, by string) ([]string, error) {
 	var written []string
 	for _, acc := range accounts {
@@ -119,6 +145,15 @@ func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Ac
 		case err == nil && Theirs(cur, acc, owner):
 			continue
 		case err == nil:
+			if owner == nil {
+				live, err := liveOwner(ctx, c, cur)
+				if err != nil {
+					return written, fmt.Errorf("read owner of account Secret %s: %w", name, err)
+				}
+				if live {
+					return written, fmt.Errorf("%s: %w", name, ErrLiveOwner)
+				}
+			}
 			if err := c.Delete(ctx, cur, client.Preconditions{UID: &cur.UID}); err != nil && !apierrors.IsNotFound(err) {
 				return written, fmt.Errorf("replace account Secret %s: %w", name, err)
 			}
@@ -135,6 +170,21 @@ func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Ac
 		written = append(written, name)
 	}
 	return written, nil
+}
+
+// Added returns the accounts of next whose username prev does not declare.
+func Added(prev, next []account.Account) []account.Account {
+	had := make(map[string]bool, len(prev))
+	for _, acc := range prev {
+		had[acc.Username] = true
+	}
+	var added []account.Account
+	for _, acc := range next {
+		if !had[acc.Username] {
+			added = append(added, acc)
+		}
+	}
+	return added
 }
 
 // SetOwner adds the HelmRelease as owner of the named account Secrets. It is

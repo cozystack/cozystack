@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/util/dryrun"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -55,7 +56,7 @@ func (o *OperationREST) GroupVersionKind(schema.GroupVersion) schema.GroupVersio
 }
 
 // Create performs the operation on the named Credential.
-func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Object, createValidation rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
+func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	req, ok := obj.(*corev1alpha1.CredentialRequest)
 	if !ok {
 		return nil, apierrors.NewBadRequest(fmt.Sprintf("expected CredentialRequest, got %T", obj))
@@ -75,9 +76,20 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 	}
 
 	r := o.parent
-	res, err := r.resolve(ctx, ns, name)
+	res, err := r.resolve(ctx, r.direct, ns, name)
 	if err != nil {
 		return nil, err
+	}
+	// Only a declared account is minted, whether or not its Secret exists: a
+	// Secret left behind by a removed user, or by values written around the
+	// API, does not make the account real.
+	acc, err := o.declared(ctx, res)
+	if err != nil {
+		return nil, err
+	}
+	if res.secret != nil && string(res.secret.Data[account.UsernameKey]) != acc.Username {
+		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
+			"credential %s holds user %q, the application declares %q; write the application to reseed it", name, res.secret.Data[account.UsernameKey], acc.Username))
 	}
 
 	var precondition string
@@ -95,6 +107,15 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 			"credential %s changed: password %s by %s at %s", name, describe(rec.Origin), rec.By, rec.At.UTC().Format("2006-01-02T15:04:05Z")))
 	}
 
+	if options != nil && dryrun.IsDryRun(options.DryRun) {
+		// A dry run answers as the operation would, without a password: one
+		// that is never stored would not log in.
+		return &corev1alpha1.CredentialRequest{
+			TypeMeta: metav1.TypeMeta{APIVersion: corev1alpha1.SchemeGroupVersion.String(), Kind: "CredentialRequest"},
+			Status:   corev1alpha1.CredentialRequestStatus{Username: acc.Username, IssuedAt: metav1.NewTime(r.now())},
+		}, nil
+	}
+
 	password, err := format.GeneratePassword()
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
@@ -106,15 +127,14 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 	now := metav1.NewTime(r.now())
 	by := user.GetName()
 
-	var username string
+	username := acc.Username
 	if res.secret != nil {
-		username = string(res.secret.Data[account.UsernameKey])
 		sec := res.secret.DeepCopy()
 		sec.Data[account.PasswordKey] = []byte(stored)
 		account.WriteRecord(sec, account.ReadRecord(sec).Apply(o.op, now, by))
 		// The update carries the Secret's own resourceVersion, so two concurrent
 		// operations cannot both land: the second gets a conflict and no password.
-		if err := r.c.Update(ctx, sec); err != nil {
+		if err := r.direct.Update(ctx, sec); err != nil {
 			if apierrors.IsConflict(err) {
 				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s changed while the request was in flight", name))
 			}
@@ -122,13 +142,7 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		}
 	} else {
 		// A declared account whose Secret is missing, as after a conversion
-		// that left the release out, gets a Secret with a new identity. One that
-		// is not declared does not exist.
-		acc, err := o.declared(ctx, res)
-		if err != nil {
-			return nil, err
-		}
-		username = acc.Username
+		// that left the release out, gets a Secret with a new identity.
 		app := store.App{
 			Namespace: ns, Release: res.hr.Name,
 			Group: res.hr.Labels[appsv1alpha1.ApplicationGroupLabel],
@@ -137,7 +151,7 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 			Block: res.kind.Block,
 		}
 		if res.stale != nil {
-			if err := r.c.Delete(ctx, res.stale, client.Preconditions{UID: &res.stale.UID}); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.direct.Delete(ctx, res.stale, client.Preconditions{UID: &res.stale.UID}); err != nil && !apierrors.IsNotFound(err) {
 				return nil, err
 			}
 		}
@@ -148,7 +162,7 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		}
 		sec.Data[account.PasswordKey] = []byte(stored)
 		account.WriteRecord(sec, account.Record{}.Apply(o.op, now, by))
-		if err := r.c.Create(ctx, sec); err != nil {
+		if err := r.direct.Create(ctx, sec); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s was created while the request was in flight", name))
 			}
@@ -161,7 +175,7 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		reason = store.ReasonCredentialRevoked
 		password = ""
 	}
-	store.Emit(ctx, r.c, res.hr, reason, username, by)
+	store.Emit(ctx, r.direct, res.hr, reason, username, by)
 
 	return &corev1alpha1.CredentialRequest{
 		TypeMeta: metav1.TypeMeta{

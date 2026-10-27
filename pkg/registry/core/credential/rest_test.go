@@ -3,7 +3,10 @@
 package credential
 
 import (
+	"bytes"
 	"context"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -17,8 +20,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -50,6 +55,12 @@ type fixture struct {
 
 func newFixture(t *testing.T, objs ...client.Object) *fixture {
 	t.Helper()
+	return newFixtureWith(t, nil, objs...)
+}
+
+// newFixtureWith builds the fixture on a client whose calls go through funcs.
+func newFixtureWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *fixture {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -66,9 +77,13 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 		},
 	}}
 	f := &fixture{hr: hr}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, hr)...).Build()
+	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, hr)...)
+	if funcs != nil {
+		b = b.WithInterceptorFuncs(*funcs)
+	}
+	c := b.Build()
 	f.c = c
-	f.r = NewREST(c, map[string]Kind{"Postgres": {
+	f.r = NewREST(c, c, map[string]Kind{"Postgres": {
 		Block:    testBlock(),
 		Accounts: func(context.Context, *helmv2.HelmRelease) ([]account.Account, error) { return f.declare, nil },
 	}})
@@ -81,11 +96,13 @@ func (f *fixture) app() store.App {
 	return store.App{Namespace: ns, Release: "postgres-orders", Group: appsv1alpha1.GroupName, Kind: "Postgres", Name: "orders", Block: testBlock()}
 }
 
-// seed writes an owned account Secret for user and returns it as stored.
+// seed declares user and writes its owned account Secret, and returns the
+// Secret as stored.
 func (f *fixture) seed(t *testing.T, username string) *corev1.Secret {
 	t.Helper()
 	owner := store.OwnerReference(f.hr)
 	mapped, _ := account.MapName(username)
+	f.declare = append(f.declare, account.Account{Username: username, Mapped: mapped})
 	sec, err := store.SeedSecret(f.app(), account.Account{Username: username, Mapped: mapped}, &owner, metav1.NewTime(f.r.now()), "seeder")
 	if err != nil {
 		t.Fatal(err)
@@ -307,3 +324,96 @@ func TestUnconvertedKindHasNoCredentials(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestMintRefusesAnUndeclaredAccountWithASecret(t *testing.T) {
+	f := newFixture(t)
+	before := f.seed(t, "web")
+	// The user left the values and the prune of its Secret failed.
+	f.declare = nil
+	if _, err := f.mint(t, "postgres-orders.web", ""); !apierrors.IsNotFound(err) {
+		t.Fatalf("mint on an undeclared account: %v, want NotFound", err)
+	}
+	// A Secret holding another user than the one the name maps to.
+	f.declare = []account.Account{{Username: "Web", Mapped: "web"}}
+	if _, err := f.mint(t, "postgres-orders.web", ""); !apierrors.IsConflict(err) {
+		t.Fatalf("mint on a Secret of another user: %v, want Conflict", err)
+	}
+	if string(f.secret(t, before.Name).Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
+		t.Fatal("a refused mint must not write")
+	}
+}
+
+func TestDryRunMintAndRevokeWriteNothing(t *testing.T) {
+	f := newFixture(t)
+	before := f.seed(t, "web")
+	dry := &metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}
+	for _, op := range []*OperationREST{NewMintREST(f.r), NewRevokeREST(f.r)} {
+		out, err := op.Create(f.ctx, "postgres-orders.web", &corev1alpha1.CredentialRequest{}, nil, dry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res := out.(*corev1alpha1.CredentialRequest); res.Status.Password != "" || res.Status.Username != "web" {
+			t.Fatalf("dry-run response = %+v", res.Status)
+		}
+	}
+	after := f.secret(t, before.Name)
+	if after.ResourceVersion != before.ResourceVersion || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
+		t.Fatal("a dry run changed the account Secret")
+	}
+	if evs := f.events(t); len(evs) != 0 {
+		t.Fatalf("a dry run recorded events: %+v", evs)
+	}
+}
+
+// Two operations racing on one account cannot both land: the write carries
+// the resourceVersion the operation read, so the slower one gets a conflict
+// and no password.
+func TestMintConflictsOnAConcurrentChange(t *testing.T) {
+	var raced bool
+	f := newFixtureWith(t, &interceptor.Funcs{
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if sec, ok := obj.(*corev1.Secret); ok && !raced {
+				raced = true
+				other := &corev1.Secret{}
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(sec), other); err != nil {
+					return err
+				}
+				other.Annotations["concurrent"] = "write"
+				if err := cl.Update(ctx, other); err != nil {
+					return err
+				}
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	})
+	f.seed(t, "web")
+	res, err := f.mint(t, "postgres-orders.web", "")
+	if !apierrors.IsConflict(err) || res != nil {
+		t.Fatalf("mint racing a concurrent write: res=%v err=%v, want a conflict and no password", res, err)
+	}
+}
+
+func TestMintLogsNoPassword(t *testing.T) {
+	var buf bytes.Buffer
+	fs := flag.NewFlagSet("klog", flag.ContinueOnError)
+	klog.InitFlags(fs)
+	_ = fs.Set("v", "10")
+	_ = fs.Set("logtostderr", "false")
+	klog.SetOutput(&buf)
+	defer func() {
+		klog.SetOutput(io.Discard)
+		_ = fs.Set("logtostderr", "true")
+		_ = fs.Set("v", "0")
+	}()
+
+	f := newFixture(t)
+	f.seed(t, "web")
+	res, err := f.mint(t, "postgres-orders.web", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	klog.Flush()
+	if strings.Contains(buf.String(), res.Status.Password) {
+		t.Fatal("the minted password reached the log")
+	}
+}
