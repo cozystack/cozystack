@@ -136,3 +136,18 @@ tests:
       - notMatchRegex:
           path: stringData["init.sh"]
           pattern: 'SET cozystack.createrole_granted'
+
+  # CNPG creates the roles from the spec, possibly after this hook starts; the
+  # marking pass waits for every declared one, bounded, before it runs.
+  - it: waits a bounded time for the declared roles before marking them
+    set:
+      users:
+        web: {}
+        Bob.Smith: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "roles_from=\\$SECONDS\\nuntil \\[ \"\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT count\\(\\*\\) FROM pg_catalog.pg_roles WHERE rolname IN \\('Bob.Smith', 'web'\\)\"\\)\" = \"2\" \\]; do\\n  if \\[ \"\\$SECONDS\" -ge \\$\\(\\(roles_from \\+ 60\\)\\) \\]; then"
