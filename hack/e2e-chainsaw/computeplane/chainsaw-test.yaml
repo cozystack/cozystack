@@ -35,10 +35,10 @@
 # and the teardown. This is the third suite in a full run that brings up a
 # tenant cluster, next to kubernetes-latest and kubernetes-previous. A failure
 # that stalls worker join everywhere reddens all three, and their red paths
-# together can exceed the E2E job's 215-minute cap, which cancels the job and
+# together can exceed the E2E job's 255-minute cap, which cancels the job and
 # loses its log and report. The cap is sized for the red path of the
-# kubernetes pair only; this suite is not counted in it, and that is an
-# accepted risk.
+# kubernetes pair, the Kairos pool step of kubernetes-latest included; this
+# suite is not counted in it, and that is an accepted risk.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

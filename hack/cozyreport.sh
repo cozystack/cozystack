@@ -121,7 +121,7 @@
 # the number; do not expect to find it written here.
 #
 # TWO ceilings sit outside it, and they fail differently. The job is capped at
-# `timeout-minutes: 215`, and reaching that cancels every step still to come --
+# `timeout-minutes: 255`, and reaching that cancels every step still to come --
 # the artifact upload among them. The step running this script is capped at 30 of
 # its own, and reaching THAT ends only this step: the uploads after it still run,
 # and `continue-on-error` on that step keeps the overrun out of the job's result,

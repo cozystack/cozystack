@@ -137,7 +137,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 255
     permissions:
       contents: read
       checks: write # Breakpoint action updates its dedicated "Breakpoint Open" Check Run.
@@ -292,7 +292,7 @@ jobs:
       # collect-report packages cozyreport plus per-failed-test crust-gather
       # snapshots captured before Chainsaw cleanup.
       #
-      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # A ceiling of its own, not the job's 255 minutes. `Upload cozyreport.tgz`
       # is the next step and the collector writes its tarball at the very end of
       # its run, so a read that never returns spends what is left of the job
       # budget, the job is cancelled, and the upload never runs -- the artifact
