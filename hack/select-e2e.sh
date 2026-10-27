@@ -243,14 +243,17 @@ escalate_to_full_suite() {
 # this list read as longer than the set of real exceptions.
 src_to_suites() {
   case "$1" in
-    vm-instance-application) echo vminstance ;;
+    # gpuclaim attaches GPUs to VMs, each with a blank VMDisk attached, so
+    # both VM sources select it beside vminstance.
+    vm-instance-application) echo "vminstance gpuclaim" ;;
     # The vminstance suite creates a VMDisk and asserts the DataVolume behind it
     # (hack/e2e-chainsaw/vminstance/vmdisk.yaml, vmdisk-vmi.yaml), so it is the
     # suite that covers this source and everything reaching it, kubevirt-cdi
     # included. Without the entry the source maps to a `vm-disk` suite that does
     # not exist, is dropped by intersect_suites(), and a CDI change reaches
     # nothing runnable through it.
-    vm-disk-application) echo vminstance ;;
+    vm-disk-application) echo "vminstance gpuclaim" ;;
+    gpu-operator) echo gpuclaim ;;
     # The VMInstance and VMDisk backup round-trips are the only Tests that run a
     # Velero backup and restore; without this the source maps to a `velero`
     # suite that does not exist and a Velero change runs neither.
