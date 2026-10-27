@@ -1,0 +1,112 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: nodegroupclasses.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: NodeGroupClass
+    listKind: NodeGroupClassList
+    plural: nodegroupclasses
+    singular: nodegroupclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.os
+      name: OS
+      type: string
+    - jsonPath: .spec.image.kubernetesVersion
+      name: Kubernetes
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NodeGroupClass selects the worker OS, and for Kairos the worker image, of
+          the KubernetesNodes pools that name it in nodeGroupClassName. Classes are
+          created by the platform operator; the platform ships talos and kairos.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              NodeGroupClassSpec is immutable as a whole: a new image or version is a new
+              class, so no edit can roll every pool that uses one.
+            properties:
+              image:
+                description: |-
+                  Image is the worker image of a Kairos class. Omitted, a pool boots the
+                  platform image for its Kubernetes version.
+                properties:
+                  kubernetesVersion:
+                    description: |-
+                      KubernetesVersion is the exact Kubernetes release of kubelet and kubeadm
+                      in the image. A pool on this class runs its Machines at this version, so
+                      its minor must equal the pool's version.
+                    pattern: ^v[0-9]+\.[0-9]+\.[0-9]+$
+                    type: string
+                  reference:
+                    description: |-
+                      Reference is the container disk holding the worker OS, as a registry
+                      reference without a scheme, pinned by digest so that every worker of a
+                      pool boots the same bytes. CDI imports it into each worker's system disk
+                      without credentials, so it must be publicly pullable.
+                    maxLength: 512
+                    pattern: ^[^\s:/]+(:[0-9]+)?(/[^\s/]+)+$
+                    type: string
+                required:
+                - kubernetesVersion
+                type: object
+                x-kubernetes-validations:
+                - message: image.reference must be set
+                  rule: has(self.reference)
+                - message: image.reference must be pinned by digest (@sha256:<64 hex>);
+                    publish a new image under a new class instead of moving a tag
+                  rule: '!has(self.reference) || self.reference.matches(''@sha256:[0-9a-f]{64}$'')'
+              os:
+                description: OS is the operating system of the workers of every pool
+                  on this class.
+                enum:
+                - talos
+                - kairos
+                type: string
+            required:
+            - os
+            type: object
+            x-kubernetes-validations:
+            - message: spec is immutable; create a new NodeGroupClass instead
+              rule: self == oldSelf
+            - message: image is allowed only with os kairos
+              rule: self.os == 'kairos' || !has(self.image)
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: the built-in classes talos and kairos carry only os, equal to their
+            name
+          rule: '!(self.metadata.name in [''talos'', ''kairos'']) || (self.spec.os
+            == self.metadata.name && !has(self.spec.image))'
+    served: true
+    storage: true
+    subresources: {}

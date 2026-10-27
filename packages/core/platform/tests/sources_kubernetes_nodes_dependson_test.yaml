@@ -1,0 +1,55 @@
+suite: kubernetes-nodes PackageSource dependencies
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # kubernetes-nodes-rd ships the built-in NodeGroupClass objects, whose CRD
+  # cozystack-controller installs. A variant dependency becomes a HelmRelease
+  # dependsOn on every component of that package, so this edge is what orders
+  # the objects after their CRD.
+  - it: kubernetes-nodes depends on the package that installs the NodeGroupClass CRD
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-nodes-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: kubernetes-nodes-rd
+            path: system/kubernetes-nodes-rd
+            install:
+              namespace: cozy-system
+              releaseName: kubernetes-nodes-rd
+  - it: every cozystack-engine variant installs cozystack-controller
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - lengthEqual:
+          path: spec.variants
+          count: 2
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: cozystack-controller
+            path: system/cozystack-controller
+            install:
+              namespace: cozy-system
+              releaseName: cozystack-controller
+              dependsOn:
+                - application-definition-crd
+      - contains:
+          path: spec.variants[1].components
+          content:
+            name: cozystack-controller
+            path: system/cozystack-controller
+            install:
+              namespace: cozy-system
+              releaseName: cozystack-controller
+              dependsOn:
+                - application-definition-crd
