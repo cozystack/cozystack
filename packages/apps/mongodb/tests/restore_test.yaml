@@ -888,7 +888,41 @@ tests:
         s3SecretKey: "secret"
     asserts:
       - failedTemplate:
-          errorMessage: "bootstrap.enabled cannot be set while the application is being created. Create it with bootstrap.enabled false, wait until it is ready, then set bootstrap.enabled to true and the restore starts by itself"
+          errorMessage: "bootstrap.enabled cannot be set while the application is being created. Create it with backup.enabled=true and bootstrap.enabled=false, wait until the database and its backup agents are ready, then set bootstrap.enabled=true"
+
+  - it: requires enabling backups before requesting bootstrap on an existing cluster
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    capabilities:
+      apiVersions:
+        - psmdb.percona.com/v1
+    kubernetesProvider:
+      scheme: *psmdbScheme
+      objects:
+        - apiVersion: psmdb.percona.com/v1
+          kind: PerconaServerMongoDB
+          metadata:
+            name: test-mongodb
+            namespace: tenant-test
+          spec:
+            backup:
+              enabled: false
+          status:
+            state: ready
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backups are not enabled on the existing cluster. First apply backup.enabled=true with bootstrap.enabled=false, wait until the database and its backup agents are ready, then set bootstrap.enabled=true"
 
   - it: holds the restore back while the cluster is initializing
     release:
@@ -905,6 +939,9 @@ tests:
           metadata:
             name: test-mongodb
             namespace: tenant-test
+          spec:
+            backup:
+              enabled: true
           status:
             state: initializing
     set:
@@ -936,6 +973,9 @@ tests:
           metadata:
             name: test-mongodb
             namespace: tenant-test
+          spec:
+            backup:
+              enabled: true
           status:
             state: ready
     set:
@@ -967,6 +1007,9 @@ tests:
           metadata:
             name: test-mongodb
             namespace: tenant-test
+          spec:
+            backup:
+              enabled: true
     set:
       bootstrap:
         enabled: true
@@ -996,6 +1039,9 @@ tests:
           metadata:
             name: test-mongodb
             namespace: tenant-test
+          spec:
+            backup:
+              enabled: true
           status:
             state: error
             backupVersion: 2.11.0
@@ -1028,6 +1074,9 @@ tests:
           metadata:
             name: test-mongodb
             namespace: tenant-test
+          spec:
+            backup:
+              enabled: true
           status:
             state: ready
             backupVersion: 2.11.0

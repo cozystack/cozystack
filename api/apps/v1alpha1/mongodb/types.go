@@ -99,7 +99,7 @@ type Bootstrap struct {
 	// S3 path the backup to restore was written to, like s3://bucket/path/. Leave empty to restore from `backup.destinationPath`. Set it to the backup path of the source application when restoring its backup, so this application keeps writing its own backups to `backup.destinationPath` and not into the folder of the source. It is read with the endpoint and credentials from `backup`.
 	// +kubebuilder:default:=""
 	DestinationPath string `json:"destinationPath,omitempty"`
-	// Restore the backup named in `backupName` into this application. Turn it on once the application is ready, it cannot be set while the application is being created. The restore then starts by itself as soon as the database and its backup agents are ready, and it needs `backup.enabled`.
+	// Restore the backup named in `backupName` into this application. First create or update the application with `backup.enabled=true` and `bootstrap.enabled=false`, wait until the database and its backup agents are ready, then set `bootstrap.enabled=true`. Enabling backups and bootstrap in the same change is not supported.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
 	// Timestamp for point-in-time recovery; empty means latest.
