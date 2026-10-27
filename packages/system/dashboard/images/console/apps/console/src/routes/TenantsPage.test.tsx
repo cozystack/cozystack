@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from "vitest"
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest"
 import { screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import {
@@ -59,6 +59,18 @@ beforeAll(() => {
   })
 })
 
+// Each test picks the selected tenant it needs; default to "whmcs" so the
+// subtree fixtures below load without the provider switching it (a switch
+// changes the label selector and re-subscribes, which the mock client does not
+// resolve a second time).
+beforeEach(() => {
+  try {
+    localStorage.setItem(SELECTED_TENANT_KEY, "whmcs")
+  } catch {
+    /* ignore */
+  }
+})
+
 describe("TenantsPage tree", () => {
   it("renders the visible subtree and bridges over an invisible parent", async () => {
     renderWithK8sProvider(
@@ -89,6 +101,44 @@ describe("TenantsPage tree", () => {
     expect(editButtons).toHaveLength(1)
     expect(screen.getByTitle("Edit tenant whmcs-x")).toBeInTheDocument()
     expect(screen.queryByTitle("Edit tenant whmcs-a-b")).not.toBeInTheDocument()
+  })
+
+  it("offers Edit for the root tenant and its direct children", async () => {
+    // Regression: a first-level sub-tenant (namespace tenant-user1, named
+    // without the `root` segment) had its real parent — tenant-root — missed by
+    // realParentNamespace, so the Edit button never rendered even though the
+    // Tenant CR lives right there in tenant-root. Here both tenant-root and the
+    // child are visible, so both rows must offer Edit.
+    // View the hierarchy from root so both rows are in scope.
+    localStorage.setItem(SELECTED_TENANT_KEY, "root")
+    const client = new K8sClient()
+    const items = [tn("tenant-root", []), tn("tenant-user1", ["tenant-root"])]
+    vi.spyOn(client, "list").mockImplementation(
+      async (_g, _v, plural) =>
+        ({
+          apiVersion: "v1",
+          kind: `${plural}List`,
+          metadata: {},
+          items: plural === "tenantnamespaces" ? items : [],
+        }) as K8sList<unknown>,
+    )
+    vi.spyOn(client, "getApiGroups").mockResolvedValue({
+      kind: "APIGroupList",
+      apiVersion: "v1",
+      groups: [],
+    } as APIGroupList)
+
+    renderWithK8sProvider(
+      <TenantProvider>
+        <TenantsPage />
+      </TenantProvider>,
+      { client, initialRoute: "/admin/tenants" },
+    )
+
+    expect(await screen.findByText("user1")).toBeInTheDocument()
+    expect(screen.getByTitle("Edit tenant root")).toBeInTheDocument()
+    expect(screen.getByTitle("Edit tenant user1")).toBeInTheDocument()
+    expect(screen.getAllByRole("button", { name: /edit/i })).toHaveLength(2)
   })
 
   it("collapses a subtree via the row toggle", async () => {

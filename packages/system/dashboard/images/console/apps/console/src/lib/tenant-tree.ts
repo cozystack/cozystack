@@ -1,5 +1,6 @@
 import type { TenantNamespace } from "@cozystack/types"
 import { tenantDisplayName } from "./tenant-context.tsx"
+import { ROOT_TENANT_NAMESPACE } from "./constants.ts"
 
 const ANCESTOR_LABEL_PREFIX = "tenant.cozystack.io/"
 
@@ -96,7 +97,17 @@ export function relativeTenantName(node: TenantTreeNode): string {
  */
 export function realParentNamespace(tn: TenantNamespace): string | undefined {
   const ns = tn.metadata.name
-  return ancestorNamespaces(tn)
+  const ancestors = ancestorNamespaces(tn)
+  const prefixParent = ancestors
     .filter((ancestor) => ns.startsWith(`${ancestor}-`))
     .sort((a, b) => b.length - a.length)[0]
+  if (prefixParent) return prefixParent
+  // Direct children of root are named `tenant-<name>`, not
+  // `tenant-root-<name>` (the chart drops the `root` segment), so no ancestor
+  // label is a literal name prefix of theirs. Their real parent is still root,
+  // which is present as the `tenant-root` ancestor label. Without this, the
+  // Edit action was hidden for every first-level sub-tenant. Mirrors the same
+  // special case in tenantCrName (TenantsPage).
+  if (ancestors.includes(ROOT_TENANT_NAMESPACE)) return ROOT_TENANT_NAMESPACE
+  return undefined
 }
