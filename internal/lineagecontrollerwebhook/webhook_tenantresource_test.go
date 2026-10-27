@@ -16,13 +16,15 @@ import (
 )
 
 // The tenantresource verdict is the definition's, but an object may narrow it
-// and never widen it: a rendered "false" survives a selector that matches the
-// name, a rendered "true" does not survive one that does not.
+// on CREATE and never widen it: a rendered "false" survives a selector that
+// matches the name, a rendered "true" does not survive one that does not. A
+// re-admission UPDATE gets the definition's verdict whatever the label says.
 func TestHandle_TenantResourceLabelNarrowsOnly(t *testing.T) {
 	tenantResourcePath := "/metadata/labels/" + strings.ReplaceAll(corev1alpha1.TenantResourceLabelKey, "/", "~1")
 
 	tests := []struct {
 		name     string
+		op       admissionv1.Operation
 		secret   string
 		rendered string
 		// want is the value the label must hold once the patch is applied;
@@ -31,21 +33,40 @@ func TestHandle_TenantResourceLabelNarrowsOnly(t *testing.T) {
 	}{
 		{
 			name:     "a rendered false is kept where the definition selects the name",
+			op:       admissionv1.Create,
 			secret:   "harbor-demo-credentials",
 			rendered: "false",
 			want:     "",
 		},
 		{
 			name:     "a rendered true is overwritten where the definition does not select the name",
+			op:       admissionv1.Create,
 			secret:   "harbor-demo-other",
 			rendered: "true",
 			want:     "false",
 		},
 		{
 			name:     "no rendered label gets the definition's verdict",
+			op:       admissionv1.Create,
 			secret:   "harbor-demo-credentials",
 			rendered: "",
 			want:     "true",
+		},
+		{
+			// The cacert controller's re-admission after a selector change:
+			// managed-by-cozystack dropped, the old verdict still on the object.
+			name:     "a re-admission grants where the definition now selects the name",
+			op:       admissionv1.Update,
+			secret:   "harbor-demo-credentials",
+			rendered: "false",
+			want:     "true",
+		},
+		{
+			name:     "a re-admission revokes where the definition no longer selects the name",
+			op:       admissionv1.Update,
+			secret:   "harbor-demo-other",
+			rendered: "true",
+			want:     "false",
 		},
 	}
 
@@ -78,13 +99,25 @@ func TestHandle_TenantResourceLabelNarrowsOnly(t *testing.T) {
 				t.Fatalf("marshal object: %v", err)
 			}
 
-			resp := w.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+			req := admissionv1.AdmissionRequest{
 				Kind:      metav1.GroupVersionKind{Version: "v1", Kind: "Secret"},
 				Namespace: "tenant-demo",
 				Name:      tt.secret,
-				Operation: admissionv1.Create,
+				Operation: tt.op,
 				Object:    runtime.RawExtension{Raw: raw},
-			}})
+			}
+			if tt.op == admissionv1.Update {
+				old := obj.DeepCopy()
+				oldLabels := old.GetLabels()
+				oldLabels[ManagedObjectKey] = "true"
+				old.SetLabels(oldLabels)
+				oldRaw, err := json.Marshal(old)
+				if err != nil {
+					t.Fatalf("marshal old object: %v", err)
+				}
+				req.OldObject = runtime.RawExtension{Raw: oldRaw}
+			}
+			resp := w.Handle(context.Background(), admission.Request{AdmissionRequest: req})
 			if !resp.Allowed {
 				t.Fatalf("expected allowed response, got %+v", resp.Result)
 			}
