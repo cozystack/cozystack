@@ -120,3 +120,83 @@ tests:
       - lengthEqual:
           path: spec.managed.roles
           count: 1
+
+  # The account Secret name must be the one the API derives; the same rows are
+  # pinned for account.MapName in pkg/credentials/account/account_test.go.
+  - it: names each account Secret as the API does
+    set:
+      users:
+        web: {}
+        Bob.Smith: {}
+        app_user: {}
+        UPPER: {}
+        x-1: {}
+        db.user_2: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains: {path: spec.managed.roles, content: {name: web, passwordSecret: {name: pg-test.web.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: Bob.Smith, passwordSecret: {name: pg-test.bob-smith.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: app_user, passwordSecret: {name: pg-test.app-user.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: UPPER, passwordSecret: {name: pg-test.upper.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: x-1, passwordSecret: {name: pg-test.x-1.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: db.user_2, passwordSecret: {name: pg-test.db-user-2.account}}, any: true}
+
+  - it: refuses a user whose account name does not start and end with a letter or digit
+    set:
+      users:
+        app_: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "app_" maps to the account name "app-", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses a user whose account name starts with a dash
+    set:
+      users:
+        _svc: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "_svc" maps to the account name "-svc", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses a user whose account name ends with a dash
+    set:
+      users:
+        x.: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "x." maps to the account name "x-", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses the CloudNativePG replication user
+    set:
+      users:
+        streaming_replica: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "streaming_replica" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses names PostgreSQL reserves
+    set:
+      users:
+        pg_owner: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "pg_owner" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses names CloudNativePG reserves
+    set:
+      users:
+        cnpg_pooler: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "cnpg_pooler" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses a user named as a role of a declared database
+    set:
+      users:
+        shop_admin: {}
+      databases:
+        shop: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "shop_admin" is the name of a role of database "shop"; rename the user'
