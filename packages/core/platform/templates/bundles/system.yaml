@@ -174,9 +174,17 @@
        platform-level key, so `telemetry.disabled: true` plus the installer
        flag silences both. Without this, an operator who followed the
        documented opt-out kept sending cozy_application_count. */ -}}
+{{- $controllerValues := dict -}}
 {{- if .Values.telemetry.disabled -}}
-{{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
-{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- $_ := set $controllerValues "disableTelemetry" true -}}
+{{- end -}}
+{{- $gpuSettings := include "cozystack.platform.gpu.settings" $ | fromYaml -}}
+{{- $gpuVM := eq (include "cozystack.platform.gpu.vmEnabled" $) "true" -}}
+{{- if $gpuVM -}}
+{{- $_ := set $controllerValues "gpu" (dict "enabled" true "resourceNames" $gpuSettings.resourceNames "rawResourceNames" $gpuSettings.rawResourceNames) -}}
+{{- end -}}
+{{- if $controllerValues -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" (dict "cozystackController" $controllerValues)) -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
@@ -310,7 +318,11 @@
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-application" "default" $) }}
 {{- end }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.etcd-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
+{{- $basicsComponents := dict -}}
+{{- if $gpuVM -}}
+{{- $_ := set $basicsComponents "cozystack-basics" (dict "values" (dict "gpu" (dict "enabled" true "rawResourceNames" $gpuSettings.rawResourceNames))) -}}
+{{- end }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-basics" "default" $ $basicsComponents) }}
 {{- /*
   Forward admin backupStorage overrides (endpoint, region, systemSecretName, …)
   into the emitted cozystack.backupstrategy-controller Package CR's
@@ -342,7 +354,11 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.full.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metrics-server" $) }}
-{{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
+{{- $monitoringAgentsValues := dict "global" (dict "target" "tenant-root") -}}
+{{- if $gpuVM -}}
+{{- $_ := set $monitoringAgentsValues "gpu" (dict "enabled" true) -}}
+{{- end -}}
+{{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" $monitoringAgentsValues) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.goldpinger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}

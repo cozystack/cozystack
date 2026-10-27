@@ -1,0 +1,67 @@
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+---
+# Whoever orders GPUClaim objects must not touch two parts of a claim. The
+# finalizer keeps a released claim, its binding and its usage record until
+# no VMI uses it; without it a held claim could leave the usage records.
+# The template mark names the claims the controller created from a
+# claimTemplate, which it deletes with their VMI; on a tenant's own order it
+# would let the controller delete that order. The API server
+# and the garbage collector own the orphan and foregroundDeletion
+# finalizers, so those stay free.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gpu-claim-tamper
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gpu.cozystack.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["gpuclaims"]
+  variables:
+  - name: trusted
+    expression: >-
+      request.userInfo.username == "system:kube-controller-manager" ||
+      (has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:kube-system"))
+  - name: finalizers
+    expression: >-
+      object.metadata.?finalizers.orValue([]).filter(f, f != "orphan" && f != "foregroundDeletion")
+  - name: oldFinalizers
+    expression: >-
+      oldObject == null ? [] :
+      oldObject.metadata.?finalizers.orValue([]).filter(f, f != "orphan" && f != "foregroundDeletion")
+  - name: mark
+    expression: object.metadata.?labels[?"gpu.cozystack.io/template-claim"]
+  - name: oldMark
+    expression: >-
+      oldObject == null ? optional.none() : oldObject.metadata.?labels[?"gpu.cozystack.io/template-claim"]
+  validations:
+  - expression: >-
+      variables.trusted || (
+        variables.finalizers.all(f, f in variables.oldFinalizers) &&
+        variables.oldFinalizers.all(f, f in variables.finalizers))
+    messageExpression: >-
+      "GPUClaim " + object.metadata.name + ": finalizers are managed by the GPU controller and cannot be added or removed. Delete the claim to release it."
+    reason: Forbidden
+  - expression: variables.trusted || variables.mark == variables.oldMark
+    messageExpression: >-
+      "GPUClaim " + object.metadata.name + ": the label gpu.cozystack.io/template-claim is set only by the GPU controller on claims it creates from a claimTemplate."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gpu-claim-tamper
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gpu-claim-tamper
+  validationActions: [Deny]
+{{- end }}

@@ -4,15 +4,16 @@ cozy-lib.barman.sidecarConfiguration renders a barman-cloud ObjectStore
 plugin. It carries the two settings the sidecar cannot get right on its own.
 
 Resources: the plugin injects the sidecar with no resources, and what that
-means depends on the namespace. A tenant with resourceQuotas set carries a
+means depends on the namespace. A tenant with non-GPU resourceQuotas carries a
 LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults every
 container to 128Mi; the sidecar is OOMKilled mid-backup under it, leaving the
 ObjectStore healthy and the backup failed. Measured cgroup high-water mark on a
 38 MB database is 254 MiB, so 128Mi cannot hold it. A namespace without a
-LimitRange, which is cozy-keycloak and any tenant that leaves resourceQuotas
-empty, gave the sidecar no requests and no limit at all, so nothing reserved
-memory for it and nothing bounded it. The same request and limit settle both:
-256Mi holds the measured working set and 1Gi is four times the measurement.
+LimitRange, which is cozy-keycloak and any tenant without non-GPU
+resourceQuotas, gave the sidecar no requests and no limit at all, so nothing
+reserved memory for it and nothing bounded it. The same request and limit
+settle both: 256Mi holds the measured working set and 1Gi is four times the
+measurement.
 No CPU limit is set, matching the entityOperator precedent in
 packages/apps/kafka: a throttled sidecar stalls WAL archiving instead of
 failing it. Inside a tenant the limit counts against the ResourceQuota

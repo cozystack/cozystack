@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/gpu"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2429,6 +2432,151 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 			}
 			if workload.Status.Operational != tc.want {
 				t.Errorf("PVC Workload Operational = %v, want %v", workload.Status.Operational, tc.want)
+			}
+		})
+	}
+}
+
+// A virt-launcher pod of a VMI with claim references requests the GPUs its
+// claims hold, and those claims already have usage records of their own.
+func TestReconcile_LauncherPodDoesNotReportGPUsItsClaimsCover(t *testing.T) {
+	const rn = "nvidia.com/L40S"
+	cases := []struct {
+		name     string
+		refLabel bool
+		attached []int32
+		phase    gpuv1alpha1.GPUClaimPhase
+		// vmi is how the pod's VMI lists it: "" for an active pod,
+		// "inactive" for a VMI whose activePods lacks it, "missing" for none.
+		vmi string
+		// getErr fails reading the VMI.
+		getErr error
+		want   string
+	}{
+		{name: "all units covered", refLabel: true, attached: []int32{1, 1}, want: ""},
+		{name: "partly covered", refLabel: true, attached: []int32{1}, want: "1"},
+		{name: "no reference label", refLabel: false, attached: []int32{1, 1}, want: "2"},
+		// The phase table leaves a Lost claim out of the usage records, and
+		// the pod must not bring its GPUs back in.
+		{name: "claims Lost", refLabel: true, attached: []int32{1, 1}, phase: gpuv1alpha1.GPUClaimLost, want: ""},
+		// The label and the owner reference are no proof: any pod can carry
+		// them. Only the VMI's own list of its pods is.
+		{name: "pod not among the VMI's active pods", refLabel: true, attached: []int32{1, 1}, vmi: "inactive", want: "2"},
+		{name: "no such VMI", refLabel: true, attached: []int32{1, 1}, vmi: "missing", want: "2"},
+		// Without KubeVirt there is no VMI to list the pod.
+		{name: "no VMI kind served", refLabel: true, attached: []int32{1, 1},
+			getErr: &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "kubevirt.io", Kind: "VirtualMachineInstance"}}, want: "2"},
+		// A failed read leaves the pod's record for the next pass rather than
+		// reporting the GPUs its claims may cover.
+		{name: "VMI unreadable", refLabel: true, attached: []int32{1, 1}, getErr: errors.New("simulated API outage"), want: "no record"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := runtime.NewScheme()
+			_ = cozyv1alpha1.AddToScheme(s)
+			_ = corev1.AddToScheme(s)
+			_ = cosiv1alpha1.AddToScheme(s)
+			_ = gpuv1alpha1.AddToScheme(s)
+			vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
+			s.AddKnownTypeWithName(vmiGVK, &unstructured.Unstructured{})
+			s.AddKnownTypeWithName(vmiGVK.GroupVersion().WithKind("VirtualMachineInstanceList"), &unstructured.UnstructuredList{})
+
+			selector := map[string]string{"app": "vm"}
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "default"},
+				Spec:       cozyv1alpha1.WorkloadMonitorSpec{Selector: selector},
+			}
+			podLabels := map[string]string{"app": "vm"}
+			if tc.refLabel {
+				podLabels[gpu.LabelClaimReference] = gpu.LabelValueTrue
+			}
+			units := corev1.ResourceList{
+				corev1.ResourceCPU:   resource.MustParse("1"),
+				rn:                   resource.MustParse("2"),
+				"nvidia.com/hostdev": resource.MustParse("1"),
+			}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "virt-launcher-vm1-x", Namespace: "default", Labels: podLabels, UID: "pod-uid",
+					Annotations: map[string]string{"workload.cozystack.io/resources": `{"` + rn + `":"2"}`},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance",
+						Name: "vm1", UID: "vmi-uid", Controller: ptr.To(true)}},
+				},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "compute",
+					Resources: corev1.ResourceRequirements{Requests: units, Limits: units}}}},
+			}
+			objs := []client.Object{monitor, pod, &gpuv1alpha1.GPUClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "l40s"},
+				Spec: gpuv1alpha1.GPUClassSpec{Source: gpuv1alpha1.GPUClassSource{
+					DevicePlugin: &gpuv1alpha1.DevicePluginSource{ResourceName: rn}}},
+			}}
+			phase := tc.phase
+			if phase == "" {
+				phase = gpuv1alpha1.GPUClaimAttached
+			}
+			for i, count := range tc.attached {
+				objs = append(objs, &gpuv1alpha1.GPUClaim{
+					ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("d%d", i), Namespace: "default"},
+					Spec:       gpuv1alpha1.GPUClaimSpec{ClassName: "l40s", Count: count},
+					Status: gpuv1alpha1.GPUClaimStatus{Phase: phase,
+						AttachedTo: &gpuv1alpha1.GPUClaimAttachment{VMI: "vm1"}},
+				})
+			}
+			if tc.vmi != "missing" {
+				vmi := &unstructured.Unstructured{}
+				vmi.SetGroupVersionKind(vmiGVK)
+				vmi.SetNamespace("default")
+				vmi.SetName("vm1")
+				vmi.SetUID("vmi-uid")
+				active := map[string]any{"another-pod-uid": "node-a"}
+				if tc.vmi != "inactive" {
+					active["pod-uid"] = "node-a"
+				}
+				_ = unstructured.SetNestedMap(vmi.Object, active, "status", "activePods")
+				objs = append(objs, vmi)
+			}
+			objs = append(objs, &gpuv1alpha1.GPUClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "default"},
+				Spec:       gpuv1alpha1.GPUClaimSpec{ClassName: "l40s", Count: 1},
+				Status: gpuv1alpha1.GPUClaimStatus{Phase: gpuv1alpha1.GPUClaimAttached,
+					AttachedTo: &gpuv1alpha1.GPUClaimAttachment{VMI: "vm2"}},
+			})
+			builder := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(monitor)
+			if tc.getErr != nil {
+				builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == vmiGVK.Kind {
+							return tc.getErr
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				})
+			}
+			c := builder.Build()
+			r := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "vm", Namespace: "default"}}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			w := &cozyv1alpha1.Workload{}
+			err := c.Get(context.TODO(), types.NamespacedName{Name: "pod-virt-launcher-vm1-x", Namespace: "default"}, w)
+			if tc.want == "no record" {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("want no Workload while the VMI is unreadable, got %v %v", err, w.Status.Resources)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("get Workload: %v", err)
+			}
+			got, ok := w.Status.Resources[rn]
+			switch {
+			case tc.want == "" && ok:
+				t.Fatalf("%s reported as %s, want it dropped", rn, got.String())
+			case tc.want != "" && (!ok || got.Cmp(resource.MustParse(tc.want)) != 0):
+				t.Fatalf("%s = %v, want %s", rn, w.Status.Resources, tc.want)
+			}
+			if q := w.Status.Resources["nvidia.com/hostdev"]; q.Cmp(resource.MustParse("1")) != 0 {
+				t.Fatalf("a NIC next to the GPU must stay reported: %v", w.Status.Resources)
 			}
 		})
 	}

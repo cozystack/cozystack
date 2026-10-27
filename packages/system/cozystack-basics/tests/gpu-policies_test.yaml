@@ -1,0 +1,95 @@
+suite: cozystack-basics GPU admission policies follow the platform's GPU switch
+templates:
+  - templates/gpu-class-policy.yaml
+  - templates/gpu-claim-tamper-policy.yaml
+  - templates/gpu-raw-names-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+# The decisions of each policy are pinned in internal/gpu/policytest, which
+# reads these templates. This suite pins when they render: the class and
+# claim policies only where the platform switched GPUs for VMs on, and the
+# raw-name policy only where the hoster also forbade raw names, since its
+# bindings refuse everything they match until the controller publishes the
+# GPU resource names.
+tests:
+  - it: renders no GPU policy by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-raw-names-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-class-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-claim-tamper-policy.yaml
+
+  - it: renders the class and claim policies when GPUs are on
+    set:
+      gpu:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+        template: templates/gpu-class-policy.yaml
+      - hasDocuments:
+          count: 2
+        template: templates/gpu-claim-tamper-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-raw-names-policy.yaml
+
+  - it: accepts the switch as a string
+    set:
+      gpu:
+        enabled: "true"
+    template: templates/gpu-claim-tamper-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: treats the string "false" as off
+    set:
+      gpu:
+        enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-class-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-claim-tamper-policy.yaml
+
+  - it: renders no GPU policy with a null gpu block
+    set:
+      gpu: null
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-class-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gpu-claim-tamper-policy.yaml
+
+  - it: renders the raw-name policy when raw names are forbidden
+    set:
+      gpu:
+        enabled: true
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders no raw-name policy while GPUs are off
+    set:
+      gpu:
+        rawResourceNames: forbidden
+    template: templates/gpu-raw-names-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -18,7 +18,9 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -27,7 +29,10 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -41,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	gpuv1alpha1 "github.com/cozystack/cozystack/api/gpu/v1alpha1"
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
@@ -49,6 +55,10 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
+	"github.com/cozystack/cozystack/internal/gpu"
+	gpucontroller "github.com/cozystack/cozystack/internal/gpu/controller"
+	"github.com/cozystack/cozystack/internal/gpu/model"
+	gpuwebhook "github.com/cozystack/cozystack/internal/gpu/webhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -70,6 +80,7 @@ func init() {
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gpuv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(gatewayv1alpha2.Install(scheme))
@@ -92,6 +103,8 @@ func main() {
 	var quotaBufferPercent int64
 	var seaweedfsMetricsEndpoint string
 	var tlsOpts []func(*tls.Config)
+	var gpuCfg gpu.Config
+	var gpuResourceNames, gpuRawResourceNames string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -114,6 +127,16 @@ func main() {
 		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
 			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
 			"Basic auth may be embedded as userinfo (https://user:pass@host/...). Empty keeps label-based discovery.")
+	flag.BoolVar(&gpuCfg.Enabled, "enable-gpu", false,
+		"Enable the GPU features that need KubeVirt, such as GPUClaim placement. GPU finalizers and usage records run without it.")
+	flag.StringVar(&gpuResourceNames, "gpu-resource-names", "",
+		"Comma-separated GPU resource names besides those of GPUClasses and the node agents (gpu.resourceNames).")
+	flag.StringVar(&gpuRawResourceNames, "gpu-raw-resource-names", string(gpu.RawNamesAllowed),
+		"Whether VMs and pods may request GPU resource names directly: allowed or forbidden (gpu.rawResourceNames).")
+	flag.DurationVar(&gpuCfg.LostCapacityGrace, "gpu-lost-capacity-grace", 5*time.Minute,
+		"How long a GPU node stays NotReady, or serves fewer units of a GPU resource than its devices hold, before its claims move.")
+	flag.DurationVar(&gpuCfg.AttachmentGrace, "gpu-attachment-grace", 2*time.Minute,
+		"How long a GPUClaim attachment waits for its VMI to appear; must exceed the API server request timeout.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -135,6 +158,13 @@ func main() {
 			setupLog.Error(err, "invalid --seaweedfs-metrics-endpoint")
 			os.Exit(1)
 		}
+	}
+
+	gpuCfg.ResourceNames = model.ParseResourceNames(gpuResourceNames)
+	gpuCfg.RawResourceNames = gpu.RawNamesPolicy(gpuRawResourceNames)
+	if err := validateGPUConfig(&gpuCfg); err != nil {
+		setupLog.Error(err, "invalid GPU flags")
+		os.Exit(1)
 	}
 
 	// Configure telemetry
@@ -216,19 +246,19 @@ func main() {
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
+				// The GPU settings ConfigMap is the only ConfigMap this binary
+				// reads through the cache, so cache only that one.
+				&corev1.ConfigMap{}: {
+					Namespaces: map[string]cache.Config{gpu.SettingsNamespace: {
+						FieldSelector: fields.OneTermEqualSelector("metadata.name", gpu.SettingsConfigMap),
+					}},
+				},
 			},
 		},
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		// The program exits as soon as the manager stops, which is what makes
+		// releasing the lease on cancel safe. Without it a rollout leaves the
+		// launcher pods of starting GPU VMs gated for a whole lease duration.
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -337,13 +367,62 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = gpucontroller.Setup(mgr, gpuCfg); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GPU")
+		os.Exit(1)
+	}
+	// Asking the manager for its webhook server starts it, and the server
+	// needs a serving certificate, so registration waits for --enable-gpu.
+	if gpuCfg.Enabled {
+		if err = gpuwebhook.Register(mgr, gpuCfg); err != nil {
+			setupLog.Error(err, "unable to register the GPU webhooks")
+			os.Exit(1)
+		}
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	// With GPU enabled, a replica is ready only once the GPU, Node,
+	// ConfigMap and Namespace informers have synced. Every replica starts
+	// them, so a replica that takes the lease starts the GPU controller on
+	// synced caches. The GPU webhooks read none of them: they serve on every
+	// replica while only the leader binds, so they read from the API, where
+	// a lagging watch cannot make them admit what the cluster refuses.
+	// Readiness does not wait for KubeVirt, whose kinds a fresh install can
+	// serve only after this controller starts: packages that depend on
+	// cozystack-controller wait for its readiness. The VMI and KubeVirt
+	// informers start once their kinds are served.
+	readyz := healthz.Ping
+	if gpuCfg.Enabled {
+		vmiGVK := schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachineInstance"}
+		kvGVK := vmiGVK.GroupVersion().WithKind("KubeVirt")
+		vmi := &unstructured.Unstructured{}
+		vmi.SetGroupVersionKind(vmiGVK)
+		kv := &unstructured.Unstructured{}
+		kv.SetGroupVersionKind(kvGVK)
+		warmup := &gpucontroller.Warmup{
+			Mapper:    mgr.GetRESTMapper(),
+			Informers: mgr.GetCache(),
+			Objects: []client.Object{&gpuv1alpha1.GPUClaim{}, &gpuv1alpha1.GPUClass{}, &gpuv1alpha1.GPUNode{},
+				&corev1.Node{}, &corev1.ConfigMap{}, &corev1.Namespace{}},
+			Kinds:           []schema.GroupVersionKind{vmiGVK, kvGVK},
+			KubeVirtObjects: []client.Object{vmi, kv},
+			Interval:        5 * time.Second,
+			OnWait: func(k schema.GroupVersionKind, err error) {
+				setupLog.Info("waiting for a KubeVirt kind the GPU webhooks read", "kind", k.String(), "reason", err.Error())
+			},
+		}
+		if err := mgr.Add(warmup); err != nil {
+			setupLog.Error(err, "unable to add the GPU informer warm-up")
+			os.Exit(1)
+		}
+		readyz = warmup.Ready
+	}
+	if err := mgr.AddReadyzCheck("readyz", readyz); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
@@ -366,4 +445,20 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// validateGPUConfig defaults an empty raw-name policy to allowed and
+// refuses non-positive grace periods, since a zero attachment grace would
+// clear every attachment before its VMI appears.
+func validateGPUConfig(cfg *gpu.Config) error {
+	if cfg.RawResourceNames == "" {
+		cfg.RawResourceNames = gpu.RawNamesAllowed
+	}
+	if cfg.LostCapacityGrace <= 0 || cfg.AttachmentGrace <= 0 {
+		return errors.New("--gpu-lost-capacity-grace and --gpu-attachment-grace must be positive")
+	}
+	if cfg.RawResourceNames != gpu.RawNamesAllowed && cfg.RawResourceNames != gpu.RawNamesForbidden {
+		return fmt.Errorf("--gpu-raw-resource-names is %q, want %s or %s", cfg.RawResourceNames, gpu.RawNamesAllowed, gpu.RawNamesForbidden)
+	}
+	return nil
 }

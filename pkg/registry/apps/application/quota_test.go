@@ -19,6 +19,8 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -28,9 +30,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/cozystack/cozystack/internal/gpu"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 )
@@ -136,19 +141,23 @@ func usageQuota(t *testing.T, namespace, name string, used map[string]string) *c
 	}
 }
 
-func TestRenderedLimitKey(t *testing.T) {
+func TestUsageKey(t *testing.T) {
 	cases := map[string]string{
 		"cpu":                    "limits.cpu",
 		"memory":                 "limits.memory",
 		"ephemeral-storage":      "limits.ephemeral-storage",
-		"devices.com/nvidia":     "limits.devices.com/nvidia",
+		"devices.com/nvidia":     "requests.devices.com/nvidia",
+		"hugepages-2Mi":          "requests.hugepages-2Mi",
+		"requests.storage":       "requests.storage",
+		"limits.cpu":             "limits.cpu",
+		"count/services":         "count/services",
 		"storage":                "requests.storage",
 		"pods":                   "pods",
 		"services.loadbalancers": "services.loadbalancers",
 	}
 	for raw, want := range cases {
-		if got := renderedLimitKey(raw); got != want {
-			t.Errorf("renderedLimitKey(%q) = %q, want %q", raw, got, want)
+		if got := usageKey(raw); got != want {
+			t.Errorf("usageKey(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -339,6 +348,28 @@ func TestValidateTenantResourceQuotas_PoolUsage(t *testing.T) {
 		}
 	})
 
+	// The quota controller counts extended resources only under requests.*;
+	// limits.<name> of one never carries usage.
+	t.Run("parent usage of an extended resource shrinks remaining", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"nvidia.com/gpu": "2"})
+		used := usageQuota(t, "tenant-foo", "tenant-quota", map[string]string{"requests.nvidia.com/gpu": "2"})
+		r := newTenantREST(t, parent, used)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"nvidia.com/gpu": "1"})); len(errs) == 0 {
+			t.Fatalf("child nvidia.com/gpu=1 should be denied when the parent pool already uses 2 of 2")
+		}
+	})
+
+	t.Run("parent usage of a prefixed key shrinks remaining", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"requests.storage": "10Gi"})
+		used := usageQuota(t, "tenant-foo", "tenant-quota", map[string]string{"requests.storage": "8Gi"})
+		r := newTenantREST(t, parent, used)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"requests.storage": "5Gi"})); len(errs) == 0 {
+			t.Fatalf("child requests.storage=5Gi should be denied when the parent pool already uses 8Gi of 10Gi")
+		}
+	})
+
 	// No rendered usage yet (freshly-created parent, Flux has not rendered the
 	// quota): usage degrades to zero and behaviour matches the pre-usage gate.
 	t.Run("absent usage degrades to budget-only check", func(t *testing.T) {
@@ -371,5 +402,141 @@ func TestParentTenantHelmReleaseRef(t *testing.T) {
 					tc.owned, name, ns, ok, tc.wantName, tc.wantNS, tc.wantOK)
 			}
 		})
+	}
+}
+
+// GPU budget keys cap a tenant's whole subtree on their own rule, so they take
+// no part in the declaration gate or in deciding whether a tenant is bounded.
+func TestValidateTenantResourceQuotas_GPUKeys(t *testing.T) {
+	const total = "gpu.cozystack.io/total"
+	const class = "gpu.cozystack.io/l40s"
+
+	t.Run("a GPU-only child is allowed whatever its parent and siblings declare", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10", total: "4", class: "2"})
+		sibling := tenantHelmRelease(t, "baz", "tenant-foo", map[string]string{total: "4", class: "2"})
+		r := newTenantREST(t, parent, sibling)
+
+		app := childApplication(t, "bar", "tenant-foo", map[string]string{total: "8", class: "3"})
+		if errs := r.validateTenantResourceQuotas(context.Background(), app); len(errs) > 0 {
+			t.Fatalf("GPU keys must not be checked against parent or siblings, got: %v", errs)
+		}
+	})
+
+	t.Run("a child with cpu and GPU keys is checked for cpu only", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10", total: "2"})
+		r := newTenantREST(t, parent)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "4", total: "5"})); len(errs) > 0 {
+			t.Fatalf("cpu within budget must be allowed whatever the GPU keys, got: %v", errs)
+		}
+		errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "11", total: "1"}))
+		if len(errs) != 1 || errs[0].Field != "spec.resourceQuotas[cpu]" {
+			t.Fatalf("want exactly the cpu key refused, got: %v", errs)
+		}
+	})
+
+	t.Run("a GPU-only sibling shares the parent pool", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+		sibling := tenantHelmRelease(t, "baz", "tenant-foo", map[string]string{total: "1"})
+		siblingUsed := usageQuota(t, "tenant-foo-baz", "compute", map[string]string{"limits.cpu": "8"})
+		r := newTenantREST(t, parent, sibling, siblingUsed)
+
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "5"})); len(errs) == 0 {
+			t.Fatalf("usage of a GPU-only sibling must count against the parent pool")
+		}
+	})
+}
+
+func gpuSettings(rawNames string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: gpu.SettingsNamespace, Name: gpu.SettingsConfigMap},
+		Data: map[string]string{
+			gpu.SettingsKeyResourceNames:    "nvidia.com/AD102GL_L40S,nvidia.com/NVIDIA_L40S-24C",
+			gpu.SettingsKeyRawResourceNames: rawNames,
+		},
+	}
+}
+
+func TestValidateTenantResourceQuotas_RawGPUKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		settings   *corev1.ConfigMap
+		quotas     map[string]string
+		wantFields []string
+	}{
+		{
+			name:       "forbidden refuses a raw GPU key in every form",
+			settings:   gpuSettings(string(gpu.RawNamesForbidden)),
+			quotas:     map[string]string{"nvidia.com/AD102GL_L40S": "1", "requests.nvidia.com/NVIDIA_L40S-24C": "1", "limits.nvidia.com/AD102GL_L40S": "1", "cpu": "1"},
+			wantFields: []string{"spec.resourceQuotas[limits.nvidia.com/AD102GL_L40S]", "spec.resourceQuotas[nvidia.com/AD102GL_L40S]", "spec.resourceQuotas[requests.nvidia.com/NVIDIA_L40S-24C]"},
+		},
+		{
+			name:     "forbidden keeps other extended resources and GPU budget keys",
+			settings: gpuSettings(string(gpu.RawNamesForbidden)),
+			quotas:   map[string]string{"example.com/fpga": "1", "gpu.cozystack.io/total": "2"},
+		},
+		{
+			name:     "allowed keeps raw GPU keys",
+			settings: gpuSettings(string(gpu.RawNamesAllowed)),
+			quotas:   map[string]string{"nvidia.com/AD102GL_L40S": "1"},
+		},
+		{
+			name:     "empty setting means allowed",
+			settings: gpuSettings(""),
+			quotas:   map[string]string{"nvidia.com/AD102GL_L40S": "1"},
+		},
+		{
+			name:   "no settings means allowed",
+			quotas: map[string]string{"nvidia.com/AD102GL_L40S": "1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var objects []client.Object
+			if tc.settings != nil {
+				objects = append(objects, tc.settings)
+			}
+			r := newTenantREST(t, objects...)
+
+			errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", tc.quotas))
+			var got []string
+			for _, e := range errs {
+				got = append(got, e.Field)
+			}
+			if !slices.Equal(got, tc.wantFields) {
+				t.Fatalf("refused fields = %v, want %v (errors: %v)", got, tc.wantFields, errs)
+			}
+		})
+	}
+}
+
+// Without the settings the API cannot tell a raw GPU key from any other
+// extended resource, so such a key fails closed; a tenant with no key that can
+// be a resource name never reads the settings.
+func TestValidateTenantResourceQuotas_RawGPUKeysSettingsUnreadable(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
+	}
+	failing := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				return errors.New("simulated API outage")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+	r := newTenantREST(t)
+	r.w = failing
+
+	errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"nvidia.com/AD102GL_L40S": "1"}))
+	if len(errs) != 1 || errs[0].Type != field.ErrorTypeInternal {
+		t.Fatalf("want one internal error, got: %v", errs)
+	}
+	if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "1"})); len(errs) > 0 {
+		t.Fatalf("a tenant with only cpu must not depend on the settings, got: %v", errs)
 	}
 }

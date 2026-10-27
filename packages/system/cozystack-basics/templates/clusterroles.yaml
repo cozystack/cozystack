@@ -138,6 +138,9 @@ rules:
   - options
   - taps
   verbs: ["get", "list", "watch"]
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclaims"]
+  verbs: ["get", "list", "watch"]
 {{/* Read-only visibility into the objects that govern read-replica autoscaling of a
      tenant's own databases: the KEDA ScaledObject the chart renders into the tenant
      namespace and the keda-hpa-<release> HorizontalPodAutoscaler KEDA creates beside
@@ -290,6 +293,15 @@ rules:
   - update
   - patch
   - delete
+{{- if and (eq (toString ((.Values.gpu).enabled | default false)) "true") (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+{{/* Rendered under the same conditions as cozystack-gpu-claim-tamper, which
+     keeps tenants off a claim's finalizers and template mark. Status, which
+     carries the binding and attachment, is a subresource and stays the
+     controller's. */}}
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclaims"]
+  verbs: ["create", "update", "patch", "delete"]
+{{- end }}
 ---
 # == super admin cluster role ==
 # Aggregates admin + all roles labeled for super-admin access
@@ -320,3 +332,27 @@ rules:
   - '*'
   verbs:
   - '*'
+---
+# GPUClass is the hoster's catalog and is cluster-scoped, so tenant roles,
+# bound per namespace, cannot grant its read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:gpuclasses:view
+rules:
+- apiGroups: ["gpu.cozystack.io"]
+  resources: ["gpuclasses"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozy:gpuclasses:view:authenticated
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozy:gpuclasses:view
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated

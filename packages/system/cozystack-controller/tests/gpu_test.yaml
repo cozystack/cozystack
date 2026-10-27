@@ -1,0 +1,343 @@
+suite: cozystack-controller GPU webhooks and metrics
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/certmanager.yaml
+  - templates/webhooks.yaml
+  - templates/metrics-service.yaml
+  - templates/pdb.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+tests:
+  - it: renders no GPU object and no GPU flag by default
+    templates:
+      - templates/service.yaml
+      - templates/certmanager.yaml
+      - templates/webhooks.yaml
+      - templates/metrics-service.yaml
+      - templates/pdb.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves the default Deployment as it was
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: [--leader-elect, --zap-log-level=info]
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].ports
+
+  - it: passes the GPU flags and serves webhooks and metrics with GPU enabled
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu:
+        enabled: true
+        resourceNames: [nvidia.com/GH100_H100, nvidia.com/NVIDIA_L40S-24C]
+        rawResourceNames: forbidden
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --enable-gpu
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-resource-names=nvidia.com/GH100_H100,nvidia.com/NVIDIA_L40S-24C
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-raw-resource-names=forbidden
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8443
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: webhook
+              containerPort: 9443
+            - name: metrics
+              containerPort: 8443
+            - name: health
+              containerPort: 8081
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: webhook-certs
+              secret:
+                secretName: cozystack-controller-webhook-cert
+                defaultMode: 0400
+
+  # readyz waits for the GPU, Node, ConfigMap and Namespace caches the
+  # webhooks read; without the probe a replica would receive admissions
+  # before it can answer them.
+  - it: gates readiness on readyz with GPU enabled
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe
+          value:
+            httpGet:
+              path: /readyz
+              port: health
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: health
+            containerPort: 8081
+
+  - it: renders no readiness probe by default
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe
+
+  # A fail-closed webhook in one replica blocks GPU VM starts for every
+  # controller rollout.
+  - it: runs two replicas with GPU enabled
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  # Two replicas on one node would both go with it.
+  - it: spreads the GPU replicas over nodes
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity
+          value:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        app: cozystack-controller
+
+  - it: renders no affinity by default
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity
+
+  - it: keeps a higher replica count with GPU enabled
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu.enabled: true
+      cozystackController.replicas: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: renders no empty resource-name flag
+    template: templates/deployment.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-resource-names=
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-raw-resource-names=allowed
+
+  - it: keeps one replica available during a disruption
+    template: templates/pdb.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app: cozystack-controller
+
+  - it: serves the webhooks on 443 from the pod's 9443
+    template: templates/service.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-controller-webhook
+      - equal:
+          path: spec.ports
+          value:
+            - name: webhook
+              port: 443
+              targetPort: webhook
+              protocol: TCP
+      - equal:
+          path: spec.selector
+          value:
+            app: cozystack-controller
+
+  - it: exposes the metrics port for the scrape object
+    template: templates/metrics-service.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels
+          value:
+            app.kubernetes.io/name: cozystack-controller
+      - equal:
+          path: spec.ports
+          value:
+            - name: metrics
+              port: 8443
+              targetPort: metrics
+              protocol: TCP
+
+  - it: issues a serving certificate for the webhook Service
+    template: templates/certmanager.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: spec.secretName
+          value: cozystack-controller-webhook-cert
+        documentIndex: 3
+      - equal:
+          path: spec.dnsNames
+          value:
+            - cozystack-controller-webhook
+            - cozystack-controller-webhook.cozy-system.svc
+        documentIndex: 3
+
+  - it: mutates only referencing VMIs and virt-launcher pods, fail closed
+    template: templates/webhooks.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    documentSelector:
+      path: kind
+      value: MutatingWebhookConfiguration
+    asserts:
+      # Sorts before virt-api-mutator, so KubeVirt's mutator sees the gpus.
+      - equal:
+          path: metadata.name
+          value: cozystack-gpu
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cozy-system/cozystack-controller-webhook
+      - equal:
+          path: webhooks[0].clientConfig.service
+          value:
+            name: cozystack-controller-webhook
+            namespace: cozy-system
+            path: /gpu/mutate-vmi
+      - equal:
+          path: webhooks[0].rules
+          value:
+            - operations: [CREATE]
+              apiGroups: [kubevirt.io]
+              apiVersions: [v1]
+              resources: [virtualmachineinstances]
+      - equal:
+          path: webhooks[0].objectSelector
+          value:
+            matchLabels:
+              gpu.cozystack.io/claim-reference: "true"
+      - equal:
+          path: webhooks[0].sideEffects
+          value: NoneOnDryRun
+      - equal:
+          path: webhooks[0].timeoutSeconds
+          value: 10
+      - equal:
+          path: webhooks[0].reinvocationPolicy
+          value: IfNeeded
+      - equal:
+          path: webhooks[1].clientConfig.service.path
+          value: /gpu/gate-virt-launcher
+      - equal:
+          path: webhooks[1].rules
+          value:
+            - operations: [CREATE]
+              apiGroups: [""]
+              apiVersions: [v1]
+              resources: [pods]
+      - equal:
+          path: webhooks[1].objectSelector
+          value:
+            matchLabels:
+              gpu.cozystack.io/claim-reference: "true"
+              kubevirt.io: virt-launcher
+            matchExpressions:
+              - key: kubevirt.io/migrationJobUID
+                operator: DoesNotExist
+      - equal:
+          path: webhooks[1].sideEffects
+          value: None
+      - equal:
+          path: webhooks[1].reinvocationPolicy
+          value: IfNeeded
+      - equal:
+          path: webhooks[*].failurePolicy
+          value: Fail
+      - equal:
+          path: webhooks[*].namespaceSelector
+          value:
+            matchExpressions:
+              - key: cozystack.io/system
+                operator: NotIn
+                values: ["true"]
+              - key: kubernetes.io/metadata.name
+                operator: NotIn
+                values: [kube-system, default]
+
+  - it: validates GPUClaim orders, fail closed
+    template: templates/webhooks.yaml
+    set:
+      cozystackController.gpu.enabled: true
+    documentSelector:
+      path: kind
+      value: ValidatingWebhookConfiguration
+    asserts:
+      - equal:
+          path: webhooks[0].clientConfig.service.path
+          value: /gpu/validate-gpuclaim
+      - equal:
+          path: webhooks[0].rules
+          value:
+            - operations: [CREATE]
+              apiGroups: [gpu.cozystack.io]
+              apiVersions: [v1alpha1]
+              resources: [gpuclaims]
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Fail
+      - equal:
+          path: webhooks[0].sideEffects
+          value: None
+      - equal:
+          path: webhooks[0].timeoutSeconds
+          value: 10

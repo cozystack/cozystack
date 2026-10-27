@@ -67,8 +67,10 @@ const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-cla
 // DefaultProviders returns the registry of dropdown sources.
 func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 	return map[string]providerFunc{
-		"gpu":             gpuProvider(dyn),
-		"instancetype":    nameListProvider(dyn, gvrInstancetype),
+		"gpu":             rawGPUProvider(dyn),
+		"instancetype":    instancetypeProvider(dyn),
+		"gpuclass":        gpuClassProvider(dyn),
+		"gpuclaim":        gpuClaimProvider(dyn),
 		"instanceprofile": nameListProvider(dyn, gvrPreference),
 		"network":         nameListNamespacedProvider(dyn, gvrNADs),
 		"image":           imageProvider(dyn),

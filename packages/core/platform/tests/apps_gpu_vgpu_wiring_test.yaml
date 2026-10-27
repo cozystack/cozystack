@@ -1,0 +1,81 @@
+suite: apps.yaml gpu.vgpu → _cluster wiring
+templates:
+  - templates/apps.yaml
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# gpu.vgpu entitles the root tenant to vGPU, and every child's entitlement
+# needs its parent's. cozystack-basics renders the root tenant from
+# _cluster.gpu-vgpu. The key is written only when on: _cluster is copied into
+# every tenant's cozystack-values, so a key that is always present would
+# upgrade every release in every tenant.
+tests:
+  - it: writes gpu-vgpu when gpu.vgpu is on
+    set:
+      gpu.vgpu: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^_cluster:\n(  .*\n)*  gpu-vgpu: "true"$'
+
+  - it: leaves gpu-vgpu out by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vgpu
+
+  - it: leaves gpu-vgpu out for a quoted "false"
+    set:
+      gpu.vgpu: "false"
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vgpu
+
+  - it: does not fail on a null gpu block
+    set:
+      gpu: null
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vgpu
+
+  # Apps read the GPU switch from _cluster: vm-instance refuses claim
+  # references where no webhook would resolve them.
+  - it: writes gpu-vm-enabled where gpu-operator serves GPUs to VMs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^_cluster:\n(  .*\n)*  gpu-vm-enabled: "true"$'
+
+  - it: leaves gpu-vm-enabled out under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled
+
+  - it: leaves gpu-vm-enabled out by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: gpu-vm-enabled

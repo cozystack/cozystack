@@ -1,0 +1,156 @@
+suite: bundles.system GPU feature → cozystack-basics wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+
+# The GPU class and claim admission policies in cozystack-basics are
+# switched on only where gpu-operator serves GPUs to VMs: enabled through the
+# iaas bundle in the default or vgpu variant. The container variant serves
+# GPUs to pods and never to VMs.
+tests:
+  - it: enables the GPU policies under the default variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - equal:
+          path: spec.components.cozystack-basics.values.gpu
+          value:
+            enabled: true
+            rawResourceNames: allowed
+
+  - it: enables the GPU policies under the vgpu variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - equal:
+          path: spec.components.cozystack-basics.values.gpu.enabled
+          value: true
+
+  - it: enables the GPU policies on isp-full-generic
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - equal:
+          path: spec.components.cozystack-basics.values.gpu.enabled
+          value: true
+
+  - it: renders no GPU switch under the container variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: renders no GPU switch when gpu-operator is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: renders no GPU switch when gpu-operator is also disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+        disabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - notExists:
+          path: spec.components
+
+  # gpu-operator is emitted by the iaas bundle, so without it nothing serves
+  # GPUs whatever enabledPackages lists.
+  - it: renders no GPU switch without the iaas bundle
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: does not fail on a null gpu block
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - equal:
+          path: spec.components.cozystack-basics.values.gpu.enabled
+          value: true

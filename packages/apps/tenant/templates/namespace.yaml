@@ -76,6 +76,8 @@
 {{- if and (not $schedulingClass) .Values.schedulingClass }}
 {{- $schedulingClass = .Values.schedulingClass }}
 {{- end }}
+
+{{- $vgpu := and (eq (printf "%v" ($parentNamespace.vgpu | default false)) "true") (eq (printf "%v" ((.Values.gpu).vgpu | default false)) "true") }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -91,6 +93,7 @@ metadata:
     namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
     namespace.cozystack.io/host: {{ $computedHost | quote }}
+    namespace.cozystack.io/vgpu: {{ $vgpu | quote }}
     {{- with $schedulingClass }}
     scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
@@ -130,5 +133,8 @@ stringData:
       {{- end }}
       {{- with $schedulingClass }}
       schedulingClass: {{ . | quote }}
+      {{- end }}
+      {{- if $vgpu }}
+      vgpu: true
       {{- end }}
 {{- end }}

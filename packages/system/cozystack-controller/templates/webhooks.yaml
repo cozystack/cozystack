@@ -1,0 +1,96 @@
+{{- if (.Values.cozystackController.gpu).enabled }}
+{{- $namespaceSelector := dict "matchExpressions" (list
+  (dict "key" "cozystack.io/system" "operator" "NotIn" "values" (list "true"))
+  (dict "key" "kubernetes.io/metadata.name" "operator" "NotIn" "values" (list "kube-system" "default"))) }}
+# Both mutating webhooks select only objects carrying the claim-reference
+# label, so of VMIs and pods an outage of the controller blocks only the
+# start of VMs with claim references; the validating webhook below also
+# blocks new GPUClaim orders. The name sorts before virt-api-mutator, so
+# KubeVirt's own mutator sees the gpus entries too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: cozystack-gpu
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+webhooks:
+- name: vmi.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  # Records the attachments of held claims, but not on a dry run.
+  sideEffects: NoneOnDryRun
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/mutate-vmi
+  rules:
+  - operations: [CREATE]
+    apiGroups: [kubevirt.io]
+    apiVersions: [v1]
+    resources: [virtualmachineinstances]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  objectSelector:
+    matchLabels:
+      gpu.cozystack.io/claim-reference: "true"
+# Fails closed: a launcher pod created without the gate would reach the
+# scheduler unpinned.
+- name: virt-launcher.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  # A later mutator may drop a toleration; the call adds it again and
+  # leaves the gate it finds.
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/gate-virt-launcher
+  rules:
+  - operations: [CREATE]
+    apiGroups: [""]
+    apiVersions: [v1]
+    resources: [pods]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  # Only virt-launcher pods with claim references wait on this webhook.
+  # Migration targets are left out: KubeVirt deletes a target pod that
+  # stays pending.
+  objectSelector:
+    matchLabels:
+      gpu.cozystack.io/claim-reference: "true"
+      kubevirt.io: virt-launcher
+    matchExpressions:
+    - key: kubevirt.io/migrationJobUID
+      operator: DoesNotExist
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: cozystack-gpu
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+webhooks:
+- name: gpuclaim.gpu.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/validate-gpuclaim
+  rules:
+  - operations: [CREATE]
+    apiGroups: [gpu.cozystack.io]
+    apiVersions: [v1alpha1]
+    resources: [gpuclaims]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+{{- end }}

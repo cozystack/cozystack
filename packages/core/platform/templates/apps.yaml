@@ -253,6 +253,18 @@ stringData:
              null/omitted in custom values. Missing key -> the true default,
              matching the chart values.yaml. */}}
       monitoring-enabled: {{ dig "rootEnabled" true (.Values.monitoring | default dict) | quote }}
+      {{- /* The root tenant's vGPU entitlement, read by cozystack-basics.
+             Only written when on: every release in every tenant reads this
+             Secret, and a key appearing would upgrade all of them. */}}
+      {{- if eq (printf "%v" ((.Values.gpu).vgpu | default false)) "true" }}
+      gpu-vgpu: "true"
+      {{- end }}
+      {{- /* Whether GPUs serve VMs, so that vm-instance refuses claim
+             references where no webhook would resolve them. Written only when
+             on, like gpu-vgpu. */}}
+      {{- if eq (include "cozystack.platform.gpu.vmEnabled" .) "true" }}
+      gpu-vm-enabled: "true"
+      {{- end }}
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
