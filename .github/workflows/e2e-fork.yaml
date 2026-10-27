@@ -543,7 +543,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 255
     permissions:
       contents: read
       packages: read
