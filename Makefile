@@ -144,7 +144,7 @@ migrations-target-check:
 # repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
 # from their generator workflows.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./pkg/credentials/... ./pkg/specschema/...
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./pkg/credentials/... ./pkg/specschema/... ./cmd/credentials-migrate/...
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.

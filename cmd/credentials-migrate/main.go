@@ -36,6 +36,12 @@ import (
 	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
+// errUnresolvable marks a release whose accounts cannot be resolved from its
+// values: the one cause the hook leaves a release out for. Every other error
+// fails the hook, so the upgrade retries instead of switching a release whose
+// Secrets were not written.
+var errUnresolvable = errors.New("accounts cannot be resolved")
+
 const (
 	reasonSkipped = "CredentialsMigrationSkipped"
 	defaultActor  = "system:serviceaccount:cozy-system:cozystack-migration-hook"
@@ -194,6 +200,12 @@ func (m *migrator) seed(ctx context.Context) error {
 			st.Releases[key] = rec
 		}
 		if err := m.seedRelease(ctx, hr); err != nil {
+			if !errors.Is(err, errUnresolvable) {
+				if serr := m.saveState(ctx, st); serr != nil {
+					return errors.Join(fmt.Errorf("%s: %w", key, err), serr)
+				}
+				return fmt.Errorf("%s: %w", key, err)
+			}
 			m.skip(ctx, st, hr, err)
 			continue
 		}
@@ -265,6 +277,11 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 	if err := m.seedRelease(ctx, hr); err != nil {
 		return err
 	}
+	// Without a recorded version nothing tells the old chart from the new
+	// one, and retiring the source under the old chart takes its passwords.
+	if rec.ChartVersion == "" {
+		return errors.New("no chart version was recorded before the upgrade, so the switch cannot be confirmed; check that the release renders the converted chart and finish it by hand")
+	}
 	deadline := m.now().Add(m.o.timeout)
 	for {
 		if apimeta.IsStatusConditionTrue(hr.Status.Conditions, "Ready") && chartVersion(hr) != "" && chartVersion(hr) != rec.ChartVersion {
@@ -284,14 +301,14 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 	return m.retireSource(ctx, hr)
 }
 
-// seedRelease writes the account Secrets the release lacks. It fails only
-// where the accounts themselves cannot be resolved; a missing plaintext leaves
-// that account to the first mint.
+// seedRelease writes the account Secrets the release lacks. A missing
+// plaintext leaves that account to the first mint; every other failure is an
+// error, wrapping errUnresolvable where the accounts cannot be resolved.
 func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
 	block := m.o.block()
 	accounts, err := store.ResolveAccounts(block, nil, hr.Spec.Values)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", errUnresolvable, err)
 	}
 	if len(accounts) == 0 {
 		return nil

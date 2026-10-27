@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
@@ -27,6 +28,12 @@ import (
 
 func newMigrator(t *testing.T, objs ...client.Object) *migrator {
 	t.Helper()
+	return newMigratorWith(t, nil, objs...)
+}
+
+// newMigratorWith builds the migrator on a client whose calls go through funcs.
+func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *migrator {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -34,7 +41,11 @@ func newMigrator(t *testing.T, objs ...client.Object) *migrator {
 	if err := helmv2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&helmv2.HelmRelease{}).Build()
+	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&helmv2.HelmRelease{})
+	if funcs != nil {
+		b = b.WithInterceptorFuncs(*funcs)
+	}
+	c := b.Build()
 	o := &options{
 		migration: 60, kind: "Postgres", formatName: format.ScramSHA256, accountsPath: "users",
 		labels: labelFlags{"cnpg.io/reload": "true"}, sourceSuffix: "-credentials",
@@ -217,5 +228,128 @@ func TestRetireSourceKeepsPlatformKeys(t *testing.T) {
 	sec, ok := m.secret(t, "postgres-orders-credentials")
 	if !ok || string(sec.Data["root"]) != "toor" || len(sec.Data) != 1 {
 		t.Fatalf("source = %v", sec)
+	}
+}
+
+// A transient API error must fail the hook, so the upgrade retries: left out
+// as a skip, the chart would switch and take the plaintext with it.
+func TestSeedFailsClosedOnAnAPIError(t *testing.T) {
+	ctx := context.Background()
+	m := newMigratorWith(t, &interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if sec, ok := obj.(*corev1.Secret); ok && strings.HasSuffix(sec.Name, ".account") {
+				return apierrors.NewServiceUnavailable("etcd is busy")
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}, release(`{"users":{"web":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err == nil || !strings.Contains(err.Error(), "etcd is busy") {
+		t.Fatalf("seed = %v, want the API error", err)
+	}
+	st, err := m.loadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Skipped) != 0 {
+		t.Fatalf("a transient error must not be recorded as a skip: %v", st.Skipped)
+	}
+}
+
+func TestFinishHoldsAReleaseWithNoRecordedVersion(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{}}}`, "", true), sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m.switchChart(t, "0.2.0", true)
+	if err := m.finish(ctx); err == nil {
+		t.Fatal("finish must report a release it cannot confirm switched")
+	}
+	if _, ok := m.secret(t, "postgres-orders-credentials"); !ok {
+		t.Fatal("the source must stay while the switch cannot be confirmed")
+	}
+}
+
+func TestFinishWaitsForReady(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{"password":"leftover"}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// On the new chart, but the upgrade has not succeeded.
+	m.switchChart(t, "0.2.0", false)
+	if err := m.finish(ctx); err == nil {
+		t.Fatal("finish must hold a release that is not Ready")
+	}
+	if _, ok := m.secret(t, "postgres-orders-credentials"); !ok {
+		t.Fatal("the source must stay until the release is Ready on the new chart")
+	}
+}
+
+func TestFinishTreatsADeletedReleaseAsDone(t *testing.T) {
+	ctx := context.Background()
+	hr := release(`{"users":{"web":{}}}`, "0.1.0", true)
+	m := newMigrator(t, hr, sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.c.Delete(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.finish(ctx); err != nil {
+		t.Fatalf("finish = %v, want nothing left to convert", err)
+	}
+}
+
+func TestSeedKeepsTheFirstRecordedVersion(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The hook runs again after the chart has moved on, as a retried upgrade does.
+	m.switchChart(t, "0.2.0", true)
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := m.loadState(ctx)
+	if v := st.Releases["tenant-foo/postgres-orders"].ChartVersion; v != "0.1.0" {
+		t.Fatalf("recorded version = %q, want the first one", v)
+	}
+}
+
+func TestSeedReplacesAForeignSecretAndSkipsAMissingPlaintext(t *testing.T) {
+	ctx := context.Background()
+	foreign := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders.web.account", Namespace: "tenant-foo"},
+		Data: map[string][]byte{account.UsernameKey: []byte("web"), account.PasswordKey: []byte("planted")}}
+	m := newMigrator(t, release(`{"users":{"web":{},"api":{}}}`, "0.1.0", true), foreign, sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := m.secret(t, "postgres-orders.web.account")
+	if string(sec.Data[account.PasswordKey]) == "planted" || !account.IsAccountSecret(sec) {
+		t.Fatal("a Secret that is not the release's own must be replaced, or the operator applies its verifier")
+	}
+	if _, ok := m.secret(t, "postgres-orders.api.account"); ok {
+		t.Fatal("an account with no plaintext to migrate is left to its first mint")
+	}
+}
+
+// switchChart moves the release to another chart version, Ready or not.
+func (m *migrator) switchChart(t *testing.T, version string, ready bool) {
+	t.Helper()
+	ctx := context.Background()
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Status.History = helmv2.Snapshots{{Version: 2, ChartVersion: version, Status: "deployed"}}
+	status := metav1.ConditionFalse
+	if ready {
+		status = metav1.ConditionTrue
+	}
+	cur.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: status, Reason: "x", LastTransitionTime: metav1.Now()}}
+	if err := m.c.Status().Update(ctx, cur); err != nil {
+		t.Fatal(err)
 	}
 }
