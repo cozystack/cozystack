@@ -1282,16 +1282,18 @@ _cozy_guest_kubelet_image_timing() {
 # capture file says which of them happened.
 #
 # The Pod list is namespace-wide rather than scoped to one release. The two
-# virt-launcher captures immediately above the call site already select that
-# way, and suites run one at a time. Below the cap a Pod that does not belong
+# virt-launcher captures just before the node-join call site already select
+# that way, and suites run one at a time. Below the cap a Pod that does not belong
 # to this test costs one extra file named after itself and nothing else; at
 # the cap it can displace one of this suite's own, since kubectl returns the
 # list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible.
 #
-# Takes the context it was called in, because it is called from both paths and
-# both write here. On the failure path the console is the evidence; on the
-# passing path it is the baseline that evidence is read against, and the two are
-# the same files in the same directory. Which one a tarball holds is otherwise
+# Takes the context it was called in, because a suite calls it from both paths
+# and both write here; another failure path that calls it runs under a
+# COZY_SNAPSHOT_NAME of its own so that it does not land on top of them. On the
+# failure path the console is the evidence; on the passing path it is the
+# baseline that evidence is read against, and the two are the same files in
+# the same directory. Which one a tarball holds is otherwise
 # recoverable only from the run's verdict somewhere else entirely, so the
 # capture states it.
 cozy_capture_tenant_serial_console() {
