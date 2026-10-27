@@ -128,7 +128,8 @@ spec:
           name: postgres-test-init-job
 
   # No second disclosure: the minted password logs in over TCP as the user,
-  # the Credential records the mint and no read path carries the password,
+  # the Credential records the mint, no read path the design names carries
+  # the password (the audit log aside, which the sandbox does not collect),
   # and a second mint replaces the first once CloudNativePG applies it.
   - name: verify-minted-credential
     try:
@@ -147,18 +148,33 @@ spec:
           status:
             password:
               origin: NotIssued
+    # bash for pipefail and process substitution; the sandbox's /bin/sh is dash.
     - script:
         timeout: 5m
+        shell: bash
         content: |
-          set -eu
+          set -euo pipefail
+          cred=postgres-test.testuser
+          as="--as=e2e-postgres-probe --as-group=system:authenticated --as-group=${NAMESPACE}-super-admin"
           mint() {
-            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/postgres-test.testuser/mint" \
+            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/$cred/mint" \
               -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
               | jq -r '.status.password'
           }
+          # The password goes to psql on stdin: exec arguments travel in the
+          # request URI, which the audit log records at any level.
           login() {
-            kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
-              env PGPASSWORD="$1" psql -h postgres-test-rw -U testuser -d testdb -tAc 'SELECT 1' 2>/dev/null | tr -d '[:space:]'
+            printf '%s\n' "$1" | kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- \
+              sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql "$@"' sh \
+              -h postgres-test-rw -U testuser -d testdb -tAc 'SELECT 1' 2>/dev/null | tr -d '[:space:]' || true
+          }
+          # Fails when any of the named texts carries the password.
+          refuse() {
+            local what=$1 text=$2
+            if printf '%s' "$text" | grep -qF -- "$first"; then
+              echo "$what carries the minted password" >&2
+              exit 1
+            fi
           }
           pod=$(kubectl -n "$NAMESPACE" get pod \
             -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary -o name | head -n1)
@@ -169,15 +185,39 @@ spec:
           # wait on that eventually consistent property, not a retry.
           until [ "$(login "$first")" = "1" ]; do sleep 5; done
 
-          cred=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io postgres-test.testuser -o json)
-          [ "$(printf '%s' "$cred" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $cred" >&2; exit 1; }
-          [ "$(printf '%s' "$cred" | jq -r '.status.history[0].operation')" = "Mint" ] || { echo "history lacks the mint: $cred" >&2; exit 1; }
-          if printf '%s' "$cred" | grep -q -- "$first"; then echo "the Credential carries the password" >&2; exit 1; fi
-          if kubectl -n "$NAMESPACE" get secret postgres-test.testuser.account -o json | grep -q -- "$first"; then
-            echo "the account Secret carries the plaintext" >&2; exit 1
+          view=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io "$cred" -o json)
+          [ "$(printf '%s' "$view" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $view" >&2; exit 1; }
+          [ "$(printf '%s' "$view" | jq -r '.status.history[0].operation')" = "Mint" ] || { echo "history lacks the mint: $view" >&2; exit 1; }
+          refuse "the Credential" "$view"
+
+          # The account Secret holds the verifier, decoded, never the password.
+          stored=$(kubectl -n "$NAMESPACE" get secret "$cred.account" -o json | jq -r '.data.password' | base64 -d)
+          case "$stored" in
+            'SCRAM-SHA-256$4096:'*) ;;
+            *) echo "the account Secret does not hold a SCRAM verifier" >&2; exit 1 ;;
+          esac
+          refuse "the account Secret" "$stored"
+
+          refuse "an Event" "$(kubectl -n "$NAMESPACE" get events -o json)"
+          refuse "the application" "$(kubectl -n "$NAMESPACE" get postgreses.apps.cozystack.io test -o json)"
+          # Every revision of the release, decoded: Helm stores each as base64
+          # of gzipped JSON inside the Secret's base64.
+          for rel in $(kubectl -n "$NAMESPACE" get secret -l owner=helm,name=postgres-test -o name); do
+            refuse "Helm release $rel" "$(kubectl -n "$NAMESPACE" get "$rel" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip)"
+          done
+          # Everything the tenant's own super-admins can read through
+          # tenantsecrets, decoded; the account Secret is not among it.
+          visible=$(kubectl -n "$NAMESPACE" get tenantsecrets.core.cozystack.io $as -o json)
+          if printf '%s' "$visible" | jq -r '.items[].metadata.name' | grep -Fqx "$cred.account"; then
+            echo "the account Secret is listed through tenantsecrets" >&2; exit 1
           fi
-          if kubectl -n "$NAMESPACE" get events -o json | grep -q -- "$first"; then
-            echo "an Event carries the password" >&2; exit 1
+          refuse "tenantsecrets" "$(printf '%s' "$visible" | jq -r '.items[].data // {} | .[] | @base64d')"
+          # can-i exits 1 when it answers no, so the answer is read from its
+          # output; anything but a plain "no" fails, an error included.
+          answer=$(kubectl -n "$NAMESPACE" auth can-i get "secret/$cred.account" $as 2>&1) || true
+          if [ "$answer" != no ]; then
+            echo "the tenant super-admin group can read the account Secret, or can-i did not answer: $answer" >&2
+            exit 1
           fi
 
           second=$(mint)
