@@ -113,8 +113,11 @@ psql_app_exec() {
     pod=$(cnpg_primary_pod "$cluster")
     [[ -n "$pod" ]] || { log_error "no primary pod for cnpg cluster '$cluster'"; return 1; }
     pw=$(app_password "$cluster" "$user") || return 1
-    kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
-        env PGPASSWORD="$pw" psql -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
+    # The password goes to psql on stdin: exec arguments travel in the request
+    # URI, which the audit log records at any level.
+    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- \
+        sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql "$@"' sh \
+        -h "${cluster}-rw" -U "$user" -d "$db" -tAc "$sql"
 }
 
 # Block until the application user can authenticate against a cluster, or fail
