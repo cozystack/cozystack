@@ -113,7 +113,7 @@ func (a *app) notify(args []string) int {
 			if !*push {
 				continue
 			}
-			prompt := fmt.Sprintf("Resolve the deferred backport conflict of pull request #%d on batch pull request #%d, branch %s, by following docs/release/backport-tasks/resolve-conflict.md on main. Push only to %s, and only a commit that `backport-batch fold --line %s --original %d` accepts.", n, pr.Number, pr.Head.Ref, pr.Head.Ref, l.branch(), n)
+			prompt := fmt.Sprintf("Resolve the deferred backport conflict of pull request #%d on batch pull request #%d, branch %s, by following docs/release/backport-tasks/resolve-conflict.md on main: pick each of the pull request's own commits onto the batch head in order with `git cherry-pick -x`, resolving each conflict inside the files the pull request changes, then join the picks to the batch head with a merge commit whose message ends in a %s trailer naming its merge commit on main. Push only that merge to %s, as a fast-forward, and only once `backport-batch fold --line %s --original %d --commit <merge>` prints ok.", n, pr.Number, pr.Head.Ref, batchTrailer, pr.Head.Ref, l.branch(), n)
 			if err := a.gh.startTask(token, l.branch(), pr.Head.Ref, prompt); err != nil {
 				return a.fail(err)
 			}

@@ -13,7 +13,7 @@ go build ./cmd/backport-batch
 ./backport-batch check --line release-X.Y
 ```
 
-[`backport-batch check`](../../cmd/backport-batch/README.md) applies the rules to every pull request merged into `main` since the line branched, and looks for each one they take on the line, by an `-x` line naming it, a `Backport of #N` line, or a pick that would change nothing, and then on the open batch pull request. A conflict the batch deferred prints as a warning without failing the check. A change that reached the line by hand counts like any other, by what reached the line.
+[`backport-batch check`](../../cmd/backport-batch/README.md) applies the rules to every pull request merged into `main` since the line branched, and looks for each one they take on the line and then on the open batch pull request: by picks whose `-x` lines name its merge commit or every commit of its own, by a pick that would change nothing, and, on commits from before the policy's batch-only day, by what their text says, such as `Backport of #N`. A conflict the batch deferred prints as a warning without failing the check. A change that reached the line by hand counts like any other, by what reached the line.
 
 ### Backporting code that touches monotonic counters
 

@@ -131,7 +131,7 @@ func TestNotifyConflicts(t *testing.T) {
 		t.Fatalf("--agent ci = %d\n%s", code, stderr)
 	}
 	if len(gh.tasks) != 1 || !strings.HasPrefix(gh.tasks[0], "agent-token release-1.1 backport-batch/release-1.1-20261026 ") ||
-		!strings.Contains(gh.tasks[0], "#6") || !strings.Contains(gh.tasks[0], "resolve-conflict.md") || strings.Contains(gh.tasks[0], "#7") {
+		!strings.Contains(gh.tasks[0], "#6") || !strings.Contains(gh.tasks[0], "resolve-conflict.md") || !strings.Contains(gh.tasks[0], batchTrailer+" trailer") || strings.Contains(gh.tasks[0], "#7") {
 		t.Errorf("agent tasks = %q, want one for #6 on the batch branch", gh.tasks)
 	}
 	if len(gh.issueComments) != 0 {

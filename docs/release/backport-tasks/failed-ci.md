@@ -5,7 +5,7 @@ CI on the batch pull request runs the line's build and tests against every origi
 ### Inputs
 
 - The open batch pull request for the line and its failing checks: `gh pr checks <batch>`, and the log of each failing job, `gh run view <run id> --log-failed`.
-- The originals the batch carries, one commit each, with the files they change: `git log --reverse --format='%h %s' --name-only origin/<line>..origin/backport-batch/<line>-<yyyymmdd>`. The pull request number closes each subject, and the `(cherry picked from commit …)` line of each commit names its original on `main`.
+- The originals the batch carries, one unit each on its first-parent line: `git log --first-parent --reverse --format='%h %s' origin/<line>..origin/backport-batch/<line>-<yyyymmdd>`. A merged pull request's unit is a merge whose message is the original's merge message, naming its number, and whose `Backported-from:` trailer names its merge commit on `main`; its commits are `git log --reverse --format='%h %an %s' <unit>^1..<unit>^2`. A squash-merged one is one commit whose subject ends in its number. The files a unit changes are `git diff --name-only <unit>^1 <unit>`.
 - The line's own CI on its head, `gh run list --branch <line>`, to tell a failure the batch brought from one the line already had.
 
 ### Output

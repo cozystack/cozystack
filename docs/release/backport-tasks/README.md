@@ -4,7 +4,7 @@ The [backport batch](../backports.md) is built by [`backport-batch`](../../../cm
 
 | Task | Input | Output | Check |
 |---|---|---|---|
-| [Resolve a conflict](./resolve-conflict.md) | a deferred conflict on the batch pull request | one commit on the batch branch | `backport-batch fold` |
+| [Resolve a conflict](./resolve-conflict.md) | a deferred conflict on the batch pull request | the original's commits picked under one merge on the batch branch, or one pick for a squash | `backport-batch fold`, and `backport-batch verify` in CI |
 | [Attribute a failed batch CI](./failed-ci.md) | the failing jobs of the batch pull request | the culprit deferred to the next batch | `backport-batch run --defer` |
 | [Check a pull request title](./title-check.md) | a pull request to `main`, its title and diff | a report on the pull request | the maintainer's review |
 
