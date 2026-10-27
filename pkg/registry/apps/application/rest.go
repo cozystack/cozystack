@@ -44,6 +44,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/util/dryrun"
 	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -253,7 +254,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	// The account Secrets exist before the release that reads them, and the
 	// release owns them as soon as it exists.
-	seeded, err := r.seedBeforeCreate(ctx, app, helmRelease, accounts)
+	seeded, err := r.seedBeforeCreate(ctx, app, helmRelease, accounts, options != nil && dryrun.IsDryRun(options.DryRun))
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +608,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	// Accounts the write adds get their Secrets before the release reads them.
-	if err := r.seedBeforeUpdate(ctx, app, helmRelease, cur, accounts); err != nil {
+	if err := r.seedBeforeUpdate(ctx, app, helmRelease, cur, accounts, options != nil && dryrun.IsDryRun(options.DryRun)); err != nil {
 		return nil, false, err
 	}
 
@@ -672,7 +673,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	// Accounts the write removed are gone from the chart now, so their
 	// Secrets can go.
-	r.pruneAfterUpdate(ctx, app, accounts)
+	r.pruneAfterUpdate(ctx, app, accounts, options != nil && dryrun.IsDryRun(options.DryRun))
 
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)

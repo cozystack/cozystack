@@ -247,7 +247,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
 		tapstorage.NewREST(dyn),
 	)
-	credentials := credentialstorage.NewREST(cli, credentialKinds)
+	credentials := credentialstorage.NewREST(cli, watchCli, credentialKinds)
 	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
 	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
 	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)

@@ -4,7 +4,9 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -19,11 +21,13 @@ import (
 	"k8s.io/apiserver/pkg/warning"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
+	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
 // The schema defaults backup.enabled to true, so the Static backup account
@@ -59,7 +63,28 @@ func newCredentialsREST(t *testing.T, objects ...client.Object) (*REST, client.C
 	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	// The fake client assigns no UIDs, and without them every ownership check
+	// compares two empty strings and passes.
+	var uids atomic.Int64
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetUID() == "" {
+				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+		// The API server keeps an object's UID on an update that sends none;
+		// the fake client would blank it.
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if obj.GetUID() == "" {
+				cur := obj.DeepCopyObject().(client.Object)
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
+					obj.SetUID(cur.GetUID())
+				}
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	}).Build()
 	return NewREST(c, c, cfg), c
 }
 
@@ -216,4 +241,91 @@ func keys(m map[string]*corev1.Secret) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestCreateDuplicateLeavesLiveSecretsAlone(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	before := accountSecrets(t, c)["postgres-orders.web.account"]
+
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("second create: %v, want AlreadyExists", err)
+	}
+	after := accountSecrets(t, c)["postgres-orders.web.account"]
+	if after == nil || after.UID != before.UID || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
+		t.Fatal("a refused create must leave the live application's Secret untouched")
+	}
+}
+
+func TestCreateReplacesAnUnownedLeftover(t *testing.T) {
+	// Left by an earlier create whose owner was never set.
+	leftover, err := store.SeedSecret(store.App{Namespace: "tenant-foo", Release: "postgres-orders", Group: appsv1alpha1.GroupName, Kind: postgresKind, Name: "orders", Block: credentialsBlock()},
+		account.Account{Username: "web", Mapped: "web"}, nil, metav1.Now(), "earlier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftover.UID = "uid-leftover"
+	r, c := newCredentialsREST(t, leftover)
+	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	sec := accountSecrets(t, c)["postgres-orders.web.account"]
+	hr := getRelease(t, c)
+	if sec.UID == "uid-leftover" || string(sec.Data[account.PasswordKey]) == string(leftover.Data[account.PasswordKey]) {
+		t.Fatal("a leftover must be replaced, so the account gets a new identity")
+	}
+	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != hr.UID {
+		t.Fatalf("owners = %v, want the new release", sec.OwnerReferences)
+	}
+}
+
+func TestDryRunWritesNoAccountSecrets(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	dry := []string{metav1.DryRunAll}
+
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{DryRun: dry}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(accountSecrets(t, c)); n != 0 {
+		t.Fatalf("a dry-run create wrote %d account Secrets", n)
+	}
+
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	before := accountSecrets(t, c)
+	updated := postgresApp(`{"users":{"api":{}}}`)
+	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{DryRun: dry}); err != nil {
+		t.Fatal(err)
+	}
+	after := accountSecrets(t, c)
+	if len(after) != len(before) || after["postgres-orders.web.account"] == nil || after["postgres-orders.api.account"] != nil {
+		t.Fatalf("a dry-run update changed the account Secrets: %v -> %v", keys(before), keys(after))
+	}
+}
+
+// An account the release already declared and that has no Secret, as after a
+// conversion that left the release out, is not seeded by an unrelated write:
+// a seed would replace its working password with a discarded one.
+func TestUpdateSeedsOnlyAddedAccounts(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}},"backup":{"enabled":false}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(ctx, accountSecrets(t, c)["postgres-orders.web.account"]); err != nil {
+		t.Fatal(err)
+	}
+	updated := postgresApp(`{"users":{"web":{},"api":{}},"backup":{"enabled":false},"size":"20Gi"}`)
+	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := accountSecrets(t, c)
+	if got["postgres-orders.api.account"] == nil || got["postgres-orders.web.account"] != nil {
+		t.Fatalf("secrets = %v, want api seeded and web left alone", keys(got))
+	}
 }

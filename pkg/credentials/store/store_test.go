@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -101,8 +102,8 @@ func TestEnsureSeedsAndKeepsTheirs(t *testing.T) {
 	}
 	first := string(sec.Data[account.PasswordKey])
 
-	// A second create of the same application, as after an interrupted one,
-	// reuses the Secret nobody owns.
+	// An update, with the owner known, seeds only what it is given and leaves
+	// an owned Secret alone.
 	hr := release("uid-1")
 	if err := SetOwner(ctx, c, "tenant-foo", written, OwnerReference(hr)); err != nil {
 		t.Fatal(err)
@@ -244,5 +245,103 @@ func TestResolveAccountsAppliesDefaults(t *testing.T) {
 	}
 	if got, err := ResolveAccounts(nil, schema, values); err != nil || got != nil {
 		t.Fatalf("no block, no accounts: %v %v", got, err)
+	}
+}
+
+func TestEnsureCreateReplacesLeftovers(t *testing.T) {
+	ctx := context.Background()
+	gone := OwnerReference(release("uid-gone"))
+	live := release("uid-live")
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(live).Build()
+	app := testApp()
+	now := metav1.Now()
+
+	// Left by an earlier create that never got its owner, and by a deleted
+	// application of the same name whose HelmRelease is gone.
+	if _, err := Ensure(ctx, c, app, accounts("web"), nil, now, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ensure(ctx, c, app, accounts("api"), &gone, now, "x"); err != nil {
+		t.Fatal(err)
+	}
+	unowned := getSecret(t, c, "postgres-orders.web.account")
+	stale := getSecret(t, c, "postgres-orders.api.account")
+
+	written, err := Ensure(ctx, c, app, accounts("web", "api"), nil, now, "jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 2 {
+		t.Fatalf("both leftovers must be replaced and handed to SetOwner, written = %v", written)
+	}
+	if string(getSecret(t, c, "postgres-orders.web.account").Data[account.PasswordKey]) == string(unowned.Data[account.PasswordKey]) {
+		t.Fatal("an unowned leftover kept its verifier")
+	}
+	if string(getSecret(t, c, "postgres-orders.api.account").Data[account.PasswordKey]) == string(stale.Data[account.PasswordKey]) {
+		t.Fatal("a Secret of a gone release kept its verifier")
+	}
+}
+
+func TestEnsureCreateRefusesLiveOwner(t *testing.T) {
+	ctx := context.Background()
+	live := release("uid-live")
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(live).Build()
+	app := testApp()
+	owner := OwnerReference(live)
+	if _, err := Ensure(ctx, c, app, accounts("web"), &owner, metav1.Now(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	before := getSecret(t, c, "postgres-orders.web.account")
+
+	written, err := Ensure(ctx, c, app, accounts("web"), nil, metav1.Now(), "jane")
+	if !errors.Is(err, ErrLiveOwner) || len(written) != 0 {
+		t.Fatalf("written=%v err=%v, want ErrLiveOwner and nothing written", written, err)
+	}
+	after := getSecret(t, c, "postgres-orders.web.account")
+	if string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) || len(after.OwnerReferences) != 1 {
+		t.Fatal("the live application's Secret must be left untouched")
+	}
+}
+
+// The application labels alone do not make a Secret an account Secret: the
+// lineage webhook puts them on every Secret of the application, and Prune
+// must never delete the chart's own.
+func TestListAndPruneSeeOnlyAccountSecrets(t *testing.T) {
+	ctx := context.Background()
+	app := testApp()
+	chartOwned := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: "postgres-orders-credentials", Namespace: "tenant-foo",
+		Labels: map[string]string{
+			"apps.cozystack.io/application.group": app.Group,
+			"apps.cozystack.io/application.kind":  app.Kind,
+			"apps.cozystack.io/application.name":  app.Name,
+		},
+	}}
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(chartOwned).Build()
+	if _, err := Ensure(ctx, c, app, accounts("web"), nil, metav1.Now(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := List(ctx, c, app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != "postgres-orders.web.account" {
+		t.Fatalf("listed = %v", listed)
+	}
+	if _, err := Prune(ctx, c, app, nil); err != nil {
+		t.Fatal(err)
+	}
+	getSecret(t, c, "postgres-orders-credentials")
+}
+
+func TestAdded(t *testing.T) {
+	got := Added(accounts("web", "api"), []account.Account{{Username: "web", Mapped: "web"}, {Username: "Api", Mapped: "api"}, {Username: "new", Mapped: "new"}})
+	var names []string
+	for _, a := range got {
+		names = append(names, a.Username)
+	}
+	// Api is a different user from api, however the name maps.
+	if strings.Join(names, ",") != "Api,new" {
+		t.Fatalf("added = %v", names)
 	}
 }

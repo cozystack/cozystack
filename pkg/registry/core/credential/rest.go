@@ -60,8 +60,11 @@ type Kind struct {
 
 // REST serves the credentials view.
 type REST struct {
-	c   client.Client
-	gvr schema.GroupVersionResource
+	c client.Client
+	// direct reads and writes for mint and revoke, which the cached client
+	// would answer with a Secret written a moment ago missing.
+	direct client.Client
+	gvr    schema.GroupVersionResource
 	// kinds is keyed by the application kind the HelmRelease labels name.
 	kinds map[string]Kind
 	now   func() time.Time
@@ -69,9 +72,10 @@ type REST struct {
 
 // NewREST creates the credentials storage. kinds carries every converted
 // application kind; a HelmRelease of a kind absent from it has no credentials.
-func NewREST(c client.Client, kinds map[string]Kind) *REST {
+func NewREST(c, direct client.Client, kinds map[string]Kind) *REST {
 	return &REST{
-		c: c,
+		c:      c,
+		direct: direct,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -117,13 +121,13 @@ type resolved struct {
 // must exist and belong to a converted kind, or the credential does not exist.
 // A Secret that is not the application's own, by marker or by owner, counts
 // as absent.
-func (r *REST) resolve(ctx context.Context, namespace, name string) (*resolved, error) {
+func (r *REST) resolve(ctx context.Context, c client.Reader, namespace, name string) (*resolved, error) {
 	release, mapped, ok := account.SplitCredentialName(name)
 	if !ok {
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 	hr := &helmv2.HelmRelease{}
-	if err := r.c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: release}, hr); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: release}, hr); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
@@ -135,7 +139,7 @@ func (r *REST) resolve(ctx context.Context, namespace, name string) (*resolved, 
 	}
 	res := &resolved{hr: hr, kind: kind, mapped: mapped}
 	sec := &corev1.Secret{}
-	err := r.c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: account.SecretName(release, mapped)}, sec)
+	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: account.SecretName(release, mapped)}, sec)
 	switch {
 	case err == nil && ownedBy(sec, hr):
 		res.secret = sec
@@ -197,7 +201,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	if err != nil {
 		return nil, err
 	}
-	res, err := r.resolve(ctx, ns, name)
+	res, err := r.resolve(ctx, r.c, ns, name)
 	if err != nil {
 		return nil, err
 	}
