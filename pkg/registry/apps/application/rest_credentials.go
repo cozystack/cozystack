@@ -5,6 +5,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -66,31 +68,56 @@ func actor(ctx context.Context) string {
 	return ""
 }
 
+// direct is the client the account Secret writes read through. The cached
+// client can miss an object written a moment ago, and a stale read here
+// replaces or recreates a Secret that exists.
+func (r *REST) direct() client.Client {
+	if r.w != nil {
+		return r.w
+	}
+	return r.c
+}
+
 // seedBeforeCreate writes the account Secrets of a new application, with no
 // owner yet, and the valuesFrom entries that carry them into the chart.
 // It returns the Secrets it wrote, for the owner to be set once the
 // HelmRelease exists, or for removal if the HelmRelease is not created.
-func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Application, hr *helmv2.HelmRelease, accounts []account.Account) ([]string, error) {
+// An existing release fails the create before any Secret is touched, since
+// its own Secrets would otherwise be replaced.
+func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Application, hr *helmv2.HelmRelease, accounts []account.Account, dryRun bool) ([]string, error) {
 	if r.credentials == nil {
 		return nil, nil
 	}
 	hr.Spec.ValuesFrom = store.ValuesFrom(r.credentials, hr.Name, accounts)
-	written, err := store.Ensure(ctx, r.c, r.storeApp(app.Namespace, app.Name), accounts, nil, metav1.Now(), actor(ctx))
+	existing := &helmv2.HelmRelease{}
+	err := r.direct().Get(ctx, client.ObjectKey{Namespace: hr.Namespace, Name: hr.Name}, existing)
+	switch {
+	case err == nil:
+		return nil, apierrors.NewAlreadyExists(r.gvr.GroupResource(), app.Name)
+	case !apierrors.IsNotFound(err):
+		return nil, apierrors.NewInternalError(fmt.Errorf("read HelmRelease %s: %w", hr.Name, err))
+	}
+	if dryRun {
+		return nil, nil
+	}
+	written, err := store.Ensure(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), accounts, nil, metav1.Now(), actor(ctx))
 	if err != nil {
 		r.unseed(ctx, app.Namespace, written)
+		if errors.Is(err, store.ErrLiveOwner) {
+			return nil, apierrors.NewAlreadyExists(r.gvr.GroupResource(), app.Name)
+		}
 		return nil, apierrors.NewInternalError(fmt.Errorf("seed account Secrets: %w", err))
 	}
 	return written, nil
 }
 
 // unseed removes the Secrets a create wrote before its HelmRelease failed, so
-// a retry starts clean. Best effort: a Secret nobody owns is reused by the
-// retry in any case.
+// a retry starts clean. Best effort: a retry replaces a leftover in any case.
 func (r *REST) unseed(ctx context.Context, namespace string, names []string) {
 	for _, name := range names {
 		sec := &corev1.Secret{}
 		sec.Namespace, sec.Name = namespace, name
-		if err := r.c.Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.direct().Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
 			klog.Warningf("failed to remove account Secret %s/%s after a failed create: %v", namespace, name, err)
 		}
 	}
@@ -98,26 +125,39 @@ func (r *REST) unseed(ctx context.Context, namespace string, names []string) {
 
 // ownSeeded gives the created HelmRelease the account Secrets seeded before
 // it. The application exists by now, so a failure is reported as a warning
-// rather than an error: the next write of the application retries it.
+// rather than an error.
 func (r *REST) ownSeeded(ctx context.Context, hr *helmv2.HelmRelease, names []string) {
 	if len(names) == 0 {
 		return
 	}
-	if err := store.SetOwner(ctx, r.c, hr.Namespace, names, store.OwnerReference(hr)); err != nil {
+	if err := store.SetOwner(ctx, r.direct(), hr.Namespace, names, store.OwnerReference(hr)); err != nil {
 		klog.Errorf("failed to own account Secrets of %s/%s: %v", hr.Namespace, hr.Name, err)
 		warning.AddWarning(ctx, "", fmt.Sprintf("account Secrets were written but not yet owned by the release: %v", err))
 	}
 }
 
-// seedBeforeUpdate writes the account Secrets an update adds, owned by the
-// live HelmRelease from the start, and the valuesFrom entries of the result.
-func (r *REST) seedBeforeUpdate(ctx context.Context, app *appsv1alpha1.Application, hr, cur *helmv2.HelmRelease, accounts []account.Account) error {
+// seedBeforeUpdate writes the account Secrets of the accounts the update adds,
+// owned by the live HelmRelease from the start, and the valuesFrom entries of
+// the result. An account the release already declared and that has no Secret
+// is left alone: a seed would replace its working password with a discarded
+// one, and a mint creates the Secret when someone needs it.
+func (r *REST) seedBeforeUpdate(ctx context.Context, app *appsv1alpha1.Application, hr, cur *helmv2.HelmRelease, accounts []account.Account, dryRun bool) error {
 	if r.credentials == nil {
 		return nil
 	}
 	hr.Spec.ValuesFrom = store.ValuesFrom(r.credentials, hr.Name, accounts)
+	if dryRun {
+		return nil
+	}
+	prev, err := r.accountsOf(cur.Spec.Values)
+	if err != nil {
+		// The stored values were written around the API; nothing tells which
+		// accounts are new, so seed none and leave the rest to a mint.
+		klog.Warningf("accounts of %s/%s before the update cannot be resolved, seeding none: %v", cur.Namespace, cur.Name, err)
+		return nil
+	}
 	owner := store.OwnerReference(cur)
-	if _, err := store.Ensure(ctx, r.c, r.storeApp(app.Namespace, app.Name), accounts, &owner, metav1.Now(), actor(ctx)); err != nil {
+	if _, err := store.Ensure(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), store.Added(prev, accounts), &owner, metav1.Now(), actor(ctx)); err != nil {
 		return apierrors.NewInternalError(fmt.Errorf("seed account Secrets: %w", err))
 	}
 	return nil
@@ -125,11 +165,11 @@ func (r *REST) seedBeforeUpdate(ctx context.Context, app *appsv1alpha1.Applicati
 
 // pruneAfterUpdate deletes the account Secrets of the accounts the update
 // removed, once the HelmRelease write has dropped them from the chart.
-func (r *REST) pruneAfterUpdate(ctx context.Context, app *appsv1alpha1.Application, accounts []account.Account) {
-	if r.credentials == nil {
+func (r *REST) pruneAfterUpdate(ctx context.Context, app *appsv1alpha1.Application, accounts []account.Account, dryRun bool) {
+	if r.credentials == nil || dryRun {
 		return
 	}
-	if _, err := store.Prune(ctx, r.c, r.storeApp(app.Namespace, app.Name), accounts); err != nil {
+	if _, err := store.Prune(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), accounts); err != nil {
 		klog.Errorf("failed to prune account Secrets of %s/%s: %v", app.Namespace, app.Name, err)
 		warning.AddWarning(ctx, "", fmt.Sprintf("account Secrets of removed users were not all deleted: %v", err))
 	}
