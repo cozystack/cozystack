@@ -273,7 +273,7 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
 | `users`                   | Users configuration map. Each user is a PostgreSQL role the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SCRAM verifier, and a revoke retires the password without issuing one. A `password` key here is ignored and draws an admission warning. A password set inside PostgreSQL is reverted by the operator. | `map[string]object` | `{}`    |
 | `users[name].replication` | Whether the user has replication privileges.                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `bool`              | `false` |
-| `users[name].createRole`  | Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.                                    | `bool`              | `false` |
+| `users[name].createRole`  | Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the upgrade, in a pre-upgrade check, until a platform administrator drops that role.            | `bool`              | `false` |
 | `users[name].bypassRls`   | Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.                                                                                                                                                                                                                                                      | `bool`              | `false` |
 
 
@@ -354,7 +354,16 @@ users:
     replication: true
 ```
 
-Passwords cannot be set here — they are auto-generated and stored in the `<release>-credentials` Secret. Read a user's password with `kubectl get secret <release>-credentials -o json | jq -r '.data["user1"]' | base64 -d` (a username may contain a `.`, which `jsonpath` would treat as a path step and return nothing).
+Passwords cannot be set here. Each user is an account of the Cozystack credentials API: a `Credential` named `<release>.<account>` in `core.cozystack.io/v1alpha1`, where `<account>` is the user name lowercased with every character outside `[a-z0-9-]` replaced by `-`. A mint returns a new password once and replaces the previous one; only its SCRAM verifier is stored, so the password cannot be read back:
+
+```bash
+kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/<namespace>/credentials/postgres-<name>.user1/mint" \
+  -f <(echo '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') | jq -r .status.password
+```
+
+A user added to an existing application has no password until the first mint. Names PostgreSQL or CloudNativePG reserve (`postgres`, `streaming_replica`, `pg_*`, `cnpg_*`), the name of a database role (`<db>_admin`, `<db>_readonly`), and two users mapping to one account name are refused.
+
+Downgrading the platform past the conversion to minted passwords is not supported: the previous chart generates a new password for every account. A manual `helm rollback` of a release to a revision from before the conversion is undone at its next reconcile, and meanwhile the old revision's `<release>-credentials` shows a password that no longer works; mint again once the release is back.
 
 ### databases
 
