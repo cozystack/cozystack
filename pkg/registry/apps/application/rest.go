@@ -1573,13 +1573,16 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 		},
 		Spec: filteredSpec,
 		Status: appsv1alpha1.ApplicationStatus{
-			Version: hr.Status.LastAttemptedRevision,
+			Version:                    hr.Status.LastAttemptedRevision,
+			InstallFailures:            hr.Status.InstallFailures,
+			UpgradeFailures:            hr.Status.UpgradeFailures,
+			LastAttemptedReleaseAction: string(hr.Status.LastAttemptedReleaseAction),
 		},
 	}
 
 	var conditions []metav1.Condition
 	for _, hrCondition := range hr.GetConditions() {
-		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" {
+		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" || hrCondition.Type == "Stalled" {
 			conditions = append(conditions, metav1.Condition{
 				LastTransitionTime: hrCondition.LastTransitionTime,
 				Reason:             hrCondition.Reason,
