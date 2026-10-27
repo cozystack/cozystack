@@ -33,6 +33,24 @@ migrations:
   # Reset it to false once the upgrade is through, or the next platform upgrade
   # that adds an etcd migration will skip its snapshot too.
   etcdAdoptSkipBackup: false
+# Which storage control plane the cluster runs.
+#
+#   linstor   — the default, and what every existing cluster runs.
+#   blockstor — EXPERIMENTAL, for new clusters only. A
+#               LINSTOR-API-compatible control plane serving the same
+#               CSI driver and StorageClasses. Do not switch a cluster
+#               that already holds LINSTOR volumes: the pinned blockstor
+#               release cannot adopt them safely, and nothing converts
+#               LINSTOR's database into blockstor's.
+#
+# Anything else fails the render rather than defaulting, so a typo
+# cannot quietly deploy the wrong storage control plane. Changing the
+# backend of a running cluster fails the render too; on a cluster that
+# holds no volumes yet, set storage.acknowledgeBackendChange to the new
+# backend to confirm the switch.
+storage:
+  backend: linstor
+
 # Bundle deployment configuration
 bundles:
   system:

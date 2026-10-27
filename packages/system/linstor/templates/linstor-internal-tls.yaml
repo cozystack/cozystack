@@ -1,3 +1,5 @@
+{{- /* Under both backends: the satellite configuration in
+       satellites-cozy.yaml takes its internalTLS certificates from this CA. */ -}}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
