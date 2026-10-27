@@ -21,6 +21,32 @@ const schema = JSON.stringify({
 
 const noop = () => {}
 
+// The tenant chart types resourceQuotas values as int-or-string quantities.
+// After sanitisation that is a two-type array, not a bare "string", and the
+// structured quota editor must still recognise it.
+const tenantQuotaSchema = JSON.stringify({
+  type: "object",
+  properties: {
+    resourceQuotas: {
+      type: "object",
+      additionalProperties: {
+        pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))([KMGTPE]i|[numkMGTPE])?$",
+        anyOf: [{ type: "integer" }, { type: "string" }],
+        "x-kubernetes-int-or-string": true,
+      },
+    },
+  },
+})
+
+describe("SchemaForm resourceQuotas editor", () => {
+  it("uses the structured quota editor for int-or-string resourceQuotas", () => {
+    render(<SchemaForm openAPISchema={tenantQuotaSchema} formData={{}} onChange={noop} />)
+    // ResourceQuotasField renders its predefined rows; the generic
+    // additionalProperties editor does not. "Load Balancers" is unique to it.
+    expect(screen.getByText("Load Balancers")).toBeInTheDocument()
+  })
+})
+
 describe("SchemaForm immutableMode", () => {
   it("renders fields editable and without help text when immutableMode is omitted", () => {
     render(

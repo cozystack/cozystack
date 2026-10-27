@@ -55,21 +55,23 @@ describe("sanitizeSchema", () => {
     expect(sanitizeSchema(input)).toEqual(input)
   })
 
-  it("coerces x-kubernetes-int-or-string to [integer, string] and drops anyOf", () => {
+  it("coerces x-kubernetes-int-or-string to [number, string] and drops anyOf", () => {
     const out = sanitizeSchema({
       "x-kubernetes-int-or-string": true,
       pattern: QUANTITY_PATTERN,
       anyOf: [{ type: "integer" }, { type: "string" }],
     })
-    expect(out.type).toEqual(["integer", "string"])
+    expect(out.type).toEqual(["number", "string"])
     expect(out.anyOf).toBeUndefined()
     // The pattern survives so junk strings are still rejected.
     expect(out.pattern).toBe(QUANTITY_PATTERN)
   })
 
-  it("int-or-string field validates a bare number and a quantity string, rejects junk", () => {
+  it("int-or-string field validates whole and fractional numbers and quantity strings, rejects junk", () => {
     // Oracle is ajv via @rjsf/validator-ajv8, not hand-rolled assertions: the
     // sanitised schema is what the form actually validates against at submit.
+    // `number` (not `integer`) is required because the text widget coerces a
+    // typed `0.5` to the JS number 0.5, which an integer type would reject.
     const schema = sanitizeSchema({
       description: "CPU limit.",
       default: 1,
@@ -79,9 +81,11 @@ describe("sanitizeSchema", () => {
     })
     const errors = (v: unknown) =>
       validator.validateFormData(v, schema as never).errors.map((e) => e.message)
-    // Bare integer (the field's own default) must be accepted — this is the bug.
+    // Bare integer (the field's own default) must be accepted — the original bug.
     expect(errors(1)).toEqual([])
-    // Suffixed quantity string stays valid.
+    // Fractional cores, coerced to a JS number by the widget, must be accepted.
+    expect(errors(0.5)).toEqual([])
+    // Suffixed quantity strings stay valid.
     expect(errors("500m")).toEqual([])
     expect(errors("1")).toEqual([])
     // Nonsense is still rejected by the pattern.

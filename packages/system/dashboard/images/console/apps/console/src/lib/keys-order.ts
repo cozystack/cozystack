@@ -59,10 +59,12 @@ export function keysOrderToUiSchema(
  *
  *   - `x-kubernetes-int-or-string` together with `anyOf: [{integer},{string}]`
  *     — the field accepts either. We drop the anyOf (RJSF would render it as a
- *     variant selector) and set `type: ["integer", "string"]`, which keeps a
- *     single text input while letting RJSF coerce a bare number (`cpu: 1`) to a
- *     number and leave a suffixed value (`cpu: 500m`) a string — the same way
- *     the YAML editor and kubectl parse them.
+ *     variant selector) and set `type: ["number", "string"]`, which keeps a
+ *     single text input while letting RJSF coerce a typed number (`cpu: 1` or
+ *     `cpu: 0.5`) to a JS number and leave a suffixed value (`cpu: 500m`) a
+ *     string — the same way the YAML editor and kubectl parse them. `number`,
+ *     not `integer`: the widget coerces a fractional `0.5` to the number 0.5,
+ *     which an integer type would reject.
  *   - `x-kubernetes-preserve-unknown-fields: true` on an object without
  *     properties — arbitrary nested values allowed. Left as a "raw" object
  *     (handled via additionalProperties: true).
@@ -91,9 +93,10 @@ export function sanitizeSchema(schema: any): any {
     // Two-type array, not a bare "string": collapsing to "string" rejected the
     // numeric form of a quantity — including the schema's own numeric default
     // (`default: 1`) — so the form refused values the YAML editor and the API
-    // both accept. ["integer", "string"] validates both and still renders one
-    // text input (see the header comment).
-    out.type = ["integer", "string"]
+    // both accept. ["number", "string"] validates whole and fractional numbers
+    // and quantity strings, and still renders one text input (see the header
+    // comment).
+    out.type = ["number", "string"]
   }
   if (schema["x-kubernetes-preserve-unknown-fields"] && !schema.properties) {
     out.type = "object"
