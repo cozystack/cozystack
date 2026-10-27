@@ -68,6 +68,32 @@ function memoryCell(totals: ResourceTotals, ready: boolean, podsUnavailable: boo
   )
 }
 
+// Ephemeral-storage on the node. There is no "used" figure to show: the
+// Kubernetes API exposes capacity/allocatable for the node's ephemeral-storage
+// and the pods' requests, but metrics.k8s.io reports usage only for CPU and
+// memory, and distributed-storage (PV/LINSTOR) occupancy is not attributable to
+// a node here at all. So this reports the node's storage capacity and what pods
+// have requested, and never fabricates a usage number.
+function storageCell(totals: ResourceTotals, ready: boolean, podsUnavailable: boolean) {
+  if (!ready || totals.allocatable <= 0) {
+    return <div className="text-xs text-slate-400">—</div>
+  }
+  return (
+    <div className="space-y-0.5 text-xs">
+      {podsUnavailable ? (
+        <div className="text-slate-400" title={REQUESTED_UNAVAILABLE_REASON}>
+          — req
+        </div>
+      ) : (
+        <div className="tabular-nums text-slate-500">
+          {humanizeBytes(totals.requested)} / {humanizeBytes(totals.allocatable)} req
+        </div>
+      )}
+      <div className="tabular-nums text-slate-400">capacity {humanizeBytes(totals.capacity)}</div>
+    </div>
+  )
+}
+
 function extendedCell(
   totals: ResourceTotals | undefined,
   ready: boolean,
@@ -177,6 +203,12 @@ export function ClusterUsageTable({
   }[] = [
     { key: "cpu", label: "CPU", linkKey: "cpu", render: (r) => cpuCell(r.standard.cpu, r.ready, podsUnavailable) },
     { key: "memory", label: "Memory", linkKey: "memory", render: (r) => memoryCell(r.standard.memory, r.ready, podsUnavailable) },
+    {
+      key: "ephemeral-storage",
+      label: "Storage",
+      linkKey: "ephemeral-storage",
+      render: (r) => storageCell(r.standard["ephemeral-storage"], r.ready, podsUnavailable),
+    },
     ...extendedKeys.map((k) => ({
       key: k,
       label: k,

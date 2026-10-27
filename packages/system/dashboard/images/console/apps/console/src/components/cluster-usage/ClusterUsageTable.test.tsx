@@ -54,7 +54,7 @@ describe("ClusterUsageTable (transposed: nodes are columns)", () => {
     expect(nodeCols(container)).toEqual(["worker-a", "worker-b"])
   })
 
-  it("lays out resource rows top-to-bottom: CPU, Memory, then extended in order", () => {
+  it("lays out resource rows top-to-bottom: CPU, Memory, Storage, then extended in order", () => {
     const { container } = render(
       <ClusterUsageTable
         rows={[row("n", { extended: { "nvidia.com/gpu": { capacity: 2, allocatable: 2, requested: 1 } } })]}
@@ -64,7 +64,7 @@ describe("ClusterUsageTable (transposed: nodes are columns)", () => {
     const order = Array.from(container.querySelectorAll("[data-attribute-row]")).map((el) =>
       el.getAttribute("data-attribute-row"),
     )
-    expect(order).toEqual(["cpu", "memory", "nvidia.com/gpu", "amd.com/gpu"])
+    expect(order).toEqual(["cpu", "memory", "ephemeral-storage", "nvidia.com/gpu", "amd.com/gpu"])
   })
 
   it("links resource row labels (CPU, Memory, extended) to the per-resource drill-down", () => {
@@ -81,6 +81,10 @@ describe("ClusterUsageTable (transposed: nodes are columns)", () => {
     expect(screen.getByRole("link", { name: "Memory" })).toHaveAttribute(
       "href",
       "/admin/capacity/cluster/r/memory",
+    )
+    expect(screen.getByRole("link", { name: "Storage" })).toHaveAttribute(
+      "href",
+      "/admin/capacity/cluster/r/ephemeral-storage",
     )
     expect(screen.getByRole("link", { name: "nvidia.com/gpu" })).toHaveAttribute(
       "href",
@@ -177,6 +181,35 @@ describe("ClusterUsageTable (transposed: nodes are columns)", () => {
     )
     await user.type(screen.getByLabelText("Filter nodes"), "control")
     expect(nodeCols(container)).toEqual(["a"])
+  })
+
+  it("shows a Storage row with node ephemeral-storage capacity, em dash when the node has none", () => {
+    const { container } = render(
+      <ClusterUsageTable
+        rows={[
+          row("has-disk", {
+            standard: {
+              cpu: { capacity: 8, allocatable: 8, requested: 1 },
+              memory: { capacity: 16 * 1024 ** 3, allocatable: 16 * 1024 ** 3, requested: 0 },
+              "ephemeral-storage": {
+                capacity: 100 * 1024 ** 3,
+                allocatable: 90 * 1024 ** 3,
+                requested: 10 * 1024 ** 3,
+              },
+              pods: { capacity: 110, allocatable: 110, requested: 0 },
+            },
+          }),
+          row("no-disk"), // fixture leaves ephemeral-storage at zero
+        ]}
+        extendedKeys={[]}
+      />,
+    )
+    const storageRow = attrRow(container, "ephemeral-storage")
+    expect(storageRow).not.toBeNull()
+    // The node that reports ephemeral-storage shows its capacity …
+    expect(within(storageRow).getByText(/capacity/)).toBeInTheDocument()
+    // … while the node with none collapses to an em dash (no fabricated usage).
+    expect(within(storageRow).getByText("—")).toBeInTheDocument()
   })
 
   it("replaces the Requested line with an em-dash tooltip when podsUnavailable", () => {
