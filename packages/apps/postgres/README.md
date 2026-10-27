@@ -89,6 +89,8 @@ field.
 
 The chart can also emit a `cnpg.io/ScheduledBackup` directly, without a BackupClass. Superseded by the BackupClass + Plan path above and kept around for clusters that did not migrate. It does not run by default - `backup.schedule` defaults to an empty string, which gates the chart's ScheduledBackup template off. To turn it on, set a standard five-field cron such as `0 2 * * *` for every day at 02:00, or the CloudNativePG six-field form with a leading seconds field such as `0 0 2 * * *` for the same time. The chart prepends a `0` seconds field to a five-field value, because CloudNativePG reads the first field as seconds and would otherwise run `0 2 * * *` every hour.
 
+On upgrade, an existing `backup.schedule: "0 2 * * *"` changes from hourly at minute 2 to daily at 02:00. To keep the previous hourly schedule, set `backup.schedule: "0 2 * * * *"` before upgrading.
+
 ```yaml
 ## @param backup.enabled Enable plugin WAL archiving + render the chart-managed ScheduledBackup
 ## @param backup.schedule Cron schedule, five fields or six with leading seconds. Empty means no chart-managed ScheduledBackup
