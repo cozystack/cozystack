@@ -1,0 +1,16 @@
+# The KubernetesNodes chart resolves these two names without reading them; the
+# objects exist so the classes can be listed. The CRD refuses any other content
+# under either name.
+apiVersion: cozystack.io/v1alpha1
+kind: NodeGroupClass
+metadata:
+  name: talos
+spec:
+  os: talos
+---
+apiVersion: cozystack.io/v1alpha1
+kind: NodeGroupClass
+metadata:
+  name: kairos
+spec:
+  os: kairos
