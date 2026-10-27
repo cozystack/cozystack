@@ -2636,6 +2636,7 @@ func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testi
 				Enabled:  true,
 				Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)}},
 			}},
+			Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
 		}
 	}
 	newRJ := func(name string) *backupsv1alpha1.RestoreJob {
@@ -2771,6 +2772,7 @@ func mongodbToCopyFixture(t *testing.T, databases string) (*backupsv1alpha1.Back
 			Enabled:  true,
 			Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-target-s3-creds"}}`)}},
 		}},
+		Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
 	}
 	app := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
 	if databases != "" {
@@ -2791,6 +2793,76 @@ func mongodbRestoresIn(t *testing.T, c client.Client) []psmdbtypes.PerconaServer
 		t.Fatalf("list operator restores: %v", err)
 	}
 	return list.Items
+}
+
+func TestReconcileMongoDBRestore_WaitsForTargetAndBackupAgentsBeforeHandOver(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, backupVersion string
+		expired                    bool
+	}{
+		{name: "no status yet"},
+		{name: "initializing with backup agents", state: "initializing", backupVersion: "2.11.0"},
+		{name: "ready without backup agents", state: psmdbtypes.StateReady},
+		{name: "error with backup agents", state: psmdbtypes.StateError, backupVersion: "2.11.0"},
+		{name: "deadline expires before agents are ready", state: psmdbtypes.StateReady, expired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+			if tc.expired {
+				rj.Spec.Options = &runtime.RawExtension{Raw: []byte(`{"restoreTimeoutSeconds":1}`)}
+				rj.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-time.Minute)}
+			}
+			c := newMongoDBStrategyTestClient(t, objs...)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+			ctx := context.Background()
+			cluster := &psmdbtypes.PerconaServerMongoDB{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+				t.Fatal(err)
+			}
+			cluster.Status.State, cluster.Status.BackupVersion = tc.state, tc.backupVersion
+			if err := c.Update(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			result, err := r.reconcileMongoDBRestore(ctx, rj.DeepCopy(), backup)
+			if err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 0 {
+				t.Fatalf("an unready target must not reach the operator, got %d restores", n)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(rj), rj); err != nil {
+				t.Fatal(err)
+			}
+			cond := apimeta.FindStatusCondition(rj.Status.Conditions, "Ready")
+			if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "TargetPerconaServerMongoDBNotReady" {
+				t.Fatalf("expected a target readiness condition, got %+v", cond)
+			}
+			if tc.expired {
+				if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed || result.RequeueAfter != 0 {
+					t.Fatalf("expired wait must fail, got phase=%q result=%+v", rj.Status.Phase, result)
+				}
+				return
+			}
+			if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseRunning || result.RequeueAfter != psmdbPollInterval {
+				t.Fatalf("target must be retried, got phase=%q result=%+v", rj.Status.Phase, result)
+			}
+			cluster.Status.State, cluster.Status.BackupVersion = psmdbtypes.StateReady, "2.11.0"
+			if err := c.Update(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := c.Get(ctx, client.ObjectKeyFromObject(rj), rj); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := r.reconcileMongoDBRestore(ctx, rj.DeepCopy(), backup); err != nil {
+					t.Fatalf("reconcile ready target: %v", err)
+				}
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 1 {
+				t.Fatalf("ready target must get exactly one restore, got %d", n)
+			}
+		})
+	}
 }
 
 // A full logical restore into another application replays the source's
@@ -2856,6 +2928,7 @@ func TestReconcileMongoDBRestore_InPlaceStaysFullRestore(t *testing.T) {
 					Enabled:  true,
 					Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-src-s3-creds"}}`)}},
 				}},
+				Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
 			}
 			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-src-s3-creds"}}
 			// No application object at all, so a read of it would fail the job.
@@ -2944,8 +3017,13 @@ func TestReconcileMongoDBRestore_ToCopyWithoutTargetApplicationFails(t *testing.
 
 // The shape is decided only until the operator CR exists. A target edited
 // while the operator is already writing into it must not fail that restore.
-func TestReconcileMongoDBRestore_ToCopyShapeIsNotRecheckedAfterHandOver(t *testing.T) {
+func TestReconcileMongoDBRestore_ToCopyShapeAndReadinessAreNotRecheckedAfterHandOver(t *testing.T) {
 	backup, rj, objs := mongodbToCopyFixture(t, "")
+	for _, o := range objs {
+		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
+			cluster.Status = psmdbtypes.PerconaServerMongoDBStatus{State: "initializing"}
+		}
+	}
 	inflight := &psmdbtypes.PerconaServerMongoDBRestore{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "tenant", Name: "rj-copy-abc",
@@ -2970,6 +3048,9 @@ func TestReconcileMongoDBRestore_ToCopyShapeIsNotRecheckedAfterHandOver(t *testi
 	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Errorf("a restore already running must not be refused for what the target declares now: %+v", persisted.Status.Conditions)
 	}
+	if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond != nil && cond.Reason == "TargetPerconaServerMongoDBNotReady" {
+		t.Errorf("an in-flight restore must not wait on pre-restore readiness: %+v", cond)
+	}
 }
 
 // mongodbGateHarness keeps a to-copy RestoreJob whose operator restore has
@@ -2989,6 +3070,7 @@ func newMongoDBGateHarness(t *testing.T, clusterState, clusterMessage string, se
 		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
 			cluster.Status.State = clusterState
 			cluster.Status.Message = clusterMessage
+			cluster.Status.BackupVersion = "" // Only the hand-over waits for PBM's version.
 		}
 	}
 	done := &psmdbtypes.PerconaServerMongoDBRestore{

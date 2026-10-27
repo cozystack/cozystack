@@ -137,6 +137,7 @@ type PerconaServerMongoDBPITR struct {
 // hold is resolved by the operator against whatever pbm still carries.
 type PerconaServerMongoDBStatus struct {
 	State              string                          `json:"state,omitempty"`
+	BackupVersion      string                          `json:"backupVersion,omitempty"`
 	ObservedGeneration int64                           `json:"observedGeneration,omitempty"`
 	Conditions         []PerconaServerMongoDBCondition `json:"conditions,omitempty"`
 	// Message is the operator's last reconcile error, empty while the cluster

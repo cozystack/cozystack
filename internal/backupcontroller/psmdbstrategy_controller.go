@@ -1719,6 +1719,16 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	if existingRestore == nil && apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, psmdbRestoreCondReplayed) {
 		return r.awaitMongoDBTargetReady(ctx, restoreJob, nil, targetCluster, options)
 	}
+	// Percona can fail the restore permanently if PBM has not reported its version yet.
+	if existingRestore == nil && (targetCluster.Status.State != psmdbtypes.StateReady || targetCluster.Status.BackupVersion == "") {
+		msg := fmt.Sprintf("target psmdb.percona.com/PerconaServerMongoDB %s/%s is not ready for restore (state=%q, backupVersion=%q); waiting for the database and its backup agents",
+			target.Namespace, targetPSMDBName, targetCluster.Status.State, targetCluster.Status.BackupVersion)
+		deadline := options.effectiveRestoreDeadline()
+		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", fmt.Sprintf("%s; not resolved within %s", msg, deadline))
+		}
+		return r.requeueMongoDBRestoreWaiting(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", msg)
+	}
 
 	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
 	// swap applies. On the legacy flow the backupSource carries the SOURCE
