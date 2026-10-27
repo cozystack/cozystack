@@ -63,11 +63,11 @@ func TestPresenceOnTheLine(t *testing.T) {
 			carried: "picked in",
 		},
 		{
-			name: "an -x line naming one of the pull request's commits",
+			name: "an -x line naming the pull request's only commit",
 			land: func(f *fixture, _, pr string) {
 				f.onLine("release-1.1", "change\n\n(cherry picked from commit "+pr+")", map[string]string{"app/x.txt": "fixed\n"})
 			},
-			carried: "picked in",
+			carried: "its 1 commit picked",
 		},
 		{
 			name: "an -x line among other trailers",

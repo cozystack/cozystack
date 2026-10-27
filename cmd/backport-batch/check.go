@@ -18,9 +18,7 @@ package main
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
-	"strings"
 )
 
 // check is the gate before a patch cut: every original the policy takes is on
@@ -81,13 +79,13 @@ func (a *app) check(args []string) int {
 func terminalSafe(s string) string { return capped(oneLine(clean(s, false)), titleLimit) }
 
 // fold checks a hand-made resolution of a deferred conflict before anyone
-// pushes it onto the batch: one commit, on the batch head, porting one
-// original, inside the files that original touches.
+// pushes it onto the batch: one original on the batch head, in the shape the
+// batch carries it, inside the files that original touches.
 func (a *app) fold(args []string) int {
 	fs := a.flags("fold")
 	lineArg := fs.String("line", "", "release line, release-X.Y")
 	number := fs.Int("original", 0, "number of the original pull request")
-	commit := fs.String("commit", "", "the resolution commit")
+	commit := fs.String("commit", "", "the resolution: the merge commit, or for a squash-merged original its one commit")
 	if err := parse(fs, args); err != nil {
 		return 2
 	}
@@ -121,7 +119,11 @@ func (a *app) fold(args []string) int {
 }
 
 // refuseFold says why commit is not a fold of original n onto the batch, or ""
-// when it is one.
+// when it is one: for a merged pull request a merge whose first parent is the
+// batch head and whose second parent ends a straight line of picks of the pull
+// request's own commits, in order, each with its -x line, naming the original
+// in its Backported-from trailer; for a squash-merged one a single pick of its
+// commit on main. Pushed as it is, either is a fast-forward of the batch.
 func refuseFold(b *batch, n int, commit string) (string, error) {
 	v := b.find(n)
 	switch {
@@ -139,49 +141,28 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	if !gitOK("cat-file", "-e", "--end-of-options", commit+"^{commit}") {
 		return fmt.Sprintf("%.12s is not a commit in this repository", commit), nil
 	}
-	out, err := git("rev-list", "--parents", "-n", "1", "--end-of-options", commit)
+	u, err := readUnit(commit)
 	if err != nil {
 		return "", err
 	}
-	parents := strings.Fields(out)[1:]
-	if len(parents) != 1 {
-		return fmt.Sprintf("%.12s has %d parents; a fold is one commit with one parent", commit, len(parents)), nil
+	want := 1
+	if v.o.parents > 1 {
+		want = 2
 	}
-	if parents[0] != b.prHead {
-		return fmt.Sprintf("%.12s is on %.12s, not on the head of batch pull request #%d (%.12s)", commit, parents[0], b.pr.Number, b.prHead), nil
+	switch {
+	case len(u.parents) != want && want == 2:
+		return fmt.Sprintf("%.12s has %d parents; #%d is a merged pull request, so a fold is a merge of its picked commits onto the batch head", commit, len(u.parents), n), nil
+	case len(u.parents) != want:
+		return fmt.Sprintf("%.12s has %d parents; #%d merged as one commit, so a fold is one commit with one parent", commit, len(u.parents), n), nil
+	case u.parents[0] != b.prHead:
+		return fmt.Sprintf("%.12s is on %.12s, not on the head of batch pull request #%d (%.12s)", commit, u.parents[0], b.pr.Number, b.prHead), nil
 	}
-	changes, err := changedFiles(commit+"^", commit)
-	if err != nil {
-		return "", err
-	}
-	if len(changes) == 0 {
-		return fmt.Sprintf("%.12s changes nothing", commit), nil
-	}
-	allowed := paths(v.changes)
-	var extra []string
-	for _, p := range paths(changes) {
-		if !slices.Contains(allowed, p) {
-			extra = append(extra, p)
-		}
-	}
-	if len(extra) > 0 {
-		for i, p := range extra {
-			extra[i] = strconv.Quote(p)
-		}
-		return fmt.Sprintf("%.12s touches %s, which #%d does not touch", commit, strings.Join(extra, ", "), n), nil
-	}
-	msgs, err := commitMessages([]string{commit})
-	if err != nil {
-		return "", err
-	}
-	sources := xSources(msgs[commit].message)
-	if len(sources) == 0 {
-		return fmt.Sprintf("%.12s carries no (cherry picked from commit %s) line in its trailers", commit, v.o.merge), nil
-	}
-	for _, source := range sources {
-		if !slices.Contains(v.commits, source) {
-			return fmt.Sprintf("%.12s names %s, which is not a commit of #%d", commit, source, n), nil
-		}
+	why, carried, err := checkUnit(b, u)
+	switch {
+	case err != nil || why != "":
+		return why, err
+	case carried != v:
+		return fmt.Sprintf("%.12s carries #%d, not #%d", commit, carried.o.number, n), nil
 	}
 	return "", nil
 }

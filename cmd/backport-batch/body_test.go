@@ -247,6 +247,7 @@ func TestDeferredRoundTrip(t *testing.T) {
 		"an unknown key":  deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[],\"x\":1}\n```",
 		"a bad number":    deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[{\"original\":-1}]}\n```",
 		"a repeat":        deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[{\"original\":5},{\"original\":5,\"reason\":\"x\"}]}\n```",
+		"a bad commit":    deferredFence + "\n{\"line\":\"release-1.6\",\"deferred\":[{\"original\":5,\"commit\":\"-x\"}]}\n```",
 		"a broken fence":  deferredFence + "\n{}\nmore\n```",
 		"an empty fence":  deferredFence + "\n```",
 		"a trailing line": deferredFence,

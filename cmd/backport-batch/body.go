@@ -166,10 +166,11 @@ func releaseNote(body string) string {
 // deferredFence opens the block check reads the deferred conflicts from.
 const deferredFence = "```backport-batch"
 
-// deferredEntry is a conflict, with its files, or an original --defer took
-// out of the batch, with the reason given.
+// deferredEntry is a conflict, with the commit that failed and its files, or
+// an original --defer took out of the batch, with the reason given.
 type deferredEntry struct {
 	Original int      `json:"original"`
+	Commit   string   `json:"commit,omitempty"`
 	Files    []string `json:"files"`
 	More     int      `json:"more,omitempty"`
 	Reason   string   `json:"reason,omitempty"`
@@ -194,7 +195,7 @@ func deferredBlock(l line, conflicts, held []pick) string {
 	rec := deferredRecord{Line: l.branch(), Deferred: []deferredEntry{}}
 	for _, p := range conflicts {
 		files := p.files[:min(len(p.files), filesKept)]
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more})
+		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Commit: p.failed, Files: files, More: len(p.files) - len(files) + p.more})
 	}
 	for _, p := range held {
 		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: []string{}, Reason: capped(oneLine(clean(p.reason, false)), titleLimit)})
@@ -239,6 +240,9 @@ func parseDeferred(body string, l line) (map[int]deferredEntry, error) {
 		if d.Original <= 0 {
 			return nil, fmt.Errorf("the %s block names original %d", deferredFence, d.Original)
 		}
+		if d.Commit != "" && checkSHA(d.Commit) != nil {
+			return nil, fmt.Errorf("the %s block names commit %q for #%d", deferredFence, d.Commit, d.Original)
+		}
 		if _, dup := out[d.Original]; dup {
 			return nil, fmt.Errorf("the %s block names #%d twice", deferredFence, d.Original)
 		}
@@ -269,6 +273,8 @@ type report struct {
 	overrides []*verdict
 	stale     []*verdict
 	start     time.Time
+	// shapes says, for an original on the branch, what it brought.
+	shapes map[*verdict]string
 }
 
 func (r *report) ruleTitle(rule int) string {
@@ -293,15 +299,19 @@ func (r *report) ruleTitle(rule int) string {
 // in details written out.
 func (r *report) what(details map[int]bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) and applied with `git cherry-pick -x` in merge order. Each commit keeps the original message and names its original in a `(cherry picked from commit …)` line. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, tasksURL)
+	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) in merge order. A merged pull request comes as its own commits, picked with `git cherry-pick -x` so each keeps its author, message and sign-offs, and a merge commit that carries the original's merge message with a `%s:` trailer naming it; a squash-merged one comes as one pick. `backport-batch verify` checks that shape. A pick listed as changed differs from the commit it came from; `git range-diff <merge>^1..<merge>^2 <batch merge>^1..<batch merge>^2` shows how. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, batchTrailer, tasksURL)
 	if len(r.onBranch) == 0 {
 		b.WriteString("Nothing is picked yet.\n")
 	}
 	for _, v := range r.onBranch {
-		fmt.Fprintf(&b, "- %s %s\n", prLink(v.o.number), titleSpan(v.o.title))
+		shape := ""
+		if s := r.shapes[v]; s != "" {
+			shape = ", " + s
+		}
+		fmt.Fprintf(&b, "- %s %s%s\n", prLink(v.o.number), titleSpan(v.o.title), shape)
 	}
 	if len(r.deferred) > 0 {
-		fmt.Fprintf(&b, "\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first, as [resolving a conflict](%sresolve-conflict.md) describes.\n\n", tasksURL)
+		fmt.Fprintf(&b, "\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each names the first of its commits that conflicted and the files it conflicted in, and nothing of it is on the branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first, as [resolving a conflict](%sresolve-conflict.md) describes.\n\n", tasksURL)
 		for _, p := range r.deferred {
 			var files []string
 			for _, f := range p.files[:min(len(p.files), filesListed)] {
@@ -310,7 +320,11 @@ func (r *report) what(details map[int]bool) string {
 			if more := len(p.files) - len(files) + p.more; more > 0 {
 				files = append(files, fmt.Sprintf("%d more", more))
 			}
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
+			at := ""
+			if p.failed != "" {
+				at = " at " + codeSpan(p.failed[:12])
+			}
+			fmt.Fprintf(&b, "- %s %s%s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), at, strings.Join(files, ", "))
 		}
 	}
 	if len(r.held) > 0 {

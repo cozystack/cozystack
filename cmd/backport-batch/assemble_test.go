@@ -20,20 +20,28 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-// A clean pick lands with the original message and its -x line, in main's
-// merge order, -m 1 for a merge and a plain pick for a squash.
+// A merged pull request lands as its own commits, each picked with -x and
+// keeping its author and sign-offs, under a merge commit that carries the
+// merge message from main and names it; a squash lands as one pick; a merge
+// of main into the pull request's branch is left out; all in main's merge
+// order.
 func TestRunPicksInMergeOrder(t *testing.T) {
 	f := newFixture(t)
 	f.lines()
-	mc5 := f.pr(5, "fix(app): five", "Body.\n\n```release-note\nfix(app): five is fixed\n```", map[string]string{"app/five.txt": "5\n"})
+	signoff := "Signed-off" + "-by: " + contributor
+	mc5 := f.prCommits(5, "fix(app): five", "Body.\n\n```release-note\nfix(app): five is fixed\n```",
+		change{files: map[string]string{"app/five.txt": "5\n"}, author: contributor, message: "fix(app): start five\n\n" + signoff},
+		change{files: map[string]string{"app/five.txt": "5, done\n", "app/five-more.txt": "more\n"}, author: contributor, message: "fix(app): finish five\n\n" + signoff})
 	sq6 := f.squash(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
 	f.pr(7, "feat(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
-	mc8 := f.pr(8, "fix(app): eight", "", map[string]string{"app/five.txt": "5 and 8\n"})
+	mc8 := f.prCommits(8, "fix(app): eight", "",
+		change{files: map[string]string{"app/eight.txt": "8\n"}},
+		change{mergeMain: true},
+		change{files: map[string]string{"app/eight.txt": "8, after main\n"}})
 
 	code, stdout, stderr := f.exec(nil, "run", "--line", "release-1.1")
 	if code != 0 {
@@ -44,24 +52,54 @@ func TestRunPicksInMergeOrder(t *testing.T) {
 	}
 	want := []string{"fix(app): five (#5)", "fix(app): six (#6)", "fix(app): eight (#8)"}
 	if got := f.subjects("origin/release-1.1", "HEAD"); !slices.Equal(got, want) {
-		t.Errorf("picked %q, want %q", got, want)
+		t.Errorf("the batch carries %q, want %q", got, want)
 	}
-	for i, mc := range []string{mc5, sq6, mc8} {
-		msg := f.git("log", "-1", "--format=%B", "HEAD~"+strconv.Itoa(2-i))
-		if !strings.Contains(msg, "(cherry picked from commit "+mc+")\nSigned-off-by: Batch Test <batch@example.invalid>") {
-			t.Errorf("pick %d lacks its -x line for %s or its sign-off:\n%s", i, mc, msg)
+
+	line := f.git("rev-parse", "origin/release-1.1")
+	u5 := f.git("rev-parse", "HEAD~2")
+	if got := f.git("rev-parse", u5+"^1"); got != line {
+		t.Errorf("#5's merge sits on %.12s, want the line's head %.12s", got, line)
+	}
+	if msg := f.git("log", "-1", "--format=%B", u5); !strings.HasSuffix(msg, "\n\n"+batchTrailer+": "+mc5) || !strings.HasPrefix(msg, "fix(app): five (#5)") {
+		t.Errorf("#5's merge does not carry the merge message and name %s:\n%s", mc5, msg)
+	}
+	own := strings.Fields(f.git("rev-list", "--reverse", mc5+"^1.."+mc5+"^2"))
+	picks := strings.Fields(f.git("rev-list", "--reverse", u5+"^2", "^"+u5+"^1"))
+	if len(picks) != 2 || len(own) != 2 {
+		t.Fatalf("#5 brought %d picks of its %d commits, want 2", len(picks), len(own))
+	}
+	for i, c := range picks {
+		msg := f.git("log", "-1", "--format=%B", c)
+		if got := f.git("log", "-1", "--format=%an <%ae>", c); got != contributor {
+			t.Errorf("pick %d is authored by %q, want %q", i, got, contributor)
+		}
+		if !strings.Contains(msg, signoff+"\n(cherry picked from commit "+own[i]+")\nSigned-off-by: Batch Test <batch@example.invalid>") {
+			t.Errorf("pick %d lacks the contributor's sign-off, its -x line for %s or the batch's sign-off:\n%s", i, own[i], msg)
 		}
 	}
-	if f.git("rev-parse", "HEAD:app/five.txt") != f.git("rev-parse", mc8+":app/five.txt") {
-		t.Error("app/five.txt is not what main has after #8")
+
+	u6 := f.git("rev-parse", "HEAD~1")
+	if parents := strings.Fields(f.git("rev-list", "--parents", "-n", "1", u6)); len(parents) != 2 || parents[1] != u5 {
+		t.Errorf("#6 is %v, want one commit on #5's merge", parents)
 	}
-	for _, s := range []string{"[#5]", "[#6]", "[#8]", "fix(app): five is fixed", "Rule 2"} {
+	if msg := f.git("log", "-1", "--format=%B", u6); !strings.Contains(msg, "(cherry picked from commit "+sq6+")") {
+		t.Errorf("#6's pick lacks its -x line:\n%s", msg)
+	}
+
+	picks8 := strings.Fields(f.git("rev-list", "--reverse", "HEAD^2", "^HEAD^1"))
+	if got := len(picks8); got != 2 {
+		t.Errorf("#8 brought %d commits, want its own 2 without the merge of main", got)
+	}
+	if !strings.HasSuffix(f.git("log", "-1", "--format=%B", "HEAD"), batchTrailer+": "+mc8) {
+		t.Error("#8's merge does not name its merge commit")
+	}
+	if f.git("rev-parse", "HEAD:app/eight.txt") != f.git("rev-parse", mc8+":app/eight.txt") {
+		t.Error("app/eight.txt is not what main has after #8")
+	}
+	for _, s := range []string{"[#5]", "[#6]", "[#8]", "fix(app): five is fixed", "Rule 2", "`fix(app): five`, 2 commits", "`fix(app): six`, 1 commit"} {
 		if !strings.Contains(stdout, s) {
-			t.Errorf("the body lacks %q", s)
+			t.Errorf("the body lacks %q:\n%s", s, stdout)
 		}
-	}
-	if strings.Contains(stdout, "[#7](") && !strings.Contains(stdout, "<details>") {
-		t.Error("#7 is listed outside the skipped details")
 	}
 }
 

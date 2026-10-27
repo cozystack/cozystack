@@ -93,13 +93,13 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	if _, err := git("switch", "--quiet", "--no-track", "-C", branch, "--end-of-options", start); err != nil {
 		return a.fail(err)
 	}
-	for _, c := range replay {
-		status, files, err := applyPick("-c", "core.hooksPath=/dev/null", "cherry-pick", "--end-of-options", c)
+	for _, u := range replay {
+		failed, files, err := replayUnit(u)
 		switch {
 		case err != nil:
-			return a.fail(fmt.Errorf("picking %.12s again: %w", c, err))
-		case status == "conflict":
-			return a.fail(fmt.Errorf("without what is deferred, %.12s%s no longer applies (%s); defer it as well", c, b.originOf(c), strings.Join(files, ", ")))
+			return a.fail(err)
+		case failed != "":
+			return a.fail(fmt.Errorf("without what is deferred, %.12s%s no longer applies (%s); defer it as well", failed, originName(b, u), strings.Join(files, ", ")))
 		}
 	}
 	head, err := resolve("HEAD")
@@ -117,54 +117,42 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	for _, v := range b.qualifying() {
 		e := recorded[v.o.number]
 		switch {
-		case picks.picked(v.commits) != "":
+		case found(picks, v):
 			r.onBranch = append(r.onBranch, v)
 		case hold[v.o.number] != "":
 			r.held = append(r.held, pick{v: v, status: "held", reason: hold[v.o.number]})
 		case len(e.Files) > 0:
-			r.deferred = append(r.deferred, pick{v: v, status: "conflict", files: e.Files, more: e.More})
+			r.deferred = append(r.deferred, pick{v: v, status: "conflict", files: e.Files, more: e.More, failed: e.Commit})
 		}
 	}
 	return a.finish(b, r, branch, date, push, true)
 }
 
 // rebuildPlan is where the rebuild of the open batch without the originals in
-// drop starts, and the batch commits it picks again on top, oldest first.
-// While the batch still sits on the line's head, everything before the first
-// commit it drops stays as it is.
-func rebuildPlan(b *batch, drop map[int]string) (string, []string, error) {
-	out, err := git("rev-list", "--reverse", "--topo-order", "--parents", "--end-of-options", b.prHead, "^"+b.lineHead)
+// drop starts, and the units of the batch it picks again on top, oldest first,
+// each in its own shape. While the batch still sits on the line's head,
+// everything before the first unit it drops stays as it is.
+func rebuildPlan(b *batch, drop map[int]string) (string, []unit, error) {
+	units, err := batchUnits(b.prHead, b.lineHead)
 	if err != nil {
 		return "", nil, err
 	}
-	var commits []string
-	for ln := range strings.Lines(out) {
-		f := strings.Fields(ln)
-		for _, sha := range f {
-			if checkSHA(sha) != nil {
-				return "", nil, fmt.Errorf("rev-list: %q is not a commit", sha)
-			}
+	for _, u := range units {
+		if len(u.parents) > 2 || u.merge() && len(batchedFrom(u.message)) != 1 {
+			return "", nil, fmt.Errorf("batch pull request #%d carries merge commit %.12s, which is no batch merge of an original and which a rebuild cannot pick again; take the original out by hand", b.pr.Number, u.commit)
 		}
-		if len(f) != 2 {
-			return "", nil, fmt.Errorf("batch pull request #%d carries merge commit %.12s, which a rebuild cannot pick again; take the original out by hand", b.pr.Number, f[0])
-		}
-		commits = append(commits, f[0])
 	}
-	msgs, err := commitMessages(commits)
-	if err != nil {
-		return "", nil, err
-	}
-	dropped := func(c string) bool {
-		v := b.pickedBy(xSources(msgs[c].message))
+	dropped := func(u unit) bool {
+		v := b.unitOriginal(u)
 		return v != nil && drop[v.o.number] != ""
 	}
-	var keep []string
-	for _, c := range commits {
-		if !dropped(c) {
-			keep = append(keep, c)
+	var keep []unit
+	for _, u := range units {
+		if !dropped(u) {
+			keep = append(keep, u)
 		}
 	}
-	first := slices.IndexFunc(commits, dropped)
+	first := slices.IndexFunc(units, dropped)
 	switch {
 	case !isAncestor(b.lineHead, b.prHead):
 		return b.lineHead, keep, nil
@@ -173,7 +161,7 @@ func rebuildPlan(b *batch, drop map[int]string) (string, []string, error) {
 	case first == 0:
 		return b.lineHead, keep, nil
 	}
-	return commits[first-1], keep[first:], nil
+	return units[first-1].commit, keep[first:], nil
 }
 
 // pickedBy is the original whose commits the -x sources name, or nil.
@@ -188,14 +176,10 @@ func (b *batch) pickedBy(sources []string) *verdict {
 	return nil
 }
 
-// originOf names the original a batch commit picks, for an error message.
-func (b *batch) originOf(commit string) string {
-	msgs, err := commitMessages([]string{commit})
-	if err != nil {
-		return ""
-	}
-	if v := b.pickedBy(xSources(msgs[commit].message)); v != nil {
-		return fmt.Sprintf(", which picks #%d,", v.o.number)
+// originName names the original a unit carries, for an error message.
+func originName(b *batch, u unit) string {
+	if v := b.unitOriginal(u); v != nil {
+		return fmt.Sprintf(", of #%d,", v.o.number)
 	}
 	return ""
 }

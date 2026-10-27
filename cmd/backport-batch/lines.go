@@ -176,14 +176,15 @@ func mainMerges(base, mainHead string) ([]*original, []string, error) {
 	return merges, other, nil
 }
 
-// commitsOf lists what an -x line may name for the original: its merge
-// commit, which a pick with -m 1 names, and for a merge every commit it
-// brought to main, which a commit-by-commit backport names.
-func commitsOf(o *original) ([]string, error) {
+// prCommits lists what an original brings to a line, one pick each: for a
+// merged pull request every commit of its own, oldest first, leaving out the
+// merges that brought main into its branch, whose content main already has;
+// for a squash, its one commit on main.
+func prCommits(o *original) ([]string, error) {
 	if o.parents < 2 {
 		return []string{o.merge}, nil
 	}
-	oids, err := revList("--end-of-options", o.merge+"^1.."+o.merge)
+	oids, err := revList("--reverse", "--topo-order", "--no-merges", "--end-of-options", o.merge+"^1.."+o.merge+"^2")
 	if err != nil {
 		return nil, fmt.Errorf("reading the commits of #%d: %w", o.number, err)
 	}

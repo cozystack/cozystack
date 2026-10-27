@@ -30,6 +30,8 @@ type pick struct {
 	status string // picked, conflict, empty, or held out by --defer
 	commit string
 	files  []string
+	// failed is the commit whose pick conflicted.
+	failed string
 	// more counts the conflicting files a recorded conflict no longer names.
 	more   int
 	reason string
@@ -137,7 +139,7 @@ func (a *app) run(args []string) int {
 	}
 	for _, v := range b.qualifying() {
 		switch {
-		case carried != nil && carried.picked(v.commits) != "":
+		case carried != nil && found(carried, v):
 			r.onBranch = append(r.onBranch, v)
 			continue
 		case held[v.o.number].Reason != "":
@@ -148,7 +150,7 @@ func (a *app) run(args []string) int {
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
 			continue
 		}
-		p, err := cherryPick(v)
+		p, err := pickOriginal(v)
 		if err != nil {
 			return a.fail(err)
 		}
@@ -182,18 +184,20 @@ func keptOut(b *batch, carried *history) ([]*verdict, error) {
 		if v.label != labelSkip {
 			continue
 		}
-		if v.commits == nil {
-			commits, err := commitsOf(v.o)
-			if err != nil {
-				return nil, err
-			}
-			v.commits = commits
+		if err := b.load(v); err != nil {
+			return nil, err
 		}
-		if carried.picked(v.commits) != "" {
+		if found(carried, v) {
 			out = append(out, v)
 		}
 	}
 	return out, nil
+}
+
+// found says whether h carries v.
+func found(h *history, v *verdict) bool {
+	c, _ := h.found(v.o, v.commits)
+	return c != ""
 }
 
 // newReport starts the report of a run with what the rules left out and what
@@ -216,6 +220,9 @@ func newReport(b *batch) *report {
 func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, rebuilt bool) int {
 	head, err := resolve("HEAD")
 	if err != nil {
+		return a.fail(err)
+	}
+	if r.shapes, err = summarize(b, head, r.onBranch); err != nil {
 		return a.fail(err)
 	}
 	title := prTitle(b.line, date.Format(time.DateOnly))
@@ -325,27 +332,6 @@ func remoteBatchHeads(l line) (map[string]string, error) {
 		}
 	}
 	return heads, nil
-}
-
-// cherryPick picks one original onto HEAD. Hooks are off so that the commit
-// carries the original message and the -x line as git writes them; signing is
-// left to the user's configuration.
-func cherryPick(v *verdict) (pick, error) {
-	p := pick{v: v}
-	args := []string{"-c", "core.hooksPath=/dev/null", "cherry-pick", "-x", "--signoff"}
-	if v.o.parents > 1 {
-		args = append(args, "-m", "1")
-	}
-	args = append(args, "--end-of-options", v.o.merge)
-	status, files, err := applyPick(args...)
-	if err != nil {
-		return p, fmt.Errorf("cherry-pick of #%d (%s): %w", v.o.number, v.o.merge, err)
-	}
-	p.status, p.files = status, files
-	if status == "picked" {
-		p.commit, err = resolve("HEAD")
-	}
-	return p, err
 }
 
 // applyPick runs one cherry-pick onto HEAD and leaves no operation in progress

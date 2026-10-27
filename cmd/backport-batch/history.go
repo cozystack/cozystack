@@ -47,16 +47,21 @@ var (
 	prRefListEndRE = regexp.MustCompile(`^(?:[ \t]*(?:\r?\n|$)|\.(?:\s|$)|\s+to\s+` + releaseLineName + `)`)
 	prRefRE        = regexp.MustCompile(`(?:([\w.-]+/[\w.-]+))?#(\d+)`)
 	xLineRE        = regexp.MustCompile(`^\(cherry picked from commit ([0-9a-f]{40})\)$`)
+	batchLineRE    = regexp.MustCompile(`^` + batchTrailer + `: ([0-9a-f]{40})$`)
 	trailerRE      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*:[ \t]`)
 	paragraphRE    = regexp.MustCompile(`\n[ \t]*\n`)
 )
 
-// xSources lists the commits the -x lines of a message name. git writes the
-// line into the trailer block, the last paragraph, where every line is a
-// trailer or such a line; the same line anywhere else is prose, which anyone
-// can write. interpret-trailers does not report it, so the block is read here
-// the way git finds it.
-func xSources(message string) []string {
+// batchTrailer names, in the merge commit a batch makes for an original, the
+// merge commit on main it carries.
+const batchTrailer = "Backported-from"
+
+// trailerBlock is the last paragraph of a message when every line of it is a
+// trailer, a trailer's continuation or an -x line, which is where git writes
+// both; nil otherwise. The same lines anywhere else are prose, which anyone
+// can write. interpret-trailers does not report -x lines, so the block is read
+// here the way git finds it.
+func trailerBlock(message string) []string {
 	var paras []string
 	for _, p := range paragraphRE.Split(strings.ReplaceAll(message, "\r\n", "\n"), -1) {
 		if strings.TrimSpace(p) != "" {
@@ -66,20 +71,40 @@ func xSources(message string) []string {
 	if len(paras) < 2 {
 		return nil
 	}
-	var sources []string
+	var block []string
 	for _, ln := range strings.Split(paras[len(paras)-1], "\n") {
-		switch m := xLineRE.FindStringSubmatch(strings.TrimSpace(ln)); {
-		case strings.TrimSpace(ln) == "":
-		case m != nil:
-			sources = append(sources, m[1])
+		switch t := strings.TrimSpace(ln); {
+		case t == "":
+		case xLineRE.MatchString(t):
+			block = append(block, t)
 		case strings.HasPrefix(ln, " ") || strings.HasPrefix(ln, "\t"):
 			// a trailer's continuation line
 		case !trailerRE.MatchString(ln):
 			return nil
+		default:
+			block = append(block, t)
 		}
 	}
-	return sources
+	return block
 }
+
+// trailerValues lists what the lines of a message's trailer block that re
+// matches name.
+func trailerValues(message string, re *regexp.Regexp) []string {
+	var values []string
+	for _, ln := range trailerBlock(message) {
+		if m := re.FindStringSubmatch(ln); m != nil {
+			values = append(values, m[1])
+		}
+	}
+	return values
+}
+
+// xSources lists the commits the -x lines of a message name.
+func xSources(message string) []string { return trailerValues(message, xLineRE) }
+
+// batchedFrom lists the merge commits on main a batch merge says it carries.
+func batchedFrom(message string) []string { return trailerValues(message, batchLineRE) }
 
 // bodyOrigins returns the PR numbers named in a message's "Backport of"
 // phrases, in order of appearance and without repeats. A reference qualified
@@ -115,12 +140,15 @@ type pickRef struct{ source, commit string }
 
 // history is what a branch carries beyond a base it shares with main.
 //
-// Only the commits outside the base supply -x and "Backport of" evidence:
-// shared history can name an original without carrying it on this branch.
+// Only the commits outside the base supply -x, batch and "Backport of"
+// evidence: shared history can name an original without carrying it on this
+// branch.
 type history struct {
 	head      string
 	reachable map[string]bool
 	picks     []pickRef
+	// batches maps a merge commit on main to the batch merge that names it.
+	batches   map[string]string
 	backports map[int]string
 }
 
@@ -142,7 +170,7 @@ func readHistory(head, base string) (*history, error) {
 // readPicks reads only the messages of head's commits outside base, which is
 // all a batch branch is asked about.
 func readPicks(head, base string) (*history, error) {
-	h := &history{head: head, reachable: map[string]bool{}, backports: map[int]string{}}
+	h := &history{head: head, reachable: map[string]bool{}, batches: map[string]string{}, backports: map[int]string{}}
 	oids, err := revList("--end-of-options", head, "^"+base)
 	if err != nil {
 		return nil, err
@@ -156,6 +184,11 @@ func readPicks(head, base string) (*history, error) {
 		for _, source := range xSources(msg) {
 			h.picks = append(h.picks, pickRef{source: source, commit: oid})
 		}
+		for _, merge := range batchedFrom(msg) {
+			if _, ok := h.batches[merge]; !ok {
+				h.batches[merge] = oid
+			}
+		}
 		for _, n := range bodyOrigins(msg, upstreamRepo) {
 			if _, ok := h.backports[n]; !ok {
 				h.backports[n] = oid
@@ -165,14 +198,38 @@ func readPicks(head, base string) (*history, error) {
 	return h, nil
 }
 
-// picked returns the commit whose -x line names one of commits, or "".
-func (h *history) picked(commits []string) string {
+// pickOf returns the commit whose -x line names source, or "".
+func (h *history) pickOf(source string) string {
 	for _, r := range h.picks {
-		if slices.Contains(commits, r.source) {
+		if r.source == source {
 			return r.commit
 		}
 	}
 	return ""
+}
+
+// found returns the commit that carries an original on the branch and how,
+// or "" when none does: a batch merge that names its merge commit, an -x line
+// naming that merge commit, which is how a batch picked a merged pull request
+// with -m 1 before and how a hand backport does, or -x lines naming every one
+// of commits, the commits of its own.
+func (h *history) found(o *original, commits []string) (string, string) {
+	if c, ok := h.batches[o.merge]; ok {
+		return c, "batched in " + c[:12]
+	}
+	if c := h.pickOf(o.merge); c != "" {
+		return c, "picked in " + c[:12]
+	}
+	if o.parents < 2 || len(commits) == 0 {
+		return "", ""
+	}
+	last := ""
+	for _, source := range commits {
+		if last = h.pickOf(source); last == "" {
+			return "", ""
+		}
+	}
+	return last, fmt.Sprintf("its %d %s picked, the last in %s", len(commits), plural(len(commits), "commit"), last[:12])
 }
 
 // carries says how the branch carries an original, or "" when it does not.
@@ -181,8 +238,8 @@ func (h *history) carries(o *original, commits []string) (string, error) {
 	if h.reachable[o.merge] {
 		return "merged before the line forked", nil
 	}
-	if c := h.picked(commits); c != "" {
-		return "picked in " + c[:12], nil
+	if c, how := h.found(o, commits); c != "" {
+		return how, nil
 	}
 	if c, ok := h.backports[o.number]; ok {
 		return `named by "Backport of" in ` + c[:12], nil

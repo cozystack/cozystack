@@ -40,8 +40,10 @@ Usage:
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        origin/<line>, or on top of the pushed batch branch whose head is
-       --onto. --continue takes that head from the open batch PR, and starts
-       a batch when none is open. Prints the pull request body on stdout.
+       --onto. Each original goes in as its own commits, picked with -x, and
+       a merge commit naming it; a squash-merged one as one pick. --continue
+       takes the head from the open batch PR, and starts a batch when none is
+       open. Prints the pull request body on stdout.
        --push pushes the branch, fast-forward only, and opens or updates the
        draft batch PR.
        --defer rebuilds the open batch off origin/<line> without those
@@ -50,8 +52,9 @@ run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        leased on the head the rebuild started from.
 check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell.
-fold   Checks a hand-made conflict resolution commit for the open batch PR
-       and prints ok or why not, exiting 0 or 1. It never commits.
+fold   Checks a hand-made conflict resolution for the open batch PR: for a
+       merged pull request a merge of its picked commits, for a squash one
+       commit. Prints ok or why not, exiting 0 or 1. It never commits.
 notify Prints what waits on the open batch PR: a batch open for 3 days or
        more, and its deferred conflicts. --push hands each conflict to the
        CI agent with --agent ci, with the token in BACKPORT_AGENT_TOKEN, and
@@ -154,8 +157,9 @@ type verdict struct {
 	o      *original
 	rule   int // the rule that keeps it out, 0 when it qualifies
 	reason string
-	// commits are what an -x reference to the original may name, and changes
-	// the files it changes; both are read only for what passes rules 2 and 3.
+	// commits are the commits the original brings, one pick each, and changes
+	// the files it changes; both are read only for what passes rules 2 and 3,
+	// and by load for anything else.
 	commits []string
 	changes []fileChange
 	// onBatch is the commit of the open batch pull request that picks it.
@@ -276,7 +280,7 @@ func (a *app) prepare(l line) (*batch, error) {
 			return nil, err
 		}
 		if v.rule == 0 && prPicks != nil {
-			v.onBatch = prPicks.picked(v.commits)
+			v.onBatch, _ = prPicks.found(v.o, v.commits)
 		}
 		b.verdicts = append(b.verdicts, v)
 	}
@@ -337,7 +341,7 @@ func judge(o *original, label string, start time.Time, lineHist *history, newer 
 			return v, nil
 		}
 	}
-	if v.commits, err = commitsOf(o); err != nil {
+	if v.commits, err = prCommits(o); err != nil {
 		return nil, err
 	}
 	how, err := lineHist.carries(o, v.commits)
@@ -368,6 +372,31 @@ func (b *batch) qualifying() []*verdict {
 		}
 	}
 	return out
+}
+
+// load reads what the rules did not need to read for an original: its
+// commits and the files it changes.
+func (b *batch) load(v *verdict) error {
+	var err error
+	if v.changes == nil {
+		if v.changes, err = changedFiles(v.o.merge+"^1", v.o.merge); err != nil {
+			return err
+		}
+	}
+	if v.commits == nil {
+		v.commits, err = prCommits(v.o)
+	}
+	return err
+}
+
+// findMerge is the original merged as merge commit sha, or nil.
+func (b *batch) findMerge(sha string) *verdict {
+	for _, v := range b.verdicts {
+		if v.o.merge == sha {
+			return v
+		}
+	}
+	return nil
 }
 
 func (b *batch) find(number int) *verdict {

@@ -42,25 +42,41 @@ func reopen(f *fixture, gh *fakeGH) {
 }
 
 // --defer takes an original out of the open batch and nothing else: what came
-// before it keeps its commits, what came after is picked again, a resolution
-// pushed by hand survives, and the body records the reason.
+// before it keeps its commits, what came after is picked again in its own
+// shape, a resolution pushed by hand survives as the merge it was, and the
+// body records the reason.
 func TestDeferRebuildsWithoutTheOriginal(t *testing.T) {
 	f := newFixture(t)
 	f.lines()
-	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.onLine("release-1.1", "fix(app): a line-only seven", map[string]string{"app/seven.txt": "line\n"})
+	f.prCommits(5, "fix(app): five", "",
+		change{files: map[string]string{"app/five.txt": "5\n"}},
+		change{files: map[string]string{"app/five.txt": "5, done\n"}})
 	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
 	mc7 := f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
 	gh := &fakeGH{}
 	head := openBatch(t, f, gh)
-	// A fold for #7, as a maintainer would push it over a conflict.
+	l, _ := parseLine("release-1.1")
+	if d, err := parseDeferred(gh.prs[0].Body, l); err != nil || len(d[7].Files) == 0 {
+		t.Fatalf("#7 is not a deferred conflict: %+v, %v", d, err)
+	}
+	// A resolution of #7, the way fold accepts one: its commit picked onto the
+	// batch head with the conflict resolved, under a merge that names it.
 	f.git("switch", "-q", "--detach", head)
 	f.write("app/seven.txt", "7, resolved\n")
 	f.git("add", "-A")
-	f.git("commit", "-q", "-m", "fix(app): seven (#7), resolved\n\n(cherry picked from commit "+mc7+")")
+	f.git("commit", "-q", "-m", "fix(app): seven\n\n(cherry picked from commit "+f.git("rev-parse", mc7+"^2")+")")
+	pick := f.git("rev-parse", "HEAD")
+	f.git("switch", "-q", "--detach", head)
+	f.git("merge", "-q", "--no-ff", "-m", "fix(app): seven (#7)\n\n"+batchTrailer+": "+mc7, pick)
+	resolution := f.git("rev-parse", "HEAD")
 	f.git("push", "-q", "origin", "HEAD:refs/heads/"+batchBranch1)
 	f.git("switch", "-q", "main")
 	gh.prs = []pullRequest{f.batchPR(90, "release-1.1", batchBranch1, gh.prs[0].Body)}
-	first := f.git("rev-parse", head+"~2")
+	if code, out, stderr := f.exec(gh, "fold", "--line", "release-1.1", "--original", "7", "--commit", resolution); code != 1 || !strings.Contains(out, "already carries #7") {
+		t.Fatalf("fold of the pushed resolution = %d, %q, %s; want it seen as carried", code, out, stderr)
+	}
+	first := f.git("rev-parse", head+"~1")
 	// A commit picked again gets a new committer date, so a new name.
 	t.Setenv("GIT_COMMITTER_DATE", "2026-10-27T06:00:00Z")
 
@@ -69,17 +85,28 @@ func TestDeferRebuildsWithoutTheOriginal(t *testing.T) {
 		t.Fatalf("run --defer = %d\n%s", code, stderr)
 	}
 	pushed := f.remoteHead(batchBranch1)
-	want := []string{"fix(app): five (#5)", "fix(app): seven (#7)", "fix(app): seven (#7), resolved"}
+	want := []string{"fix(app): five (#5)", "fix(app): seven (#7)"}
 	if got := f.subjects("origin/release-1.1", pushed); !slices.Equal(got, want) {
 		t.Errorf("the rebuilt batch carries %q, want %q", got, want)
 	}
-	if got := f.git("rev-parse", pushed+"~2"); got != first {
-		t.Errorf("the pick of #5 became %.12s, want it kept as %.12s", got, first)
+	if got := f.git("rev-parse", pushed+"~1"); got != first {
+		t.Errorf("the merge of #5 became %.12s, want it kept as %.12s", got, first)
+	}
+	if parents := strings.Fields(f.git("rev-list", "--parents", "-n", "1", pushed)); len(parents) != 3 {
+		t.Errorf("#7's resolution came back as %v, want a merge", parents)
+	}
+	if !strings.HasSuffix(f.git("log", "-1", "--format=%B", pushed), batchTrailer+": "+mc7) {
+		t.Error("#7's merge lost its trailer")
 	}
 	if got := f.git("show", pushed+":app/seven.txt"); got != "7, resolved" {
 		t.Errorf("the resolution was lost: app/seven.txt is %q", got)
 	}
-	l, _ := parseLine("release-1.1")
+	if want := "`fix(app): seven`, 1 commit, changed in the pick: `" + f.git("rev-parse", pushed+"^2")[:12] + "`"; !strings.Contains(stdout, want) {
+		t.Errorf("the body does not say the resolution differs from #7's commit (%s):\n%s", want, stdout)
+	}
+	if strings.Contains(stdout, "`fix(app): five`, 2 commits, changed") {
+		t.Errorf("the body calls #5's clean picks changed:\n%s", stdout)
+	}
 	deferred, err := parseDeferred(stdout, l)
 	if err != nil || len(deferred) != 1 || deferred[6].Reason != "fails the app e2e" {
 		t.Errorf("deferred = %+v, %v; want #6 for its reason", deferred, err)
@@ -157,7 +184,7 @@ func TestDeferOnAMovedLine(t *testing.T) {
 	moved := f.onLine("release-1.1", "fix(chart): a line-only value", map[string]string{"chart/values.yaml": "replicas: 3\nimage: app:1\n"})
 
 	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "x", "--push")
-	if code != 2 || !strings.Contains(stderr, "which picks #6, no longer applies (app/x.txt); defer it as well") {
+	if code != 2 || !strings.Contains(stderr, ", of #6, no longer applies (app/x.txt); defer it as well") {
 		t.Errorf("run --defer 5 = %d, want a refusal naming #6:\n%s", code, stderr)
 	}
 	if got := f.remoteHead(batchBranch1); got != head {

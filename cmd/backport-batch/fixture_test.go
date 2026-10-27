@@ -129,6 +129,52 @@ func (f *fixture) pr(n int, title, body string, files map[string]string) string 
 	return f.git("rev-parse", "HEAD")
 }
 
+// contributor writes the commits of the pull requests that say so.
+const contributor = "Contributor One <one@example.invalid>"
+
+// change is one step of a pull request's branch: a commit of files, by author
+// with message when given, or with mergeMain a merge of main into the branch
+// after main moved on.
+type change struct {
+	files     map[string]string
+	author    string
+	message   string
+	mergeMain bool
+}
+
+// prCommits merges pull request n into main as a merge commit of a branch
+// made of changes, and returns the merge commit.
+func (f *fixture) prCommits(n int, title, body string, changes ...change) string {
+	f.t.Helper()
+	branch := fmt.Sprintf("pr-%d", n)
+	f.git("switch", "-q", "main")
+	f.git("switch", "-q", "-c", branch)
+	for i, c := range changes {
+		if c.mergeMain {
+			f.git("switch", "-q", "main")
+			f.apply(map[string]string{fmt.Sprintf("main/%d-%d.txt", n, i): "main moved\n"})
+			f.git("commit", "-q", "-m", "chore: move main along")
+			f.git("switch", "-q", branch)
+			f.git("merge", "-q", "--no-ff", "-m", "Merge branch 'main' into "+branch, "main")
+			continue
+		}
+		f.apply(c.files)
+		msg := c.message
+		if msg == "" {
+			msg = fmt.Sprintf("change %d for #%d", i+1, n)
+		}
+		args := []string{"commit", "-q", "--allow-empty", "-m", msg}
+		if c.author != "" {
+			args = append(args, "--author", c.author)
+		}
+		f.git(args...)
+	}
+	f.git("switch", "-q", "main")
+	f.git("merge", "-q", "--no-ff", "-m", fmt.Sprintf("%s (#%d)\n\n%s", title, n, body), branch)
+	f.git("push", "-q", "origin", "main")
+	return f.git("rev-parse", "HEAD")
+}
+
 // squash merges pull request n into main as a single commit.
 func (f *fixture) squash(n int, title, body string, files map[string]string) string {
 	f.t.Helper()
@@ -303,11 +349,11 @@ func (f *fixture) lines() {
 	f.release("release-1.1")
 }
 
-// subjects lists the subjects of the commits on branch beyond base, oldest
-// first.
+// subjects lists the subjects of the units on branch beyond base, oldest
+// first: the first-parent line, where a batch has one commit per original.
 func (f *fixture) subjects(base, branch string) []string {
 	f.t.Helper()
-	out := f.git("log", "--reverse", "--format=%s", base+".."+branch)
+	out := f.git("log", "--reverse", "--first-parent", "--format=%s", base+".."+branch)
 	if out == "" {
 		return nil
 	}

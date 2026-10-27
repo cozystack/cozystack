@@ -57,6 +57,17 @@ func capture(name string, args ...string) (string, error) {
 // git runs a git command whose failure means the batch cannot be trusted.
 func git(args ...string) (string, error) { return capture("git", args...) }
 
+// gitInput is git with input on its stdin.
+func gitInput(input string, args ...string) (string, error) {
+	cmd := command("git", args...)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return string(out), nil
+}
+
 func gitOK(args ...string) bool {
 	return command("git", args...).Run() == nil
 }
@@ -140,10 +151,11 @@ func revList(args ...string) ([]string, error) {
 	return shas, nil
 }
 
-// commitObject is what the batch reads of a commit: its message, and when it
-// was committed, which for a merge GitHub made is when it merged.
+// commitObject is what the batch reads of a commit: its message, its parents,
+// and when it was committed, which for a merge GitHub made is when it merged.
 type commitObject struct {
 	message   string
+	parents   []string
 	committed time.Time
 }
 
@@ -201,7 +213,16 @@ func commitMessages(shas []string) (map[string]commitObject, error) {
 		if err != nil {
 			return nil, fmt.Errorf("commit %s: %w", sha, err)
 		}
-		msgs[sha] = commitObject{message: msg, committed: committed}
+		var parents []string
+		for ln := range strings.Lines(headers) {
+			if p, ok := strings.CutPrefix(strings.TrimRight(ln, "\n"), "parent "); ok {
+				if err := checkSHA(p); err != nil {
+					return nil, fmt.Errorf("commit %s: %w", sha, err)
+				}
+				parents = append(parents, p)
+			}
+		}
+		msgs[sha] = commitObject{message: msg, parents: parents, committed: committed}
 	}
 	return msgs, nil
 }
