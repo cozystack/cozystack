@@ -145,12 +145,23 @@ stringData:
       managed roles; a second writer here would fight it. Two things it has no
       field for stay: the marker membership, which CNPG grants with the default
       options and this re-grant narrows to a record, leaving the options of an
-      existing membership alone; and createrole_self_grant. Both wait for the
-      role to exist, since this hook may run before CNPG has created it, and
-      the next run finishes what this one skipped. The createRole flag is
+      existing membership alone; and createrole_self_grant. Both need the role,
+      which CNPG creates within seconds of the spec but possibly after this hook
+      starts, so the pass waits for it a bounded time; a role still missing
+      then keeps CNPG's defaults until the next run. The createRole flag is
       recorded here after an install, where the pre-upgrade hook that reads it
       has no cluster to reach.
     */}}
+    {{- $declared := list }}
+    {{- range $user, $u := .Values.users }}{{ $declared = append $declared (printf "'%s'" $user) }}{{ end }}
+    roles_from=$SECONDS
+    until [ "$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname IN ({{ join ", " $declared }})")" = "{{ len $declared }}" ]; do
+      if [ "$SECONDS" -ge $((roles_from + 60)) ]; then
+        echo "not every declared role exists yet; marking those that do, the next run marks the rest" >&2
+        break
+      fi
+      sleep 2
+    done
     {{- $grantsCreateRole := false }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
     {{- range $user, $u := .Values.users }}
