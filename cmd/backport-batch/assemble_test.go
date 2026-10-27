@@ -101,6 +101,9 @@ func TestRunPicksInMergeOrder(t *testing.T) {
 			t.Errorf("the body lacks %q:\n%s", s, stdout)
 		}
 	}
+	if code, out, stderr := f.exec(nil, "verify", "--line", "release-1.1", "--head", f.git("rev-parse", "HEAD")); code != 0 {
+		t.Errorf("verify of the batch = %d\n%s\n%s", code, out, stderr)
+	}
 }
 
 // A conflict is aborted, recorded with its files, and the next original is

@@ -107,6 +107,9 @@ func TestDeferRebuildsWithoutTheOriginal(t *testing.T) {
 	if strings.Contains(stdout, "`fix(app): five`, 2 commits, changed") {
 		t.Errorf("the body calls #5's clean picks changed:\n%s", stdout)
 	}
+	if code, out, stderr := f.exec(gh, "verify", "--line", "release-1.1", "--head", pushed); code != 0 {
+		t.Errorf("verify of the rebuilt batch = %d\n%s\n%s", code, out, stderr)
+	}
 	deferred, err := parseDeferred(stdout, l)
 	if err != nil || len(deferred) != 1 || deferred[6].Reason != "fails the app e2e" {
 		t.Errorf("deferred = %+v, %v; want #6 for its reason", deferred, err)

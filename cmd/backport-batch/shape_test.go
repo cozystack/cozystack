@@ -136,6 +136,130 @@ func TestPresenceOfAMultiCommitOriginal(t *testing.T) {
 	}
 }
 
+// verify passes a batch the run built and fails one with an original that is
+// not in the batch's shape, reading nothing from GitHub when given the head.
+func TestVerify(t *testing.T) {
+	type world struct {
+		f    *fixture
+		gh   *fakeGH
+		head string
+		mc5  string
+		sq6  string
+	}
+	setup := func(t *testing.T) *world {
+		f := newFixture(t)
+		f.lines()
+		w := &world{f: f}
+		w.mc5 = f.prCommits(5, "fix(app): five", "",
+			change{files: map[string]string{"app/five.txt": "5\n"}},
+			change{files: map[string]string{"app/five.txt": "5, done\n"}})
+		w.sq6 = f.squash(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+		f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
+		w.gh = &fakeGH{}
+		w.head = openBatch(t, f, w.gh)
+		return w
+	}
+	// on adds a commit with message and files on top of the batch head.
+	on := func(w *world, message string, files map[string]string) string {
+		w.f.git("switch", "-q", "--detach", w.head)
+		w.f.apply(files)
+		w.f.git("commit", "-q", "--allow-empty", "-m", message)
+		sha := w.f.git("rev-parse", "HEAD")
+		w.f.git("switch", "-q", "main")
+		return sha
+	}
+	cases := []struct {
+		name    string
+		head    func(w *world) string
+		refusal string
+	}{
+		{name: "the batch as the run built it", head: func(w *world) string { return w.head }},
+		{
+			name: "an original picked as one commit with -m 1",
+			head: func(w *world) string {
+				return on(w, "fix(app): five (#5)\n\n(cherry picked from commit "+w.mc5+")", map[string]string{"app/five.txt": "5, again\n"})
+			},
+			refusal: "picks the merge commit of #5 as one commit",
+		},
+		{
+			name: "a commit that is no original",
+			head: func(w *world) string {
+				return on(w, "fix(ci): adjust for the line", map[string]string{"ci.txt": "x\n"})
+			},
+			refusal: "carries 0 (cherry picked from commit",
+		},
+		{
+			name: "an original carried twice",
+			head: func(w *world) string {
+				own := strings.Fields(w.f.git("rev-list", "--reverse", w.mc5+"^1.."+w.mc5+"^2"))
+				p := on(w, "again\n\n(cherry picked from commit "+own[1]+")", map[string]string{"app/five.txt": "5, done again\n"})
+				w.f.git("switch", "-q", "--detach", w.head)
+				w.f.git("merge", "-q", "--no-ff", "-m", "fix(app): five (#5)\n\n"+batchTrailer+": "+w.mc5, p)
+				sha := w.f.git("rev-parse", "HEAD")
+				w.f.git("switch", "-q", "main")
+				return sha
+			},
+			refusal: "carries #5 again",
+		},
+		{
+			name: "a squash-merged original carried as a merge",
+			head: func(w *world) string {
+				p := on(w, "six\n\n(cherry picked from commit "+w.sq6+")", map[string]string{"app/six.txt": "6, again\n"})
+				w.f.git("switch", "-q", "--detach", w.head)
+				w.f.git("merge", "-q", "--no-ff", "-m", "fix(app): six (#6)\n\n"+batchTrailer+": "+w.sq6, p)
+				sha := w.f.git("rev-parse", "HEAD")
+				w.f.git("switch", "-q", "main")
+				return sha
+			},
+			refusal: "which main took as one commit",
+		},
+		{
+			name: "a merge of the line into the batch",
+			head: func(w *world) string {
+				line := w.f.onLine("release-1.1", "fix(chart): on the line", map[string]string{"chart/values.yaml": "replicas: 2\nimage: app:1\n"})
+				w.f.git("switch", "-q", "--detach", w.head)
+				w.f.git("merge", "-q", "--no-ff", "-m", "Merge branch 'release-1.1' into the batch", line)
+				sha := w.f.git("rev-parse", "HEAD")
+				w.f.git("switch", "-q", "main")
+				return sha
+			},
+			refusal: "with 0 " + batchTrailer + " trailers",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := setup(t)
+			head := tc.head(w)
+			// GitHub is not asked: a failing fake would fail the run.
+			gh := &fakeGH{err: errString("gh: not to be asked")}
+			code, stdout, stderr := w.f.exec(gh, "verify", "--line", "release-1.1", "--head", head)
+			switch {
+			case tc.refusal == "" && code != 0:
+				t.Errorf("verify = %d\n%s\n%s", code, stdout, stderr)
+			case tc.refusal != "" && (code != 1 || !strings.Contains(stdout, tc.refusal)):
+				t.Errorf("verify = %d, want 1 with %q:\n%s\n%s", code, tc.refusal, stdout, stderr)
+			}
+		})
+	}
+
+	t.Run("the open batch pull request", func(t *testing.T) {
+		w := setup(t)
+		code, stdout, stderr := w.f.exec(w.gh, "verify", "--line", "release-1.1")
+		if code != 0 || !strings.Contains(stdout, "3 units at "+w.head[:12]) {
+			t.Errorf("verify = %d\n%s\n%s", code, stdout, stderr)
+		}
+		if code, stdout, _ := w.f.exec(&fakeGH{}, "verify", "--line", "release-1.1"); code != 0 || !strings.Contains(stdout, "nothing to verify") {
+			t.Errorf("verify with no batch open = %d, %q", code, stdout)
+		}
+	})
+	t.Run("a head that is not here", func(t *testing.T) {
+		w := setup(t)
+		if code, _, stderr := w.f.exec(w.gh, "verify", "--line", "release-1.1", "--head", strings.Repeat("ab", 20)); code != 2 || !strings.Contains(stderr, "fetch it first") {
+			t.Errorf("verify = %d (%s), want 2", code, stderr)
+		}
+	})
+}
+
 // A pick that lands among lines the line changed is the same change, and the
 // body does not call it changed; one whose change differs is called so.
 func TestSummaryCallsOnlyChangedPicksChanged(t *testing.T) {

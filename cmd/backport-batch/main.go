@@ -35,6 +35,7 @@ Usage:
   backport-batch run   --line release-X.Y --defer N[,N] --reason TEXT [--push] [--policy REF]
   backport-batch check --line release-X.Y [--policy REF]
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
+  backport-batch verify --line release-X.Y [--head SHA]
   backport-batch notify --line release-X.Y [--agent ci|manual] [--mention @org/team] [--push]
   backport-batch lines
 
@@ -55,6 +56,9 @@ check  Exits 1 while a change the policy takes is neither on the line nor on
 fold   Checks a hand-made conflict resolution for the open batch PR: for a
        merged pull request a merge of its picked commits, for a squash one
        commit. Prints ok or why not, exiting 0 or 1. It never commits.
+verify Checks every original on the batch, from the line's head to --head or
+       to the open batch PR's head, against that same shape. Exits 0 when all
+       pass, 1 with the reasons when one does not.
 notify Prints what waits on the open batch PR: a batch open for 3 days or
        more, and its deferred conflicts. --push hands each conflict to the
        CI agent with --agent ci, with the token in BACKPORT_AGENT_TOKEN, and
@@ -99,6 +103,8 @@ func (a *app) main(args []string) int {
 		return a.check(args[1:])
 	case "fold":
 		return a.fold(args[1:])
+	case "verify":
+		return a.verify(args[1:])
 	case "notify":
 		return a.notify(args[1:])
 	case "lines":
