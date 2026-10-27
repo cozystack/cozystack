@@ -289,6 +289,27 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 							Format:      "int32",
 						},
 					},
+					"installFailures": {
+						SchemaProps: spec.SchemaProps{
+							Description: "InstallFailures is the install failure count of the underlying HelmRelease. It counts only attempts that recorded a Helm release, so a failure before Helm records one, such as a chart that fails to render, shows only as Ready=False; a failure to apply the rendered resources is counted. It resets when the desired state (generation, chart version, values) changes, and on success only under the RetryOnFailure strategy, so a Ready release may carry it.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"upgradeFailures": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UpgradeFailures is the upgrade failure count of the underlying HelmRelease, with the same counting and reset rules as InstallFailures.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"lastAttemptedReleaseAction": {
+						SchemaProps: spec.SchemaProps{
+							Description: "LastAttemptedReleaseAction is the last release action (install or upgrade) the underlying HelmRelease attempted.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 			},
 		},
