@@ -182,7 +182,10 @@ lg_allowlisted() {
 # build all_apps there), spelled the same way on purpose: a layout one side
 # accepts and the other refuses would run a suite the selector never selects,
 # or make a suite that runs impossible to allowlist. Change both together. A
-# parked chainsaw-test.yaml.disabled matches none of the names.
+# parked chainsaw-test.yaml.disabled matches none of the names. The type test
+# is the selector's too: a step-file name counts unless it is a directory, and
+# a chainsaw-test.y*ml counts whatever its type, so Chainsaw reports a
+# directory by that name instead of this validation stopping the run first.
 lg_suite_has_test() {
     local root=$1 suite=$2 path
     [ -d "$root/$suite" ] || return 1
@@ -191,7 +194,7 @@ lg_suite_has_test() {
             chainsaw-test.yaml|chainsaw-test.yml) return 0 ;;
         esac
         [[ ${path##*/} =~ ^[0-9]+-[^/]*\.ya?ml$ ]] && return 0
-    done < <(find "$root/$suite" -mindepth 1 ! -type d \( -name chainsaw-test.yaml -o -name chainsaw-test.yml -o -name '[0-9]*-*.yaml' -o -name '[0-9]*-*.yml' \) 2>/dev/null)
+    done < <(find "$root/$suite" -mindepth 1 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \) \( -name chainsaw-test.yaml -o -name chainsaw-test.yml -o -name '[0-9]*-*.yaml' -o -name '[0-9]*-*.yml' \) 2>/dev/null)
     return 1
 }
 

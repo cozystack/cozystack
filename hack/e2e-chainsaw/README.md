@@ -18,7 +18,7 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Chainsaw finds a Test. Three layouts do that, and the selector (`hack/select-e2e.sh`), the runner (`hack/e2e-chainsaw-run.sh`) and the leak-guard allowlist all recognise the same three:
+A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Chainsaw finds a Test. Three layouts do that, and the selector (`hack/select-e2e.sh`) and the leak-guard allowlist both recognise the same three:
 
 - `chainsaw-test.yaml`, the usual one, or `chainsaw-test.yml` when the `.yaml` is absent;
 - numbered step files such as `01-install.yaml`, which Chainsaw turns into a Test on its own when neither of the above exists;
