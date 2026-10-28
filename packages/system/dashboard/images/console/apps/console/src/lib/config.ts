@@ -6,8 +6,9 @@ export interface AppConfig {
   logoText?: string
   logoSvg?: string
   // Logo height in px for the header. Lets a square logo be shown larger than
-  // the default 36px (tuned for the wide default logo). Clamped on render.
-  logoHeight?: number
+  // the default 36px (tuned for the wide default logo). Clamped on render, and
+  // a numeric string (as config.json may serialize it) is coerced there too.
+  logoHeight?: number | string
   iconSvg?: string
   // Platform version injected at deploy time by the chart (from the console
   // image tag), so a promoted-by-retag image reports the stable version rather

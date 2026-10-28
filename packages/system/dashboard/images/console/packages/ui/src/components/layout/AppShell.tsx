@@ -16,7 +16,7 @@ interface AppShellProps {
   children?: ReactNode
   logoSvg?: string
   logoText?: string
-  logoHeight?: number
+  logoHeight?: number | string
 }
 
 export function AppShell({

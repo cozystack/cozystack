@@ -25,17 +25,19 @@ interface HeaderProps {
   logoSvg?: string
   logoText?: string
   /** Logo height in px. Defaults to 36 and is clamped to a sane range so a
-   *  square logo can be enlarged without a bad config value deforming the bar. */
-  logoHeight?: number
+   *  square logo can be enlarged without a bad config value deforming the bar.
+   *  Accepts a numeric string too, since branding config.json may ship "48". */
+  logoHeight?: number | string
 }
 
 const DEFAULT_LOGO_HEIGHT = 36
 const MIN_LOGO_HEIGHT = 16
 const MAX_LOGO_HEIGHT = 80
 
-function resolveLogoHeight(height?: number): number {
-  if (typeof height !== "number" || !Number.isFinite(height)) return DEFAULT_LOGO_HEIGHT
-  return Math.max(MIN_LOGO_HEIGHT, Math.min(MAX_LOGO_HEIGHT, height))
+function resolveLogoHeight(height?: number | string): number {
+  const n = typeof height === "string" ? Number(height) : height
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_LOGO_HEIGHT
+  return Math.max(MIN_LOGO_HEIGHT, Math.min(MAX_LOGO_HEIGHT, n))
 }
 
 const DEFAULT_TABS: HeaderTab[] = [

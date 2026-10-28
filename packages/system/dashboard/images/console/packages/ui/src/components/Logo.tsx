@@ -24,8 +24,10 @@ export function Logo({ className, title = "Cozystack", svgContent, text, style }
     )
   }
   if (text) {
+    // inline-flex + items-center so a configured height (style.height) centers
+    // the label vertically instead of leaving it pinned to the top.
     return (
-      <span className={className} style={style}>
+      <span className={`${className ?? ""} inline-flex items-center`} style={style}>
         {text}
       </span>
     )

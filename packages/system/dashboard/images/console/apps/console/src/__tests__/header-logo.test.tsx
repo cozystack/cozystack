@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { render } from "@testing-library/react"
 import { MemoryRouter } from "react-router"
-import { Header } from "@cozystack/ui"
+import { Header, AppShell } from "@cozystack/ui"
 
 function renderHeader(props: Record<string, unknown> = {}) {
   return render(
@@ -33,5 +33,19 @@ describe("Header logo sizing", () => {
   it("ignores a non-numeric logoHeight and falls back to the default", () => {
     const { container } = renderHeader({ logoHeight: Number.NaN })
     expect(container.querySelector("img")?.style.height).toBe("36px")
+  })
+
+  it("coerces a numeric-string logoHeight (branding config.json ships it as a string)", () => {
+    const { container } = renderHeader({ logoHeight: "48" })
+    expect(container.querySelector("img")?.style.height).toBe("48px")
+  })
+
+  it("passes logoHeight through AppShell to the header logo", () => {
+    const { container } = render(
+      <MemoryRouter>
+        <AppShell sections={[]} logoHeight={64} />
+      </MemoryRouter>,
+    )
+    expect(container.querySelector("img")?.style.height).toBe("64px")
   })
 })
