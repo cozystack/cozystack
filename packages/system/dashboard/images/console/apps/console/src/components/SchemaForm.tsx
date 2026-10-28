@@ -311,7 +311,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
     // Scoped to schemas where resourceQuotas values are quantities (the
     // cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
     // The chart types them as int-or-string, which sanitizeSchema turns into
-    // `["number", "string"]`, so accept a string type or a type array that
+    // `["string", "integer"]`, so accept a string type or a type array that
     // includes "string".
     const rqSchema = schema.properties?.resourceQuotas as
       | { additionalProperties?: { type?: unknown } }

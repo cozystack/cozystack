@@ -40,6 +40,15 @@ describe("Header logo sizing", () => {
     expect(container.querySelector("img")?.style.height).toBe("48px")
   })
 
+  it("treats a blank-string logoHeight as unset, not zero", () => {
+    // `pick` keeps an empty branding.logoHeight, so config.json may carry "".
+    // Number("") is 0, which would clamp to the 16px minimum — fall back to 36.
+    for (const blank of ["", "   "]) {
+      const { container } = renderHeader({ logoHeight: blank })
+      expect(container.querySelector("img")?.style.height).toBe("36px")
+    }
+  })
+
   it("passes logoHeight through AppShell to the header logo", () => {
     const { container } = render(
       <MemoryRouter>

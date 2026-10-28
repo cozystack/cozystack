@@ -35,7 +35,9 @@ const MIN_LOGO_HEIGHT = 16
 const MAX_LOGO_HEIGHT = 80
 
 function resolveLogoHeight(height?: number | string): number {
-  const n = typeof height === "string" ? Number(height) : height
+  // A blank string is "unset", not zero: Number("") is 0, which would clamp to
+  // the minimum. Treat it as NaN so it falls back to the default.
+  const n = typeof height === "string" ? (height.trim() === "" ? NaN : Number(height)) : height
   if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_LOGO_HEIGHT
   return Math.max(MIN_LOGO_HEIGHT, Math.min(MAX_LOGO_HEIGHT, n))
 }
