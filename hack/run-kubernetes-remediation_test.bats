@@ -33,9 +33,10 @@ load test_helper
 # (from ALL_HR), one release's install strategy and Ready condition together
 # (<name>.strategy and <name>.ready, joined the way the guard's jsonpath joins
 # them), its history statuses (<name>.history), and whether it exists at all
-# (`-o name`, which an ABSENT marker turns into NotFound). A missing fixture file
-# stands for a field the object does not carry, which is what kubectl prints for
-# an absent jsonpath - nothing.
+# (`--ignore-not-found -o name`, which a <name>.ABSENT marker turns into empty
+# output, and whose read the markers below take as <name>.exists). A missing
+# fixture file stands for a field the object does not carry, which is what
+# kubectl prints for an absent jsonpath - nothing.
 #
 # A FAILS marker file makes the matching read exit non-zero with a message on
 # stderr, which is how the API answers a timeout or a denied request. That
@@ -105,6 +106,7 @@ case "$mode" in
   list) markers=LIST ;;
   history) markers="$name.history" ;;
   probe) markers="$name.strategy $name.ready" ;;
+  exists) markers="$name.exists" ;;
   *) markers= ;;
 esac
 for m in $markers; do
@@ -148,9 +150,14 @@ case "$mode" in
       "$(cat "$FIXTURES/$name.ready" 2>/dev/null || true)"
     ;;
   exists)
-    # `get hr <name> -o name`: NotFound is a non-zero exit with the message on
-    # stderr, which an ABSENT marker reproduces; anything else exists.
+    # `get hr <name> --ignore-not-found -o name`: an absent release prints
+    # nothing and exits 0, which an ABSENT marker reproduces; anything else
+    # exists. Without the flag kubectl answers NotFound with a non-zero exit,
+    # so a read that drops it is told apart here the way the cluster would.
     if [ -f "$FIXTURES/$name.ABSENT" ]; then
+      case " $* " in
+        *' --ignore-not-found '*) exit 0 ;;
+      esac
       echo "Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io \"$name\" not found" >&2
       exit 1
     fi
@@ -405,6 +412,96 @@ STUB
     fi
     if printf '%s\n' "$out" | grep -q -F 'Reading .spec.install.strategy.name and the Ready condition of kubernetes-nodes-test-latest-version-md0 failed'; then
         echo "expected no failed read of the absent pool release, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "a failed existence read of the pool release is not reported as absence" {
+    # The report runs on the failure path, where a slow apiserver is most
+    # likely. A cut-off existence read said "does not exist" there, which sends
+    # the reader to the wrong stage of the run; it has to be named as the failed
+    # read it is, the way the parent's and the listing's are, and the walk goes
+    # on to the addons.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    : > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.exists.CUTOFF"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'Checking whether kubernetes-nodes-test-latest-version-md0 exists failed - the read did not finish'; then
+        echo "expected the cut-off existence read to be named as a failed read, got: $out" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$out" | grep -q -F 'kubernetes-nodes-test-latest-version-md0 does not exist'; then
+        echo "expected a failed read not to be reported as absence, got: $out" >&2
+        exit 1
+    fi
+    if grep -F 'kubernetes-nodes-test-latest-version-md0' "$FIXTURES/CALLS" | grep -q -v -F -e '-o name'; then
+        echo "expected no classification read of a release whose existence is unknown, calls were: $(cat "$FIXTURES/CALLS")" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q 'HelmRelease kubernetes-test-latest-version-coredns '; then
+        echo "expected the addons to be read after the failed pool read, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the failure-path report does not read the pool release past its budget" {
+    # The parent's reads are issued before the first clock check, so on a path
+    # that opens no phase they can spend the whole budget on their own. The pool
+    # release is three more bounded reads, and starting them past the deadline
+    # takes them out of the tenant snapshot's time.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.strategy"
+    printf 'failed\ndeployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+    # The deadline is stamped at 1000+90 and the pool release is checked one
+    # reading later, at 1100.
+    date_ticks="$tmp/ticks"
+    printf '0' > "$date_ticks"
+    date_now=1000
+    date_step=100
+    COZY_GUARD_REPORT_BUDGET=90
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    date_now=
+    date_step=0
+    date_ticks=
+    unset COZY_GUARD_REPORT_BUDGET
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q 'HelmRelease kubernetes-test-latest-version (install strategy'; then
+        echo "expected the parent to have been classified before the budget ran out, got: $out" >&2
+        exit 1
+    fi
+    if grep -q -F 'kubernetes-nodes-test-latest-version-md0' "$FIXTURES/CALLS"; then
+        echo "expected no read of the pool release once the budget was spent, calls were: $(cat "$FIXTURES/CALLS")" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 90s; kubernetes-nodes-test-latest-version-md0 and the addon releases of kubernetes-test-latest-version were not read'; then
+        echo "expected the skipped pool release to be named, got: $out" >&2
         exit 1
     fi
 
@@ -1269,14 +1366,15 @@ STUB
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-cilium.history"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
-    # 30s per reading against a 90s budget: the report stamps its deadline at
-    # 1000+90, the listing is checked at 1030, the first addon at 1060 and the
-    # second at 1090, which is the first reading the deadline refuses.
+    # 30s per reading against a 120s budget: the report stamps its deadline at
+    # 1000+120, the pool release is checked at 1030, the listing at 1060, the
+    # first addon at 1090 and the second at 1120, which is the first reading
+    # the deadline refuses.
     date_ticks="$tmp/ticks"
     printf '0' > "$date_ticks"
     date_now=1000
     date_step=30
-    COZY_GUARD_REPORT_BUDGET=90
+    COZY_GUARD_REPORT_BUDGET=120
 
     rc=0
     out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
@@ -1296,7 +1394,7 @@ STUB
         echo "expected the second addon to fall outside the budget, got: $out" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 90s; kubernetes-test-latest-version-coredns and every release after it were not read'; then
+    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 120s; kubernetes-test-latest-version-coredns and every release after it were not read'; then
         echo "expected the cut-off release to be named, got: $out" >&2
         exit 1
     fi
@@ -1479,13 +1577,13 @@ $out" >&2
     printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
     printf 'uninstalled\ndeployed\n' > "$FIXTURES/kubernetes-test-latest-version-cilium.history"
-    # The deadline is stamped at 1000+90 and the listing is checked one reading
-    # later, at 1100.
+    # The deadline is stamped at 1000+150, the pool release is admitted at 1100
+    # and the listing is checked one reading later, at 1200.
     date_ticks="$tmp/ticks"
     printf '0' > "$date_ticks"
     date_now=1000
     date_step=100
-    COZY_GUARD_REPORT_BUDGET=90
+    COZY_GUARD_REPORT_BUDGET=150
 
     rc=0
     out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?

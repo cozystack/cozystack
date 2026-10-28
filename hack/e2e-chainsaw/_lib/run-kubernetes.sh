@@ -5512,7 +5512,8 @@ _COZY_GUARD_REPORT_DONE=0
 # failing path would replace the caller's own exit status, and the tenant
 # crust-gather snapshot hangs off that exit.
 #
-# Bounded on its own clock, checked before the listing and before each release.
+# Bounded on its own clock, checked before the pool release, before the listing
+# and before each addon release.
 # What comes after this on the exit path is the tenant snapshot, which needs the
 # rest of the op, so a namespace whose apiserver answers slowly must cost a
 # bounded number of seconds here rather than however many releases happen to be
@@ -5532,7 +5533,7 @@ cozy_report_helmrelease_remediation() {
   local _ns="$1"
   local _parent="$2"
   local _label="${3:-}"
-  local _addon_hrs _hr _pool _deadline _budget
+  local _addon_hrs _hr _pool _pool_found _read_rc _deadline _budget
   [ "${_COZY_GUARD_REPORT_DONE}" -eq 0 ] || return 0
   # An empty parent name means the run failed before the release was created, so
   # there is no history anywhere to read yet.
@@ -5560,13 +5561,24 @@ cozy_report_helmrelease_remediation() {
   cozy_guard_helmrelease "$_ns" "${_parent}" required || true
   # The pool release is created by a later apply than the parent, so a run that
   # failed between the two has none to read. Its absence is then a fact about
-  # where the run stopped, not a failed read, and is reported as such.
+  # where the run stopped, not a failed read, and is reported as such. Only an
+  # exit 0 with empty output means absent: --ignore-not-found makes NotFound
+  # that, so any non-zero exit is a read that failed and is named as one.
   _pool=$(cozy_pool_helmrelease_name "${_parent}")
   cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_pool}" || return 0
-  if _cozy_guard_kubectl get hr -n "$_ns" "${_pool}" -o name >/dev/null 2>&1; then
-    cozy_guard_helmrelease "$_ns" "${_pool}" required || true
-  else
+  if [ "$(date +%s)" -ge "${_deadline}" ]; then
+    echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; ${_pool} and the addon releases of ${_parent} were not read, so nothing was observed about any of them ===" >&2
+    return 0
+  fi
+  _cozy_guard_read_bounds
+  _read_rc=0
+  _pool_found=$(_cozy_guard_kubectl get hr -n "$_ns" "${_pool}" --ignore-not-found -o name) || _read_rc=$?
+  if [ "${_read_rc}" -ne 0 ]; then
+    echo "Checking whether ${_pool} exists failed - $(_cozy_guard_read_failure "${_read_rc}"); nothing was observed about it either way." >&2
+  elif [ -z "${_pool_found}" ]; then
     echo "» ${_pool} does not exist - the run ended before the worker pool was applied, or its HelmRelease was never created; nothing to read"
+  else
+    cozy_guard_helmrelease "$_ns" "${_pool}" required || true
   fi
   cozy_diag_phase_has_time "the addon HelmRelease listing of ${_parent}" || return 0
   if [ "$(date +%s)" -ge "${_deadline}" ]; then
