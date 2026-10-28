@@ -214,7 +214,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		artifact, err := r.createMariaDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -365,6 +365,10 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	mdbBackup *mariadbtypes.Backup,
 	rendered *strategyv1alpha1.MariaDBTemplate,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	takenAt := metav1.Now()
 	if cond := apimeta.FindStatusCondition(mdbBackup.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && !cond.LastTransitionTime.IsZero() {
 		takenAt = cond.LastTransitionTime
@@ -393,6 +397,9 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	// no Artifact at all - leave it nil instead.
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
+		if probe {
+			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, j.Namespace, rendered.Storage.S3, mdbBackup, takenAt.Time)
+		}
 	}
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -415,8 +422,8 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}
