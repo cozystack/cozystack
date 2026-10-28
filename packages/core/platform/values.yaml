@@ -549,6 +549,19 @@ authentication:
     # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
     # custom realm paired with an explicit URL must name the same realm.
     keycloakInternalUrl: null
+    # Additional CA trust anchors for the bundled Keycloak server (LDAPS,
+    # external IdPs, SMTP). Each entry selects one key from an existing Secret
+    # or ConfigMap in cozy-keycloak; key defaults to ca.crt. Trust applies to
+    # the entire server across all realms. See packages/system/keycloak/values.yaml
+    # for supported formats, incoming-client-mTLS scope and rotation behavior.
+    # Ignored when oidc.enabled is false: no Keycloak Package is emitted. An
+    # existing Package and its rendered truststores remain on the cluster
+    # (helm.sh/resource-policy: keep).
+    keycloakTruststores: []
+    # - configMapName: organization-ca
+    #   key: ca.crt
+    # - secretName: partner-ca
+    #   key: certificates.pem
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
