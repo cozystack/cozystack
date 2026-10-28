@@ -26,9 +26,10 @@ STORAGE="${COZY_PROXMOX_STORAGE:?COZY_PROXMOX_STORAGE is required, the PVE stora
 # a fixed path under /tmp: the file is a credential for the whole tenant, so it
 # must not outlive the run on a shared runner, and dump_diagnostics reads
 # whatever is at this path, so a file left by a previous run would be reported
-# as this run's tenant. The workflow points this at runner.temp, which the
-# runner empties between jobs; apply-tenant removes a leftover before it does
-# anything else, and the suite's finally removes the file when the run ends.
+# as this run's tenant. On the workflow's runner this is RUNNER_TEMP, which the
+# runner exports into every step and empties between jobs; apply-tenant removes
+# a leftover before it does anything else, and the suite's finally removes the
+# file when the run ends.
 WORKDIR="${COZY_PROXMOX_WORKDIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}"
 TENANT_KUBECONFIG="$WORKDIR/proxmox-e2e-tenant.kubeconfig"
 FIXTURE="$(cd "$(dirname "$0")/.." && pwd)/kubernetes-proxmox/tenant.yaml"
