@@ -1,6 +1,6 @@
 import { createRef } from "react"
 import { describe, it, expect } from "vitest"
-import { render, screen, act } from "@testing-library/react"
+import { render, screen, act, fireEvent } from "@testing-library/react"
 import { SchemaForm, type SchemaFormHandle } from "./SchemaForm.tsx"
 import { IMMUTABLE_HELP_TEXT } from "../lib/immutable-paths.ts"
 
@@ -36,6 +36,38 @@ const tenantQuotaSchema = JSON.stringify({
       },
     },
   },
+})
+
+describe("SchemaForm int-or-string quantity", () => {
+  const quantitySchema = JSON.stringify({
+    type: "object",
+    properties: {
+      cpu: {
+        "x-kubernetes-int-or-string": true,
+        pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))([KMGTPE]i|[numkMGTPE])?$",
+        anyOf: [{ type: "integer" }, { type: "string" }],
+      },
+    },
+  })
+
+  it("keeps a typed fractional quantity as a string, not a float", () => {
+    // A float like 0.5 is rejected by the chart's values.schema.json and would
+    // fail the HelmRelease, so the field must stay a text input that emits
+    // "0.5" rather than a number widget that emits the float 0.5.
+    let last: { cpu?: unknown } = {}
+    const { container } = render(
+      <SchemaForm
+        openAPISchema={quantitySchema}
+        formData={{ cpu: 1 }}
+        onChange={(d) => (last = d as { cpu?: unknown })}
+      />,
+    )
+    const input = container.querySelector('input[type="text"]') as HTMLInputElement
+    expect(input).not.toBeNull()
+    fireEvent.change(input, { target: { value: "0.5" } })
+    expect(last.cpu).toBe("0.5")
+    expect(typeof last.cpu).toBe("string")
+  })
 })
 
 describe("SchemaForm resourceQuotas editor", () => {

@@ -55,23 +55,25 @@ describe("sanitizeSchema", () => {
     expect(sanitizeSchema(input)).toEqual(input)
   })
 
-  it("coerces x-kubernetes-int-or-string to [number, string] and drops anyOf", () => {
+  it("coerces x-kubernetes-int-or-string to [string, integer] and drops anyOf", () => {
     const out = sanitizeSchema({
       "x-kubernetes-int-or-string": true,
       pattern: QUANTITY_PATTERN,
       anyOf: [{ type: "integer" }, { type: "string" }],
     })
-    expect(out.type).toEqual(["number", "string"])
+    // string first so RJSF picks StringField and keeps typed values as strings;
+    // integer still accepted for a stored/default whole number.
+    expect(out.type).toEqual(["string", "integer"])
     expect(out.anyOf).toBeUndefined()
     // The pattern survives so junk strings are still rejected.
     expect(out.pattern).toBe(QUANTITY_PATTERN)
   })
 
-  it("int-or-string field validates whole and fractional numbers and quantity strings, rejects junk", () => {
-    // Oracle is ajv via @rjsf/validator-ajv8, not hand-rolled assertions: the
-    // sanitised schema is what the form actually validates against at submit.
-    // `number` (not `integer`) is required because the text widget coerces a
-    // typed `0.5` to the JS number 0.5, which an integer type would reject.
+  it("int-or-string field accepts an integer and quantity strings, rejects a float and junk", () => {
+    // Oracle is ajv via @rjsf/validator-ajv8, matching the chart's own
+    // values.schema.json (anyOf integer|string): a JSON float like 0.5 is
+    // invalid there and fails the HelmRelease, so the form must not accept it;
+    // the fractional value belongs as the string "0.5".
     const schema = sanitizeSchema({
       description: "CPU limit.",
       default: 1,
@@ -81,13 +83,14 @@ describe("sanitizeSchema", () => {
     })
     const errors = (v: unknown) =>
       validator.validateFormData(v, schema as never).errors.map((e) => e.message)
-    // Bare integer (the field's own default) must be accepted — the original bug.
+    // Stored/default whole number must be accepted — the original bug.
     expect(errors(1)).toEqual([])
-    // Fractional cores, coerced to a JS number by the widget, must be accepted.
-    expect(errors(0.5)).toEqual([])
-    // Suffixed quantity strings stay valid.
+    // Fractional and suffixed quantities are valid as strings.
+    expect(errors("0.5")).toEqual([])
     expect(errors("500m")).toEqual([])
     expect(errors("1")).toEqual([])
+    // A JSON float must be rejected (the chart schema rejects it too).
+    expect(errors(0.5).length).toBeGreaterThan(0)
     // Nonsense is still rejected by the pattern.
     expect(errors("bad!!").length).toBeGreaterThan(0)
   })
