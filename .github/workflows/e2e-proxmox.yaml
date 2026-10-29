@@ -160,4 +160,8 @@ jobs:
 
       - name: Remove staged credentials
         if: always()
-        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY"
+        # The tenant kubeconfig is the suite's, fetched by run-proxmox.sh into
+        # RUNNER_TEMP, which the runner exports into every step (the runner
+        # context is not allowed in job-level env); its finally removes it too,
+        # but a run killed mid-step never reaches that.
+        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY" "$RUNNER_TEMP/proxmox-e2e-tenant.kubeconfig"
