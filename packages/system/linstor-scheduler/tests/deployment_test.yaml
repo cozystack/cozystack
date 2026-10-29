@@ -44,6 +44,22 @@ tests:
       - equal:
           path: metadata.annotations["secret.reloader.stakater.com/reload"]
           value: other-client-tls
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_CERTIFICATE
+            valueFrom:
+              secretKeyRef:
+                name: other-client-tls
+                key: tls.crt
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: other-client-tls
+                key: tls.key
 
   # The admission webhook does not use the LINSTOR client secret; rolling it
   # on that secret's rotation would only restart it for nothing.
