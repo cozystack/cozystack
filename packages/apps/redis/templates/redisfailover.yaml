@@ -9,6 +9,14 @@
   top-level resources falls back to resourcesPreset.
 */}}
 {{- $sentinel := .Values.sentinel | default dict -}}
+{{- /*
+  A lone Redis pod has no replica to promote, so three Sentinels would only
+  watch it. One Sentinel still lets the operator find the master (its quorum is
+  replicas/2+1, so 1). The operator gives the Sentinel Deployment a PDB with
+  minAvailable 1 whenever Redis has two replicas or fewer, which on a single
+  Sentinel would block every node drain, so that PDB is dropped with it.
+*/}}
+{{- $sentinelReplicas := ternary 1 3 (le (int .Values.replicas) 1) -}}
 {{- $sentinelPreset := $sentinel.resourcesPreset | default .Values.resourcesPreset -}}
 {{- $sentinelResources := .Values.resources -}}
 {{- if or $sentinel.resources $sentinel.resourcesPreset -}}
@@ -65,7 +73,10 @@ spec:
     # pods they keep no RDB, only a sentinel.conf the init container rewrites
     # on every start, so a chart rollback to an older engine is safe here.
     image: {{ $redisImage | quote }}
-    replicas: 3
+    replicas: {{ $sentinelReplicas }}
+    {{- if eq $sentinelReplicas 1 }}
+    disablePodDisruptionBudget: true
+    {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $sentinelPreset $sentinelResources $) | nindent 6 }}
   redis:
     image: {{ $redisImage | quote }}
@@ -152,8 +163,8 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ $sentinelPreset | quote }}
 spec:
-  minReplicas: 2
-  replicas: 3
+  minReplicas: {{ ternary 1 2 (eq $sentinelReplicas 1) }}
+  replicas: {{ $sentinelReplicas }}
   kind: redis
   type: sentinel
   selector:
