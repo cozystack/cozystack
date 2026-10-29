@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for cozy_guard_addon_helmreleases in
+# Unit tests for cozy_guard_all_helmreleases and cozy_guard_addon_helmreleases in
 # hack/e2e-chainsaw/_lib/run-kubernetes.sh
 #
 # cozy_guard_helmrelease judges one release; cozy_guard_addon_helmreleases runs
@@ -32,9 +32,11 @@ load test_helper
 # created. The stub answers the shapes the guard issues: the namespace listing
 # (from ALL_HR), one release's install strategy and Ready condition together
 # (<name>.strategy and <name>.ready, joined the way the guard's jsonpath joins
-# them), and its history statuses (<name>.history). A missing fixture file
-# stands for a field the object does not carry, which is what kubectl prints for
-# an absent jsonpath - nothing.
+# them), its history statuses (<name>.history), and whether it exists at all
+# (`--ignore-not-found -o name`, which a <name>.ABSENT marker turns into empty
+# output, and whose read the markers below take as <name>.exists). A missing
+# fixture file stands for a field the object does not carry, which is what
+# kubectl prints for an absent jsonpath - nothing.
 #
 # A FAILS marker file makes the matching read exit non-zero with a message on
 # stderr, which is how the API answers a timeout or a denied request. That
@@ -96,6 +98,7 @@ for a in "$@"; do
     describe) mode=describe ;;
     *'status.history'*) mode=history ;;
     *'install.strategy.name'*) mode=probe ;;
+    name) mode=exists ;;
     kubernetes-*) name=$a ;;
   esac
 done
@@ -103,6 +106,7 @@ case "$mode" in
   list) markers=LIST ;;
   history) markers="$name.history" ;;
   probe) markers="$name.strategy $name.ready" ;;
+  exists) markers="$name.exists" ;;
   *) markers= ;;
 esac
 for m in $markers; do
@@ -144,6 +148,20 @@ case "$mode" in
     printf '%s@%s' \
       "$(cat "$FIXTURES/$name.strategy" 2>/dev/null || true)" \
       "$(cat "$FIXTURES/$name.ready" 2>/dev/null || true)"
+    ;;
+  exists)
+    # `get hr <name> --ignore-not-found -o name`: an absent release prints
+    # nothing and exits 0, which an ABSENT marker reproduces; anything else
+    # exists. Without the flag kubectl answers NotFound with a non-zero exit,
+    # so a read that drops it is told apart here the way the cluster would.
+    if [ -f "$FIXTURES/$name.ABSENT" ]; then
+      case " $* " in
+        *' --ignore-not-found '*) exit 0 ;;
+      esac
+      echo "Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io \"$name\" not found" >&2
+      exit 1
+    fi
+    echo "helmrelease.helm.toolkit.fluxcd.io/$name"
     ;;
   describe) echo "stub describe of $name" ;;
 esac
@@ -246,6 +264,245 @@ STUB
     out=$(PATH="$tmp/bin:$PATH" cozy_guard_all_helmreleases tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
     if [ "$rc" -eq 0 ]; then
         echo "expected the addon footprint alone to fail the run, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the pool release is read by the full guard, and its footprint fails the run" {
+    # The worker pool is kubernetes-nodes-<test>-md0, an Application HelmRelease
+    # the apiserver stamps like the parent, on the node-join path through the
+    # talos-reconcile Job it renders. Its name does not start with the addon
+    # prefix kubernetes-<test>-, so the addon listing never selects it, and
+    # before this read a failed action on it was invisible to the guard on every
+    # path. Parent and addon are clean here; the pool alone carries the finding.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.strategy"
+    printf 'failed\ndeployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_guard_all_helmreleases tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "expected the pool release footprint to fail the run, got: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'HelmRelease kubernetes-nodes-test-latest-version-md0 carries a failed or uninstalled Snapshot, and its install strategy is RetryOnFailure'; then
+        echo "expected the pool release to be named in the verdict, got: $out" >&2
+        exit 1
+    fi
+    if ! grep -q -F 'kubernetes-nodes-test-latest-version-md0' "$FIXTURES/CALLS"; then
+        echo "expected a read of the pool release, calls were: $(cat "$FIXTURES/CALLS")" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "a clean pool release leaves the full guard green" {
+    # The pin for the passing path: with every release clean the composite
+    # returns zero, so the pool read above is a read and not an unconditional
+    # verdict. The pool name is derived from the parent, the way the addon
+    # prefix is, which this fixture spells out.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+
+    PATH="$tmp/bin:$PATH" cozy_guard_all_helmreleases tenant-test kubernetes-test-latest-version
+    [ "$(cozy_pool_helmrelease_name kubernetes-test-latest-version)" = kubernetes-nodes-test-latest-version-md0 ]
+
+    rm -rf "$tmp"
+}
+
+@test "the pool release is held to a stamped install strategy like the parent" {
+    # The pool is an Application HelmRelease, so an empty strategy there is the
+    # read and never the object, the same as on the parent. Without this the
+    # jsonpath rename the parent check exists for would leave the pool's
+    # footprint on the lenient branch while the parent's check still passed.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    printf 'True' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.ready"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_guard_all_helmreleases tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "expected an empty install strategy on the pool release to fail the run, got: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'spec.install.strategy.name of kubernetes-nodes-test-latest-version-md0 came back empty'; then
+        echo "expected the failure to name the pool release, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the failure-path report classifies the pool release too" {
+    # Same reading as the passing path, from the exit handler: a pool release
+    # that failed an action is named, and the report still returns zero.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.strategy"
+    printf 'failed\ndeployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'HelmRelease kubernetes-nodes-test-latest-version-md0 carries a failed or uninstalled Snapshot'; then
+        echo "expected the pool release footprint to be classified, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the failure-path report says when the pool release was never created" {
+    # The pool is applied after the parent, and the exit handler is armed between
+    # the two, so a run whose pool apply failed reaches the report with no pool
+    # release. That is a fact about where the run stopped, and the report says so
+    # instead of reporting a failed read of a missing object.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    : > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.ABSENT"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'kubernetes-nodes-test-latest-version-md0 does not exist'; then
+        echo "expected the report to say the pool release does not exist, got: $out" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$out" | grep -q -F 'Reading .spec.install.strategy.name and the Ready condition of kubernetes-nodes-test-latest-version-md0 failed'; then
+        echo "expected no failed read of the absent pool release, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "a failed existence read of the pool release is not reported as absence" {
+    # The report runs on the failure path, where a slow apiserver is most
+    # likely. A cut-off existence read said "does not exist" there, which sends
+    # the reader to the wrong stage of the run; it has to be named as the failed
+    # read it is, the way the parent's and the listing's are, and the walk goes
+    # on to the addons.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
+    : > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.exists.CUTOFF"
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'Checking whether kubernetes-nodes-test-latest-version-md0 exists failed - the read did not finish'; then
+        echo "expected the cut-off existence read to be named as a failed read, got: $out" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$out" | grep -q -F 'kubernetes-nodes-test-latest-version-md0 does not exist'; then
+        echo "expected a failed read not to be reported as absence, got: $out" >&2
+        exit 1
+    fi
+    if grep -F 'kubernetes-nodes-test-latest-version-md0' "$FIXTURES/CALLS" | grep -q -v -F -e '-o name'; then
+        echo "expected no classification read of a release whose existence is unknown, calls were: $(cat "$FIXTURES/CALLS")" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q 'HelmRelease kubernetes-test-latest-version-coredns '; then
+        echo "expected the addons to be read after the failed pool read, got: $out" >&2
+        exit 1
+    fi
+
+    rm -rf "$tmp"
+}
+
+@test "the failure-path report does not read the pool release past its budget" {
+    # The parent's reads are issued before the first clock check, so on a path
+    # that opens no phase they can spend the whole budget on their own. The pool
+    # release is three more bounded reads, and starting them past the deadline
+    # takes them out of the tenant snapshot's time.
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    cozy_make_kubectl_stub "$tmp"
+    export FIXTURES="$tmp/fixtures"
+    printf 'kubernetes-test-latest-version-coredns\n' > "$FIXTURES/ALL_HR"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
+    printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
+    printf 'RetryOnFailure' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.strategy"
+    printf 'failed\ndeployed\n' > "$FIXTURES/kubernetes-nodes-test-latest-version-md0.history"
+    # The deadline is stamped at 1000+90 and the pool release is checked one
+    # reading later, at 1100.
+    date_ticks="$tmp/ticks"
+    printf '0' > "$date_ticks"
+    date_now=1000
+    date_step=100
+    COZY_GUARD_REPORT_BUDGET=90
+
+    rc=0
+    out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
+    date_now=
+    date_step=0
+    date_ticks=
+    unset COZY_GUARD_REPORT_BUDGET
+    if [ "$rc" -ne 0 ]; then
+        echo "expected the report to return zero, got rc=$rc: $out" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q 'HelmRelease kubernetes-test-latest-version (install strategy'; then
+        echo "expected the parent to have been classified before the budget ran out, got: $out" >&2
+        exit 1
+    fi
+    if grep -q -F 'kubernetes-nodes-test-latest-version-md0' "$FIXTURES/CALLS"; then
+        echo "expected no read of the pool release once the budget was spent, calls were: $(cat "$FIXTURES/CALLS")" >&2
+        exit 1
+    fi
+    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 90s; kubernetes-nodes-test-latest-version-md0 and the addon releases of kubernetes-test-latest-version were not read'; then
+        echo "expected the skipped pool release to be named, got: $out" >&2
         exit 1
     fi
 
@@ -1110,14 +1367,15 @@ STUB
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-cilium.history"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version-coredns.history"
-    # 30s per reading against a 90s budget: the report stamps its deadline at
-    # 1000+90, the listing is checked at 1030, the first addon at 1060 and the
-    # second at 1090, which is the first reading the deadline refuses.
+    # 30s per reading against a 120s budget: the report stamps its deadline at
+    # 1000+120, the pool release is checked at 1030, the listing at 1060, the
+    # first addon at 1090 and the second at 1120, which is the first reading
+    # the deadline refuses.
     date_ticks="$tmp/ticks"
     printf '0' > "$date_ticks"
     date_now=1000
     date_step=30
-    COZY_GUARD_REPORT_BUDGET=90
+    COZY_GUARD_REPORT_BUDGET=120
 
     rc=0
     out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
@@ -1137,7 +1395,7 @@ STUB
         echo "expected the second addon to fall outside the budget, got: $out" >&2
         exit 1
     fi
-    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 90s; kubernetes-test-latest-version-coredns and every release after it were not read'; then
+    if ! printf '%s\n' "$out" | grep -q -F 'stopped after 120s; kubernetes-test-latest-version-coredns and every release after it were not read'; then
         echo "expected the cut-off release to be named, got: $out" >&2
         exit 1
     fi
@@ -1225,6 +1483,19 @@ $out" >&2
     fi
     if [ "$arm" -ge "$cp_wait" ]; then
         echo "expected the handler armed (line $arm) before the control-plane wait (line $cp_wait)" >&2
+        exit 1
+    fi
+    # And before the pool apply, which follows the parent's. A failing pool
+    # apply exits under errexit, so armed after it that run leaves the parent
+    # unclassified, and the report's absent-pool line describes a run that never
+    # reaches it.
+    pool_apply=$(grep -n '^kind: KubernetesNodes$' "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$pool_apply" ]; then
+        echo "expected to find the KubernetesNodes apply in $lib" >&2
+        exit 1
+    fi
+    if [ "$arm" -ge "$pool_apply" ]; then
+        echo "expected the handler armed (line $arm) before the pool apply (line $pool_apply)" >&2
         exit 1
     fi
     # The parent name is part of this one, because it is what tells the
@@ -1320,13 +1591,13 @@ $out" >&2
     printf 'RetryOnFailure' > "$FIXTURES/kubernetes-test-latest-version.strategy"
     printf 'deployed\n' > "$FIXTURES/kubernetes-test-latest-version.history"
     printf 'uninstalled\ndeployed\n' > "$FIXTURES/kubernetes-test-latest-version-cilium.history"
-    # The deadline is stamped at 1000+90 and the listing is checked one reading
-    # later, at 1100.
+    # The deadline is stamped at 1000+150, the pool release is admitted at 1100
+    # and the listing is checked one reading later, at 1200.
     date_ticks="$tmp/ticks"
     printf '0' > "$date_ticks"
     date_now=1000
     date_step=100
-    COZY_GUARD_REPORT_BUDGET=90
+    COZY_GUARD_REPORT_BUDGET=150
 
     rc=0
     out=$(PATH="$tmp/bin:$PATH" cozy_report_helmrelease_remediation tenant-test kubernetes-test-latest-version 2>&1) || rc=$?
