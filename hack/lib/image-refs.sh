@@ -57,6 +57,9 @@
 # private build-registry host, since the mirror's host rewrite cannot reach
 # inside a gzip. Fixing it means decompress/rewrite/recompress with `gzip -n`
 # to stay reproducible — see docs/agents/image-refs.md.
+# system/capi-providers-bootstrap has the same gap for its Kairos provider ref
+# (files/bootstrap-components-kairos.yaml, files/components-kairos.gz and
+# images/cluster-api-provider-kairos.tag), with the same residual.
 # Assigned unconditionally rather than via ${VAR:-default}: this list is
 # safety-critical for the retag and the mirror, neither of which has a
 # postcondition that would notice it being wrong. An inherited environment

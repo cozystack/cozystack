@@ -13,6 +13,7 @@ build: build-deps
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
+	make -C packages/apps/kubernetes-nodes image
 	make -C packages/apps/vpn image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
@@ -34,6 +35,7 @@ build: build-deps
 	make -C packages/system/talos-log-collector image
 	make -C packages/system/kamaji image
 	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-bootstrap image
 	make -C packages/system/capi-providers-infraprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image

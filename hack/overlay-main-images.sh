@@ -27,7 +27,8 @@
 #   - packages/core/talos and packages/core/installer: owned by dedicated jobs
 #     (the input-gated build-talos job / the finalize installer build), so their
 #     own files are never overlaid. A successful Talos job also adds its actual
-#     output package, packages/extra/bootbox, to BUILT_JSON at the call site.
+#     output package, packages/extra/bootbox, to BUILT_JSON at the call site,
+#     and a successful Kairos worker disk job adds packages/apps/kubernetes-nodes.
 #   - vendored charts/ subtrees: upstream chart values we do not build.
 #
 # Surgical + self-validating: a file is overlaid only when every line that
