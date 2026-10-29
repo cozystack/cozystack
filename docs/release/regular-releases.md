@@ -55,8 +55,8 @@ A regular release sequence runs as follows:
    2. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    3. Cuts the write-once `api/apps/v1alpha1/v1.2.0` Go-module tag at the same commit.
    4. Ensures the `release-1.2` maintenance branch exists at the tag commit. Since the rc freeze created it, this is normally a no-op fast-forward: the merge commit is already its tip.
-   5. Publishes the release page (`draft` → `latest`), using `docs/changelogs/v1.2.0.md` from the merge commit as the release body.
-   6. Retags the verified packages candidate and rc container images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no container rebuild.
+   5. Retags the verified packages candidate and rc container images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no container rebuild.
+   6. Publishes the release page (`draft` → `latest`), using `docs/changelogs/v1.2.0.md` from the merge commit as the release body. It goes last, so the page never announces a version whose images and chart are not in the registry yet.
 6. Once the release is published, merge the parked `cozystack/website` docs PR (opened back at promote time, step 3.iv) so the live site's version routing flips to `v1.2.0` — its versioned docs and `openapi.json` are on GitHub now. The maintainer can then announce the release to the community.
 
 ```mermaid

@@ -638,9 +638,9 @@ jobs:
   #
   #    Previously this lived in tags.yaml::generate-changelog, gated on the stable
   #    tag push. Under the promote flow that tag is created by
-  #    pull-requests-release.yaml finalize — i.e. AFTER the release is published —
-  #    so the changelog PR could only ever be opened once the release was already
-  #    public. Moving generation here is the only fix; re-gating the tag-triggered
+  #    pull-requests-release.yaml finalize, in the run that publishes the release
+  #    once the retag and the chart are done, so the changelog PR could never be
+  #    reviewed before the release went public. Moving generation here is the only fix; re-gating the tag-triggered
   #    job cannot help.
   #
   #    The generation logic is factored into .github/workflows/changelog-generate.yaml
