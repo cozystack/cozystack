@@ -44,6 +44,11 @@ spec:
         port: 9094
         type: loadbalancer
         tls: {{ $tlsEnabled }}
+        {{- /* The listener sits on a public LoadBalancer address, so it never
+               accepts an anonymous client. Credentials come from the KafkaUsers
+               rendered in users.yaml. */}}
+        authentication:
+          type: scram-sha-512
       {{- end }}
     config:
       {{- if eq (int .Values.kafka.replicas) 1 }}

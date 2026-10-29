@@ -1,0 +1,28 @@
+{{- /*
+  Each KafkaUser name is also its SCRAM username and the name of the Secret the
+  User Operator writes its generated password into, so it carries the release
+  name: two Kafka instances in one namespace may declare the same user. The
+  names refused below would make that Secret collide with one Strimzi already
+  writes for the cluster itself.
+*/}}
+{{- $reserved := list "cluster-ca" "cluster-ca-cert" "clients-ca" "clients-ca-cert" "kafka-brokers" "cluster-operator-certs" "entity-topic-operator-certs" "entity-user-operator-certs" "kafka-exporter-certs" "cruise-control-certs" "cruise-control-api" }}
+{{- range $user, $u := .Values.users }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $user) }}
+{{- fail (printf "invalid Kafka user name %q: it may contain only lowercase letters, digits and \"-\", and must start and end with a letter or a digit (it becomes part of a Kubernetes object name)" $user) }}
+{{- end }}
+{{- if has $user $reserved }}
+{{- fail (printf "Kafka user name %q is reserved: its credentials Secret %s-%s would collide with a Secret Strimzi manages for the cluster" $user $.Release.Name $user) }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: {{ $.Release.Name }}-{{ $user }}
+  labels:
+    strimzi.io/cluster: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+spec:
+  authentication:
+    type: scram-sha-512
+{{- end }}

@@ -1,14 +1,9 @@
 {
   "title": "Chart Values",
   "type": "object",
-  "x-cozystack-name": {
-    "type": "string",
-    "description": "Kafka cluster name. The KRaft controller pods are named `kafka-\u003cname\u003e-c-\u003chash\u003e-\u003cid\u003e` with an 8-character hash, and that pod hostname must fit the 63-character DNS-1123 label limit even for the smallest cluster.",
-    "maxLength": 44
-  },
   "properties": {
     "external": {
-      "description": "Enable external access from outside the cluster.",
+      "description": "Enable external access from outside the cluster. The external listener (port 9094) accepts only clients that authenticate with SCRAM-SHA-512 as one of the `users`.",
       "type": "boolean",
       "default": false
     },
@@ -18,7 +13,7 @@
       "default": {},
       "properties": {
         "enabled": {
-          "description": "Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.",
+          "description": "Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true still sends those credentials and all data in plaintext over a public IP, so use it only in controlled networks.",
           "type": "boolean"
         }
       }
@@ -31,6 +26,14 @@
         "v3.9",
         "v3.8"
       ]
+    },
+    "users": {
+      "description": "Users allowed on the external listener. Each key `\u003cname\u003e` (lowercase letters, digits and `-`) becomes the SCRAM-SHA-512 username `\u003crelease\u003e-\u003cname\u003e`, where `\u003crelease\u003e` is `kafka-\u003capplication name\u003e`, and its generated password is written to the Secret of the same name (keys `password` and `sasl.jaas.config`). Every user can read and write every topic.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object"
+      }
     },
     "topics": {
       "description": "Topics configuration.",
