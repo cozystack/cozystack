@@ -1,0 +1,1 @@
+ghcr.io/sergelogvinov/proxmox-csi-controller:v0.20.0@sha256:95ef74cce03e89a1706d9b32888a84bf44e0db439c4fe2a4334ce123728d4c3b
