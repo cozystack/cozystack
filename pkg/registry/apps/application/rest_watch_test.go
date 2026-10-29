@@ -209,7 +209,7 @@ func TestWatchIntegration_WMWatcherCloseProducesNilChannel(t *testing.T) {
 }
 
 func newTestRESTWithSchemesFromClient(c client.Client) *REST {
-	return NewREST(c, nil, &config.Resource{
+	return NewREST(c, nil, nil, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",

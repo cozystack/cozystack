@@ -60,6 +60,7 @@ import (
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	apiextvalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -91,16 +92,21 @@ const (
 
 // REST implements the RESTStorage interface for Application resources
 type REST struct {
-	c             client.Client
-	w             client.WithWatch
-	gvr           schema.GroupVersionResource
-	gvk           schema.GroupVersionKind
-	kindName      string
-	singularName  string
-	releaseConfig config.ReleaseConfig
-	specSchema    *structuralschema.Structural
-	nameSchema    *validation.NameSchema
-	nameSchemaErr error
+	c                 client.Client
+	w                 client.WithWatch
+	defaultsReader    client.Reader
+	defaultsReadLimit time.Duration
+	gvr               schema.GroupVersionResource
+	gvk               schema.GroupVersionKind
+	kindName          string
+	singularName      string
+	releaseConfig     config.ReleaseConfig
+	specSchema        *structuralschema.Structural
+	nameSchema        *validation.NameSchema
+	nameSchemaErr     error
+	defaultsValidator apiextvalidation.SchemaCreateValidator
+	defaultsSchema    *apiextv1.JSONSchemaProps
+	defaultsSchemaErr error
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
@@ -133,7 +139,7 @@ func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
-func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
+func NewREST(c client.Client, w client.WithWatch, defaultsReader client.Reader, config *config.Resource) *REST {
 	specSchema, err := buildSpecSchema(config.Application.OpenAPISchema)
 	if err != nil {
 		klog.Errorf("Failed to build spec schema: %v", err)
@@ -144,10 +150,13 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		klog.Errorf("ApplicationDefinition for %s declares an invalid %s, refusing to create %s objects until it is fixed: %v",
 			config.Application.Kind, appsv1alpha1.NameSchemaExtension, config.Application.Kind, nameSchemaErr)
 	}
+	defaultsValidator, defaultsSchemaErr := buildInstallationDefaultsValidator(config.Application.OpenAPISchema)
 
 	return &REST{
-		c: c,
-		w: w,
+		c:                 c,
+		w:                 w,
+		defaultsReader:    defaultsReader,
+		defaultsReadLimit: installationDefaultsReadTimeout,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -157,12 +166,15 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 			Group:   appsv1alpha1.GroupName,
 			Version: "v1alpha1",
 		}.WithKind(config.Application.Kind),
-		kindName:      config.Application.Kind,
-		singularName:  config.Application.Singular,
-		releaseConfig: config.Release,
-		specSchema:    specSchema,
-		nameSchema:    nameSchema,
-		nameSchemaErr: nameSchemaErr,
+		kindName:          config.Application.Kind,
+		singularName:      config.Application.Singular,
+		releaseConfig:     config.Release,
+		specSchema:        specSchema,
+		nameSchema:        nameSchema,
+		nameSchemaErr:     nameSchemaErr,
+		defaultsValidator: defaultsValidator,
+		defaultsSchema:    parseDefaultsSchema(config.Application.OpenAPISchema),
+		defaultsSchemaErr: defaultsSchemaErr,
 	}
 }
 
@@ -194,6 +206,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// Validate name length against Helm release and label limits
 	if nameLenErrs := r.validateNameLength(app.Name); len(nameLenErrs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
+	}
+
+	if err := r.applyInstallationDefaults(ctx, app); err != nil {
+		if apierrors.IsBadRequest(err) {
+			return nil, err
+		}
+		klog.Warningf("Skipping installation defaults for %s: %v", r.gvr.Resource, err)
+		warning.AddWarning(ctx, "", "Installation defaults could not be applied; continuing without them")
 	}
 
 	// For Tenant applications, also validate that the computed workload

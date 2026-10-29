@@ -201,6 +201,28 @@ func (c completedConfig) New() (*CozyServer, error) {
 		return nil, fmt.Errorf("cache sync failed")
 	}
 
+	// The create path reads installation defaults from this cache. The API waits
+	// for the first sync so a create does not race it, but only for a bounded
+	// time: the defaults are optional and an unreadable ConfigMap must not keep
+	// the whole API from serving.
+	defaultsCache, err := applicationstorage.NewInstallationDefaultsCache(cfg, mgrScheme)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build application defaults cache: %w", err)
+	}
+	if _, err := defaultsCache.GetInformer(ctx, &corev1.ConfigMap{}); err != nil {
+		return nil, fmt.Errorf("failed to get application defaults informer: %w", err)
+	}
+	go func() {
+		if err := defaultsCache.Start(ctx); err != nil {
+			panic(fmt.Errorf("application defaults cache start failed: %w", err))
+		}
+	}()
+	syncCtx, cancelSync := context.WithTimeout(ctx, applicationstorage.InstallationDefaultsSyncTimeout)
+	defer cancelSync()
+	if ok := defaultsCache.WaitForCacheSync(syncCtx); !ok {
+		klog.Warning("Application defaults cache did not sync; creates skip installation defaults until it does")
+	}
+
 	cli := mgr.GetClient()
 	watchCli, err := client.NewWithWatch(cfg, client.Options{Scheme: mgrScheme})
 	if err != nil {
@@ -255,7 +277,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	// --- dynamically-configured, per-tenant resources ---
 	appsV1alpha1Storage := map[string]rest.Storage{}
 	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		storage := applicationstorage.NewREST(cli, watchCli, defaultsCache, &resConfig)
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
 	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {

@@ -1,0 +1,88 @@
+[
+  {
+    "name": "omitted fields receive installation values",
+    "user": {},
+    "installation": { "size": "20Gi", "nested": { "enabled": true } },
+    "expected": { "size": "20Gi", "nested": { "enabled": true } }
+  },
+  {
+    "name": "explicit empty values win",
+    "user": { "object": {}, "array": [], "flag": false, "number": 0, "text": "", "nullable": null },
+    "installation": { "object": { "enabled": true }, "array": [1], "flag": true, "number": 3, "text": "default", "nullable": "default" },
+    "expected": { "object": {}, "array": [], "flag": false, "number": 0, "text": "", "nullable": null }
+  },
+  {
+    "name": "nonempty objects with declared properties merge recursively",
+    "schema": { "type": "object", "properties": { "nested": { "type": "object", "properties": { "child": { "type": "object", "properties": { "user": { "type": "boolean" }, "default": { "type": "boolean" } } }, "sibling": { "type": "integer" } } } } },
+    "user": { "nested": { "child": { "user": true } } },
+    "installation": { "nested": { "child": { "user": false, "default": true }, "sibling": 1 } },
+    "expected": { "nested": { "child": { "user": true, "default": true }, "sibling": 1 } }
+  },
+  {
+    "name": "an empty nested object stops recursion",
+    "schema": { "type": "object", "properties": { "nested": { "type": "object", "properties": { "child": { "type": "object", "properties": { "default": { "type": "boolean" } } }, "sibling": { "type": "integer" } } } } },
+    "user": { "nested": { "child": {} } },
+    "installation": { "nested": { "child": { "default": true }, "sibling": 1 } },
+    "expected": { "nested": { "child": {}, "sibling": 1 } }
+  },
+  {
+    "name": "typed dictionaries are replaced as a whole",
+    "schema": { "type": "object", "properties": { "mirrors": { "type": "object", "additionalProperties": { "type": "object", "properties": { "endpoints": { "type": "array", "items": { "type": "string" } }, "skipFallback": { "type": "boolean" } } } } } },
+    "user": { "mirrors": { "docker.io": { "endpoints": ["https://mine"] } } },
+    "installation": { "mirrors": { "docker.io": { "endpoints": ["https://platform"], "skipFallback": true }, "ghcr.io": { "endpoints": ["https://platform"] } } },
+    "expected": { "mirrors": { "docker.io": { "endpoints": ["https://mine"] } } }
+  },
+  {
+    "name": "free-form objects are replaced as a whole",
+    "schema": { "type": "object", "properties": { "values": { "type": "object", "x-kubernetes-preserve-unknown-fields": true } } },
+    "user": { "values": { "a": 1 } },
+    "installation": { "values": { "a": 2, "b": 3 } },
+    "expected": { "values": { "a": 1 } }
+  },
+  {
+    "name": "objects that also declare a dictionary are replaced as a whole",
+    "schema": { "type": "object", "properties": { "options": { "type": "object", "properties": { "known": { "type": "string" } }, "additionalProperties": { "type": "string" } } } },
+    "user": { "options": { "extra": "user" } },
+    "installation": { "options": { "known": "platform", "platformKey": "injected" } },
+    "expected": { "options": { "extra": "user" } }
+  },
+  {
+    "name": "objects that also preserve unknown fields are replaced as a whole",
+    "schema": { "type": "object", "properties": { "options": { "type": "object", "properties": { "known": { "type": "string" } }, "x-kubernetes-preserve-unknown-fields": true } } },
+    "user": { "options": { "extra": "user" } },
+    "installation": { "options": { "known": "platform", "platformKey": "injected" } },
+    "expected": { "options": { "extra": "user" } }
+  },
+  {
+    "name": "closed objects still merge recursively",
+    "schema": { "type": "object", "properties": { "options": { "type": "object", "properties": { "known": { "type": "string" }, "other": { "type": "string" } }, "additionalProperties": false } } },
+    "user": { "options": { "known": "user" } },
+    "installation": { "options": { "known": "platform", "other": "platform" } },
+    "expected": { "options": { "known": "user", "other": "platform" } }
+  },
+  {
+    "name": "an omitted dictionary is copied whole",
+    "schema": { "type": "object", "properties": { "mirrors": { "type": "object", "additionalProperties": { "type": "object", "properties": { "endpoints": { "type": "array", "items": { "type": "string" } } } } } } },
+    "user": {},
+    "installation": { "mirrors": { "docker.io": { "endpoints": ["https://platform"] } } },
+    "expected": { "mirrors": { "docker.io": { "endpoints": ["https://platform"] } } }
+  },
+  {
+    "name": "arrays are whole replacement values",
+    "user": { "rows": [{ "name": "user", "nested": {} }] },
+    "installation": { "rows": [{ "name": "default", "extra": true }] },
+    "expected": { "rows": [{ "name": "user", "nested": {} }] }
+  },
+  {
+    "name": "user scalars and objects retain their type",
+    "user": { "scalar": "user", "object": { "user": true } },
+    "installation": { "scalar": { "default": true }, "object": "default" },
+    "expected": { "scalar": "user", "object": { "user": true } }
+  },
+  {
+    "name": "installation nulls and empty objects are copied",
+    "user": { "user": true },
+    "installation": { "object": {}, "nullable": null, "array": [] },
+    "expected": { "user": true, "object": {}, "nullable": null, "array": [] }
+  }
+]
