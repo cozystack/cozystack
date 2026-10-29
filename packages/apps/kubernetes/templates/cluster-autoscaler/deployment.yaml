@@ -46,6 +46,15 @@ spec:
           requests:
             cpu: 125m
             memory: 128Mi
+        {{- /* Without CAPI_VERSION the autoscaler reads the newest Cluster API
+              version the management cluster serves, which is v1beta2 from
+              Cluster API v1.11. The 1.32 build lacks the fixes for reading
+              v1beta2 (kubernetes/autoscaler#8410 for scale from zero, #9458
+              for infrastructure references), so it stays on v1beta1, served
+              until Cluster API v1.16, until the image moves past them. */}}
+        env:
+        - name: CAPI_VERSION
+          value: v1beta1
         command:
         - /cluster-autoscaler
         args:

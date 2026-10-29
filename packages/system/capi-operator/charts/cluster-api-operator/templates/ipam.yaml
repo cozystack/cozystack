@@ -3,6 +3,7 @@
   {{- $ipamNamespace := default ( printf "%s-%s" $name "ipam-system" ) (get $ipam "namespace") }}
   {{- $ipamName := $name }}
   {{- $ipamVersion := get $ipam "version" }}
+{{- if ne $ipam.createNamespace false }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,6 +15,7 @@ metadata:
     {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $ipamNamespace }}
+{{- end }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: IPAMProvider
@@ -26,34 +28,51 @@ metadata:
     "helm.sh/hook-weight": "2"
     {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
-{{- if or $ipamVersion $.Values.configSecret.name $.Values.manager $.Values.additionalDeployments }}
+{{- if or $ipamVersion $.Values.configSecret.name $ipam.manager $ipam.deployment $.Values.additionalDeployments (($ipam).configSecret).name }}
 spec:
 {{- end }}
 {{- if $ipamVersion }}
   version: {{ $ipamVersion }}
 {{- end }}
-{{- if $.Values.manager }}
-{{- if and (kindIs "map" $.Values.manager.featureGates) (hasKey $.Values.manager.featureGates $ipamName) }}
+{{- if $ipam.deployment }}
+  deployment: {{ toYaml $ipam.deployment | nindent 4 }}
+{{- end }}
+{{- if $ipam.manager }}
   manager:
-{{- range $key, $value := $.Values.manager.featureGates }}
-  {{- if eq $key $ipamName }}
+  {{- if $ipam.manager.featureGates }}
     featureGates:
+    {{- range $key, $value := $ipam.manager.featureGates }}
+      {{ $key }}: {{ $value }}
+    {{- end }}
+  {{- end }}
+  {{- if $ipam.manager.metrics }}
+    metrics:
+    {{- if $ipam.manager.metrics.insecureDiagnostics }}
+      insecureDiagnostics: {{ $ipam.manager.metrics.insecureDiagnostics }}
+    {{- end }}
+    {{- if $ipam.manager.metrics.diagnosticsAddress }}
+      diagnosticsAddress: {{ $ipam.manager.metrics.diagnosticsAddress }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $ipamName) }}
+{{- range $key, $value := $.Values.fetchConfig }}
+  {{- if eq $key $ipamName }}
+  fetchConfig:
     {{- range $k, $v := $value }}
       {{ $k }}: {{ $v }}
     {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}
-{{- end }}
-{{- if $.Values.configSecret.name }}
-  configSecret:
-    name: {{ $.Values.configSecret.name }}
-    {{- if $.Values.configSecret.namespace }}
-    namespace: {{ $.Values.configSecret.namespace }}
-    {{- end }}
+{{- if (default (($ipam).configSecret).name (($.Values).configSecret).name) }}
+{{- include "capi-operator.configSecret" (dict "ROOT" $ "ARGUMENT" $ipam) | nindent 2 }}
 {{- end }}
 {{- if $ipam.manifestPatches }}
   manifestPatches: {{ toYaml $ipam.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $ipam.fetchConfig }}
+  fetchConfig: {{ toYaml $ipam.fetchConfig | nindent 4 }}
 {{- end }}
 {{- if $.Values.additionalDeployments }}
   additionalDeployments: {{ toYaml $.Values.additionalDeployments | nindent 4 }}

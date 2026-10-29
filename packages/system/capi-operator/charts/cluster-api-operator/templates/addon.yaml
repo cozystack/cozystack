@@ -3,6 +3,7 @@
   {{- $addonNamespace := default ( printf "%s-%s" $name "addon-system" ) (get $addon "namespace") }}
   {{- $addonName := $name }}
   {{- $addonVersion := get $addon "version" }}
+{{- if ne $addon.createNamespace false }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,6 +15,7 @@ metadata:
     {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $addonNamespace }}
+{{- end }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: AddonProvider
@@ -26,11 +28,29 @@ metadata:
     "helm.sh/hook-weight": "2"
     {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
-{{- if or $addonVersion $.Values.secretName }}
+{{- if or $addonVersion $.Values.secretName $.Values.configSecret.name $addon.manager $addon.deployment (($addon).configSecret).name }}
 spec:
 {{- end}}
+{{- if $addon.deployment }}
+  deployment: {{ toYaml $addon.deployment | nindent 4 }}
+{{- end }}
+{{- if $addon.manager }}
+  manager:
+  {{- if $addon.manager.metrics }}
+    metrics:
+    {{- if $addon.manager.metrics.insecureDiagnostics }}
+      insecureDiagnostics: {{ $addon.manager.metrics.insecureDiagnostics }}
+    {{- end }}
+    {{- if $addon.manager.metrics.diagnosticsAddress }}
+      diagnosticsAddress: {{ $addon.manager.metrics.diagnosticsAddress }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 {{- if $addonVersion }}
   version: {{ $addonVersion }}
+{{- end }}
+{{- if (default (($addon).configSecret).name (($.Values).configSecret).name) }}
+{{- include "capi-operator.configSecret" (dict "ROOT" $ "ARGUMENT" $addon) | nindent 2 }}
 {{- end }}
 {{- if $.Values.secretName }}
   secretName: {{ $.Values.secretName }}
@@ -40,6 +60,9 @@ spec:
 {{- end }}
 {{- if $addon.manifestPatches }}
   manifestPatches: {{ toYaml $addon.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $addon.fetchConfig }}
+  fetchConfig: {{ toYaml $addon.fetchConfig | nindent 4 }}
 {{- end }}
 {{- if $addon.additionalManifests }}
   additionalManifests:
