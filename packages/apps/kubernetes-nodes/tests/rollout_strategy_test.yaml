@@ -65,3 +65,20 @@ tests:
       - equal:
           path: spec.strategy.rollingUpdate.maxUnavailable
           value: 0
+
+  # A replacement VM in a pool with passed-through GPUs may need the very GPU
+  # the old node holds; with maxUnavailable 0 it would wait for it forever.
+  - it: lets a GPU pool remove a node before its replacement is up
+    set:
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
