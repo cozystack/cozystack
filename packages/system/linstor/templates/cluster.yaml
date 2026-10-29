@@ -144,3 +144,10 @@ spec:
         - op: add
           path: /metadata/annotations/reloader.stakater.com~1auto
           value: "true"
+    - target:
+        kind: Deployment
+        name: linstor-affinity-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
