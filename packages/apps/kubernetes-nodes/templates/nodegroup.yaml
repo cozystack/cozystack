@@ -104,7 +104,19 @@
        or 1e1 pass as the integers they decode to, and a leading-zero
        spelling passes as whatever YAML reads it as. A bare numeric zero
        is left alone: it is falsy, so the pool renders without domain.cpu
-       and is sized by its instancetype. */}}
+       and is sized by its instancetype.
+
+       The decoded value is kept: it is the core count the VM actually gets,
+       and the cluster-autoscaler capacity annotation and the reservation
+       check below start from it rather than from a decimal parse of the raw
+       string. The kubelet reservations do not: the worker machineconfig in
+       _talosconfigtemplate.tpl sizes them from the raw string, and the
+       TalosConfigTemplate name is a hash of that config, so reading the
+       decoded value there would roll every leading-zero pool. The two
+       readings differ for a leading zero: YAML reads "010" as octal, so the
+       VM has 8 cores while the kubelet reserves 2 x 500m (5% of decimal 10),
+       and the node offers 7000m. */}}
+{{- $kubevirtCores := "" }}
 {{- $cpuValue := (.Values.resources | default dict).cpu }}
 {{- if and (not $isProxmox) (not (kindIs "invalid" $cpuValue)) (not (and (not (kindIs "string" $cpuValue)) (eq (float64 $cpuValue) 0.0))) }}
 {{-   $cpu := printf "%v" $cpuValue }}
@@ -113,6 +125,7 @@
 {{-   if not (and $isNumber (gt (float64 $cores) 0.0) (lt (float64 $cores) 4294967296.0) (eq (floor $cores) (float64 $cores))) }}
 {{-     fail (printf "nodeGroup %s: resources.cpu (%s) must be a whole number of vCPU cores between 1 and 4294967295, such as 2. On the kubevirt substrate it becomes the worker VM's domain.cpu.cores, which KubeVirt declares as an unsigned 32-bit integer, so a millicore or fractional quantity cannot size the guest. Set a core count, or remove the field." $groupName $cpu) }}
 {{-   end }}
+{{-   $kubevirtCores = printf "%.0f" (float64 $cores) }}
 {{- end }}
 {{- /* Assembled once in _helpers.tpl and read back here and in
        talos-reconcile-job.yaml, so the TalosConfigTemplate name this file
@@ -749,6 +762,12 @@ spec:
 {{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
 {{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
 {{- end }}
+{{- /* $effectiveCpu sizes the reservations exactly as the machineconfig
+       does. $vmCpu is what the node has: the YAML-decoded count on kubevirt
+       (see the note at the top of this file); proxmox hands the raw quantity
+       to the machine template through cpuToMillicores, so there the two are
+       the same string. */}}
+{{- $vmCpu := $kubevirtCores | default $effectiveCpu }}
 {{- $autoReservedMi := 256 }}
 {{- if $effectiveMemory }}
 {{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
@@ -865,14 +884,14 @@ spec:
 {{-   end }}
 {{- end }}
 {{/* Validate that total reserved CPU does not exceed effective node CPU */}}
-{{- if $effectiveCpu }}
+{{- if $vmCpu }}
 {{-   $sysCpuMillis := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
 {{-   $kubeCpuMillis := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
 {{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
-{{-   $effectiveCpuMillicoresV := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $effectiveCpuMillicoresV := include "kubernetes.cpuToMillicores" $vmCpu | int }}
 {{-   $effectiveCpuMillis := float64 $effectiveCpuMillicoresV }}
 {{-   if ge $totalCpuMillis $effectiveCpuMillis }}
-{{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
+{{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $vmCpu) }}
 {{-   end }}
 {{- end }}
 {{/* Guard: explicit kubelet overrides require effective memory for validation */}}
@@ -944,10 +963,10 @@ metadata:
     {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | floor }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
     {{- end }}
-    {{- if $effectiveCpu }}
+    {{- if $vmCpu }}
     {{-   $sysCpuMillisA := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
     {{-   $kubeCpuMillisA := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
-    {{-   $effectiveCpuMillicoresA := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+    {{-   $effectiveCpuMillicoresA := include "kubernetes.cpuToMillicores" $vmCpu | int }}
     {{-   $effectiveCpuMillisA := float64 $effectiveCpuMillicoresA }}
     {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
     {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
