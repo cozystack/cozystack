@@ -1,0 +1,54 @@
+suite: Reloader patches on operator-managed LINSTOR API clients
+
+templates:
+  - templates/cluster.yaml
+
+tests:
+  # Every operator-managed workload that authenticates to the LINSTOR API with
+  # a cert-manager client certificate must roll when that secret rotates. The
+  # affinity controller reads its certificate from env vars at startup, so
+  # without the patch it keeps the old one and, after expiry, every request
+  # to the controller fails with EOF while PV node affinities stop following
+  # replica moves.
+  - it: every LINSTOR API client workload carries the Reloader auto annotation
+    asserts:
+      - contains:
+          path: spec.patches
+          content:
+            target:
+              kind: Deployment
+              name: linstor-controller
+            patch: |-
+              - op: add
+                path: /metadata/annotations/reloader.stakater.com~1auto
+                value: "true"
+      - contains:
+          path: spec.patches
+          content:
+            target:
+              kind: Deployment
+              name: linstor-csi-controller
+            patch: |-
+              - op: add
+                path: /metadata/annotations/reloader.stakater.com~1auto
+                value: "true"
+      - contains:
+          path: spec.patches
+          content:
+            target:
+              kind: DaemonSet
+              name: linstor-csi-node
+            patch: |-
+              - op: add
+                path: /metadata/annotations/reloader.stakater.com~1auto
+                value: "true"
+      - contains:
+          path: spec.patches
+          content:
+            target:
+              kind: Deployment
+              name: linstor-affinity-controller
+            patch: |-
+              - op: add
+                path: /metadata/annotations/reloader.stakater.com~1auto
+                value: "true"
