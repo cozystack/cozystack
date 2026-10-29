@@ -14,8 +14,9 @@
 #     full force-push cycle promote actually performs.
 #   * hack/validate-changelog.sh against every current-era changelog in the tree
 #     plus hand-built truncated / wrong-version / whitespace inputs.
-#   * finalize's release-body selection, executed under node with the same inputs
-#     the workflow gives it.
+#   * The github-script steps that set a release body, finalize's and
+#     update-releasenotes', taken verbatim from the workflows and run under node
+#     against fixture trees.
 #   * The GitHub Actions `needs` + `if:` semantics the whole non-blocking design
 #     rests on, run under `act` when Docker is available (see
 #     hack/testdata/needs-semantics.yaml).
@@ -40,6 +41,7 @@ PARSE_RC="$REPO_ROOT/hack/parse-rc-tag.sh"
 SELECT="$REPO_ROOT/hack/select-changelog-source.sh"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
+SYNC="$REPO_ROOT/.github/workflows/update-releasenotes.yaml"
 
 # Body of a top-level workflow job, so an assertion about one job cannot be
 # satisfied — or broken — by an unrelated one. Same shape as the contract suite's.
@@ -127,6 +129,68 @@ https://github.com/cozystack/cozystack/releases/tag/v${version}
 Truncated fixture — no sections, no compare link.
 EOF
 }
+
+# Exactly <count> copies of <string> and no newline; awk passes the bytes of a
+# multi-byte <string> through untouched.
+repeat() {
+  awk -v s="$1" -v n="$2" 'BEGIN { for (i = 0; i < n; i++) printf "%s", s }'
+}
+
+# node runs the workflows' github-script, so it is required, not optional: a
+# test that passes without it has run nothing. The unit lane's runner has it,
+# which hack/pr-labeler-contract.bats already depends on.
+need_node() {
+  command -v node >/dev/null 2>&1 && return 0
+  echo "node is required to run the workflows' github-script steps" >&2
+  return 1
+}
+
+# Runs one github-script step under node with its script exactly as the
+# workflow carries it, from <tree> as the working directory; github and core
+# are stand-ins. Leaves the step's log in <out>/log, one line per call to GitHub
+# or core in <out>/calls (ending in `ok`, or `threw` if the step threw), and
+# each body sent with updateRelease in <out>/body.<release_id>.
+#
+#   run_step <workflow> <job> <step> <tree> <releases.json> <out> [<tag>]
+run_step() {
+  mkdir -p "$6"
+  JOB="$2" STEP="$3" yq '.jobs[strenv(JOB)].steps[] | select(.name == strenv(STEP)) | .with.script' "$1" > "$6/script.js"
+  [ -s "$6/script.js" ] || { echo "no script for step '$3' in $1" >&2; return 1; }
+  cat > "$6/harness.js" <<'JS'
+const fs = require('fs');
+const path = require('path');
+const [scriptFile, releasesFile, outDir] = process.argv.slice(2);
+let script = fs.readFileSync(scriptFile, 'utf8');
+if (process.env.TAG) script = script.split('${{ steps.get_tag.outputs.tag }}').join(process.env.TAG);
+if (script.includes('${{')) throw new Error('an expression in the script was left unsubstituted');
+const releases = JSON.parse(fs.readFileSync(releasesFile, 'utf8'));
+const calls = [];
+const github = { rest: { repos: {
+  listReleases: async () => ({ data: releases }),
+  updateRelease: async (p) => {
+    const keys = Object.keys(p).filter((k) => !['owner', 'repo', 'release_id', 'body'].includes(k)).sort();
+    calls.push(['updateRelease', p.release_id, ...keys.map((k) => `${k}=${p[k]}`), ...('body' in p ? ['body'] : [])].join(' '));
+    if ('body' in p) fs.writeFileSync(path.join(outDir, `body.${p.release_id}`), p.body);
+    return { data: { ...releases.find((r) => r.id === p.release_id), ...p } };
+  },
+} } };
+const context = { repo: { owner: 'cozystack', repo: 'cozystack' } };
+const core = {
+  setOutput: (k, v) => calls.push(`setOutput ${k}=${v}`),
+  setFailed: (m) => calls.push(`setFailed ${m}`),
+};
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('require', 'github', 'context', 'core', script)(require, github, context, core)
+  .then(() => 'ok', (e) => `threw ${e.message}`)
+  .then((result) => fs.writeFileSync(path.join(outDir, 'calls'), calls.concat(result).join('\n') + '\n'));
+JS
+  ( cd "$4" && TAG="${7:-}" node "$6/harness.js" "$6/script.js" "$5" "$6" > "$6/log" 2>&1 ) || {
+    echo "node failed for step '$3':" >&2; sed 's/^/    /' "$6/log" >&2; return 1; }
+  [ -s "$6/calls" ] || { echo "step '$3' recorded nothing" >&2; return 1; }
+}
+
+# The body finalize publishes for v1.7.0 in place of one over 100000 bytes.
+LINK_V170='The release notes for v1.7.0 are too long for a GitHub release description; the full changelog is [docs/changelogs/v1.7.0.md](https://github.com/cozystack/cozystack/blob/v1.7.0/docs/changelogs/v1.7.0.md).'
 
 # The rc-tag parser is shared by changelog-rc.yaml and mirrored inline by the
 # reusable changelog-generate.yaml. It must REJECT whitespace outright, not strip
@@ -466,75 +530,134 @@ v1.6.0=reject:format"
   return 0
 }
 
-@test "finalize: the release-body selection runs and picks the changelog" {
-  command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
-
+# finalize's Publish draft release step, run as the workflow carries it, one
+# merge-commit tree per case. Whatever the tree holds, the release is
+# published: with the release notes, else the changelog, else the draft's own
+# body, and with a link in place of anything over 100000 bytes, since the tags
+# already exist and a body GitHub refuses would strand the release.
+@test "finalize: publishes the release notes, else the changelog, and a link over 100000 bytes" {
+  need_node
   tmp="$(mktemp -d)"
+  cat > "$tmp/releases.json" <<'EOF'
+[
+  {"id": 1, "draft": true, "prerelease": false, "tag_name": "v1.7.0", "name": "v1.7.0", "body": "Promoted from v1.7.0-rc.3."},
+  {"id": 2, "draft": false, "prerelease": false, "tag_name": "v1.6.5", "name": "v1.6.5", "body": "v1.6.5"}
+]
+EOF
+  notes=docs/releasenotes/v1.7.0.md
+  cl=docs/changelogs/v1.7.0.md
+  for c in notes blanknotes changelog neither blank at over multibyte overnotes; do
+    mkdir -p "$tmp/$c/docs/releasenotes" "$tmp/$c/docs/changelogs"
+  done
+  printf '# Cozystack v1.7.0\n\nThe highlights.\n' > "$tmp/notes/$notes"
+  printf ' \n\t\n' > "$tmp/blanknotes/$notes"
+  printf '   \n\n \n' > "$tmp/blank/$cl"
+  for c in notes blanknotes changelog; do write_changelog "$tmp/$c/$cl" 1.7.0; done
+  repeat a 100000 > "$tmp/at/$cl"
+  repeat a 100001 > "$tmp/over/$cl"
+  # 40000 characters, 120000 bytes: the limit is in bytes.
+  repeat '€' 40000 > "$tmp/multibyte/$cl"
+  repeat a 100001 > "$tmp/overnotes/$notes"
+  write_changelog "$tmp/overnotes/$cl" 1.7.0
 
-  # The same decision finalize makes, extracted verbatim in shape: read the file,
-  # refuse whitespace-only, otherwise use it as the body.
-  #
-  # All three cases run in ONE node invocation. Driving them from a shell loop
-  # produced an empty capture for the missing-file case under this repo's
-  # cozytest runner — reproducibly, with node exiting 0 and writing nothing, and
-  # not reproducible outside it. Rather than assert around a runner quirk (which
-  # would leave the assertion quietly meaningless), the decision table is
-  # computed in one process and compared as a whole.
-  cat > "$tmp/body.js" <<'JS'
-const fs = require('fs');
-
-// Verbatim in shape from pull-requests-release.yaml's Publish draft release step.
-function selectBody(changelogPath) {
-  let body;
-  let decision;
-  if (fs.existsSync(changelogPath)) {
-    const raw = fs.readFileSync(changelogPath, 'utf8');
-    if (raw.trim().length === 0) {
-      decision = 'refuse-whitespace';
-    } else {
-      body = raw;
-      decision = 'use-file';
-    }
-  } else {
-    decision = 'absent';
-  }
-  const payload = { draft: false, ...(body ? { body } : {}) };
-  return decision + ':' + Object.prototype.hasOwnProperty.call(payload, 'body');
+  for spec in notes:$notes blanknotes:$cl changelog:$cl at:$cl over:link multibyte:link overnotes:link neither:none blank:none; do
+    c="${spec%%:*}"; want="${spec#*:}"
+    run_step "$FINALIZE" finalize 'Publish draft release' "$tmp/$c" "$tmp/releases.json" "$tmp/out.$c" v1.7.0
+    with_body=' body'
+    [ "$want" != none ] || with_body=''
+    expected="$(printf 'ok\nsetOutput make_latest=true\nupdateRelease 1 draft=false make_latest=true prerelease=false%s\n' "$with_body")"
+    [ "$(sort "$tmp/out.$c/calls")" = "$expected" ] || {
+      echo "$c: finalize did something other than publishing v1.7.0:" >&2
+      sed 's/^/  /' "$tmp/out.$c/calls" "$tmp/out.$c/log" >&2; exit 1; }
+    case "$want" in
+      none)
+        grep -q '^::warning::' "$tmp/out.$c/log" || {
+          echo "$c: the draft's body was kept without a ::warning::" >&2; exit 1; } ;;
+      link)
+        [ "$(cat "$tmp/out.$c/body.1")" = "$LINK_V170" ] || {
+          echo "$c: the body over 100000 bytes was not replaced by the link:" >&2
+          head -c 300 "$tmp/out.$c/body.1" >&2; exit 1; }
+        grep -q '^::warning::.* bytes, over MAX_BODY_BYTES' "$tmp/out.$c/log" || {
+          echo "$c: the link was published without a ::warning::" >&2; exit 1; } ;;
+      *)
+        cmp -s "$tmp/out.$c/body.1" "$tmp/$c/$want" || {
+          echo "$c: the body is not $want byte for byte" >&2; exit 1; }
+        grep -qF "Release body from $want ($(wc -c < "$tmp/$c/$want") bytes)" "$tmp/out.$c/log" || {
+          echo "$c: the log does not give the body's source and byte length:" >&2
+          sed 's/^/  /' "$tmp/out.$c/log" >&2; exit 1; } ;;
+    esac
+  done
+  rm -rf "$tmp"
 }
 
-const lines = process.argv.slice(2).map((p) => {
-  const label = p.replace(/^.*\//, '');
-  return label + '=' + selectBody(p);
-});
-fs.writeFileSync(1, lines.join('\n') + '\n');
-JS
+# A release with no release notes publishes exactly what finalize published
+# before they existed. Every shipped changelog is a fixture; one over 100000
+# bytes, which GitHub may refuse, publishes the link instead.
+@test "finalize: without release notes a shipped changelog is published byte for byte, or as the link over 100000 bytes" {
+  need_node
+  tmp="$(mktemp -d)"
+  checked=0
+  verbatim=0
+  for f in "$REPO_ROOT"/docs/changelogs/v*.md; do
+    [ -f "$f" ] || continue
+    tag="$(basename "$f" .md)"
+    mkdir -p "$tmp/$tag/docs/changelogs"
+    cp "$f" "$tmp/$tag/docs/changelogs/"
+    printf '[{"id": 1, "draft": true, "prerelease": false, "tag_name": "%s", "name": "%s", "body": "draft"}]\n' "$tag" "$tag" > "$tmp/$tag.json"
+    run_step "$FINALIZE" finalize 'Publish draft release' "$tmp/$tag" "$tmp/$tag.json" "$tmp/out.$tag" "$tag"
+    if [ "$(wc -c < "$f")" -le 100000 ]; then
+      cmp -s "$tmp/out.$tag/body.1" "$f" || { echo "$tag: not published byte for byte" >&2; exit 1; }
+      verbatim=$((verbatim + 1))
+    else
+      grep -qF "/blob/$tag/docs/changelogs/$tag.md)." "$tmp/out.$tag/body.1" || {
+        echo "$tag: over 100000 bytes but not published as the link" >&2; exit 1; }
+    fi
+    checked=$((checked + 1))
+  done
+  [ "$checked" -ge 10 ] && [ "$verbatim" -ge 10 ] || {
+    echo "$checked changelog(s) checked, $verbatim verbatim; the glob broke and this verifies nothing." >&2; exit 1; }
+  rm -rf "$tmp"
+}
 
-  write_changelog "$tmp/good.md" 1.6.0
-  printf '   \n\n \n' > "$tmp/ws.md"
+# update-releasenotes' sync step, run as the workflow carries it over one main
+# checkout. It makes finalize's choice of file, but a body over 100000 bytes is
+# never synced, not even as the link: the tags.yaml backstop ports a changelog
+# to main without its release notes, and it would replace the body finalize
+# published.
+@test "update-releasenotes: syncs the release notes, else the changelog, and never a body over 100000 bytes" {
+  need_node
+  tmp="$(mktemp -d)"
+  m="$tmp/main"
+  mkdir -p "$m/docs/releasenotes" "$m/docs/changelogs"
+  printf '# v1.0.1\n\nThe highlights.\n' > "$m/docs/releasenotes/v1.0.1.md"
+  printf ' \n' > "$m/docs/releasenotes/v1.0.2.md"
+  for v in 1 2 3 8 9; do write_changelog "$m/docs/changelogs/v1.0.$v.md" "1.0.$v"; done
+  repeat a 100001 > "$m/docs/changelogs/v1.0.5.md"
+  repeat '€' 40000 > "$m/docs/changelogs/v1.0.6.md"
+  repeat a 100000 > "$m/docs/changelogs/v1.0.7.md"
+  repeat a 100001 > "$m/docs/releasenotes/v1.0.9.md"
+  UP_TO_DATE="$(cat "$m/docs/changelogs/v1.0.8.md")" node -e '
+    const r = (v, body) => ({ id: v, draft: false, prerelease: false, tag_name: `v1.0.${v}`, name: `v1.0.${v}`, body });
+    process.stdout.write(JSON.stringify([1, 2, 3, 4, 5, 6, 7, 9].map((v) => r(v, "old body")).concat(r(8, process.env.UP_TO_DATE))));' > "$tmp/releases.json"
 
-  node "$tmp/body.js" "$tmp/good.md" "$tmp/ws.md" "$tmp/nope.md" > "$tmp/out.txt" 2>"$tmp/err.txt" || {
-    echo "node failed:" >&2; cat "$tmp/err.txt" >&2; exit 1; }
-
-  want="good.md=use-file:true
-ws.md=refuse-whitespace:false
-nope.md=absent:false"
-  got="$(cat "$tmp/out.txt")"
-
-  [ "$got" = "$want" ] || {
-    echo "finalize's release-body decision table is wrong." >&2
-    echo "expected:" >&2; printf '%s\n' "$want" | sed 's/^/  /' >&2
-    echo "got:" >&2;      printf '%s\n' "$got"  | sed 's/^/  /' >&2
-    echo "A whitespace-only or absent changelog reaching the body would publish" >&2
-    echo "blank release notes instead of leaving the draft's text in place." >&2
-    exit 1
-  }
-
-  # And the shape asserted here must be the shape finalize actually uses.
-  grep -q 'raw.trim().length === 0' "$FINALIZE" || {
-    echo "finalize's whitespace guard changed shape; this test now proves nothing" >&2
-    echo "about the real workflow." >&2
-    exit 1
-  }
+  run_step "$SYNC" update-releasenotes 'Update release notes from changelogs' "$m" "$tmp/releases.json" "$tmp/out"
+  want="updateRelease 1 body
+updateRelease 2 body
+updateRelease 3 body
+updateRelease 7 body
+ok"
+  [ "$(cat "$tmp/out/calls")" = "$want" ] || {
+    echo "The sync updated other releases than v1.0.1, v1.0.2, v1.0.3 and v1.0.7:" >&2
+    sed 's/^/  /' "$tmp/out/calls" "$tmp/out/log" >&2; exit 1; }
+  for pair in 1:releasenotes 2:changelogs 3:changelogs 7:changelogs; do
+    v="${pair%%:*}"
+    cmp -s "$tmp/out/body.$v" "$m/docs/${pair#*:}/v1.0.$v.md" || {
+      echo "v1.0.$v was not synced with docs/${pair#*:}/v1.0.$v.md" >&2; exit 1; }
+  done
+  for v in 5 6 9; do
+    grep -q "^::warning::.*over MAX_BODY_BYTES.*leaving the body of release v1.0.$v as it is" "$tmp/out/log" || {
+      echo "v1.0.$v, over 100000 bytes, was left alone without a ::warning:: naming it" >&2; exit 1; }
+  done
   rm -rf "$tmp"
 }
 
