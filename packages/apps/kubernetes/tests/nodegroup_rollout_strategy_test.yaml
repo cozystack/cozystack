@@ -74,3 +74,25 @@ tests:
       - equal:
           path: spec.strategy.rollingUpdate.maxSurge
           value: 1
+
+  # A replacement VM in a group with passed-through GPUs may need the very GPU
+  # the old node holds; with maxUnavailable 0 it would wait for it forever.
+  - it: lets a GPU group remove a node before its replacement is up
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 8Gi}
+          gpus:
+            - name: nvidia.com/AD102GL_L40S
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
