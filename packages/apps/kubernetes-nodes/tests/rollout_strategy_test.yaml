@@ -1,0 +1,67 @@
+suite: worker pool rollout keeps capacity
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 1
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  # A rollout replaces every Machine. With maxUnavailable 1 a one-node pool
+  # drained and deleted its only node as soon as the replacement Machine was
+  # created, leaving the pool empty until the new node joined.
+  - it: never drains a node before its replacement is ready
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: surges up to the pool ceiling
+    set:
+      maxReplicas: 5
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 5
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  # CAPI rejects a RollingUpdate with maxSurge and maxUnavailable both 0.
+  - it: keeps a surge of one on a pool capped at zero
+    set:
+      minReplicas: 0
+      maxReplicas: 0
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
