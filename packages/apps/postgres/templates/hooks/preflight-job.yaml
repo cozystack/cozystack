@@ -1,0 +1,228 @@
+{{- /*
+  Refuses to adopt a role the chart did not mark, which a CREATEROLE holder
+  can have planted under a name values declare later. It runs pre-upgrade
+  because CNPG adopts a managed role within seconds of the spec reaching it,
+  so the post-upgrade init-job would find it adopted. Only a name CNPG does
+  not manage yet can be planted ahead of its adoption, so the check reads the
+  live Cluster first, at run time, and connects to the database only when the
+  upgrade adds such a name or newly grants createRole; an upgrade that adds
+  neither passes with the database down. Reading the Cluster here rather than
+  through a template lookup keeps the render free of cluster state. The flag
+  is read before it is set, so the upgrade that first grants createRole still
+  adopts and the flag is on before CNPG applies it. Fails closed: a Cluster
+  that cannot be read counts as managing nothing, and no catalog query tells a
+  planted role from an administrator's. Skipped under bootstrap.recovery, for
+  the reason init-job.yaml gives, and on install, where there is no cluster.
+*/ -}}
+{{- if and .Release.IsUpgrade (not .Values.bootstrap.enabled) (or .Values.users .Values.databases) }}
+{{- $grantsCreateRole := false }}
+{{- range $user, $u := .Values.users }}
+{{- if default false $u.createRole }}
+{{- $grantsCreateRole = true }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-preflight
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-preflight
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  resourceNames: [{{ .Release.Name | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-preflight
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-preflight
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}-preflight
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-preflight-script
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  new-roles.sh: |
+    set -u
+    # Writes to /work/new each declared role the live Cluster does not manage
+    # yet, and each user whose createRole it does not grant yet.
+    live=" "
+    if out=$(kubectl -n {{ .Release.Namespace }} get clusters.postgresql.cnpg.io {{ .Release.Name }} -o jsonpath='{range .spec.managed.roles[*]}{.name}={.createrole}{" "}{end}'); then
+      live=" $out "
+    else
+      echo "cannot read Cluster {{ .Release.Name }}; checking every declared name" >&2
+    fi
+    : > /work/new
+    check() {
+      case "$live" in
+        *" $3="*) ;;
+        *) echo "$1 $2 $3" >> /work/new; return ;;
+      esac
+      if [ "$4" = true ]; then
+        case "$live" in
+          *" $3=true "*) ;;
+          *) echo "createrole $2 $3" >> /work/new ;;
+        esac
+      fi
+    }
+    {{- range $user, $u := .Values.users }}
+    check user {{ $user }} {{ $user }} {{ default false $u.createRole }}
+    {{- end }}
+    {{- range $database, $d := .Values.databases }}
+    check database {{ $database }} {{ $database }}_admin false
+    check database {{ $database }} {{ $database }}_readonly false
+    {{- end }}
+    echo "new to the Cluster:"
+    cat /work/new
+  preflight.sh: |
+    #!/bin/bash
+    set -e
+    if [ ! -s /work/new ]; then
+      echo "the upgrade adds no role and grants no new createRole; nothing to check"
+      exit 0
+    fi
+    until pg_isready ; do
+      if [ "$SECONDS" -ge 250 ]; then
+        echo "postgres did not become ready in time; the upgrade adds roles that must be checked first, so it cannot proceed" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+
+    echo "== refuse to adopt unmarked roles"
+    while read -r kind key role; do
+      [ "$kind" = createrole ] && continue
+      psql -v ON_ERROR_STOP=1 --echo-all -v kind="$kind" -v key="$key" -v role="$role" <<\EOT
+    SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', format('role "%s" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and %ss.%s will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the %s under another name', r.rolname, :'kind', :'key', :'kind'))
+    FROM pg_catalog.pg_roles r
+    WHERE r.rolname = :'role'
+      AND current_setting('cozystack.createrole_granted', true) = 'on'
+      AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
+    EOT
+    done < /work/new
+    {{- if $grantsCreateRole }}
+    psql -v ON_ERROR_STOP=1 --echo-all -c "ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';"
+    {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-preflight
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  activeDeadlineSeconds: 300
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      name: {{ .Release.Name }}-preflight
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}-preflight
+      initContainers:
+      - name: new-roles
+        image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
+        command:
+        - /bin/sh
+        - /scripts/new-roles.sh
+        env:
+        - name: HOME
+          value: /work
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        volumeMounts:
+        - mountPath: /scripts
+          name: scripts
+        - mountPath: /work
+          name: work
+        {{- include "postgresjobs.resources" . | nindent 8 }}
+      containers:
+      - name: postgres
+        image: {{ include "postgres.imageName" $ }}
+        command:
+        - bash
+        - /scripts/preflight.sh
+        env:
+        - name: PGUSER
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-superuser
+              key: username
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-superuser
+              key: password
+        - name: PGHOST
+          value: {{ .Release.Name }}-rw
+        - name: PGPORT
+          value: "5432"
+        - name: PGDATABASE
+          value: postgres
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+        volumeMounts:
+        - mountPath: /scripts
+          name: scripts
+        - mountPath: /work
+          name: work
+        {{- include "postgresjobs.resources" . | nindent 8 }}
+      securityContext:
+        fsGroup: 26
+        runAsGroup: 26
+        runAsNonRoot: true
+        runAsUser: 26
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: scripts
+        configMap:
+          name: {{ .Release.Name }}-preflight-script
+      - name: work
+        emptyDir: {}
+{{- end }}
