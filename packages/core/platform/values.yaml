@@ -1,3 +1,59 @@
+# Partial application specs, keyed by ApplicationDefinition.spec.application.plural.
+# Applies to every application, including external catalogs. Precedence:
+# user-supplied values > applicationDefaults > developer chart/schema defaults.
+# The API stores installation defaults in HelmRelease.spec.values only on creation
+# (including apply-create and dry-run previews). Changes here never modify or
+# re-render existing applications; edit their saved spec to change their settings.
+#
+# Nonempty objects with declared properties merge recursively. Arrays, dictionaries
+# (additionalProperties) and free-form objects are replaced as a whole, so a pool
+# that sets its own registryMirrors never receives platform entries. Explicit {},
+# [], false, 0, "" and permitted null values win. An empty object disables
+# installation defaults for that object.
+# Existing normalization of required, non-nullable null fields still applies.
+# A null set here for a field that also has a developer default is stored as null
+# by kubectl and Terraform, but the dashboard form shows the developer default and
+# stores that instead.
+# Quote quantities such as cpu: "2". The dashboard form validates integer-or-string
+# fields as strings and rejects a number, although the API accepts it.
+# Terraform and other clients may send their own defaults; those are user values
+# and take precedence. Developer defaults retain their chart/schema behavior.
+#
+# The platform renders cozy-system/cozystack-application-defaults with defaults.json.
+# The merge runs only in Go. The dashboard asks for one server-side dry-run when
+# the order page opens and submits the displayed spec; edit uses saved values. It
+# does not read the ConfigMap or compute defaults locally and needs no extra
+# ConfigMap RBAC. Missing configuration means no installation defaults. Invalid
+# JSON, structure or reserved top-level fields also skip defaulting: creation
+# continues with the submitted spec, ordinary validation/admission still runs, and
+# the client gets a warning.
+# Before merging, the API checks the selected entry against its application's
+# OpenAPI schema. Unknown fields require an explicit dictionary or free-form
+# declaration. Object properties may be omitted; array values must be complete.
+# An object's own oneOf is not evaluated, since it cannot be judged on a partial
+# object.
+# Invalid configured values or missing/unreadable schemas skip the selected entry
+# without merging any part of it. Other applications' schemas are checked when
+# creating their instances. Saving this ConfigMap does not validate its payload;
+# inspect the result with kubectl create --dry-run=server -o yaml and a name that
+# is not in use.
+# Do not put secrets here. Applied values are visible in application specs.
+# These values are not forwarded through cozystack-values or valuesFrom.
+#
+# Example:
+# applicationDefaults:
+#   postgreses:
+#     storageClass: replicated
+#     size: 20Gi
+#   kubernetesnodeses:
+#     talos:
+#       imageFactoryURL: https://factory.example.com
+#       installerRepository: registry.example.com/installer
+#       registryMirrors:
+#         ghcr.io:
+#           endpoints: [https://registry.example.com]
+applicationDefaults: {}
+
 sourceRef:
   kind: OCIRepository
   name: cozystack-platform
