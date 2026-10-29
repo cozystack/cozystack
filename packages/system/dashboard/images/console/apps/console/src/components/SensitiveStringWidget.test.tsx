@@ -43,6 +43,19 @@ function renderWithLabel(props: WidgetProps) {
 const TOGGLE_NAME = /toggle credential visibility/i
 
 describe("SensitiveStringWidget", () => {
+  it("keeps an emptied value as an empty string when the server owns defaults, and drops the key otherwise", async () => {
+    const user = userEvent.setup()
+    const server = vi.fn()
+    const view = renderWithLabel(makeProps({ value: "abc", onChange: server, registry: { formContext: { serverDefaults: true } } as unknown as WidgetProps["registry"] }))
+    await user.clear(screen.getByLabelText("access key"))
+    expect(server).toHaveBeenLastCalledWith("")
+    view.unmount()
+    const schema = vi.fn()
+    renderWithLabel(makeProps({ value: "abc", onChange: schema }))
+    await user.clear(screen.getByLabelText("access key"))
+    expect(schema).toHaveBeenLastCalledWith(undefined)
+  })
+
   it("renders a real <input> control associated with its label, regardless of state", () => {
     renderWithLabel(makeProps({ value: "super-secret" }))
 

@@ -61,7 +61,7 @@ function clientWith(result: ListResult) {
 
 const NEVER_RESOLVES = () => new Promise<K8sList<unknown>>(() => {})
 
-function makeProps(overrides: Partial<WidgetProps> = {}, source = "storageclass"): WidgetProps {
+function makeProps(overrides: Omit<Partial<WidgetProps>, "registry"> & { registry?: Partial<WidgetProps["registry"]> } = {}, source = "storageclass"): WidgetProps {
   const base = {
     id: "field",
     name: "field",
@@ -88,6 +88,45 @@ function makeProps(overrides: Partial<WidgetProps> = {}, source = "storageclass"
 }
 
 describe("DynamicOptionsWidget", () => {
+  it.each(["", null, undefined])("selects the default item in server mode when the prepared value is empty %s", async (value) => {
+    const onChange = vi.fn()
+    renderWithK8sProvider(
+      <DynamicOptionsWidget {...makeProps({ value, onChange, registry: { formContext: { serverDefaults: true } } })} />,
+      { client: clientWith(list(option("storageclass", [{ value: "standard", default: true }]))) },
+    )
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith("standard"))
+    expect(onChange).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps a value the server prepared, such as an installation default, over the default item", async () => {
+    const onChange = vi.fn()
+    renderWithK8sProvider(
+      <DynamicOptionsWidget {...makeProps({ value: "installed", onChange, registry: { formContext: { serverDefaults: true } } })} />,
+      { client: clientWith(list(option("storageclass", [{ value: "standard", default: true }, { value: "installed" }]))) },
+    )
+    await screen.findByRole("option", { name: "standard" })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("keeps None as an explicit empty string after clearing installation defaults", async () => {
+    const onChange = vi.fn()
+    function Harness() {
+      const [value, setValue] = useState<unknown>("installed")
+      return <DynamicOptionsWidget {...makeProps({
+        value,
+        onChange: (next: unknown) => { onChange(next); setValue(next) },
+        registry: { formContext: { serverDefaults: true } },
+      })} />
+    }
+    renderWithK8sProvider(<Harness />, {
+      client: clientWith(list(option("storageclass", [{ value: "standard", default: true }]))),
+    })
+    await screen.findByRole("option", { name: "standard" })
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "" } })
+    expect(onChange.mock.calls).toEqual([[""]])
+    expect(screen.getByRole("combobox")).toHaveValue("")
+  })
+
   it("auto-selects the server-marked default item exactly once when no value is set", async () => {
     const onChange = vi.fn()
     renderWithK8sProvider(

@@ -105,8 +105,7 @@ schema). The pipeline in `apps/console/src/components/SchemaForm.tsx`:
    - credential-shaped fields (`password`, `*token`, `*accessKey`, …) →
      `SensitiveStringWidget` — see `lib/sensitive-fields.ts` and its tests for
      the exact matching rules.
-4. Defaults are emitted to the parent once per schema via `getDefaultFormState`
-   so the first submit always carries a populated spec.
+4. Application forms use server-prepared values: the order page asks `dryRunCreate` once when it opens and starts the form from the returned spec (no previews on edits), and editing starts with the saved API response. In `defaulting="server"` mode, schema defaults are stripped at every depth and RJSF cannot populate defaults, while a dynamic option list still selects its server-marked default when the field is empty. Other resource forms retain their existing schema-default mode.
 
 When you add a new widget binding:
 
