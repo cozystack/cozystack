@@ -97,7 +97,7 @@ matches the golden render of a GPU pool:
       strategy:
         rollingUpdate:
           maxSurge: 3
-          maxUnavailable: 0
+          maxUnavailable: 1
         type: RollingUpdate
       template:
         metadata:
