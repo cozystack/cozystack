@@ -97,7 +97,7 @@ matches the golden render of a GPU pool:
       strategy:
         rollingUpdate:
           maxSurge: 3
-          maxUnavailable: 1
+          maxUnavailable: 0
         type: RollingUpdate
       template:
         metadata:
@@ -250,7 +250,7 @@ matches the golden render of a kubelet-override pool:
       strategy:
         rollingUpdate:
           maxSurge: 3
-          maxUnavailable: 1
+          maxUnavailable: 0
         type: RollingUpdate
       template:
         metadata:
@@ -405,7 +405,7 @@ matches the golden render of the pool objects:
       strategy:
         rollingUpdate:
           maxSurge: 3
-          maxUnavailable: 1
+          maxUnavailable: 0
         type: RollingUpdate
       template:
         metadata:
