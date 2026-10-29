@@ -251,6 +251,62 @@ step_line() {
   [ "$tooling_step" -lt "$verify" ]
 }
 
+# The release page announces the version, so it must not go public before the
+# stable images and chart it points at exist. A step that fails after the draft
+# is undrafted also cannot be re-run: the draft lookup in resolve no longer
+# finds anything to publish. The registry steps and the page read the one
+# `latest` decision resolve made before the first registry write.
+@test "finalize publishes the release page only after the stable images and chart exist" {
+  block="$(job_block finalize "$FINALIZE")"
+  [ -n "$block" ]
+  resolve="$(step_line 'Resolve draft release' "$block")"
+  retag="$(step_line 'Retag rc images to stable' "$block")"
+  chart="$(step_line 'Publish stable cozy-installer chart' "$block")"
+  publish="$(step_line 'Publish draft release' "$block")"
+  [ -n "$resolve" ]
+  [ -n "$retag" ]
+  [ -n "$chart" ]
+  [ -n "$publish" ]
+  [ "$resolve" -lt "$retag" ]
+  [ "$retag" -lt "$chart" ]
+  [ "$chart" -lt "$publish" ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .env.MOVE_LATEST' "$FINALIZE")" = "\${{ steps.resolve.outputs.make_latest == 'true' && '1' || '0' }}" ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .env.MAKE_LATEST' "$FINALIZE")" = "\${{ steps.resolve.outputs.make_latest }}" ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish draft release") | .env.MAKE_LATEST' "$FINALIZE")" = "\${{ steps.resolve.outputs.make_latest }}" ]
+}
+
+# Order alone does not hold the page back. A registry step allowed to fail, or
+# skipped for a stable tag, or a publish step that runs whatever happened before
+# it, publishes over a missing image or chart all the same; and the chart's
+# `latest` moves only on the decision.
+@test "finalize publishes nothing after a failed registry step" {
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Resolve draft release") | has("continue-on-error")' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | has("continue-on-error")' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | has("continue-on-error")' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish draft release") | has("continue-on-error")' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish draft release") | has("if")' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .if' "$FINALIZE")" = "\${{ !contains(steps.get_tag.outputs.tag, '-') }}" ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .if' "$FINALIZE")" = "\${{ !contains(steps.get_tag.outputs.tag, '-') }}" ]
+  [ "$(yq '.jobs.finalize.steps[] | select(.name == "Retag rc images to stable") | .run' "$FINALIZE")" = './hack/promote-retag.sh "${STABLE_TAG}"' ]
+  chart_code="$(yq '.jobs.finalize.steps[] | select(.name == "Publish stable cozy-installer chart") | .run' "$FINALIZE" | code_lines)"
+  [ "$(printf '%s\n' "$chart_code" | head -n 1)" = 'set -eu' ]
+  [ "$(printf '%s\n' "$chart_code" | grep -cF '||')" -eq 0 ]
+  [ "$(printf '%s\n' "$chart_code" | grep -cF 'cozy-installer:latest')" -eq 1 ]
+  printf '%s\n' "$chart_code" | grep -A3 -F 'if [ "${MAKE_LATEST}" = "true" ]; then' | grep -qF 'cozy-installer:latest'
+}
+
+# Finalize decides `latest` minutes before it moves it, so two release PRs
+# merged close together must not finalize at once. The group is built from the
+# job's own condition, so a PR that skips finalize never joins it, and every
+# merged release waits its turn instead of the waiting one being cancelled.
+@test "finalize runs one release at a time, and only release PRs share the queue" {
+  [ "$(yq '.jobs.finalize.concurrency.cancel-in-progress' "$FINALIZE")" = false ]
+  [ "$(yq '.jobs.finalize.concurrency.queue' "$FINALIZE")" = max ]
+  cond="$(yq '.jobs.finalize.if' "$FINALIZE" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g; s/^ //; s/ $//')"
+  [ -n "$cond" ]
+  [ "$(yq '.jobs.finalize.concurrency.group' "$FINALIZE")" = "\${{ ($cond) && 'release-finalize' || format('release-finalize-skipped-{0}', github.event.pull_request.number) }}" ]
+}
+
 @test "finalize checkout does not persist credentials so the app-token tag push triggers tags.yaml" {
   block="$(job_block finalize "$FINALIZE")"
   [ -n "$block" ]
