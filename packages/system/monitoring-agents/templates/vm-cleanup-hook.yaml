@@ -71,8 +71,10 @@ metadata:
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
-  # Well inside the HelmRelease's 10m uninstall budget, and above the 60s wait
-  # plus one call per object on either side of it.
+  # Bounds every kubectl call as well: --request-timeout would make kubectl
+  # skip the in-cluster credentials (hack/check-hook-request-timeout.bats).
+  # Well inside the HelmRelease's 10m uninstall budget, and above the 60s
+  # wait plus one call per object on either side of it.
   activeDeadlineSeconds: 180
   backoffLimit: 0
   ttlSecondsAfterFinished: 600
@@ -126,7 +128,7 @@ spec:
               # to keep in step. A kind whose CRD is gone just prints an error.
               owned() {
                 for k in $kinds; do
-                  kubectl get "$k.operator.victoriametrics.com" -A --request-timeout=15s \
+                  kubectl get "$k.operator.victoriametrics.com" -A \
                     -o jsonpath='{range .items[*]}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"|"}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' |
                   while IFS='|' read -r r rns ns n; do
                     if [ "$r" = "$rel" ] && [ "$rns" = "$relns" ]; then
@@ -143,7 +145,7 @@ spec:
               fi
 
               echo "$objs" | while read -r k ns n; do
-                kubectl -n "$ns" delete "$k" "$n" --wait=false --request-timeout=15s
+                kubectl -n "$ns" delete "$k" "$n" --wait=false
               done
 
               deadline=$(( $(date +%s) + 60 ))
@@ -159,6 +161,6 @@ spec:
               echo "finalizers still held after 60s; clearing them by hand"
               echo "$objs" | while read -r k ns n; do
                 kubectl -n "$ns" patch "$k" "$n" --type=merge \
-                  -p '{"metadata":{"finalizers":null}}' --request-timeout=15s
+                  -p '{"metadata":{"finalizers":null}}'
               done
               exit 0
