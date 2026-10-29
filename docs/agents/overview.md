@@ -118,6 +118,12 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
 
+**No new `lookup`.** Do not add a `lookup` to a chart template unless the operator or a maintainer has authorized that specific one. A lookup reads cluster state at render time, and nothing triggers a reconcile of the HelmRelease when the object it reads changes, so the release keeps the stale answer until something unrelated upgrades it. `helm template` and helm-unittest see only the empty branch of a lookup, so the other branch goes untested.
+
+The lookups already in the charts are not precedent: the project has worked to remove them, and they spread because agents copied them. The accepted exception is a check that an object, such as a Secret, exists, where the render converges on the same output however often it runs.
+
+To use a fact about the cluster instead, have the Cozystack API or a controller write it into the release's values, read the state at run time in a hook or Job, or move the logic into a controller.
+
 ### Go Code
 - Follow standard **Go conventions** and idioms
 - Use **controller-runtime** patterns for Kubernetes controllers

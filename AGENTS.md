@@ -28,7 +28,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Go code, Helm charts, build and test commands, project structure** (e.g., "add a field to this CRD", "fix this controller", "add a value to the postgres chart", "regenerate the values schema", "how do I build/test this", "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
-  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
+  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts, no new `lookup`), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
