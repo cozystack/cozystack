@@ -439,16 +439,16 @@ baseline_of_platform() {
   # Chainsaw finds a Test: chainsaw-test.yaml, chainsaw-test.yml, numbered step
   # files, or a Test nested in a subdirectory. The allowlist has to accept the
   # same set, or a suite that runs cannot be exempted and the run stops before
-  # the first suite. That includes a chainsaw-test.yaml that is a directory:
+  # the first suite. That includes a chainsaw-test.y*ml that is a directory:
   # the selector keeps it so Chainsaw fails on it loudly, and refusing it here
   # would stop the run before Chainsaw could report it.
   new_fixture
-  mkdir -p "$FIX/root/plain" "$FIX/root/yml" "$FIX/root/steps" "$FIX/root/nested/sub" "$FIX/root/dirtest/chainsaw-test.yaml"
+  mkdir -p "$FIX/root/plain" "$FIX/root/yml" "$FIX/root/steps" "$FIX/root/nested/sub" "$FIX/root/dirtest/chainsaw-test.yaml" "$FIX/root/dirtestyml/chainsaw-test.yml"
   : >"$FIX/root/plain/chainsaw-test.yaml"
   : >"$FIX/root/yml/chainsaw-test.yml"
   : >"$FIX/root/steps/01-install.yaml"
   : >"$FIX/root/nested/sub/chainsaw-test.yaml"
-  printf 'plain cozystack/cozystack#1\nyml cozystack/cozystack#1\nsteps cozystack/cozystack#1\nnested cozystack/cozystack#1\ndirtest cozystack/cozystack#1\n' >"$FIX/allow"
+  printf 'plain cozystack/cozystack#1\nyml cozystack/cozystack#1\nsteps cozystack/cozystack#1\nnested cozystack/cozystack#1\ndirtest cozystack/cozystack#1\ndirtestyml cozystack/cozystack#1\n' >"$FIX/allow"
   lg lg_allowlist_validate "$FIX/allow" "$FIX/root"
   rm -rf "$FIX"
 }
