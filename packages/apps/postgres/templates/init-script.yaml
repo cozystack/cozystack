@@ -53,6 +53,9 @@
   PostgreSQL identifiers too, capped at 63.
 */}}
 {{- range $database, $d := .Values.databases }}
+  {{- if has $database (list "postgres" "template0" "template1") }}
+    {{- fail (printf "databases.%s is refused: %q is a PostgreSQL system database. Managing it would hand it, its public schema and the auto-grant event trigger to the \"%s_admin\" role (template1 then passes all of that on to every database created afterwards), and removing the entry later could not drop it. Remove the entry and declare an application database instead; the next upgrade releases a system database a previous version took over, without dropping it" $database $database $database) }}
+  {{- end }}
   {{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $database)) (gt (len $database) 54) }}
     {{- fail (printf "invalid database name %q: a database name may contain only letters, digits and the characters -._ and must be at most 54 characters (it is interpolated into superuser SQL and the init-script shell, and it seeds the \"<db>_admin\" and \"<db>_readonly\" PostgreSQL roles, which CREATE ROLE silently truncates past 63 bytes; the next init-job run then cannot drop the truncated role and fails). Changing only its key in values makes the init-job drop the database; to keep the data, a platform administrator first renames it as the CNPG superuser (ALTER DATABASE, and ALTER ROLE for its <db>_admin and <db>_readonly roles), then the key is changed" $database) }}
   {{- end }}
@@ -320,6 +323,37 @@ stringData:
     EOT
     done
 
+    echo "== release system databases"
+    {{- /*
+      Versions that did not refuse postgres, template0 and template1 in
+      databases took them over like any other entry. DROP DATABASE on them can
+      only fail (template databases cannot be dropped, and this session is
+      connected to postgres), which wedged every later upgrade, so they are
+      handed back instead: the auto-grant trigger goes, since it names a role
+      about to be dropped and would make every CREATE SCHEMA fail, what the
+      <db>_admin and <db>_readonly roles own or were granted there goes back to
+      the superuser, public goes back to pg_database_owner (PostgreSQL 15 and
+      later), and the comment is cleared. The orphaned-roles pass below then
+      drops the roles; it does not visit template1, hence the per-database
+      REASSIGN/DROP OWNED here. template0 accepts no connection, and the Job
+      that commented it never got further, so only the comment is cleared.
+    */}}
+    SYSTEM_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN ('postgres', 'template0', 'template1')")
+    echo "system databases to release: $SYSTEM_DBS"
+    for db in $SYSTEM_DBS; do
+    if [ "$db" != template0 ]; then
+    psql -v ON_ERROR_STOP=1 --echo-all --dbname "$db" -v db="$db" <<\EOT
+    DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;
+    DROP FUNCTION IF EXISTS auto_grant_schema_privileges();
+    SELECT format('REASSIGN OWNED BY %I TO CURRENT_USER', r), format('DROP OWNED BY %I', r) FROM unnest(ARRAY[:'db' || '_admin', :'db' || '_readonly']) AS r WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = r)\gexec
+    SELECT 'ALTER SCHEMA public OWNER TO pg_database_owner' WHERE current_setting('server_version_num')::int >= 150000 AND EXISTS (SELECT FROM pg_namespace WHERE nspname = 'public')\gexec
+    EOT
+    fi
+    psql -v ON_ERROR_STOP=1 --echo-all -v db="$db" <<\EOT
+    COMMENT ON DATABASE :"db" IS NULL;
+    EOT
+    done
+
     echo "== delete databases"
     {{- /*
       A restore replaces spec.databases with the Backup's snapshot, but recovery
@@ -338,7 +372,7 @@ stringData:
     ADOPTED_MARK=$(psql -v ON_ERROR_STOP=1 -t -A --dbname postgres -c "SELECT current_setting('cozystack.adopted_restore', true)")
     MANAGED_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm'")
     DEFINED_DBS="{{ join " " (keys .Values.databases) }}"
-    DELETE_DBS=$(for db in $MANAGED_DBS; do case " $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
+    DELETE_DBS=$(for db in $MANAGED_DBS; do case " postgres template0 template1 $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
 
     if [ -n "$RESTORE_MARK" ] && [ "$ADOPTED_MARK" != "$RESTORE_MARK" ]; then
     echo "databases the restore brought back that values do not declare, released from management: $DELETE_DBS"
