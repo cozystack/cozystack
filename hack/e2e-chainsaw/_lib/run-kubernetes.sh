@@ -5559,11 +5559,13 @@ cozy_report_helmrelease_remediation() {
   cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_parent}" || return 0
   echo "=== ${_label}tenant HelmRelease remediation footprint (management cluster, ns ${_ns}) — classification only, this does not decide the run ==="
   cozy_guard_helmrelease "$_ns" "${_parent}" required || true
-  # The pool release is created by a later apply than the parent, so a run that
-  # failed between the two has none to read. Its absence is then a fact about
-  # where the run stopped, not a failed read, and is reported as such. Only an
-  # exit 0 with empty output means absent: --ignore-not-found makes NotFound
-  # that, so any non-zero exit is a read that failed and is named as one.
+  # The pool release is created by a later apply than the parent, and
+  # run_kubernetes_test arms the exit handler between the two, so a run whose
+  # pool apply failed reaches this with none to read. Its absence is then a fact
+  # about where the run stopped, not a failed read, and is reported as such.
+  # Only an exit 0 with empty output means absent: --ignore-not-found makes
+  # NotFound that, so any non-zero exit is a read that failed and is named as
+  # one.
   _pool=$(cozy_pool_helmrelease_name "${_parent}")
   cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_pool}" || return 0
   if [ "$(date +%s)" -ge "${_deadline}" ]; then
@@ -5762,6 +5764,28 @@ ${ouroboros_addon}
   version: "${k8s_version}"
 EOF
 
+  # Armed here, at the parent apply, rather than once the tenant answers. The
+  # parent HelmRelease exists from this point on -- the aggregated apiserver
+  # creates it before it answers the apply above -- and everything between here
+  # and the tenant LB is a management-cluster wait on that release or on what it
+  # installs: the KamajiControlPlane, the control-plane Deployments, the
+  # MachineDeployment, the admin-kubeconfig Secret. That window is the one the
+  # guard was written for. An install action that times out while
+  # admin-kubeconfig is still being provisioned leaves the failed Snapshot this
+  # reads, and every one of those waits exits under errexit with no reading at
+  # all if the handler is armed after them.
+  #
+  # Ahead of the pool apply below as well, not after it: a pool apply that fails
+  # exits under errexit too, and armed after it that run would leave the parent
+  # unclassified. Armed here, it is the run the report's "pool release does not
+  # exist" line describes.
+  #
+  # Arming this early costs the snapshot nothing: _tenant_snapshot_on_fail
+  # returns on an unset CURRENT_TENANT_KC, which is assigned where the
+  # kubeconfig becomes usable, so it no-ops until then.
+  CURRENT_TENANT_PARENT_HR="kubernetes-${test_name}"
+  trap '_tenant_failure_on_exit' EXIT
+
   # Worker node pool is a separate KubernetesNodes resource since the Phase 2
   # split. Named "<cluster>-md0" so it produces MachineDeployment
   # kubernetes-${test_name}-md0 — the same object the pre-split
@@ -5820,22 +5844,6 @@ ${talos_block}
   storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
-  # Armed here, at the apply, rather than once the tenant answers. The parent
-  # HelmRelease exists from this point on -- the aggregated apiserver renders it
-  # from the CR above -- and everything between here and the tenant LB is a
-  # management-cluster wait on that release or on what it installs: the
-  # KamajiControlPlane, the control-plane Deployments, the MachineDeployment,
-  # the admin-kubeconfig Secret. That window is the one the guard was written
-  # for. An install action that times out while admin-kubeconfig is still being
-  # provisioned leaves the failed Snapshot this reads, and every one of those
-  # waits exits under errexit with no reading at all if the handler is armed
-  # after them.
-  #
-  # Arming this early costs the snapshot nothing: _tenant_snapshot_on_fail
-  # returns on an unset CURRENT_TENANT_KC, which is assigned where the
-  # kubeconfig becomes usable, so it no-ops until then.
-  CURRENT_TENANT_PARENT_HR="kubernetes-${test_name}"
-  trap '_tenant_failure_on_exit' EXIT
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 

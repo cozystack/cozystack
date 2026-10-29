@@ -387,9 +387,10 @@ STUB
 }
 
 @test "the failure-path report says when the pool release was never created" {
-    # The pool is applied after the parent, so a run that failed between the two
-    # has no pool release. That is a fact about where the run stopped, and the
-    # report says so instead of reporting a failed read of a missing object.
+    # The pool is applied after the parent, and the exit handler is armed between
+    # the two, so a run whose pool apply failed reaches the report with no pool
+    # release. That is a fact about where the run stopped, and the report says so
+    # instead of reporting a failed read of a missing object.
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     tmp=$(mktemp -d)
     cozy_make_kubectl_stub "$tmp"
@@ -1482,6 +1483,19 @@ $out" >&2
     fi
     if [ "$arm" -ge "$cp_wait" ]; then
         echo "expected the handler armed (line $arm) before the control-plane wait (line $cp_wait)" >&2
+        exit 1
+    fi
+    # And before the pool apply, which follows the parent's. A failing pool
+    # apply exits under errexit, so armed after it that run leaves the parent
+    # unclassified, and the report's absent-pool line describes a run that never
+    # reaches it.
+    pool_apply=$(grep -n '^kind: KubernetesNodes$' "$lib" | head -n 1 | cut -d: -f1)
+    if [ -z "$pool_apply" ]; then
+        echo "expected to find the KubernetesNodes apply in $lib" >&2
+        exit 1
+    fi
+    if [ "$arm" -ge "$pool_apply" ]; then
+        echo "expected the handler armed (line $arm) before the pool apply (line $pool_apply)" >&2
         exit 1
     fi
     # The parent name is part of this one, because it is what tells the
