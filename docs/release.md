@@ -27,6 +27,21 @@ There are three types of releases:
 
 All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$`. The tag push is the trigger for the whole pipeline. **Pre-release tags (`-alpha` / `-beta` / `-rc`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow** (manual dispatch from `main` or `release-X.Y`) — it pushes the tag as the CI app at the dispatch branch's tip, so GitHub fills `base_ref` (`tags.yaml`'s `Get base branch` step refuses tags pushed without a base) and the push triggers `tags.yaml` (a tag pushed with the default `GITHUB_TOKEN` would not). Stable `vX.Y.Z` tags are never pushed by hand at all — they are cut write-once by the promote flow at a PR merge commit. Only `-rc.N` pre-releases feed the promotion flow ([`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) accepts `vX.Y.Z-rc.N` alone); `-alpha.N` / `-beta.N` tags are built and published for download and validated on demand with the [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml) button, but are never promoted to a stable release.
 
+## Milestones
+
+A milestone titled exactly as the release tag, such as `v1.7.0` or `v1.6.6`, is the scope of that release, and the end of the milestone is the release. What the milestone holds reaches users when `vX.Y.Z` is published, and not before.
+
+- Maintainers put an issue or PR in the milestone once they commit to shipping it in that release. After the line is frozen, work merged to `main` reaches the release only by [backport](#backports). For a frozen line, the milestone therefore holds what must be on `release-X.Y` before promotion.
+- The due date is optional. Set it when the release has a target date. On that day the release starts with whatever is still open.
+
+[`milestone-release.yaml`](../.github/workflows/milestone-release.yaml) starts the release once the milestone is done, meaning its last item has closed or its due date has come. It checks when an issue in a milestone closes and once a day. It opens one `Release vX.Y.Z` issue inside the milestone, labelled `area/release` and `triage/accepted`. The issue lists:
+
+- what was delivered: merged PRs and issues closed as completed;
+- anything still open, to be finished or moved to the next milestone before the rc is cut;
+- the steps from [Regular Releases](#regular-releases), with the exact rc tag and the branch to dispatch it from.
+
+The workflow never cuts a tag, creates a branch or dispatches another workflow. Cutting the rc freezes the line, so it stays a maintainer's dispatch, and the promote PR still needs a reviewed merge. The workflow only removes the need for someone to notice that the milestone is done. After the stable `vX.Y.Z` release is published, its next run closes the issue and then the milestone. A milestone whose title is not `vX.Y.Z` is ignored. A manual dispatch is a dry run unless `dry_run` is unchecked.
+
 ## Release Candidates
 
 Release candidates are Cozystack versions that introduce new features and are published before a stable release. Their purpose is to help validate stability before finalizing a new feature release.
@@ -213,7 +228,7 @@ gitGraph
 
 ## What CI does during the release process
 
-The numbered process above is implemented by seven workflows, including the reusable/manual [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml), plus the reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) that two of them share to produce the changelog. Knowing which job does what makes the failure modes much easier to diagnose.
+The numbered process above is started by [`milestone-release.yaml`](../.github/workflows/milestone-release.yaml) (see [Milestones](#milestones)) and implemented by seven workflows, including the reusable/manual [`e2e-tag.yaml`](../.github/workflows/e2e-tag.yaml), plus the reusable [`changelog-generate.yaml`](../.github/workflows/changelog-generate.yaml) that two of them share to produce the changelog. Knowing which job does what makes the failure modes much easier to diagnose.
 
 1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Cutting the first `vX.Y.0-rc.N` also creates `release-X.Y`, freezing the line; afterwards a `vX.Y.*` dispatch from `main` is refused. Stable tags are never created here.
 2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on any pre-release tag push: `build-amd64` and `build-arm64` build the pre-release side by side, then `prepare-release` publishes it and pushes its digest-pinned staging branch, then — **only for `-rc.N` tags** — the mandatory `rc-e2e` job calls `e2e-tag.yaml` in the same run (`-alpha.N` / `-beta.N` skip it and are validated on demand with `e2e-tag.yaml`'s manual button). `generate-changelog` and `update-website-docs` also live here but are **backstops only** — both are normally produced at promotion time (see 4); on a stable tag push each self-skips or no-ops when the promote flow already did the work. These stable-tag backstops only fire because finalize pushes the stable tag with the CI app token (a `GITHUB_TOKEN` push triggers no run — see 5).
