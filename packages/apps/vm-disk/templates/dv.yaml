@@ -256,6 +256,15 @@ metadata:
     {{ $storageClassAnnotation }}: {{ $requestedSC | quote }}
     {{- end }}
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
+    {{- /* A Velero restore deletes the DataVolume and recreates the PVC under
+           its name, so the next Helm upgrade creates this DataVolume over a
+           claim CDI did not make for it. CDI v1.66 accepts that only with this
+           annotation on the DataVolume or with the DataVolumeClaimAdoption
+           feature gate; the same annotation on the PVC is never read. It cannot
+           capture a claim CDI created for this very DataVolume, whose
+           createdForDataVolume is the DataVolume's uid, so a fresh import is
+           unchanged. */}}
+    cdi.kubevirt.io/allowClaimAdoption: "true"
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
   name: {{ .Release.Name }}

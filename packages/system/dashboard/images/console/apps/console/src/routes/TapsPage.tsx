@@ -62,8 +62,9 @@ export function TapsPage() {
       </div>
 
       <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-        Connecting a repository runs its charts in the management cluster. Connect only sources you
-        trust. The index verifies signatures at publication time; connecting does not verify them.
+        Connecting a repository makes its apps available but installs nothing. Install an app with{" "}
+        <code>cozypkg add</code>. Connect only sources you trust. The index verifies signatures at
+        publication time; connecting does not verify them.
       </div>
 
       <div className="mb-6 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-4">
@@ -205,6 +206,12 @@ function TapCard({ tap, onDisconnect }: { tap: Tap; onDisconnect: (name: string)
             </li>
           ))}
         </ul>
+      )}
+
+      {packages.length === 0 && (
+        <p className="mt-3 text-xs text-slate-500">
+          No apps installed from this repository yet. Install one with <code>cozypkg add</code>.
+        </p>
       )}
     </div>
   )

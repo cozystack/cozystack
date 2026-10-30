@@ -419,24 +419,51 @@ jobs:
             // Reading the file here is both race-free and branch-agnostic;
             // update-releasenotes.yaml remains for later maintainer edits and
             // manual re-syncs.
+            //
+            // docs/releasenotes/${tag}.md, a short hand-written summary for a
+            // release whose changelog is too long to read on the release page,
+            // is the body when it has content; the changelog otherwise.
+            //
+            // The tags above already exist, so a body GitHub refuses would
+            // strand a half-promoted release. GitHub's web UI cut the
+            // v1.7.0-rc.2 changelog at about 125000 characters. MAX_BODY_BYTES
+            // counts bytes, which are never fewer than characters, and sits 25
+            // percent under that figure, so neither the difference nor an
+            // imprecise limit matters, and GitHub's answer to an oversized
+            // body is never relied on. update-releasenotes.yaml uses the same
+            // constant.
             const fs = require('fs');
+            const MAX_BODY_BYTES = 100000;
             const changelogPath = `docs/changelogs/${tag}.md`;
-            let body;
-            if (fs.existsSync(changelogPath)) {
-              const raw = fs.readFileSync(changelogPath, 'utf8');
+            let sourcePath;
+            let raw;
+            for (const candidate of [`docs/releasenotes/${tag}.md`, changelogPath]) {
+              if (!fs.existsSync(candidate)) continue;
+              raw = fs.readFileSync(candidate, 'utf8');
               // Last line of defence before the body becomes public and
               // immutable-by-convention. promote-rc.yaml validates the changelog
               // structurally, but it can also arrive by hand-commit, and an
               // empty or whitespace-only file here would blank the release notes
               // more thoroughly than publishing the draft's body would.
               if (raw.trim().length === 0) {
-                console.log(`::warning::${changelogPath} is empty or whitespace-only — refusing to use it as the release body for ${tag}. Publishing with the draft's existing body instead.`);
+                console.log(`::warning::${candidate} is empty or whitespace-only — not using it as the release body for ${tag}.`);
+                continue;
+              }
+              sourcePath = candidate;
+              break;
+            }
+            let body;
+            if (!sourcePath) {
+              console.log(`::warning::No usable docs/releasenotes/${tag}.md or ${changelogPath} in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
+            } else {
+              const bytes = Buffer.byteLength(raw, 'utf8');
+              if (bytes > MAX_BODY_BYTES) {
+                body = `The release notes for ${tag} are too long for a GitHub release description; the full changelog is [${changelogPath}](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${tag}/${changelogPath}).`;
+                console.log(`::warning::${sourcePath} is ${bytes} bytes, over MAX_BODY_BYTES (${MAX_BODY_BYTES}) — publishing ${tag} with a link to ${changelogPath} instead.`);
               } else {
                 body = raw;
-                console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+                console.log(`📝 Release body from ${sourcePath} (${bytes} bytes)`);
               }
-            } else {
-              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
             }
 
             // Publish the release

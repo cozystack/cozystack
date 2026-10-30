@@ -16,6 +16,21 @@ RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
   if grep -qE '\$\{[A-Za-z_]+:[-=?+]' "$FIXTURE"; then echo "FAIL: the fixture must not carry a shell-style default envsubst leaves in place"; false; fi
 }
 
+# kubernetes-nodes names its release kubernetes-nodes-<CR name> and refuses one
+# that does not start with kubernetes-nodes-<spec.cluster>- (_helpers.tpl), so a
+# pool named anything but <cluster>-<pool> fails at helm install and the suite
+# only learns it from a Machine that never appears.
+@test "the fixture's KubernetesNodes is named <cluster>-<pool>, as kubernetes-nodes requires" {
+  doc="$(sed -n '/^kind: KubernetesNodes$/,/^---$/p' "$FIXTURE")"
+  name="$(printf '%s\n' "$doc" | sed -n 's/^  name: *//p' | head -n 1 | tr -d '"')"
+  cluster="$(printf '%s\n' "$doc" | sed -n 's/^  cluster: *//p' | head -n 1 | tr -d '"')"
+  if [ -z "$name" ] || [ -z "$cluster" ]; then echo "FAIL: no KubernetesNodes name or spec.cluster in the fixture"; false; fi
+  case "$name" in
+    "$cluster"-?*) ;;
+    *) echo "FAIL: KubernetesNodes $name must be named $cluster-<pool>"; false ;;
+  esac
+}
+
 @test "render-tenant expands every variable with the runner's defaults" {
   out="$(COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=teststore "$RUNNER" render-tenant)"
   if printf '%s' "$out" | grep -q '\${'; then echo "FAIL: the rendered tenant must not keep an unexpanded variable"; false; fi
@@ -60,4 +75,64 @@ RUNNER="$REPO_ROOT/hack/e2e-chainsaw/_lib/run-proxmox.sh"
   out="$(PATH="$stub:$PATH" COZY_PVE_SSH=root@pve COZY_PROXMOX_STORAGE=main-pool "$RUNNER" disk-freed main-pool:vm-1-pvc-x 2>&1)"
   rm -rf "$stub"
   case "$out" in *"is gone from main-pool"*) ;; *) echo "$out" >&2; exit 1 ;; esac
+}
+
+# The tenant's super-admin kubeconfig is a credential for the whole tenant, kept
+# under RUNNER_TEMP for one run. The workflow sets no path of its own, so these
+# cases go through the same RUNNER_TEMP fallback the runner provides, with the
+# override cleared.
+KUBECONFIG_NAME=proxmox-e2e-tenant.kubeconfig
+SUITE="$REPO_ROOT/hack/e2e-chainsaw/kubernetes-proxmox/chainsaw-test.yaml.disabled"
+
+@test "tenant-node writes the tenant kubeconfig without group or other bits under umask 022" {
+  work="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  # The secret read answers a kubeconfig and the first tenant read fails, which
+  # ends the check right after the fetch with the file in place.
+  cat > "$stub/kubectl" <<'STUB'
+#!/bin/sh
+case "$*" in *"get secret"*) printf '%s' YXBpVmVyc2lvbjogdjEK; exit 0 ;; esac
+exit 1
+STUB
+  chmod +x "$stub/kubectl"
+  rc=0
+  (umask 022; PATH="$stub:$PATH" RUNNER_TEMP="$work" COZY_PROXMOX_WORKDIR= COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=s "$RUNNER" tenant-node) >/dev/null 2>&1 || rc=$?
+  mode="$(ls -l "$work/$KUBECONFIG_NAME" | cut -c1-10)"
+  rm -rf "$work" "$stub"
+  [ "$rc" -ne 0 ]
+  [ "$mode" = "-rw-------" ] || { echo "FAIL: the tenant kubeconfig was written $mode" >&2; exit 1; }
+}
+
+@test "apply-tenant removes a tenant kubeconfig an earlier run left behind" {
+  work="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  printf 'an earlier run\n' > "$work/$KUBECONFIG_NAME"
+  printf '#!/bin/sh\ncat >/dev/null\n' > "$stub/kubectl"
+  chmod +x "$stub/kubectl"
+  PATH="$stub:$PATH" RUNNER_TEMP="$work" COZY_PROXMOX_WORKDIR= COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=s "$RUNNER" apply-tenant
+  left=no
+  [ ! -e "$work/$KUBECONFIG_NAME" ] || left=yes
+  rm -rf "$work" "$stub"
+  [ "$left" = no ] || { echo "FAIL: apply-tenant left the earlier run's kubeconfig in place" >&2; exit 1; }
+}
+
+@test "the suite's finally removes the tenant kubeconfig, so diagnostics after it prints no tenant section" {
+  # keep_tenant exits the finally before its deletes, and the kubeconfig has to
+  # be gone on that path as well. Diagnostics reads whatever is at the path, so
+  # a file left there would be reported as the next run's tenant.
+  work="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  printf 'this run\n' > "$work/$KUBECONFIG_NAME"
+  printf '#!/bin/sh\necho "stub $*"\n' > "$stub/kubectl"
+  printf '#!/bin/sh\nexit 0\n' > "$stub/ssh"
+  chmod +x "$stub/kubectl" "$stub/ssh"
+  finally="$(yq -r '.spec.steps[] | select(.name == "replacement-converges-unattended") | .finally[0].script.content' "$SUITE")"
+  [ -n "$finally" ]
+  PATH="$stub:$PATH" RUNNER_TEMP="$work" COZY_PROXMOX_WORKDIR= COZY_KEEP_TENANT=true sh -c "$finally" >/dev/null
+  out="$(PATH="$stub:$PATH" RUNNER_TEMP="$work" COZY_PROXMOX_WORKDIR= COZY_PVE_SSH=x COZY_PROXMOX_STORAGE=s "$RUNNER" diagnostics 2>&1)"
+  left=no
+  [ ! -e "$work/$KUBECONFIG_NAME" ] || left=yes
+  rm -rf "$work" "$stub"
+  [ "$left" = no ] || { echo "FAIL: the suite's finally left the tenant kubeconfig in place" >&2; exit 1; }
+  case "$out" in *"tenant nodes and pods"*) echo "$out" >&2; exit 1 ;; esac
 }

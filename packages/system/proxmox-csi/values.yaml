@@ -33,3 +33,14 @@ proxmox-csi-plugin:
   node:
     tolerations:
       - operator: Exists
+    plugin:
+      # The chart's default is its appVersion as a bare tag, and tags in this
+      # registry have been re-pushed. The digest is the pin; the version must
+      # stay the chart's appVersion and the one in the kubernetes chart's
+      # images/proxmox-csi-controller.tag, since node and controller are two
+      # halves of one driver release (hack/proxmox-csi-driver-pin_test.bats).
+      # The repository repeats the chart default so that hack/lib/image-refs.sh,
+      # which does not read under charts/, sees a complete reference here.
+      image:
+        repository: ghcr.io/sergelogvinov/proxmox-csi-node
+        tag: v0.20.0@sha256:e0151137a1c5fa4faea9b4622436b203f1dc246ea37a3a77d09d3855c70aabd1

@@ -303,7 +303,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 		ann[tapconst.NameAnnotation] = target.FluxSourceName
 		// Clear the materialized-revision annotation so a re-connect re-materializes
-		// (recovering a registration removed out-of-band, the same recovery `cozypkg
+		// (recovering a PackageSource removed out-of-band, the same recovery `cozypkg
 		// tap` performs), and the pinned-digest annotation so the operator re-pins
 		// the newly requested tag rather than treating the dropped pin as a user digest.
 		delete(ann, tapconst.MaterializedRevisionAnnotation)

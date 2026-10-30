@@ -91,7 +91,10 @@ jobs:
             cat "$RUNNER_TEMP/kubeconfig-check.err" >&2
             exit 1
           fi
-          printf '%s' "$PVE_SSH_KEY" > "$COZY_PVE_SSH_KEY"
+          # OpenSSH refuses a private key whose last line has no newline ("error
+          # in libcrypto"), and `gh secret set` strips it from a key read from
+          # stdin. A second newline, when the secret kept its own, is harmless.
+          printf '%s\n' "$PVE_SSH_KEY" > "$COZY_PVE_SSH_KEY"
 
           # The credentials the management-side CSI controller and CCM read. A
           # Secret rather than values so no token is ever written into a
@@ -157,4 +160,8 @@ jobs:
 
       - name: Remove staged credentials
         if: always()
-        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY"
+        # The tenant kubeconfig is the suite's, fetched by run-proxmox.sh into
+        # RUNNER_TEMP, which the runner exports into every step (the runner
+        # context is not allowed in job-level env); its finally removes it too,
+        # but a run killed mid-step never reaches that.
+        run: rm -f "$GITHUB_WORKSPACE/.kubeconfig" "$COZY_PVE_SSH_KEY" "$RUNNER_TEMP/proxmox-e2e-tenant.kubeconfig"

@@ -100,6 +100,20 @@ run_step() {
   if grep -qv 'config view' "$KUBECTL_LOG"; then echo "FAIL: Stage went past the guard"; false; fi
 }
 
+@test "Stage writes an SSH key OpenSSH loads, whether or not the secret ends in a newline" {
+  ssh-keygen -q -t ed25519 -N '' -C e2e -f "$BATS_TEST_TMPDIR/src"
+  # $(...) drops the trailing newline, as `gh secret set` does with stdin.
+  key="$(cat "$BATS_TEST_TMPDIR/src")"
+  export KUBECONFIG_B64="" PVE_TOKEN_ID="" PVE_TOKEN_SECRET="" PVE_URL="" PVE_REGION=""
+  for PVE_SSH_KEY in "$key" "$key"$'\n'; do
+    export PVE_SSH_KEY
+    STUB_SERVER=https://192.0.2.10:6443 run_step "Stage credentials"
+    [ "$status" -eq 0 ]
+    run ssh-keygen -y -f "$COZY_PVE_SSH_KEY"
+    [ "$status" -eq 0 ]
+  done
+}
+
 @test "Stage writes the stand's Secret through the staged kubeconfig when it resolves" {
   export KUBECONFIG_B64="" PVE_SSH_KEY="" PVE_TOKEN_ID="" PVE_TOKEN_SECRET="" PVE_URL="" PVE_REGION=""
   STUB_SERVER=https://192.0.2.10:6443 run_step "Stage credentials"
