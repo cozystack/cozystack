@@ -603,10 +603,11 @@ jobs:
           tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
           rm -f "$syft_dir/syft.tar.gz"
           echo "$syft_dir" >> "$GITHUB_PATH"
-      # cosign is the version docs/release.md asks users for, so the job checks
-      # its own signature the way they will. The action verifies that binary
-      # against cosign's keyless and KMS bundles with its digest-pinned
-      # bootstrap cosign. Bump with tags.yaml; the contract test holds them equal.
+      # cosign is the version docs/release/signatures-and-sbom.md asks users
+      # for, so the job checks its own signature the way they will. The action
+      # verifies that binary against cosign's keyless and KMS bundles with its
+      # digest-pinned bootstrap cosign. Bump with tags.yaml; the contract test
+      # holds them equal.
       - name: Set up cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -1044,9 +1045,10 @@ jobs:
           PR_STATE="$(gh pr view "${STABLE_BRANCH}" --json state --jq .state 2>/dev/null || echo "")"
           if [ "${PR_STATE}" = "OPEN" ]; then
             # Refresh only while the body is still the one this workflow wrote.
-            # docs/release.md tells reviewers to paste upstream breaking-change
-            # notes into this body before merge; a re-dispatch that overwrites it
-            # would destroy that with no trace and no way to recover it.
+            # docs/release/pre-release-checklist.md tells reviewers to paste
+            # upstream breaking-change notes into this body before merge; a
+            # re-dispatch that overwrites it would destroy that with no trace
+            # and no way to recover it.
             CURRENT="$(gh pr view "${STABLE_BRANCH}" --json body --jq .body 2>/dev/null || echo "")"
             if [ "${CURRENT}" = "${BODY}" ]; then
               echo "PR already open for ${STABLE_BRANCH} with an identical body; nothing to do."

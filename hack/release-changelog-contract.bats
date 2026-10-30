@@ -570,10 +570,11 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     exit 1
   }
 
-  # changelog.md sends the agent to run the docs/release.md checks and the
-  # validator on its own output, by their working-tree paths. Without these two
-  # copies it runs the rc tag's versions, which predate every check added since.
-  for f in docs/release.md hack/validate-changelog.sh; do
+  # changelog.md sends the agent to run the docs/release/changelogs.md checks
+  # and the validator on its own output, by their working-tree paths. Without
+  # these two copies it runs the rc tag's versions, which predate every check
+  # added since.
+  for f in docs/release/changelogs.md hack/validate-changelog.sh; do
     printf '%s\n' "$overlay" | code_lines | grep -qF "cp .release-tooling/$f $f" || {
       echo "The refresh step does not overlay $f from the tooling checkout, so the" >&2
       echo "agent following docs/agents/changelog.md section 9 runs the rc tag's copy." >&2
@@ -581,23 +582,26 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     }
   done
 
-  # docs/release.md sits under neither sparse-checkout path. It reaches
-  # .release-tooling only because cone mode also checks out the files of every
-  # parent directory of a listed one; without it the copy above fails the job.
+  # An rc tagged before the release docs were split has no docs/release/
+  # directory, and cp does not create one.
+  printf '%s\n' "$overlay" | code_lines | grep -qE '^[[:space:]]+mkdir -p docs/release$' || {
+    echo "The refresh step does not create docs/release before copying into it, so" >&2
+    echo "the copy fails on every rc tagged before the release docs were split." >&2
+    exit 1
+  }
+
+  # The tooling checkout has to list both directories the copies read from.
   tooling="$(printf '%s\n' "$block" | awk '
     /^      - name: Checkout release tooling from the dispatch ref$/ { inside = 1; next }
     /^      - name: / { inside = 0 }
     inside' | code_lines)"
-  printf '%s\n' "$tooling" | grep -qE '^[[:space:]]+docs/agents$' || {
-    echo "The tooling checkout no longer lists docs/agents, which is what carries" >&2
-    echo "docs/release.md into .release-tooling." >&2
-    exit 1
-  }
-  if printf '%s\n' "$tooling" | grep -qE 'sparse-checkout-cone-mode:[[:space:]]*false'; then
-    echo "The tooling checkout turned cone mode off, which drops docs/release.md" >&2
-    echo "from .release-tooling and fails the refresh step's copy." >&2
-    exit 1
-  fi
+  for d in docs/agents docs/release; do
+    printf '%s\n' "$tooling" | grep -qE "^[[:space:]]+$d\$" || {
+      echo "The tooling checkout no longer lists $d, so .release-tooling lacks the" >&2
+      echo "file the refresh step copies from it." >&2
+      exit 1
+    }
+  done
 
   # Every job that runs release tooling against an older checkout must source it
   # from the dispatch ref. A script fetched by a script that is itself missing

@@ -1,0 +1,185 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// parseDefer reads --defer N[,N] and the --reason that has to come with it.
+func parseDefer(list, reason string) ([]int, string, error) {
+	if list == "" {
+		return nil, "", errors.New("--reason goes with --defer")
+	}
+	reason = capped(oneLine(clean(reason, false)), titleLimit)
+	if reason == "" {
+		return nil, "", errors.New("--defer needs a --reason, which the batch body records")
+	}
+	var numbers []int
+	for _, s := range strings.Split(list, ",") {
+		n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(s), "#"))
+		if err != nil || n <= 0 {
+			return nil, "", fmt.Errorf("--defer %q is not a list of pull request numbers", list)
+		}
+		if !slices.Contains(numbers, n) {
+			numbers = append(numbers, n)
+		}
+	}
+	return numbers, reason, nil
+}
+
+// rebuild takes the originals in numbers out of the open batch: it builds the
+// batch branch again off the line's head without their commits, and records
+// them in the body as deferred, for reason, next to what earlier deferrals
+// recorded. It adds no new original; the next run does.
+func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
+	if b.pr == nil {
+		return a.fail(fmt.Errorf("no batch pull request is open on %s; --defer rebuilds the open one", b.line.branch()))
+	}
+	branch := b.pr.Head.Ref
+	date, err := branchDate(branch)
+	if err != nil {
+		return a.fail(err)
+	}
+	recorded, err := parseDeferred(b.pr.Body, b.line)
+	if err != nil {
+		return a.fail(fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err))
+	}
+	hold := map[int]string{}
+	for n, e := range recorded {
+		if e.Reason != "" {
+			hold[n] = e.Reason
+		}
+	}
+	carried, err := readPicks(b.prHead, b.lineHead, b.textUntil)
+	if err != nil {
+		return a.fail(err)
+	}
+	stale, err := keptOut(b, carried)
+	if err != nil {
+		return a.fail(err)
+	}
+	for _, n := range numbers {
+		switch v := b.find(n); {
+		case v == nil:
+			return a.fail(fmt.Errorf("#%d did not merge into main after %s branched", n, b.line.branch()))
+		case v.rule != 0 && !slices.Contains(stale, v):
+			return a.fail(fmt.Errorf("#%d is not one the batch takes: rule %d, %s", n, v.rule, terminalSafe(v.reason)))
+		}
+		hold[n] = reason
+	}
+	start, replay, err := rebuildPlan(b, hold)
+	if err != nil {
+		return a.fail(err)
+	}
+	if _, err := git("switch", "--quiet", "--no-track", "-C", branch, "--end-of-options", start); err != nil {
+		return a.fail(err)
+	}
+	for _, u := range replay {
+		failed, files, err := replayUnit(u)
+		switch {
+		case err != nil:
+			return a.fail(err)
+		case failed != "":
+			return a.fail(fmt.Errorf("without what is deferred, %.12s%s no longer applies (%s); defer it as well", failed, originName(b, u), strings.Join(files, ", ")))
+		}
+	}
+	head, err := resolve("HEAD")
+	if err != nil {
+		return a.fail(err)
+	}
+	picks, err := readPicks(head, b.lineHead, b.textUntil)
+	if err != nil {
+		return a.fail(err)
+	}
+	r := newReport(b)
+	if r.stale, err = keptOut(b, picks); err != nil {
+		return a.fail(err)
+	}
+	for _, v := range b.qualifying() {
+		e := recorded[v.o.number]
+		switch {
+		case found(picks, v):
+			r.onBranch = append(r.onBranch, v)
+		case hold[v.o.number] != "":
+			r.held = append(r.held, pick{v: v, status: "held", reason: hold[v.o.number]})
+		case len(e.Files) > 0:
+			r.deferred = append(r.deferred, pick{v: v, status: "conflict", files: e.Files, more: e.More, failed: e.Commit})
+		}
+	}
+	return a.finish(b, r, branch, date, push, true)
+}
+
+// rebuildPlan is where the rebuild of the open batch without the originals in
+// drop starts, and the units of the batch it picks again on top, oldest first,
+// each in its own shape. While the batch still sits on the line's head,
+// everything before the first unit it drops stays as it is.
+func rebuildPlan(b *batch, drop map[int]string) (string, []unit, error) {
+	units, err := batchUnits(b.prHead, b.lineHead)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, u := range units {
+		if len(u.parents) > 2 || u.merge() && len(batchedFrom(u.message)) != 1 {
+			return "", nil, fmt.Errorf("batch pull request #%d carries merge commit %.12s, which is no batch merge of an original and which a rebuild cannot pick again; take the original out by hand", b.pr.Number, u.commit)
+		}
+	}
+	dropped := func(u unit) bool {
+		v := b.unitOriginal(u)
+		return v != nil && drop[v.o.number] != ""
+	}
+	var keep []unit
+	for _, u := range units {
+		if !dropped(u) {
+			keep = append(keep, u)
+		}
+	}
+	first := slices.IndexFunc(units, dropped)
+	switch {
+	case !isAncestor(b.lineHead, b.prHead):
+		return b.lineHead, keep, nil
+	case first < 0:
+		return b.prHead, nil, nil
+	case first == 0:
+		return b.lineHead, keep, nil
+	}
+	return units[first-1].commit, keep[first:], nil
+}
+
+// pickedBy is the original whose commits the -x sources name, or nil.
+func (b *batch) pickedBy(sources []string) *verdict {
+	for _, v := range b.verdicts {
+		for _, s := range sources {
+			if slices.Contains(v.commits, s) {
+				return v
+			}
+		}
+	}
+	return nil
+}
+
+// originName names the original a unit carries, for an error message.
+func originName(b *batch, u unit) string {
+	if v := b.unitOriginal(u); v != nil {
+		return fmt.Sprintf(", of #%d,", v.o.number)
+	}
+	return ""
+}

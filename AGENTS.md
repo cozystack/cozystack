@@ -16,7 +16,11 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Release creation** (e.g., "create release", "prepare release", "tag release", "make a release")
   - Read: [`releasing.md`](./docs/agents/releasing.md)
-  - Action: Read the file and follow the referenced release process in `docs/release.md`
+  - Action: Read the file and follow the referenced release process: [`docs/release.md`](./docs/release.md) indexes one page per topic under `docs/release/`
+
+- **Backports, patch content** (e.g., "backport this fix", "will this reach 1.6", "what goes into the next patch", "open a PR against release-X.Y")
+  - Read: [`backports.md`](./docs/release/backports.md)
+  - Action: Read the entire file. Backports are automatic: a fix merged to `main` with a `fix` title reaches the supported release lines through the batch, so never open a backport PR by hand. A pull request against `release-*` from outside the team is closed automatically when it is opened; a maintainer keeps a fix with no counterpart on `main` by reopening it
 
 - **Image references, tags and digests** (e.g., "why is this image tagged rc", "add an image to a package", "change how an image is stamped", "promotion/nightly missed an image", "where do image refs live")
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)

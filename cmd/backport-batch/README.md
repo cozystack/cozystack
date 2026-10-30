@@ -1,0 +1,98 @@
+# backport-batch
+
+Builds the automatic backport batch for a release line and gates a patch cut on it. What goes into a batch is decided by the rules of the [backport policy](../../docs/release/backports.md) alone; this page describes how the tool applies them and does not restate them.
+
+## Usage
+
+```bash
+go build ./cmd/backport-batch
+./backport-batch run   --line release-1.7 [--onto SHA | --continue] [--date YYYY-MM-DD] [--push]
+./backport-batch run   --line release-1.7 --defer 4321[,4322] --reason "fails the e2e of the app" [--push]
+./backport-batch check --line release-1.7
+./backport-batch fold  --line release-1.7 --original 4321 --commit SHA
+./backport-batch verify --line release-1.7 [--head SHA]
+./backport-batch notify --line release-1.7 [--agent ci|manual] [--mention org/team] [--push]
+./backport-batch lines
+```
+
+[`hack/backport-batch-scheduled.sh`](../../hack/backport-batch-scheduled.sh) runs `lines`, then `run --continue --push`, `check` and `notify` for each line; [`backport-batch.yaml`](../../.github/workflows/backport-batch.yaml) runs it on schedule.
+
+Requires `git` and an authenticated `gh` on PATH, and a remote called `origin`. Every command fetches `origin` first. The batch runs only for the two newest `release-X.Y` lines.
+
+Every command reads the `backport-policy` block of the policy page from `origin/main`, or from the ref `--policy` names, which is how a change to the page is tried before it merges. A line the block lists takes nothing merged into `main` before the day it gives, unless the original carries `backport/include`; any other line starts at its fork point. A page without exactly one readable block stops the run with exit 2.
+
+Build the binary wherever an exit code matters: `go run` turns any non-zero exit into its own `1`, so under it a check that could not be completed looks the same as one that found something missing.
+
+### run
+
+Switches the current working tree to `backport-batch/<line>-<yyyymmdd>`, created at `origin/<line>`, and picks onto it one original at a time, in the order they merged into `main`, as one unit each on the branch's first-parent line. A pull request merged into `main` with a merge commit `M` goes on as its own commits, `git rev-list --reverse --topo-order --no-merges M^1..M^2`, each picked with `git cherry-pick -x --signoff`, so each keeps its author, message and sign-offs and gains the `(cherry picked from commit …)` line; the merges that brought `main` into its branch are left out, since `main` already has what they brought. A merge commit then joins the picks to the batch: its first parent is the batch before the original, its second the last pick, and its message is `M`'s with a paragraph of its own, `Backported-from: M`. A pull request squash-merged into `main` goes on as one pick. When any commit of an original conflicts, the pick is aborted, the branch goes back to where it was before that original, and the original is recorded with the commit that failed and its files; the run goes on with the next one. A commit the branch already carries is skipped as empty, and an original none of whose commits changes anything is reported as carried. The tree has to be clean. Signing follows your git configuration; hooks are off for the picks and the merge, so each commit carries its message as git writes it.
+
+The pull request body goes to stdout, built from the line's own `.github/PULL_REQUEST_TEMPLATE.md`: the originals on the branch, each with how many commits it brought and which of them differ from the commit they were picked from by `git patch-id`, a resolution or a pick git had to fit, the deferred conflicts with the commit that failed and its files, the skipped pull requests counted by rule with the lists collapsed, the originals' release notes, and a `backport-batch` block of JSON that lists the deferred conflicts for `check`. The title is `fix(backport): batch for <line>, <date>`. A body that would pass GitHub's 65536-byte limit leaves out its longest skipped lists, and the run prints them on stderr instead.
+
+`--onto SHA` continues a batch already pushed instead of starting a new one. SHA has to be the head the remote has for a batch branch of the line right now, read with `git ls-remote`, so a head someone pushed onto since is refused. What that branch carries stays, and only what it does not carry yet is picked on top, so the next push is a fast-forward. `--continue` takes SHA from the open batch pull request, and starts a new batch when none is open, which is what the scheduled run does.
+
+`--defer N[,N] --reason TEXT` takes originals out of the open batch pull request, usually the ones a failing check was pinned on. It builds the batch branch again off `origin/<line>` without their units: while the batch still sits on the line's head, the units before the first one it drops stay as they are, and every later one, a pushed resolution included, is picked again in its own shape, a merge's picks one by one and then the merge with its message. When dropping one leaves a later commit that no longer applies, the run stops and names that commit's original, to defer as well. It adds no new original. It also takes out an original that got `backport/skip` after the batch picked it, which a run never removes on its own and the body lists as still on the branch. The body records each deferred original with the reason in the `backport-batch` block; a run that continues this batch keeps them out, and the next batch tries them again. A batch that carries a merge commit other than an original's, as GitHub's update-branch button makes, is refused, since picking such a merge again would lose what it resolved.
+
+`--push` pushes the branch, refusing anything but a fast-forward of what the remote has, then opens the draft pull request against the line with `gh pr create --draft`, or updates the open batch pull request with `gh pr edit`. While a batch pull request is open on another branch it refuses, so a line never has two. It never pushes to or edits a batch pull request whose body has no `backport-batch` block either: someone wrote that body by hand, and the batch is theirs to merge or close. After `--defer` alone it replaces the branch, with `--force-with-lease=refs/heads/<branch>:<head>`, where head is what `git ls-remote` reads for the branch and has to be the head the rebuild started from: a commit pushed since is never dropped, by the tool's check or, if one lands between that check and the push, by the remote.
+
+### check
+
+Exits 1 and prints the URL of every pull request the rules take that is neither on the line nor on the open batch pull request, 0 when there is none, and 2 when it cannot tell. A pull request that the open batch lists as deferred, a conflict or one taken out with `--defer`, prints as a warning and does not fail the check. Run it before cutting a patch release or an rc from a line.
+
+### fold
+
+Checks a hand-made resolution of a deferred conflict before it is pushed onto the batch, in the shape the run gives an original. For a merged pull request `--commit` is a merge whose first parent is the head of the open batch pull request and whose message names the original in exactly one `Backported-from:` trailer; its second parent ends a straight line from that head of picks of the pull request's own commits, in their order, each ending in the `(cherry picked from commit …)` line of the commit it came from, none claiming another commit of the same original, a commit of another pull request never among them. For a squash-merged one it is a single commit on that head whose `(cherry picked from commit …)` line names the original's commit on `main`. Either has to change something, and only files the original changes. The [conflict task](../../docs/release/backport-tasks/resolve-conflict.md) gives the commands. fold prints `ok` and exits 0, or prints why not and exits 1. It never commits or pushes; push one checked resolution at a time, since the next one has to sit on the new head.
+
+### verify
+
+Holds every unit of a batch to the shape fold checks for one, the clean picks as well as resolutions: it walks the batch's first-parent line from `origin/<line>` to `--head`, or to the head of the open batch pull request, and requires each unit to be one original, merged into `main` after the line branched, in that shape, and no original twice. A commit that carries no original fails it, and so does a merge of the line into the batch. It prints one line per unit, and exits 0 when all pass, 1 when one does not, and 2 when it cannot tell. With `--head` it reads git alone, nothing from GitHub. fold runs only where someone resolved a conflict and chose to run it; [`pr-labeler.yaml`](../../.github/workflows/pr-labeler.yaml) runs verify on every push to a batch pull request, from a build of `main`, with the batch head fetched as data.
+
+### notify
+
+Reads the open batch pull request of the line, trusted as described below, and prints one line for each thing that waits on it: a batch open for three days or more, the shortest gap between two scheduled runs, so one the previous run already saw; and the conflicts it deferred. Nothing open prints nothing.
+
+With `--push`, `--agent ci` starts one task per deferred conflict for the Copilot cloud agent, `POST /agents/repos/{owner}/{repo}/tasks` with the line as `base_ref` and the batch branch as `head_ref`, so the agent commits to the batch branch. The prompt is built from numbers and branch names alone and points the agent at the [conflict task](../../docs/release/backport-tasks/resolve-conflict.md). The call runs with the token in `BACKPORT_AGENT_TOKEN` and that call alone sees it; without it `--agent ci --push` stops before anything. `--agent manual`, the default, lists the conflicts in the comment instead.
+
+The comment starts with `<!-- backport-batch:notify -->` and is one per pull request: a later run edits it in place rather than adding another, and once nothing waits it says so. Only a comment whose author the batch trusts counts as it, so one someone else wrote with the same first line is neither edited nor believed. It mentions `--mention`, `@org/team` or `@login`, only while something waits. A failed batch CI is not among what it reports: the run has no trigger on the batch's CI finishing.
+
+### lines
+
+Prints the release lines the batch runs for, newest first: the two newest `release-X.Y` branches on `origin`.
+
+## Rule 4 and the API review gate
+
+A change under `api/` is held back only when the [API review gate](../../.github/workflows/api-review-gate.yaml) would call it sizeable. The batch calls the gate's own code, `apigate.LoadSnapshot` and `apigate.Classify` from `internal/apigate`, on the trees of the original's first parent and of its merge commit. It reads only what the gate reads, from `git ls-tree` and `git cat-file` into a temporary directory, so no attribute or export rule changes what the gate sees. A reworded description or a new optional field passes; a new or removed group or resource, or a schema change that can reject what the old schema accepted, does not. Migrations, `targetVersion` and CRDs keep their own checks: the gate sees only first-party `cozystack.io` CRDs, and only their sizeable changes, while a vendored operator's CRD is just as unsafe in a patch.
+
+The CRD check works document by document. In every changed manifest, a YAML, JSON or `.tpl` file or anything under `templates/` or `crds/`, outside `tests/` and `testdata/`, the documents that declare `kind: CustomResourceDefinition` on a line of their own are compared between the parent and the merge by `metadata.name`. The change counts only when one was added, removed or edited, so an edit to the DaemonSet beside a CRD in one manifest does not, and neither does a sentence or a `lookup` call that merely names the kind. A document that declares the kind but cannot be read as an object, a CRD behind a Helm template guard for one, is compared by its text, so the check fails closed on it, and so does a `List` that holds a CRD.
+
+## Maintainer overrides
+
+Every command reads the merged pull requests that carry `backport/include` or `backport/skip`, through GitHub search, which answers at most 1000 per label; a listing that long is an error rather than a complete answer. `backport/skip` keeps a pull request out whatever the rules say, and wins over `backport/include`, which lifts rules 2 to 4 and nothing else: what the line already carries and, on the older line, what the newer one does not carry yet still decide. The batch pull request lists every overridden original and what became of it. Adding a label takes triage access to the repository, which is the trust the labels rest on; who added one is not checked.
+
+## What counts as already there
+
+An original is on a line when any of these holds, and the batch does not pick it again:
+
+- its merge commit is reachable from the line;
+- picks on the line name its merge commit, or every commit of its own, in the `(cherry picked from commit …)` line git appended to them;
+- picking it onto the line would change nothing.
+
+A pick is known by the line git appends: the last `(cherry picked from commit …)` line of the message's last paragraph, with nothing after it but trailers such as a sign-off. A picked commit keeps its message, and a batch merge carries the original's merge message, so whatever else a message says was written by someone the batch does not answer for: a line in it naming an original, as an `-x` line, a `Backported-from:` trailer or `Backport of #N`, does not count. On commits from before the policy's `batch-only` day it does, since those record the hand backports and earlier batches:
+
+- a `(cherry picked from commit …)` line anywhere in the trailer block naming its merge commit or, across commits, every commit of its own;
+- a `Backported-from:` trailer naming its merge commit;
+- `Backport of #N`, which is what a hand backport merged as one commit carries.
+
+An original is on the open batch pull request when its commits picked there show it the same way. The same rules on the newer line decide rule 6.
+
+Only the line's own commits count, the ones after the point where it branched from `main`, never a pull request against it: an open backport pull request, its title and its body are anyone's to write. The tool trusts the line's history because only maintainers merge into `release-*`; if that ever changes, a commit that names an original without carrying all of it would hide the rest. The batch pull request counts only when it comes from a `backport-batch/<line>-<yyyymmdd>` branch of this repository, not a fork, and was opened by GitHub Actions' bot or by someone whose permission on the repository GitHub reports as write or admin, and only at the head GitHub reports for it. The author association is not enough: an organization member or an invited collaborator can hold read access only. With more than one such pull request open the tool refuses to go on.
+
+Titles and bodies are read from the merge commits on `main`, which hold them as a maintainer merged them; the live pull request stays editable by its author.
+
+## What CI verifies
+
+The tool does not build or test anything. CI on the batch pull request runs the line's own build and tests against what was picked, and `verify` against its shape, and a maintainer reviews and merges it. A deferred conflict waits for the next batch unless someone resolves it, checks the resolution with `fold` and pushes it, and then CI runs again.
+
+## Untrusted text
+
+Titles, release notes and file names in the body come from whoever opened the originals. A title, a reason or a file name goes into a code span whose fence no backtick inside can close, and the release notes go into the `release-note` block with every run of three backticks or tildes defused, so GitHub acts on no mention, reference, link or HTML in them. Inside that block, in case a note is copied out of it, links lose any target outside this repository, and closing keywords, cross-repository references and mentions have their `@`, `#` and `://` swapped for fullwidth signs, which act on nothing however the backticks around them pair up. Zero-width, bidi and control characters are dropped first, and everything the tool prints passes the same filter, so nothing it relays can drive a terminal. Commit messages are read through `git cat-file --batch`, which gives each object's length, and end at their first NUL as `git log` shows them, so a message cannot pass for a second commit or hide a trailer from a reader of the log. Every value handed to git comes after `--end-of-options` or `--`, refs pass `git check-ref-format`, SHAs have to be 40 hex digits, and nothing runs through a shell.

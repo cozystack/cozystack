@@ -296,3 +296,82 @@ jobs:
               labels: newLabels,
             });
             core.info(`Applied labels: ${newLabels.join(', ')}`);
+
+  # Backports are automatic (docs/release/backports.md), so a pull request
+  # against a release branch from outside the team is closed with a pointer to
+  # the policy. Only when it is opened: a maintainer keeps a fix that exists
+  # only on a release line by reopening it.
+  #
+  # pull_request_target hands a write token to a fork's pull request, so this
+  # job never touches the head: actions/checkout takes the event's own ref,
+  # which is the base repository, the script reads only the event JSON and the
+  # author's permission on the repository, and no `${{ }}` expression reaches
+  # the shell. The permission read needs repository metadata read access, which
+  # a GITHUB_TOKEN always carries and `permissions:` has no key for.
+  close-manual-backport:
+    if: >-
+      github.event.action == 'opened' &&
+      startsWith(github.event.pull_request.base.ref, 'release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # check out hack/ from the base repository
+      pull-requests: write  # close the pull request with a comment
+    steps:
+      - name: Check out the base repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: hack
+      - name: Close a backport opened by hand from outside the team
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"
+
+  # A batch pull request carries each original in the shape cmd/backport-batch
+  # gives it. fold checks one resolution, and only when whoever resolved the
+  # conflict runs it; this checks every original on the batch on each push.
+  #
+  # pull_request_target takes the workflow from main for a pull request into
+  # any branch, so the check reaches release-* lines, which do not carry it; a
+  # pull_request job would run the line's own workflows. The tool is built from
+  # main, since the lines do not carry it either. Nothing from the pull request
+  # is checked out or run: its head is fetched as data and read with git, and
+  # no `${{ }}` expression reaches the shell. Only a branch of this repository
+  # named like a batch is checked.
+  backport-batch-verify:
+    name: Backport batch shape
+    if: >-
+      startsWith(github.event.pull_request.base.ref, 'release-') &&
+      startsWith(github.event.pull_request.head.ref, 'backport-batch/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build backport-batch from main
+        run: go build -o "$RUNNER_TEMP/backport-batch" ./cmd/backport-batch
+      - name: Fetch the batch head as data
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags --quiet origin "$HEAD_SHA"
+      - name: Verify every original on the batch
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: '"$RUNNER_TEMP/backport-batch" verify --line "$BASE_REF" --head "$HEAD_SHA"'

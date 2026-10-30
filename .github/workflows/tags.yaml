@@ -553,8 +553,8 @@ jobs:
           tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
           rm -f "$syft_dir/syft.tar.gz"
           echo "$syft_dir" >> "$GITHUB_PATH"
-      # cosign is the version docs/release.md asks users for, as in
-      # promote-rc.yaml. Bump with it.
+      # cosign is the version docs/release/signatures-and-sbom.md asks users
+      # for, as in promote-rc.yaml. Bump with it.
       - name: Set up cosign
         if: needs.build-amd64.outputs.release_exists == 'false'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2

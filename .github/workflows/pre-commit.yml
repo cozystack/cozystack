@@ -89,16 +89,14 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-    # A backport PR is the one shape whose author cannot fix a finding: the
-    # backport action cherry-picks merged commits verbatim, so their messages
+    # A backport batch is the one shape whose author cannot fix a finding:
+    # cmd/backport-batch cherry-picks merged commits verbatim, so their messages
     # are history, and roughly a quarter of the commits on main predate the
-    # rule. Matched on the branch name the action generates,
-    # backport-<pr>-to-<branch>, rather than on the prefix alone; the label that
-    # asks for a backport sits on the original PR, not on the generated one, so
-    # a branch name is the only signal a pull_request event carries. That makes
-    # the exemption a convention rather than something enforced: anyone can name
-    # a branch this way. Every other PR, fork included, is checked.
-    if: ${{ !(startsWith(github.head_ref, 'backport-') && contains(github.head_ref, '-to-')) }}
+    # rule. Matched on the branch name the batch uses,
+    # backport-batch/<line>-<date>, and only from a branch of this repository,
+    # which takes write access to push: a fork can name a branch the same way.
+    # Every other PR, fork included, is checked.
+    if: ${{ !(startsWith(github.head_ref, 'backport-batch/') && github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
       - name: Checkout head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
