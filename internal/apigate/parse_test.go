@@ -402,12 +402,14 @@ spec: {group: metrics.k8s.io, version: v1beta1}
 	}
 }
 
-// TestLoadSnapshotSkipsOversizedFiles guards the size cap added alongside
+// TestLoadSnapshotRejectsOversizedFiles guards the size cap added alongside
 // content-based discovery: since every .yaml/.yml file in the tree is now a
 // candidate (no directory allowlist), an untrusted PR head checkout could
 // otherwise force an unbounded read/parse of a pathologically large file. A
-// first-party CRD past maxYAMLFileSize must be excluded from discovery.
-func TestLoadSnapshotSkipsOversizedFiles(t *testing.T) {
+// file past maxYAMLFileSize is an error, not a skipped file: a first-party CRD
+// padded with comments past the cap would otherwise read as "no API change"
+// while Helm still ships it.
+func TestLoadSnapshotRejectsOversizedFiles(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, content string) {
 		p := filepath.Join(root, filepath.FromSlash(rel))
@@ -420,16 +422,16 @@ func TestLoadSnapshotSkipsOversizedFiles(t *testing.T) {
 	}
 	padding := strings.Repeat("# padding\n", (maxYAMLFileSize/len("# padding\n"))+1)
 	write("packages/system/oversized/crds/widgets.yaml", padding+sampleCRD)
-	// A small, legitimate resource so the empty-snapshot guard doesn't fire
-	// for an unrelated reason.
+	// A small, legitimate resource so the empty-snapshot guard cannot be the
+	// reason for the error.
 	write("packages/system/postgres-rd/cozyrds/postgres.yaml", sampleCozyRD)
 
 	snap, err := LoadSnapshot(root)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatalf("a file past maxYAMLFileSize was skipped: %v", snap)
 	}
-	if _, ok := snap[resourceKey{Group: "example.cozystack.io", Plural: "widgets"}]; ok {
-		t.Fatalf("CRD in a file past maxYAMLFileSize must be excluded: %v", snap)
+	if !strings.Contains(err.Error(), "past the") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
