@@ -27,7 +27,9 @@ name: API Review Gate
 #
 # Consequence, and the invariant every change here must preserve: declining to
 # post can only preserve a verdict some real run reached, never invent one. So
-# skipped and cancelled runs post nothing.
+# skipped and cancelled runs post no verdict. The one thing a run posts before it
+# has one is `pending`, which is not a pass and blocks the merge until a real
+# verdict replaces it.
 #
 # For the gate to actually block a merge, main branch protection must require
 # the "API Review Gate" status CONTEXT; without that it is advisory. Never wire
@@ -261,7 +263,7 @@ jobs:
 
   # Publish the required "API Review Gate" commit status. Separate from the
   # evaluating job for the reasons in the header: the gate must not be a job
-  # name, and a run that reached no verdict must post nothing.
+  # name, and a run that reached no verdict must post none.
   #
   # The `if` guard stays in LOCKSTEP with the evaluating job's — this job runs if
   # and only if that one does. A `commented` review skips both, so the previous

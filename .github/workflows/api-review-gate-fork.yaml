@@ -37,6 +37,13 @@ name: API Review Gate (fork)
 # from the base repo's PR list: for a `pull_request_review` run on a fork PR,
 # `workflow_run.head_repository` names the BASE repository and
 # `workflow_run.pull_requests` is empty, so neither can tell a fork apart.
+#
+# A status lives on the SHA, not on a PR. A head that an open same-repo PR
+# carries is therefore left to `api-gate-report` whatever else carries it, and a
+# fork head carried by two open PRs fails closed in `resolve` and is skipped by
+# the sweep. One commit status cannot hold a verdict per base, so every PR on a
+# shared head shows whichever verdict stands there, as two same-repo PRs at
+# different bases already do.
 
 on:
   workflow_run:
@@ -114,12 +121,18 @@ jobs:
             );
             const atHead = openPrs.filter(p => p.head && p.head.sha === HEAD_SHA);
             const isFork = p => !p.head.repo || p.head.repo.full_name !== `${owner}/${repo}`;
-            if (!atHead.some(isFork)) {
-              core.info(`no open fork PR has head ${HEAD_SHA} — nothing to publish`);
+            // The status lives on the SHA, so a head that an open same-repo PR
+            // carries is that PR's: api-gate-report publishes it, and a failure
+            // written here would overwrite its verdict. A fork sees every commit
+            // of this repository, so a fork PR at that head can be opened on
+            // purpose, not only by accident. It inherits the verdict whatever its
+            // base: one commit status cannot hold two.
+            if (atHead.length === 0 || atHead.some(p => !isFork(p))) {
+              core.info(`no open PR, or a same-repo PR, carries head ${HEAD_SHA} — nothing to publish`);
               return;
             }
-            // The status lands on the SHA, so it would speak for every PR at this
-            // head while being computed from one of them.
+            // Only fork PRs are left. Their bases may differ, so one status cannot
+            // speak for all of them while being computed from one.
             if (atHead.length !== 1) {
               await setStatus('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${atHead.length}`);
               return;
@@ -331,35 +344,46 @@ jobs:
                 }
               }
             }`;
+            // Every open PR is read before any is swept: whether a head is shared
+            // is a fact about all of them, not about the page a PR sits on.
+            const nodes = [];
             let cursor = null;
-            let errors = 0;
             do {
               const page = (await github.graphql(query, { owner, repo, cursor })).repository.pullRequests;
-              for (const pr of page.nodes) {
-                const commit = pr.commits.nodes[0]?.commit;
-                const status = commit?.status?.context;
-                // Only a status a workflow posted: a fork's own runs cannot post
-                // one, so on a fork head that means this workflow.
-                if (!pr.isCrossRepository || !status || commit.oid !== pr.headRefOid
-                    || status.creator?.login !== 'github-actions') continue;
-                const description = status.description || '';
-                const awaiting = status.state === 'FAILURE' && description.startsWith(NEEDS_PREFIX);
-                const approved = status.state === 'SUCCESS' && description === APPROVED;
-                if (!awaiting && !approved) continue;
-                try {
-                  const ok = await ownerApproved(pr.number, pr.headRefOid);
-                  if (awaiting && ok) {
-                    await setStatus(pr.headRefOid, 'success', APPROVED);
-                    core.info(`#${pr.number}: approved by an API owner → success`);
-                  } else if (approved && !ok) {
-                    await setStatus(pr.headRefOid, 'failure', NEEDS);
-                    core.info(`#${pr.number}: API owner approval withdrawn → failure`);
-                  }
-                } catch (err) {
-                  errors++;
-                  core.warning(`#${pr.number}: ${err}`);
-                }
-              }
+              nodes.push(...page.nodes);
               cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
             } while (cursor);
+            const carriers = new Map();
+            for (const pr of nodes) carriers.set(pr.headRefOid, (carriers.get(pr.headRefOid) || 0) + 1);
+
+            let errors = 0;
+            for (const pr of nodes) {
+              const commit = pr.commits.nodes[0]?.commit;
+              const status = commit?.status?.context;
+              // The status lives on the SHA. Where two open PRs carry the head it
+              // may be the other PR's verdict, which this PR's reviews cannot
+              // speak for.
+              if (carriers.get(pr.headRefOid) > 1) continue;
+              // Only a status a workflow posted: a fork's own runs cannot post
+              // one, so on a fork head that means this workflow.
+              if (!pr.isCrossRepository || !status || commit.oid !== pr.headRefOid
+                  || status.creator?.login !== 'github-actions') continue;
+              const description = status.description || '';
+              const awaiting = status.state === 'FAILURE' && description.startsWith(NEEDS_PREFIX);
+              const approved = status.state === 'SUCCESS' && description === APPROVED;
+              if (!awaiting && !approved) continue;
+              try {
+                const ok = await ownerApproved(pr.number, pr.headRefOid);
+                if (awaiting && ok) {
+                  await setStatus(pr.headRefOid, 'success', APPROVED);
+                  core.info(`#${pr.number}: approved by an API owner → success`);
+                } else if (approved && !ok) {
+                  await setStatus(pr.headRefOid, 'failure', NEEDS);
+                  core.info(`#${pr.number}: API owner approval withdrawn → failure`);
+                }
+              } catch (err) {
+                errors++;
+                core.warning(`#${pr.number}: ${err}`);
+              }
+            }
             if (errors) core.setFailed(`${errors} PR(s) could not be swept`);
