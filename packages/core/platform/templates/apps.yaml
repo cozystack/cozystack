@@ -138,6 +138,27 @@ stringData:
       {{-   fail "authentication.oidc.realmName must not be master: that realm holds the Keycloak super-admin, so platform clients and end users would share it. Pick any other name, e.g. realmName: \"cozy\"" }}
       {{- end }}
       oidc-realm-name: {{ $realmName | quote }}
+      {{- /* Resolved here so every consumer reads one ready-made value instead
+             of re-deriving keycloak.<root-host>. An explicit value is spliced
+             into URLs and an oauth2-proxy --whitelist-domain flag, so only a
+             bare lowercase DNS name within the RFC 1123 length limits is
+             accepted: a scheme, port or path would yield an issuer that
+             matches nothing. The kind is checked before `default`, which would
+             otherwise launder false or 0 into the derived host. The derived
+             keycloak.<root-host> is not validated, so clusters that never set
+             this key render exactly as before. */}}
+      {{- $keycloakHost := .Values.authentication.oidc.keycloakHost }}
+      {{- if not (or (kindIs "invalid" $keycloakHost) (kindIs "string" $keycloakHost)) }}
+      {{-   fail (printf "authentication.oidc.keycloakHost must be a string (got %s)" (kindOf $keycloakHost)) }}
+      {{- end }}
+      {{- if $keycloakHost }}
+      {{-   if or (gt (len $keycloakHost) 253) (not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$" $keycloakHost)) }}
+      {{-     fail (printf "authentication.oidc.keycloakHost %q is invalid: give a bare lowercase hostname such as auth.example.org, without scheme, port or path, with labels of at most 63 characters and 253 in total" $keycloakHost) }}
+      {{-   end }}
+      {{- else }}
+      {{-   $keycloakHost = printf "keycloak.%s" $rootHost }}
+      {{- end }}
+      keycloak-host: {{ $keycloakHost | quote }}
       {{- /* null keycloakInternalUrl derives the in-cluster Service URL for the
              configured realm; "" is the external-discovery escape hatch and an
              explicit value is passed through, so distinguish null from "" with

@@ -4,8 +4,7 @@
 
 {{- include "keycloak.truststores.validate" . -}}
 
-{{- $host := index .Values._cluster "root-host" }}
-{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
+{{- $ingressHost := include "keycloak.host" . }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 
 {{- /*

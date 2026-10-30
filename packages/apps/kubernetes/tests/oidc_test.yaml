@@ -2757,3 +2757,23 @@ tests:
       - notMatchRegex:
           path: stringData["config.yaml"]
           pattern: "group in the cozy realm"
+
+  # The guest apiserver must trust the issuer Keycloak actually signs with,
+  # which is https://<_cluster.keycloak-host>/realms/<realm>.
+  - it: System mode points the issuer at a custom keycloak-host
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      _cluster.keycloak-host: auth.example.org
+      oidc.mode: System
+    asserts:
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "url: https://auth.example.org/realms/cozy"
+      - notMatchRegex:
+          path: stringData["config.yaml"]
+          pattern: "keycloak.example.org"
