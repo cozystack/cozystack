@@ -225,14 +225,28 @@ resolve_silent_conclusions() {
   # Dropping the term from one side alone is what re-opens the wedge this whole
   # test is about, and neither side reads wrong on its own. Counted outside the
   # review clause, so a fork term added there cannot stand in for this one.
-  count="$(printf '%s\n' "$line" | review_clause reject rest \
-    | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
+  #
+  # Direction as well as presence: the key needs the term as written (`|| F`)
+  # and the guard needs it negated (`&& !F`). An inverted one still counts as
+  # present and sends a same-repo `release` run to `-noop` while letting the
+  # fork's mislabel into the main group.
+  rest="$(printf '%s\n' "$line" | review_clause reject rest)"
+  count="$(printf '%s\n' "$rest" | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$rest" | grep -o '|| github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
   # `plan`'s own guard, not its steps': one of those carries the same bare
   # expression for an unrelated reason (see the opener assertion below).
-  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep '^    if:' | review_clause admit rest \
-    | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
-  [ "${count:-0}" -eq 1 ]
+  # `resolve_assets` sits on `e2e`'s release arm and admits `release` the
+  # way `plan` does, so it carries the same term the same way round.
+  for job in plan resolve_assets; do
+    rest="$(job_block "$job" "$PULL_REQUESTS" | code_lines | sed -n '/^    if:/,/^    [a-z-]*:/p' \
+      | review_clause admit rest)"
+    count="$(printf '%s\n' "$rest" | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
+    [ "${count:-0}" -eq 1 ]
+    count="$(printf '%s\n' "$rest" | grep -o '&& !github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
+    [ "${count:-0}" -eq 1 ]
+  done
 
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
   [ "${count:-0}" -eq 1 ]
@@ -296,6 +310,12 @@ resolve_silent_conclusions() {
   block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
   [ -n "$block" ]
   count="$(printf '%s\n' "$block" | grep -c "context: 'E2E Tests'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  # Same-repo only, for the opener's reason: on a fork PR this job would 403
+  # and fail. Read outside the review clause, so the term has to stand where
+  # it gates the whole job.
+  count="$(printf '%s\n' "$block" | grep '^    if:' | review_clause admit rest \
+    | grep -o '!cancelled() && !github\.event\.pull_request\.head\.repo\.fork &&' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
   # Fork lane: `resolve` opens, `report` concludes. The opener goes through the
@@ -448,6 +468,15 @@ resolve_silent_conclusions() {
 
     count="$(printf '%s\n' "$block" | grep -c "github\.event_name != 'pull_request_review'" || true)"
     [ "${count:-0}" -eq 1 ]
+
+    # …and joined to the rest of the guard by `&&`. With `||` there the guard
+    # admits every review submission and every label, and the clause itself
+    # still reads correctly.
+    rest="$(printf '%s\n' "$block" | review_clause admit rest)"
+    count="$(printf '%s\n' "$rest" | grep -oE '&& \(\)|(^|[ (])\(\) &&' | wc -l | tr -d ' ')"
+    [ "${count:-0}" -eq 1 ]
+    count="$(printf '%s\n' "$rest" | grep -oE '\|\| \(\)|(^|[ (])\(\) \|\|' | wc -l | tr -d ' ')"
+    [ "${count:-0}" -eq 0 ]
   done
 
   # …and the key is the complement, term for term and the other way round: the
@@ -464,6 +493,14 @@ resolve_silent_conclusions() {
   [ "$(printf '%s\n' "$names" | review_facts)" = "$facts" ]
   [ "$(printf '%s\n' "$names" | review_polarity)" = "reject" ]
   count="$(printf '%s\n' "$clause" | grep -o '&&' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 0 ]
+  # The key's two halves are alternatives: either kind of discarded event
+  # earns `-noop` on its own. Joined by `&&` the key is never `-noop`, and
+  # every discarded label or review cancels the live run again.
+  rest="$(printf '%s\n' "$line" | review_clause reject rest)"
+  count="$(printf '%s\n' "$rest" | grep -oF '|| ())' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$rest" | grep -oF '&& ())' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 0 ]
 
   count="$(printf '%s\n' "$line" | grep -c "github\.event_name == 'pull_request_review'" || true)"
@@ -503,15 +540,40 @@ resolve_silent_conclusions() {
   count="$(printf '%s\n' "$plan_block" | grep -cF 'heavy: ${{ steps.heavy.outputs.heavy }}' || true)"
   [ "${count:-0}" -eq 1 ]
 
-  # …and the step decides rather than asserts. Every write of the output is
-  # computed — there are two, one per axis, and both go through `String()` — so
-  # replacing the decision with a constant cannot leave both counts intact.
-  # That mutation is the one worth pinning: it silently restores per-push
-  # running and reads like a simplification.
+  # …and the step decides rather than asserts. There are two writes of the
+  # output, one per axis, and each is pinned to the variable that carries its
+  # decision, with that variable pinned to what it is computed from: a
+  # constant in either place silently restores per-push running and reads
+  # like a simplification. `String(true)` keeps the wrapper, so the wrapper
+  # alone is not the pin.
   count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy'" || true)"
   [ "${count:-0}" -eq 2 ]
-  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy', String(" || true)"
-  [ "${count:-0}" -eq 2 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy', String(labelled));" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('heavy', String(heavy));" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "const labelled = context.payload.action === 'labeled'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF "&& ['e2e/run', 'e2e/full'].includes(context.payload.label.name);" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # The reporter's half of the same decision: a run that did not earn the
+  # lane leaves the status alone instead of falling through to the final
+  # branch, which reads the skipped `e2e` as a failed suite and posts red on
+  # every unapproved push.
+  block="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -cF "} else if (HEAVY !== 'true') {" || true)"
+  [ "${count:-0}" -eq 1 ]
+  # …and that branch writes the opener's `pending` again unless the head
+  # carries this pull request's own green: the opener is continue-on-error, so
+  # without the repeat a lost opener write leaves a foreign green standing.
+  count="$(printf '%s\n' "$block" | grep -cF "if (REUSE === 'true') {" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$block" | grep -cF "state = 'pending';" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$block" | grep -cF "description = 'waiting for an approving review (or the e2e/run or e2e/full label)';" || true)"
+  [ "${count:-0}" -eq 1 ]
 
   # The two axes it decides from: the label EVENT, and whether this head SHA
   # already carries a green verdict this pull request may reuse. The status
@@ -536,6 +598,42 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$plan_block" | grep -c '^ *PR_NUMBER: \${{ github\.event\.pull_request\.number }}$' || true)"
   [ "${count:-0}" -ge 1 ]
+}
+
+@test "a promote PR that asks for the suite is reported on the suite's result" {
+  # On a promote PR `e2e` runs only on its release arm, which admits the suite
+  # for a set of labels, and `e2e-report` decides from `E2E_REQUESTED` whether
+  # to report that suite's result or "verified at rc, e2e not repeated". The
+  # second branch posts success whatever the suite did, so a label the arm
+  # admits and the reporter does not know turns a red suite into a green gate.
+  # Read from `e2e`'s own guard, not its steps: `Select E2E tests` and the
+  # install step read `e2e/full` too, for scope, and would mask its removal.
+  arm="$(job_block e2e "$PULL_REQUESTS" | code_lines | sed -n '/^    if:/,/^    [a-z-]*:/p' \
+    | grep -o "contains(github\.event\.pull_request\.labels\.\*\.name, '[a-z0-9/-]*')" \
+    | sed "s/.*'\\(.*\\)')/\\1/" | grep -vx release | sort -u)"
+  asked="$(job_block e2e-report "$PULL_REQUESTS" | code_lines | grep '^ *E2E_REQUESTED:' \
+    | grep -o "contains(github\.event\.pull_request\.labels\.\*\.name, '[a-z0-9/-]*')" \
+    | sed "s/.*'\\(.*\\)')/\\1/" | sort -u)"
+  [ -n "$arm" ]
+  [ -n "$asked" ]
+  [ "$arm" = "$asked" ]
+}
+
+@test "no workflow reads the retired full-e2e label" {
+  # `full-e2e` is renamed to `e2e/full` by an alias in labels.yml, so after the
+  # sync no pull request carries the old name. A reader left on it does not
+  # fail: the label just stops widening scope, on whichever lane it was.
+  found=0
+  for wf in "$REPO_ROOT"/.github/workflows/*.yaml "$REPO_ROOT"/.github/workflows/*.yml; do
+    [ -f "$wf" ] || continue
+    found=$((found + 1))
+    count="$(code_lines < "$wf" | grep -c 'full-e2e' || true)"
+    if [ "${count:-0}" -ne 0 ]; then
+      echo "FAIL: $wf still reads full-e2e" >&2
+      false
+    fi
+  done
+  [ "$found" -gt 0 ]
 }
 
 # Every `BEGIN verdict identity` … `END verdict identity` block in a workflow,
