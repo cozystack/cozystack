@@ -1024,10 +1024,17 @@ spec:
   # action until the autoscaler notices unschedulable Pods and
   # scales back up — a real disruption window on every routine
   # platform bump.
+  {{- /* maxUnavailable 0 makes a rollout (instance type, image, version)
+         wait for each replacement Machine to be up before draining an old
+         one; with 1, a one-node pool lost its only node until the new one
+         joined. A pool with passed-through GPUs keeps 1: its replacement VM
+         may need the very GPU the old node holds, and would wait for it
+         forever. CAPI refuses maxSurge and maxUnavailable both at 0, and
+         maxReplicas may be 0, hence the floor of 1. */}}
   strategy:
     rollingUpdate:
-      maxSurge: {{ $group.maxReplicas }}
-      maxUnavailable: 1
+      maxSurge: {{ max 1 ($group.maxReplicas | int) }}
+      maxUnavailable: {{ ternary 1 0 (not (empty $group.gpus)) }}
     type: RollingUpdate
   selector:
     matchLabels:
