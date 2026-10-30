@@ -1,0 +1,51 @@
+suite: Alertmanager blackhole route
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+
+# Rules labelled severity="none", InfoInhibitor among them, exist to be
+# dropped, and Alerta answers that severity with a 500. Only the heartbeat
+# route may come ahead of the blackhole, so no delivering route claims them.
+tests:
+  - it: drops severity none ahead of every delivering route
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '\n  routes:\n  - receiver: alerta_no_resolve\n    repeat_interval: 1m\n    matchers:\n    - .event="Heartbeat".\n  - receiver: blackhole\n    matchers:\n    - .severity="none".\n'
+
+  - it: keeps severity none out of email even when its alert name is listed
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            alertnames:
+              - InfoInhibitor
+    asserts:
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '\n  routes:\n  - receiver: alerta_no_resolve\n    repeat_interval: 1m\n    matchers:\n    - .event="Heartbeat".\n  - receiver: blackhole\n    matchers:\n    - .severity="none".\n'
+      - documentSelector:
+          path: metadata.labels.app
+          value: alertmanager
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '(?s)\n  - receiver: blackhole\n    matchers:\n    - .severity="none".\n.*\n  - receiver: email\n    group_wait: 1m\n    group_interval: 5m\n    repeat_interval: .12h.\n    matchers:\n    - .alertname=~"\^\(InfoInhibitor\)\$".\n'
