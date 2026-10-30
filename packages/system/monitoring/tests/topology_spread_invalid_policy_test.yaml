@@ -1,0 +1,59 @@
+suite: monitoring refuses a malformed platform spread policy
+templates:
+  - templates/vm/vmcluster.yaml
+
+release:
+  name: monitoring-system
+  namespace: tenant-root
+
+tests:
+  - it: fails on a platform policy that does not parse
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+             topologyKey: kubernetes.io/hostname
+    asserts:
+      - failedTemplate:
+          errorPattern: "globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list\\. error converting YAML to JSON"
+
+  - it: fails on a platform policy without a topologySpreadConstraints list
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - failedTemplate:
+          errorPattern: "globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list"
+
+  - it: fails on a platform policy with an empty topologySpreadConstraints list
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints: []
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list."
+
+  - it: fails on a platform policy whose topologySpreadConstraints is not a list
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+              maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list."

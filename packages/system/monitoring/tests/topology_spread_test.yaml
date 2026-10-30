@@ -1,0 +1,453 @@
+suite: monitoring replicas spread over nodes
+templates:
+  - templates/vm/vmcluster.yaml
+  - templates/vlogs/vlogs.yaml
+  - templates/vtraces/vtraces.yaml
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring-system
+  namespace: tenant-root
+
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+  tracingStorages:
+    - name: generic
+      mode: cluster
+      retentionPeriod: "14d"
+      storage: 10Gi
+
+tests:
+  - it: requires separate nodes for vmstorage and vmselect and prefers them for vminsert
+    template: templates/vm/vmcluster.yaml
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+      - equal:
+          path: spec.vmselect.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmselect
+                  app.kubernetes.io/instance: shortterm
+      - equal:
+          path: spec.vminsert.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vminsert
+                  app.kubernetes.io/instance: shortterm
+
+  - it: keys each VMCluster's constraints to its own name
+    template: templates/vm/vmcluster.yaml
+    documentSelector:
+      path: metadata.name
+      value: longterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: vmstorage
+            app.kubernetes.io/instance: longterm
+      - equal:
+          path: spec.vmselect.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: vmselect
+            app.kubernetes.io/instance: longterm
+      - equal:
+          path: spec.vminsert.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: vminsert
+            app.kubernetes.io/instance: longterm
+
+  - it: requires separate nodes for vlstorage and prefers them for vlselect and vlinsert
+    template: templates/vlogs/vlogs.yaml
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.vlstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vlstorage
+                  app.kubernetes.io/instance: generic
+      - equal:
+          path: spec.vlselect.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vlselect
+                  app.kubernetes.io/instance: generic
+      - equal:
+          path: spec.vlinsert.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vlinsert
+                  app.kubernetes.io/instance: generic
+
+  - it: requires separate nodes for vtstorage and prefers them for vtselect and vtinsert
+    template: templates/vtraces/vtraces.yaml
+    documentSelector:
+      path: kind
+      value: VTCluster
+    asserts:
+      - equal:
+          path: spec.storage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vtstorage
+                  app.kubernetes.io/instance: generic
+      - equal:
+          path: spec.select.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vtselect
+                  app.kubernetes.io/instance: generic
+      - equal:
+          path: spec.insert.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vtinsert
+                  app.kubernetes.io/instance: generic
+
+  - it: requires separate nodes for the Alertmanager replicas
+    template: templates/alerta/alerta.yaml
+    documentSelector:
+      path: kind
+      value: VMAlertmanager
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              nodeTaintsPolicy: Ignore
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmalertmanager
+                  app.kubernetes.io/instance: alertmanager
+
+  - it: keeps the default when the platform policy is empty
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: ""
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+      - equal:
+          path: spec.vminsert.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+
+  - it: renders the platform policy in place of the default for a VMCluster
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+      - equal:
+          path: spec.vmselect.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmselect
+                  app.kubernetes.io/instance: shortterm
+      - equal:
+          path: spec.vminsert.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vminsert
+                  app.kubernetes.io/instance: shortterm
+
+  - it: renders the platform policy in place of the default for the logs store
+    template: templates/vlogs/vlogs.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.vlstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vlstorage
+                  app.kubernetes.io/instance: generic
+
+  - it: renders the platform policy in place of the default for the traces store
+    template: templates/vtraces/vtraces.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: kind
+      value: VTCluster
+    asserts:
+      - equal:
+          path: spec.storage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vtstorage
+                  app.kubernetes.io/instance: generic
+
+  - it: renders the platform policy in place of the default for the Alertmanager
+    template: templates/alerta/alerta.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: kind
+      value: VMAlertmanager
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmalertmanager
+                  app.kubernetes.io/instance: alertmanager
+
+  - it: gives every constraint of the platform policy the component's selector
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+
+  - it: keeps a selector the platform policy sets itself
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+
+  - it: gives the component's selector to a constraint after one that sets its own
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  example.org/spread: all
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+
+  - it: gives the component's selector to a constraint before one that sets its own
+    template: templates/vm/vmcluster.yaml
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchExpressions:
+                  - key: example.org/spread
+                    operator: Exists
+    documentSelector:
+      path: metadata.name
+      value: shortterm
+    asserts:
+      - equal:
+          path: spec.vmstorage.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: vmstorage
+                  app.kubernetes.io/instance: shortterm
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchExpressions:
+                  - key: example.org/spread
+                    operator: Exists
