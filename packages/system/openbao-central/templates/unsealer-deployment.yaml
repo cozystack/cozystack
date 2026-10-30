@@ -1,0 +1,93 @@
+{{- /*
+Long-running unsealer for the central OpenBAO.
+
+The Shamir-sealed server re-seals on every restart, so a reconcile loop keeps
+all pods unsealed: it polls each pod's seal status and, when sealed, replays the
+threshold of unseal keys from the openbao-system-keys Secret. Unsealing an
+already-unsealed node is a no-op, so the loop is idempotent and safely handles
+single-pod restarts, rejoining Raft peers, and full-cluster restarts.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openbao-system-unsealer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: openbao-system
+    app.kubernetes.io/component: unsealer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openbao-system
+      app.kubernetes.io/component: unsealer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openbao-system
+        app.kubernetes.io/component: unsealer
+    spec:
+      serviceAccountName: openbao-system-bootstrap
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+      volumes:
+        - name: keys
+          secret:
+            secretName: openbao-system-keys
+            optional: true
+        - name: tls
+          secret:
+            secretName: openbao-system-tls
+            optional: true
+      containers:
+        - name: unsealer
+          image: {{ .Values.bootstrap.openbaoImage | quote }}
+          env:
+            - name: BAO_CACERT
+              value: /openbao/tls/ca.crt
+            - name: UNSEAL_INTERVAL
+              value: {{ .Values.bootstrap.unsealInterval | quote }}
+            - name: KEY_THRESHOLD
+              value: {{ .Values.bootstrap.keyThreshold | quote }}
+          volumeMounts:
+            - name: keys
+              mountPath: /keys
+              readOnly: true
+            - name: tls
+              mountPath: /openbao/tls
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "openbao unsealer started (interval=${UNSEAL_INTERVAL}s, threshold=${KEY_THRESHOLD})"
+              while true; do
+                if [ ! -f /keys/key-0 ]; then
+                  echo "openbao-system-keys not present yet; waiting for init ..."
+                  sleep "$UNSEAL_INTERVAL"
+                  continue
+                fi
+                i=0
+                while [ "$i" -lt 3 ]; do
+                  addr="https://openbao-system-$i.openbao-system-internal:8200"
+                  if bao status -address="$addr" 2>/dev/null | grep -qi 'Sealed.*true'; then
+                    n=0
+                    while [ "$n" -lt "$KEY_THRESHOLD" ]; do
+                      if [ -f "/keys/key-$n" ]; then
+                        bao operator unseal -address="$addr" "$(cat "/keys/key-$n")" >/dev/null 2>&1 || true
+                      fi
+                      n=$((n+1))
+                    done
+                    echo "$(date -u +%FT%TZ) attempted unseal of openbao-system-$i"
+                  fi
+                  i=$((i+1))
+                done
+                sleep "$UNSEAL_INTERVAL"
+              done
