@@ -20,6 +20,16 @@ const (
 	HRAPIVersion = "helm.toolkit.fluxcd.io/v2"
 	HRKind       = "HelmRelease"
 	HRLabel      = "helm.toolkit.fluxcd.io/name"
+
+	// KubeVirt VirtualMachines created by the Cluster API KubeVirt provider
+	// (CAPK) for cluster nodes carry no ownerReference: CAPK links them to
+	// their KubevirtMachine through these labels only.
+	VMAPIVersion                  = "kubevirt.io/v1"
+	VMKind                        = "VirtualMachine"
+	KubevirtMachineAPIVersion     = "infrastructure.cluster.x-k8s.io/v1alpha1"
+	KubevirtMachineKind           = "KubevirtMachine"
+	KubevirtMachineNameLabel      = "capk.cluster.x-k8s.io/kubevirt-machine-name"
+	KubevirtMachineNamespaceLabel = "capk.cluster.x-k8s.io/kubevirt-machine-namespace"
 )
 
 // AppMapper maps HelmRelease to application metadata.
@@ -91,6 +101,18 @@ func WalkOwnershipGraph(
 		return
 	}
 
+	// A node VM of a Kubernetes cluster has no ownerReference, so without this
+	// step the walk would stop at it and never reach the cluster's application.
+	if name, ok := kubevirtMachineName(obj); ok {
+		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, KubevirtMachineAPIVersion, KubevirtMachineKind, obj.GetNamespace(), name)
+		if err != nil {
+			l.Error(err, "couldn't get KubevirtMachine of VirtualMachine", "namespace", obj.GetNamespace(), "virtualMachine", obj.GetName(), "kubevirtMachine", name)
+			return
+		}
+		out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
+		return
+	}
+
 	// I want "if err1 != nil go to next block, if err2 != nil, go to next block, etc semantics",
 	// like an early return from a function, but if all checks succeed, I don't want to do the rest
 	// of the function, so it's a `for { if err { break } if othererr { break } if allgood { return }
@@ -136,6 +158,22 @@ func WalkOwnershipGraph(
 	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
 
 	return
+}
+
+// kubevirtMachineName returns the KubevirtMachine a CAPK-created
+// VirtualMachine belongs to. It only follows a KubevirtMachine in the VM's own
+// namespace: CAPK can also run against an external infrastructure cluster,
+// where the KubevirtMachine lives elsewhere and is not ours to resolve.
+func kubevirtMachineName(obj *unstructured.Unstructured) (string, bool) {
+	if obj.GetAPIVersion() != VMAPIVersion || obj.GetKind() != VMKind {
+		return "", false
+	}
+	labels := obj.GetLabels()
+	name := labels[KubevirtMachineNameLabel]
+	if name == "" || labels[KubevirtMachineNamespaceLabel] != obj.GetNamespace() {
+		return "", false
+	}
+	return name, true
 }
 
 func parseWalkMemory(memory []interface{}) (*walkState, error) {
