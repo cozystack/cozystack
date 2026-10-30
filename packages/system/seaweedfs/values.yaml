@@ -123,6 +123,31 @@ seaweedfs:
                   app.kubernetes.io/instance: {{ .Release.Name }}
                   app.kubernetes.io/component: master
               topologyKey: kubernetes.io/hostname
+    # The preference above decides only where a master starts. A drain on a
+    # three-node cluster recreates the evicted master while both other nodes
+    # already run one, so it lands next to one of them and stays there once
+    # the drained node is back. Losing that node then takes two of the three
+    # raft members and the quorum with them. DoNotSchedule counts the drained
+    # node, cordoned and empty, as the minimum, so the replacement waits
+    # Pending until that node is uncordoned while the other two keep quorum.
+    # With four or more nodes it goes to a node that runs no master instead.
+    # Fewer nodes than masters still bring them all up, because the skew is
+    # measured between the nodes that exist. Two nodes take two and one, and
+    # a single node takes all three. nodeTaintsPolicy stays Ignore on purpose.
+    # Honor would leave the cordoned node out of the count and let the
+    # replacement pile up again. The price is that a node the masters never
+    # run on, such as a tainted control plane, counts as empty too, so with
+    # one in the cluster the masters need three nodes they can run on.
+    topologySpreadConstraints: |
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Ignore
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/component: master
   volume:
     replicas: 2
     resizeHook:
