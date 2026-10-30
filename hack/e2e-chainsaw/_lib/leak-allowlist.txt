@@ -1,5 +1,5 @@
-# Suites whose leaked pods hack/e2e-chainsaw-run.sh reports as a warning
-# instead of failing the suite. One line per suite directory:
+# Suites whose leaked pods and Secrets hack/e2e-chainsaw-run.sh reports as a
+# warning instead of failing the suite. One line per suite directory:
 #
 #   <suite-dir> <issue-ref>
 #
