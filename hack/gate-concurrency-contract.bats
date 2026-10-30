@@ -184,18 +184,201 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 }
 
-@test "fork gate: real runs still supersede each other on fork repo + branch" {
+@test "fork gate: real runs on the same head supersede each other, and only those" {
   line="$(code_lines < "$FORK" | grep '^  group: e2e-fork-')"
   [ -n "$line" ]
 
-  count="$(printf '%s\n' "$line" | grep -o 'workflow_run\.head_repository\.full_name' | wc -l | tr -d ' ')"
+  # Keyed by the head SHA. A review run's `workflow_run` names the base
+  # repository as its head repository, so a key built from repository and
+  # branch puts the review runs of two forks with the same branch name in one
+  # group, where each cancels the other's suite.
+  count="$(printf '%s\n' "$line" | grep -o 'workflow_run\.head_sha' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
-
-  count="$(printf '%s\n' "$line" | grep -o 'workflow_run\.head_branch' | wc -l | tr -d ' ')"
-  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$line" | grep -oE 'workflow_run\.head_(repository|branch)' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 0 ]
 
   count="$(code_lines < "$FORK" | grep -c '^  cancel-in-progress: true$' || true)"
   [ "${count:-0}" -eq 1 ]
+}
+
+@test "fork gate: resolve sees every review run and only fork push runs" {
+  # A push or label run is recognised as a fork's by its head repository. A
+  # review run is not, because its `workflow_run` names the base repository
+  # whichever side the pull request comes from, so the guard has to let every
+  # review run in and the script has to sort them by the pull request. Losing
+  # the review term leaves a fork approval with nothing to act on it; losing
+  # the head-repository test on the push term lets same-repo push runs write a
+  # status the same-repo lane owns.
+  block="$(job_block resolve "$FORK" | code_lines | sed -n '/^    if:/,/^    [a-z-]*:/p' | tr '\n' ' ')"
+  [ -n "$block" ]
+  count="$(printf '%s\n' "$block" | grep -o "(github\.event\.workflow_run\.event == 'pull_request' *&& github\.event\.workflow_run\.head_repository\.full_name != github\.event\.workflow_run\.repository\.full_name) *|| github\.event\.workflow_run\.event == 'pull_request_review'" | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 1 ]
+
+  # …and inside, a review run that is not on exactly one open fork PR posts
+  # nothing: a same-repo PR's review belongs to pull-requests.yaml.
+  script="$(job_block resolve "$FORK" | code_lines)"
+  count="$(printf '%s\n' "$script" | grep -cF "&& open[0].head.repo.full_name !== \`\${owner}/\${repo}\`;" || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+@test "fork gate: publish starts only on a run that earned the lane" {
+  # `publish` holds the OCIR token, so the one thing that must not happen is a
+  # `true` reaching it from a run that did not earn the lane. `should_run` is
+  # written `true` exactly once, and the only path to that line passes the
+  # `!lane.heavy` exit first.
+  script="$(job_block resolve "$FORK" | code_lines)"
+  [ -n "$script" ]
+  count="$(printf '%s\n' "$script" | grep -cF "core.setOutput('should_run', 'true');" || true)"
+  [ "${count:-0}" -eq 1 ]
+  # Two exits, one for a run whose build failed and one after the docs-only
+  # green, and the second has to sit between that green and the artifact
+  # check: anywhere later, an unearned run reaches the write.
+  count="$(printf '%s\n' "$script" | grep -cF 'if (!lane.heavy) {' || true)"
+  [ "${count:-0}" -eq 2 ]
+  count="$(printf '%s\n' "$script" | grep -A2 -F 'if (!lane.heavy) {' | grep -cF 'await standAside();' || true)"
+  [ "${count:-0}" -eq 2 ]
+  docs="$(printf '%s\n' "$script" | grep -nF "decide('success', 'docs-only PR" | cut -d: -f1)"
+  gate="$(printf '%s\n' "$script" | grep -nF 'if (!lane.heavy) {' | tail -1 | cut -d: -f1)"
+  arts="$(printf '%s\n' "$script" | grep -nF 'github.rest.actions.listWorkflowRunArtifacts' | cut -d: -f1)"
+  write="$(printf '%s\n' "$script" | grep -nF "core.setOutput('should_run', 'true');" | cut -d: -f1)"
+  [ -n "$docs" ] && [ -n "$gate" ] && [ -n "$arts" ] && [ -n "$write" ]
+  [ "$docs" -lt "$gate" ]
+  [ "$gate" -lt "$arts" ]
+  [ "$arts" -lt "$write" ]
+
+  for job in publish e2e report; do
+    count="$(job_block "$job" "$FORK" | code_lines | grep -c "^    if: .*needs\.resolve\.outputs\.should_run == 'true'" || true)"
+    [ "${count:-0}" -eq 1 ]
+  done
+
+  # The decision reads base-repo data only, and the account it judges is the
+  # one GitHub records as having created the triggering run.
+  for call in 'github.rest.repos.getCollaboratorPermissionLevel' 'github.rest.pulls.listReviews' \
+              'github.rest.issues.listEvents' 'github.rest.repos.listCommitStatusesForRef' \
+              'github.rest.actions.listWorkflowRuns'; do
+    count="$(printf '%s\n' "$script" | grep -cF "$call" || true)"
+    [ "${count:-0}" -eq 1 ]
+  done
+  count="$(printf '%s\n' "$script" | grep -cF 'permission = data.permission;' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # The decision is handed the pull request resolved from base-repo data and
+  # the whole latest status, description included, so the identity rule can
+  # read whose green it is.
+  count="$(printf '%s\n' "$script" | grep -cF 'prNumber, prior: latest, reviews, permission, labelEvents, headRuns,' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # …and the head identity the label rule compares runs against comes from the
+  # base-repo PR, not from the run list, which holds every PR's runs on this SHA.
+  count="$(printf '%s\n' "$script" | grep -cF 'headRepo: pr.head && pr.head.repo ? pr.head.repo.full_name : null,' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$script" | grep -cF 'headRef: pr.head ? pr.head.ref : null,' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$script" | grep -c '^ *ACTOR: *\${{ github\.event\.workflow_run\.actor\.login }}$' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$script" | grep -c '^ *CREATED_AT: *\${{ github\.event\.workflow_run\.created_at }}$' || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Both lanes show an unearned head the same way.
+  waiting="waiting for an approving review (or the e2e/run or e2e/full label)"
+  count="$(printf '%s\n' "$script" | grep -cF "'$waiting'" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep -cF "'$waiting'" || true)"
+  [ "${count:-0}" -eq 1 ]
+}
+
+@test "fork gate: the lane decision earns the suite on the same terms as plan" {
+  # The decision is a pure function between two markers in resolve's script,
+  # run here as written against the cases that matter. A grep cannot tell a
+  # dropped `commit_id` test or a flipped bound from the real thing.
+  if ! command -v node >/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      echo "FAIL: node is required in CI to run the fork lane decision" >&2
+      false
+    fi
+    echo "node unavailable; skipping"
+    return 0
+  fi
+  fn="$(job_block resolve "$FORK" \
+    | sed -n '/^ *\/\/ BEGIN verdict identity/,/^ *\/\/ END verdict identity/p;/^ *\/\/ BEGIN lane decision/,/^ *\/\/ END lane decision/p')"
+  [ -n "$fn" ]
+  driver="$BATS_TEST_TMPDIR/lane.js"
+  printf '%s\n' "$fn" > "$driver"
+  cat >> "$driver" <<'JS'
+const H = 'a'.repeat(40);
+const T0 = '2026-10-30T10:00:00Z', T1 = '2026-10-30T11:00:00Z', T2 = '2026-10-30T12:00:00Z';
+const rv = (id, login, state, commit, at) => ({ id, user: { login }, state, commit_id: commit, submitted_at: at });
+const lb = (name, login, at) => ({ event: 'labeled', label: { name }, actor: { login }, created_at: at });
+const st = (state, description) => ({ context: 'E2E Tests', state, description });
+const OWN = st('success', 'fork e2e passed (privileged run) [pr 77]');
+const FOREIGN = st('success', 'in-tree e2e passed [pr 12]');
+const review = (o) => Object.assign({ event: 'pull_request_review', actor: 'm', headSha: H, createdAt: T1, prNumber: '77',
+  prior: st('pending', 'x [pr 77]'), reviews: [rv(5, 'm', 'APPROVED', H, T1)], permission: 'write', labelEvents: [] }, o);
+const run = (at, repo = 'f/c', branch = 'x') => ({ created_at: at, head_repository: { full_name: repo }, head_branch: branch });
+const push = (o) => Object.assign({ event: 'pull_request', actor: 'm', headSha: H, createdAt: T1, prNumber: '77',
+  prior: st('pending', 'x [pr 77]'), reviews: [], permission: 'none', labelEvents: [lb('e2e/run', 'm', T1)],
+  headRepo: 'f/c', headRef: 'x', headRuns: [run(T0), run(T1)] }, o);
+const cases = {
+  'approval-write': review({}),
+  'approval-admin': review({ permission: 'admin' }),
+  'approval-read': review({ permission: 'read' }),
+  'approval-older-commit': review({ reviews: [rv(5, 'm', 'APPROVED', 'b'.repeat(40), T1)] }),
+  'approval-then-own-comment': review({ createdAt: T2, reviews: [rv(5, 'm', 'APPROVED', H, T1), rv(6, 'm', 'COMMENTED', H, T2)] }),
+  'approval-then-author-comment': review({ reviews: [rv(5, 'm', 'APPROVED', H, T1), rv(6, 'a', 'COMMENTED', H, T1)] }),
+  'author-comment-after-approval': review({ actor: 'a', createdAt: T2, permission: 'read', reviews: [rv(5, 'm', 'APPROVED', H, T1), rv(6, 'a', 'COMMENTED', H, T2)] }),
+  'approval-after-run-created': review({ reviews: [rv(5, 'm', 'APPROVED', H, T2)] }),
+  'approval-own-green-head': review({ prior: OWN }),
+  'approval-foreign-green-head': review({ prior: FOREIGN }),
+  'approval-red-head': review({ prior: st('failure', 'fork e2e did not pass [pr 77]') }),
+  'label-by-actor': push({}),
+  'label-full-by-actor': push({ labelEvents: [lb('e2e/full', 'm', T1)] }),
+  'label-by-someone-else': push({ actor: 'a' }),
+  'label-1-minute-before': push({ labelEvents: [lb('e2e/run', 'm', '2026-10-30T10:59:00Z')] }),
+  'label-3-minutes-before': push({ labelEvents: [lb('e2e/run', 'm', '2026-10-30T10:57:00Z')] }),
+  'label-before-head-was-pushed': push({ headRuns: [run(T1)], labelEvents: [lb('e2e/run', 'm', '2026-10-30T10:59:30Z')] }),
+  'label-head-seen-only-on-other-branch': push({ headRuns: [run(T0, 'f/c', 'y'), run(T1)], labelEvents: [lb('e2e/run', 'm', '2026-10-30T10:59:30Z')] }),
+  'label-head-seen-only-in-other-fork': push({ headRuns: [run(T0, 'g/c', 'x'), run(T1)], labelEvents: [lb('e2e/run', 'm', '2026-10-30T10:59:30Z')] }),
+  'label-no-runs-on-head': push({ headRuns: [] }),
+  'unlabeled-event': push({ labelEvents: [{ event: 'unlabeled', label: { name: 'e2e/run' }, actor: { login: 'm' }, created_at: T1 }] }),
+  'label-after-run': push({ labelEvents: [lb('e2e/run', 'm', T2)] }),
+  'other-label': push({ labelEvents: [lb('kind/bug', 'm', T1)] }),
+  'push-own-green': push({ labelEvents: [], prior: OWN }),
+  'push-foreign-green': push({ labelEvents: [], prior: FOREIGN }),
+  'push-no-status': push({ labelEvents: [], prior: null }),
+};
+const out = Object.entries(cases).map(([k, v]) => { const r = earnsLane(v); return `${k} heavy=${r.heavy} reuse=${r.reuse}`; });
+require('fs').writeFileSync(1, out.join('\n') + '\n');
+JS
+  got="$(node "$driver")"
+  want="approval-write heavy=true reuse=false
+approval-admin heavy=true reuse=false
+approval-read heavy=false reuse=false
+approval-older-commit heavy=false reuse=false
+approval-then-own-comment heavy=false reuse=false
+approval-then-author-comment heavy=true reuse=false
+author-comment-after-approval heavy=false reuse=false
+approval-after-run-created heavy=false reuse=false
+approval-own-green-head heavy=false reuse=true
+approval-foreign-green-head heavy=true reuse=false
+approval-red-head heavy=true reuse=false
+label-by-actor heavy=true reuse=false
+label-full-by-actor heavy=true reuse=false
+label-by-someone-else heavy=false reuse=false
+label-1-minute-before heavy=true reuse=false
+label-3-minutes-before heavy=false reuse=false
+label-before-head-was-pushed heavy=false reuse=false
+label-head-seen-only-on-other-branch heavy=false reuse=false
+label-head-seen-only-in-other-fork heavy=false reuse=false
+label-no-runs-on-head heavy=false reuse=false
+unlabeled-event heavy=false reuse=false
+label-after-run heavy=false reuse=false
+other-label heavy=false reuse=false
+push-own-green heavy=false reuse=true
+push-foreign-green heavy=false reuse=false
+push-no-status heavy=false reuse=false"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: the fork lane decision table changed" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    false
+  fi
 }
 
 @test "same-repo gate: only a label run that publishes nothing is moved aside" {
@@ -319,10 +502,12 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
 
   # Fork lane: `resolve` opens, `report` concludes. The opener goes through the
-  # helper, so pin the call.
+  # helper, so pin the call. `resolve` also writes `pending` for a run that did
+  # not earn the lane and for one whose lookups failed; neither of those is
+  # followed by `report`, so the opener is pinned by its own text.
   block="$(job_block resolve "$FORK" | code_lines)"
   [ -n "$block" ]
-  count="$(printf '%s\n' "$block" | grep -c "setStatus('pending'" || true)"
+  count="$(printf '%s\n' "$block" | grep -cF "setStatus('pending', 'Running e2e in the privileged fork workflow" || true)"
   [ "${count:-0}" -eq 1 ]
 
   block="$(job_block report "$FORK" | code_lines)"
@@ -584,7 +769,16 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$plan_block" | grep -cF 'getCombinedStatusForRef' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$plan_block" | grep -cF 'const heavy = !reuse;' || true)"
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'const heavy = approved && !reuse;' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # An approval counts on the rule the fork lane applies: write access by the
+  # collaborator API, and an approval of this head. `author_association`, all the
+  # guard can read, admits read and triage collaborators and org members.
+  count="$(printf '%s\n' "$plan_block" | grep -cF "const approved = review.commit_id === HEAD_SHA && ['admin', 'write'].includes(permission);" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'github.rest.repos.getCollaboratorPermissionLevel' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'permission = data.permission;' || true)"
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('reuse', String(reuse))" || true)"
   [ "${count:-0}" -eq 1 ]
@@ -650,8 +844,7 @@ verdict_identity_blocks() {
 @test "a verdict names the pull request that earned it, and only its own is reused" {
   # A commit status is keyed on the SHA alone, so a green on a head can be
   # another pull request's, earned on the same commit against another base.
-  # Every writer of `E2E Tests` in this workflow therefore appends ` [pr N]`,
-  # and a green is
+  # Every writer of `E2E Tests` therefore appends ` [pr N]`, and a green is
   # reused only when it carries this pull request's number. The rule is one
   # block of text, copied into every script that reads or writes the context,
   # and the copies have to be the same text or the two sides disagree about
@@ -660,10 +853,12 @@ verdict_identity_blocks() {
   [ -n "$blocks" ]
   first="$(printf '%s\n' "$blocks" | awk '/^--$/ { exit } { print }')"
   [ -n "$first" ]
+  blocks="$(printf '%s\n--\n%s\n' "$blocks" "$(verdict_identity_blocks "$FORK")")"
   n="$(printf '%s\n' "$blocks" | grep -c '^ *const verdictOf' || true)"
-  # plan's decision step, plan's opener and e2e-report.
-  [ "${n:-0}" -eq 3 ]
-  others="$(printf '%s\n' "$blocks" | grep -v '^--$' | sort | uniq -c | awk '$1 != 3' | wc -l | tr -d ' ')"
+  # plan's decision step, plan's opener and e2e-report; resolve and report in
+  # the fork lane, which reads the same greens and writes the same marker.
+  [ "${n:-0}" -eq 5 ]
+  others="$(printf '%s\n' "$blocks" | grep -v '^--$' | sort | uniq -c | awk '$1 != 5' | wc -l | tr -d ' ')"
   [ "${others:-1}" -eq 0 ]
 
   # Every write appends the marker; a write without it leaves a green no rule
@@ -672,12 +867,24 @@ verdict_identity_blocks() {
   [ "${count:-0}" -eq 1 ]
   count="$(job_block e2e-report "$PULL_REQUESTS" | code_lines | grep -cF "description: description + verdictOf(PR_NUMBER)," || true)"
   [ "${count:-0}" -eq 1 ]
-  # The number the marker carries is the pull request's own, the event's.
-  # Any other value marks every green as foreign, or as another's.
+  count="$(job_block resolve "$FORK" | code_lines | grep -cF "description: prNumber === null ? description : description + verdictOf(prNumber)," || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(job_block report "$FORK" | code_lines | grep -cF "description: description + verdictOf(PR_NUMBER), target_url: RUN_URL," || true)"
+  [ "${count:-0}" -eq 1 ]
+  # The number the marker carries is the pull request's own: the event's for
+  # the same-repo lane, the one `resolve` matched from base-repo data for the
+  # fork lane. Any other value marks every green as foreign, or as another's.
   same="$(code_lines < "$PULL_REQUESTS" | grep '^ *PR_NUMBER:')"
   [ "$(printf '%s\n' "$same" | wc -l | tr -d ' ')" -eq 3 ]
   count="$(printf '%s\n' "$same" | grep -c '^ *PR_NUMBER: \${{ github\.event\.pull_request\.number }}$' || true)"
   [ "${count:-0}" -eq 3 ]
+  fork="$(code_lines < "$FORK" | grep '^ *PR_NUMBER:')"
+  [ "$(printf '%s\n' "$fork" | wc -l | tr -d ' ')" -eq 1 ]
+  count="$(printf '%s\n' "$fork" | grep -c '^ *PR_NUMBER: *\${{ needs\.resolve\.outputs\.pr_number }}$' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # Each lane writes the context only through the calls pinned above.
+  count="$(job_block resolve "$FORK" | code_lines | grep -c 'createCommitStatus' || true)"
+  [ "${count:-0}" -eq 1 ]
 
   if ! command -v node >/dev/null; then
     if [ -n "${CI:-}" ]; then

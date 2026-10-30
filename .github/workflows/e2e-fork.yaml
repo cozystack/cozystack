@@ -23,20 +23,40 @@ name: E2E (fork)
 #
 # Same-repo PRs are handled entirely by pull-requests.yaml; this workflow no-ops
 # for them (see the `resolve` job guard).
+#
+# The suite runs here on the same terms as on the same-repo lane: an approving
+# review from an account with write access on the head being reviewed, or the
+# moment `e2e/run` or `e2e/full` is applied. Every push still builds and
+# exports the fork's archives, and every completed run still reaches `resolve`,
+# but a run that has not earned the lane leaves `E2E Tests` pending and never
+# starts `publish`. Which run earned it is decided from base-repo data only;
+# docs/agents/e2e-testing.md §10 has the rules.
 
 on:
   workflow_run:
     workflows: ["Pull Request"]
     types: [completed]
 
-# Cancel a stale privileged run when the fork pushes again (a newer Pull Request
-# run for the same fork branch supersedes it). Keyed by fork repo + branch since
-# the PR number is not known at workflow level.
+# One group per head SHA, so a later run that earns the lane on the same head (a
+# second approval, an e2e label applied while the first suite runs) supersedes
+# the earlier one, and runs for different heads never touch each other. Not keyed
+# by fork repo + branch: a review run's `workflow_run` names the BASE repository
+# as its head repository (measured on a fork PR's review run), so two forks that
+# happen to use the same branch name would share a group and cancel each other's
+# suites. The PR number is not known at workflow level. The price is that a push
+# no longer cancels a suite still running on the head it replaced; that suite
+# finishes and reports on a SHA the pull request no longer points at. A run on
+# the same head that did not earn the lane, a re-run of the push run or a reopen,
+# still cancels a running suite, since nothing before `resolve` can tell, and
+# leaves the waiting `pending`; re-running the cancelled run or approving again
+# restores it, as on the same-repo lane.
 #
-# A triggering run that concluded `cancelled` or `skipped` gets a group of its
-# OWN, keyed by that run's id. Such a run built nothing — labelling an open fork
-# PR produces one, because `plan` in pull-requests.yaml discards every label a
-# fork run could not publish for and every job skips — and `resolve` recognises
+# A triggering run that concluded `cancelled`, `skipped` or `action_required`
+# gets a group of its OWN, keyed by that run's id. Such a run built nothing —
+# labelling an open fork PR produces one, because `plan` in pull-requests.yaml
+# discards every label a fork run could not publish for and every job skips, and
+# a fork run still waiting for a maintainer to approve its workflows is another,
+# an approval's own review run included — and `resolve` recognises
 # it and posts no status at all. In the shared group it would still cancel the live
 # privileged run that DOES own the status for that head SHA, and the pair
 # "cancel the owner, then post nothing" leaves the SHA at "Expected" with
@@ -44,7 +64,7 @@ on:
 # decided to stay silent, so only a new push recovers it. Keyed by run id, a
 # discarded run can cancel only itself.
 concurrency:
-  group: e2e-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}${{ (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'skipped') && format('-discarded-{0}', github.event.workflow_run.id) || '' }}
+  group: e2e-fork-${{ github.event.workflow_run.head_sha }}${{ (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'skipped' || github.event.workflow_run.conclusion == 'action_required') && format('-discarded-{0}', github.event.workflow_run.id) || '' }}
   cancel-in-progress: true
 
 env:
@@ -54,21 +74,26 @@ permissions:
   contents: read
 
 jobs:
-  # Decide whether this is a fork PR that needs e2e, resolve its PR number and
-  # head SHA, and post the pending "E2E Tests" commit status so the PR is not
-  # mergeable until `report` concludes it. Every decision is derived from data the fork
-  # cannot forge — the workflow_run conclusion, the base-repo PR list, and the
-  # base-repo PR file list — NOT from the presence/absence of an artifact the
-  # fork's own build controls. Fail-closed if the fork build failed or the
+  # Decide whether this is a fork PR whose run earned e2e, resolve its PR number
+  # and head SHA, and post the "E2E Tests" commit status so the PR is not
+  # mergeable until `report` concludes it. Every decision is derived from data the
+  # fork cannot forge — the workflow_run event, actor, creation time and
+  # conclusion, the base-repo PR list, reviews, label events, collaborator
+  # permission and file list — NOT from the presence/absence of an artifact the
+  # fork's own build controls. Fail-closed if an earned run's build failed or the
   # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
   # entirely under docs/ (verified against the base-repo API).
   resolve:
     name: Resolve fork PR
-    # Only fork PRs: head_repository differs from the base repository. Same-repo
+    # Only fork PRs. A push or label run names the fork as its head repository,
+    # so it is recognised here. A review run names the BASE repository whichever
+    # side the pull request comes from, so every review run is let in and the
+    # script tells a fork PR from a same-repo one by the PR itself. Same-repo
     # PRs get "E2E Tests" from pull-requests.yaml's e2e-report job instead.
     if: >-
-      ${{ github.event.workflow_run.event == 'pull_request'
-      && github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name }}
+      ${{ (github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name)
+      || github.event.workflow_run.event == 'pull_request_review' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,13 +121,26 @@ jobs:
         id: r
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
-          HEAD_SHA:   ${{ github.event.workflow_run.head_sha }}
-          RUN_ID:     ${{ github.event.workflow_run.id }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA:    ${{ github.event.workflow_run.head_sha }}
+          RUN_ID:      ${{ github.event.workflow_run.id }}
+          CONCLUSION:  ${{ github.event.workflow_run.conclusion }}
+          EVENT:       ${{ github.event.workflow_run.event }}
+          # The account whose action created the triggering run: the reviewer
+          # for a review run, the labeller for a label run, the pusher for a
+          # push. A re-run keeps it (the re-runner is `triggering_actor`), so a
+          # re-run is judged as the event it replays.
+          ACTOR:       ${{ github.event.workflow_run.actor.login }}
+          CREATED_AT:  ${{ github.event.workflow_run.created_at }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
         with:
           script: |
-            const { HEAD_SHA, RUN_ID, CONCLUSION } = process.env;
+            const { HEAD_SHA, RUN_ID, CONCLUSION, EVENT, ACTOR, CREATED_AT, WORKFLOW_ID } = process.env;
             const { owner, repo } = context.repo;
+            // BEGIN verdict identity (byte-identical in every `E2E Tests` writer and reader)
+            const verdictOf = (pr) => ` [pr ${pr}]`;
+            const isOwnGreen = (st, pr) => !!st && st.state === 'success'
+              && typeof st.description === 'string' && st.description.endsWith(verdictOf(pr));
+            // END verdict identity
             // Validate the SHA before it flows into a status target / image tag.
             if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
               core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
@@ -112,8 +150,15 @@ jobs:
             core.setOutput('run_id', String(RUN_ID));
 
             const target_url = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            // Every status this lane writes names the pull request it was written
+            // for, once that is known, so a later run can tell this PR's verdict
+            // from one another PR left on the same SHA (see `isOwnGreen`). The
+            // writes before the PR is resolved are failures, which no rule reuses.
+            let prNumber = null;
             const setStatus = (state, description) => github.rest.repos.createCommitStatus({
-              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests', description, target_url,
+              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests',
+              description: prNumber === null ? description : description + verdictOf(prNumber),
+              target_url,
             });
             // Post a TERMINAL status (docs-only success / fail-closed failure) and
             // stop — no privileged run needed. `report` never runs for these
@@ -135,7 +180,15 @@ jobs:
             // which would make the `Plan build` lookup below miss. Fail-closed
             // either way: an unposted required status stays "Expected", so
             // declining to post can only preserve a verdict a real run reached.
-            if (CONCLUSION === 'cancelled' || CONCLUSION === 'skipped') {
+            //
+            // `action_required` is a fork run waiting for a maintainer to approve
+            // its workflows; it has executed nothing, and approving it runs it as
+            // attempt 2, whose completion is the one decided on. GitHub does not
+            // deliver `workflow_run` for that state (measured on three fork runs
+            // waiting there, none followed by a run of this workflow), so this
+            // is a guard for the day it does: such a run must neither post red
+            // ahead of its own build nor share a group with a live suite.
+            if (CONCLUSION === 'cancelled' || CONCLUSION === 'skipped' || CONCLUSION === 'action_required') {
               console.log(`Triggering run ${RUN_ID} concluded '${CONCLUSION}' — leaving "E2E Tests" untouched.`);
               core.setOutput('should_run', 'false');
               return;
@@ -170,165 +223,319 @@ jobs:
               return;
             }
 
-            // Past the two silent returns, this run owns the status for this
-            // SHA, so claim it before doing anything that can throw. Every
-            // lookup below is a network call, and github-script turns a 5xx
-            // into a failed job: `report` is then skipped for want of
-            // should_run, nothing writes the context, and a head SHA that was
-            // already green stays green with no suite behind it. Opening here
-            // makes that path leave `pending` instead, which blocks. Later
-            // branches overwrite it through `decide()` as before.
+            // From here on a failure must not leave the head SHA reading a verdict
+            // this run was about to replace. Every lookup below is a network call,
+            // and github-script turns a 5xx into a failed job: `report` is then
+            // skipped for want of should_run, nothing writes the context, and a
+            // head that already carried a green -- this pull request's or another
+            // one's on the same SHA -- keeps it with no suite behind it. So the
+            // decision runs inside one `try`, and a throw leaves `pending` once
+            // this run is known to own the status. The discarded-label lookup
+            // above stays outside it: posting before that decision is what would
+            // let a run stamp a status it does not own.
             //
-            // The jobs lookup above cannot move below this line: the
-            // discarded-label decision depends on it, and posting before that
-            // decision is what would let a run stamp a status it does not own.
-            // A failure there therefore still leaves the SHA untouched, which
-            // is the deliberate half of the trade rather than an oversight.
-            await setStatus('pending', 'Running e2e in the privileged fork workflow…');
+            // `should_run` is set to `true` in exactly one place, the last line of
+            // the `try`, after the lane was earned and the artifact was found.
+            // Every other exit, the `catch` included, leaves it `false` or unset,
+            // and `publish`, the only job holding the OCIR token, runs on `true`
+            // alone.
+            const WAITING = 'waiting for an approving review (or the e2e/run or e2e/full label)';
+            let owned = EVENT === 'pull_request';
+            let latest = null;
+            try {
+              // Resolve the PR number for this commit. Neither obvious lookup
+              // works for a fork: `workflow_run.pull_requests` is empty for a
+              // cross-repository run, and the association endpoint this used to
+              // call, `listPullRequestsAssociatedWithCommit`, returns nothing
+              // either — a fork PR head reaches the base repo only as
+              // `refs/pull/<n>/head`, and that association index does not walk
+              // `refs/pull/*`. It resolves same-repo heads fine, which is exactly
+              // why the hole stayed invisible: every fork PR fail-closed right
+              // here on `found 0` and no fork run ever reached publish or e2e,
+              // while same-repo PRs get "E2E Tests" from pull-requests.yaml and
+              // never enter this workflow at all.
+              //
+              // So enumerate the base repo's OPEN pull requests and match on the
+              // head SHA. Same trust properties as the call it replaces — plain
+              // base-repo API data, nothing the fork can forge — and asking for
+              // `state: 'open'` at the source keeps the old rule that a closed or
+              // merged PR never counts, so a fork cannot point a stale commit at
+              // a green.
+              // Paginated, like every other lookup in this script. Here it is
+              // load-bearing twice over: the PR being looked for is frequently
+              // not on the first page at all, and the check below counts matches,
+              // so a single page would also miss the second PR in exactly the
+              // case that count exists to catch.
+              const openPrs = await github.paginate(
+                github.rest.pulls.list,
+                { owner, repo, state: 'open', per_page: 100 },
+              );
+              // Exactly one PR AT this head, not the first match. A single
+              // branch may have several open PRs against different base branches,
+              // and every decision below is taken from whichever PR this picks:
+              // the merge-ref checkout, the docs-only verdict, the TIA file list,
+              // while the status is written to the head SHA all of them share.
+              // Taking the first would let a verdict computed for one PR satisfy
+              // another, including a docs-only green for a PR whose own base sees
+              // code. The HEAD^2 == head_sha assert downstream cannot catch that:
+              // it holds for every PR sitting on the commit.
+              //
+              // Matching head.sha, rather than any notion of reachability, is
+              // what keeps the guard as narrow as its reason. Stack one branch on
+              // another and open both PRs, and the lower PR's head is merely
+              // CONTAINED in the upper branch; counting that as two would fail
+              // the lower PR closed on a state its author cannot clear by
+              // pushing. That is the same unfixable red this workflow refuses to
+              // inflict elsewhere. Two PRs genuinely at the same head still fail
+              // closed, which is the case the guard exists for.
+              const open = openPrs.filter(p => p.head && p.head.sha === HEAD_SHA);
+              // A review run names the base repository as its head repository,
+              // so the job guard let it in without knowing which side the pull
+              // request comes from. Base-repo data does: a same-repo PR's review
+              // is reported by pull-requests.yaml itself, and a head that is not
+              // exactly one open PR was failed closed by its push run, so in
+              // both cases this run posts nothing.
+              if (EVENT === 'pull_request_review') {
+                const fork = open.length === 1 && open[0].head && open[0].head.repo
+                  && open[0].head.repo.full_name !== `${owner}/${repo}`;
+                if (!fork) {
+                  console.log(`Review run ${RUN_ID} is not on exactly one open fork PR — leaving "E2E Tests" to its owner.`);
+                  core.setOutput('should_run', 'false');
+                  return;
+                }
+                owned = true;
+              }
+              if (open.length !== 1) {
+                await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
+                return;
+              }
+              const pr = open[0];
+              // Validate it is a bare integer before it flows into a checkout ref.
+              const number = String(pr.number);
+              if (!/^[0-9]+$/.test(number)) {
+                await decide('failure', `unexpected PR number '${number}' for ${HEAD_SHA}`);
+                return;
+              }
+              prNumber = number;
+              core.setOutput('pr_number', prNumber);
 
-            // Fork build did not succeed → fail the required status (fail-closed).
-            if (CONCLUSION !== 'success') {
-              await decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
-              return;
+              // Whether this run earned the lane: the same rule as `plan`'s step in
+              // pull-requests.yaml, taken from base-repo data because nothing the
+              // fork's run produced can be believed. The inputs are fetched here
+              // and the decision is the pure function at the bottom of this
+              // script, which the contract runs against a table of cases.
+              const statuses = await github.paginate(
+                github.rest.repos.listCommitStatusesForRef,
+                { owner, repo, ref: HEAD_SHA, per_page: 100 },
+              );
+              latest = statuses.find(st => st.context === 'E2E Tests') || null;
+              let reviews = [];
+              let permission = 'none';
+              let labelEvents = [];
+              let headRuns = [];
+              if (EVENT === 'pull_request_review') {
+                reviews = await github.paginate(
+                  github.rest.pulls.listReviews,
+                  { owner, repo, pull_number: Number(prNumber), per_page: 100 },
+                );
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: ACTOR });
+                permission = data.permission;
+              } else {
+                labelEvents = await github.paginate(
+                  github.rest.issues.listEvents,
+                  { owner, repo, issue_number: Number(prNumber), per_page: 100 },
+                );
+                headRuns = await github.paginate(
+                  github.rest.actions.listWorkflowRuns,
+                  { owner, repo, workflow_id: Number(WORKFLOW_ID), event: 'pull_request', head_sha: HEAD_SHA, per_page: 100 },
+                );
+              }
+              const lane = earnsLane({
+                event: EVENT, actor: ACTOR, headSha: HEAD_SHA, createdAt: CREATED_AT,
+                prNumber, prior: latest, reviews, permission, labelEvents, headRuns,
+                headRepo: pr.head && pr.head.repo ? pr.head.repo.full_name : null,
+                headRef: pr.head ? pr.head.ref : null,
+              });
+              core.info(`heavy=${lane.heavy} reuse=${lane.reuse} (${EVENT} by ${ACTOR}, E2E Tests was ${latest ? `${latest.state} "${latest.description}"` : 'unset'})`);
+
+              // A run that did not earn the lane writes the same resting state the
+              // same-repo opener writes, and stands aside entirely when the head
+              // already carries a green it may keep, for the reason that opener
+              // does: overwriting it with a `pending` nothing will conclude wedges
+              // the gate on the good path.
+              const standAside = async () => {
+                core.setOutput('should_run', 'false');
+                if (lane.reuse) {
+                  console.log('E2E Tests left as it was: this head already carries a passing verdict, so the suite was not repeated');
+                  return;
+                }
+                await setStatus('pending', WAITING);
+              };
+
+              // A run that earned the lane and did not build fails the gate
+              // (fail-closed). One that did not earn it was never going to run the
+              // suite, so its build result is the build checks' to report.
+              if (CONCLUSION !== 'success') {
+                if (!lane.heavy) {
+                  await standAside();
+                  return;
+                }
+                await decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
+                return;
+              }
+
+              // Docs-only decision from TRUSTED data: the base-repo PR file list,
+              // NOT the presence of a fork-build artifact. A fork controls whether
+              // pull-requests.yaml emits pr-patch (its plan step runs from the fork
+              // merge commit), so inferring docs-only from a missing artifact would
+              // let a fork skip e2e and conclude green with nothing tested (#3257).
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: Number(prNumber), per_page: 100,
+              });
+              // listFiles is capped at 3000 files. A truncated list could omit the
+              // only non-docs path and green the gate, so fail closed at the cap
+              // rather than rule docs-only on a list we know may be incomplete.
+              if (files.length >= 3000) {
+                await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
+                return;
+              }
+              // A rename reports the NEW path in `filename` and the old one in
+              // `previous_filename`. Checking only `filename` would read a
+              // packages/… -> docs/… rename as docs-only, when it in fact removes
+              // a code path. BOTH sides must be under docs/ to count as docs-only.
+              const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
+              const hasNonDocs = files.some(f =>
+                !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
+              if (!hasNonDocs) {
+                await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+                return;
+              }
+
+              if (!lane.heavy) {
+                await standAside();
+                return;
+              }
+
+              // Non-docs change → e2e is REQUIRED. The fork build must have produced
+              // the pr-patch artifact; a missing one means the build did not
+              // complete, so fail closed (never conclude green without running e2e).
+              const arts = await github.paginate(
+                github.rest.actions.listWorkflowRunArtifacts,
+                { owner, repo, run_id: RUN_ID, per_page: 100 },
+              );
+              if (!arts.some(a => a.name === 'pr-patch')) {
+                await decide('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
+                return;
+              }
+
+              // Past every check: this run owns the status and is about to run the
+              // suite, so claim it before the privileged jobs start.
+              await setStatus('pending', 'Running e2e in the privileged fork workflow…');
+
+              // Test-Impact Analysis inputs, from the SAME trusted sources as the
+              // docs-only decision above: the base-repo PR file list drives suite
+              // selection (base64 so newlines survive the job output), and the
+              // base-repo PR labels drive the e2e/full override. Deriving these
+              // from `git diff` on the fork-controlled merge ref would hand a
+              // fork a second way to make TIA select nothing, on top of the one
+              // it already has — the selector runs from the fork tree, so this
+              // hardens the input and not the decision. select-e2e.sh now
+              // classifies every path it is given: shared build inputs and the
+              // e2e harness escalate to the full suite, paths that cannot affect
+              // what e2e exercises are named inert and select nothing, and a path
+              // matching neither escalates rather than returning empty. So an
+              // empty selection reaching this lane means some rule decided the
+              // change cannot affect a suite, not that the selector never
+              // recognised the path, which is what used to make it a fail-open
+              // (#3392).
+              // Both sides of a rename go to TIA too: the old path is a removal
+              // the selector must see (a moved packages/<app>/… still affects
+              // that app's suite). Extra paths can only widen the selection.
+              // Trailing newline: belt to the selector's braces. It used to be
+              // load-bearing, because `while IFS= read -r file` drops an
+              // unterminated last line and that silently emptied the selection
+              // for a one-file PR. select-e2e.sh now guards its own loop with
+              // `|| [ -n "$file" ]`, so the terminator no longer decides
+              // anything. It stays because emitting a text file that ends in a
+              // newline is the contract every other reader will assume, and
+              // because the guard and this line are in different files that can
+              // be changed by different people.
+              const changed = files
+                .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
+                .join('\n') + '\n';
+              core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
+              const fullE2e = (pr.labels || []).some(l => l.name === 'e2e/full');
+              core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
+
+              // `report` flips the pending claimed above to the terminal state
+              // after publish + e2e.
+              core.setOutput('should_run', 'true');
+            } catch (err) {
+              core.setOutput('should_run', 'false');
+              // This pull request's own green is a verdict a real run reached on
+              // this head, so a failed lookup has no reason to take it back.
+              if (owned && !isOwnGreen(latest, prNumber)) {
+                await setStatus('pending', 'could not decide whether this head earned e2e; re-run this workflow');
+              }
+              core.setFailed(`${err}`);
             }
 
-            // Resolve the PR number for this commit. Neither obvious lookup
-            // works for a fork: `workflow_run.pull_requests` is empty for a
-            // cross-repository run, and the association endpoint this used to
-            // call, `listPullRequestsAssociatedWithCommit`, returns nothing
-            // either — a fork PR head reaches the base repo only as
-            // `refs/pull/<n>/head`, and that association index does not walk
-            // `refs/pull/*`. It resolves same-repo heads fine, which is exactly
-            // why the hole stayed invisible: every fork PR fail-closed right
-            // here on `found 0` and no fork run ever reached publish or e2e,
-            // while same-repo PRs get "E2E Tests" from pull-requests.yaml and
-            // never enter this workflow at all.
+            // BEGIN lane decision (hack/gate-concurrency-contract.bats runs this under node)
             //
-            // So enumerate the base repo's OPEN pull requests and match on the
-            // head SHA. Same trust properties as the call it replaces — plain
-            // base-repo API data, nothing the fork can forge — and asking for
-            // `state: 'open'` at the source keeps the old rule that a closed or
-            // merged PR never counts, so a fork cannot point a stale commit at
-            // a green.
-            // Paginated, like every other lookup in this script. Here it is
-            // load-bearing twice over: the PR being looked for is frequently
-            // not on the first page at all, and the check below counts matches,
-            // so a single page would also miss the second PR in exactly the
-            // case that count exists to catch.
-            const openPrs = await github.paginate(
-              github.rest.pulls.list,
-              { owner, repo, state: 'open', per_page: 100 },
-            );
-            // Exactly one PR AT this head, not the first match. A single
-            // branch may have several open PRs against different base branches,
-            // and every decision below is taken from whichever PR this picks:
-            // the merge-ref checkout, the docs-only verdict, the TIA file list,
-            // while the status is written to the head SHA all of them share.
-            // Taking the first would let a verdict computed for one PR satisfy
-            // another, including a docs-only green for a PR whose own base sees
-            // code. The HEAD^2 == head_sha assert downstream cannot catch that:
-            // it holds for every PR sitting on the commit.
+            // Mirrors `plan`'s step in pull-requests.yaml. A review earns the lane
+            // when the reviewer's own latest submission at the time the run was
+            // created is an approval of exactly this head and the reviewer holds
+            // write access; the permission is read from the collaborator API rather
+            // than trusted from `author_association`. Binding to the actor's own
+            // latest review, not to "some approval exists", is what keeps a run
+            // the fork author can trigger -- a comment on their own PR, which
+            // their own workflow file can make succeed -- from re-running a suite
+            // a maintainer approved earlier.
             //
-            // Matching head.sha, rather than any notion of reachability, is
-            // what keeps the guard as narrow as its reason. Stack one branch on
-            // another and open both PRs, and the lower PR's head is merely
-            // CONTAINED in the upper branch; counting that as two would fail
-            // the lower PR closed on a state its author cannot clear by
-            // pushing. That is the same unfixable red this workflow refuses to
-            // inflict elsewhere. Two PRs genuinely at the same head still fail
-            // closed, which is the case the guard exists for.
-            const open = openPrs.filter(p => p.head && p.head.sha === HEAD_SHA);
-            if (open.length !== 1) {
-              await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
-              return;
+            // A label earns it for the head it was pressed on. The account that
+            // created this run must have applied `e2e/run` or `e2e/full` in the
+            // two minutes before the run was created, and this head must already
+            // have had a run on this pull request's branch when it did. The actor
+            // match is what tells the label run from a push run on the same head:
+            // the payload carries no action, and a push run's actor is whoever
+            // pushed, who cannot label without triage access. The head test is
+            // what keeps a label from carrying over to code it was never pressed
+            // on: a push after the label makes a head first seen after it, so a
+            // run on that head -- a maintainer updating the branch, a reopen, a
+            // triage event a fork's own workflow file chose to trigger on -- does
+            // not count, however soon it follows. The window keeps an old label
+            // from making every later run of the same account heavy; GitHub
+            // creates the run seconds after the event, and a delay past it only
+            // costs pressing the label again. A re-run keeps the original
+            // creation time and head, so it replays the event as on the same-repo
+            // lane.
+            //
+            // A green is reused, here as in `plan`'s step, only when this pull
+            // request's own lane wrote it (`isOwnGreen`); the status is keyed on
+            // the SHA alone and any other green on this head is foreign.
+            function earnsLane(i) {
+              const reuse = isOwnGreen(i.prior, i.prNumber);
+              if (i.event === 'pull_request_review') {
+                const own = i.reviews.filter(r => r.user && r.user.login === i.actor
+                  && typeof r.submitted_at === 'string' && r.submitted_at <= i.createdAt);
+                const last = own.reduce((a, r) => (a === null || r.id > a.id ? r : a), null);
+                const approved = last !== null && last.state === 'APPROVED' && last.commit_id === i.headSha
+                  && ['admin', 'write'].includes(i.permission);
+                return { heavy: approved && !reuse, reuse };
+              }
+              const until = Date.parse(i.createdAt);
+              const seen = i.headRuns
+                .filter(r => r.head_repository && r.head_repository.full_name === i.headRepo && r.head_branch === i.headRef)
+                .map(r => Date.parse(r.created_at))
+                .reduce((a, t) => Math.min(a, t), Infinity);
+              const labelled = i.labelEvents.some(e => e.event === 'labeled' && e.label
+                && ['e2e/run', 'e2e/full'].includes(e.label.name)
+                && e.actor && e.actor.login === i.actor
+                && Date.parse(e.created_at) <= until && Date.parse(e.created_at) >= until - 2 * 60 * 1000
+                && seen <= Date.parse(e.created_at));
+              return { heavy: labelled, reuse };
             }
-            const pr = open[0];
-            // Validate it is a bare integer before it flows into a checkout ref.
-            const prNumber = String(pr.number);
-            if (!/^[0-9]+$/.test(prNumber)) {
-              await decide('failure', `unexpected PR number '${prNumber}' for ${HEAD_SHA}`);
-              return;
-            }
-            core.setOutput('pr_number', prNumber);
-
-            // Docs-only decision from TRUSTED data: the base-repo PR file list,
-            // NOT the presence of a fork-build artifact. A fork controls whether
-            // pull-requests.yaml emits pr-patch (its plan step runs from the fork
-            // merge commit), so inferring docs-only from a missing artifact would
-            // let a fork skip e2e and conclude green with nothing tested (#3257).
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner, repo, pull_number: Number(prNumber), per_page: 100,
-            });
-            // listFiles is capped at 3000 files. A truncated list could omit the
-            // only non-docs path and green the gate, so fail closed at the cap
-            // rather than rule docs-only on a list we know may be incomplete.
-            if (files.length >= 3000) {
-              await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
-              return;
-            }
-            // A rename reports the NEW path in `filename` and the old one in
-            // `previous_filename`. Checking only `filename` would read a
-            // packages/… -> docs/… rename as docs-only, when it in fact removes
-            // a code path. BOTH sides must be under docs/ to count as docs-only.
-            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
-            const hasNonDocs = files.some(f =>
-              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
-            if (!hasNonDocs) {
-              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
-              return;
-            }
-
-            // Non-docs change → e2e is REQUIRED. The fork build must have produced
-            // the pr-patch artifact; a missing one means the build did not
-            // complete, so fail closed (never conclude green without running e2e).
-            const arts = await github.paginate(
-              github.rest.actions.listWorkflowRunArtifacts,
-              { owner, repo, run_id: RUN_ID, per_page: 100 },
-            );
-            if (!arts.some(a => a.name === 'pr-patch')) {
-              await decide('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
-              return;
-            }
-
-            // Test-Impact Analysis inputs, from the SAME trusted sources as the
-            // docs-only decision above: the base-repo PR file list drives suite
-            // selection (base64 so newlines survive the job output), and the
-            // base-repo PR labels drive the e2e/full override. Deriving these
-            // from `git diff` on the fork-controlled merge ref would hand a
-            // fork a second way to make TIA select nothing, on top of the one
-            // it already has — the selector runs from the fork tree, so this
-            // hardens the input and not the decision. select-e2e.sh now
-            // classifies every path it is given: shared build inputs and the
-            // e2e harness escalate to the full suite, paths that cannot affect
-            // what e2e exercises are named inert and select nothing, and a path
-            // matching neither escalates rather than returning empty. So an
-            // empty selection reaching this lane means some rule decided the
-            // change cannot affect a suite, not that the selector never
-            // recognised the path, which is what used to make it a fail-open
-            // (#3392).
-            // Both sides of a rename go to TIA too: the old path is a removal
-            // the selector must see (a moved packages/<app>/… still affects
-            // that app's suite). Extra paths can only widen the selection.
-            // Trailing newline: belt to the selector's braces. It used to be
-            // load-bearing, because `while IFS= read -r file` drops an
-            // unterminated last line and that silently emptied the selection
-            // for a one-file PR. select-e2e.sh now guards its own loop with
-            // `|| [ -n "$file" ]`, so the terminator no longer decides
-            // anything. It stays because emitting a text file that ends in a
-            // newline is the contract every other reader will assume, and
-            // because the guard and this line are in different files that can
-            // be changed by different people.
-            const changed = files
-              .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
-              .join('\n') + '\n';
-            core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
-            const fullE2e = (pr.labels || []).some(l => l.name === 'e2e/full');
-            core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
-
-            // Real run: the pending status was posted above, as soon as this
-            // run was known to own the SHA. `report` flips it to the terminal
-            // state after publish + e2e.
-            core.setOutput('should_run', 'true');
+            // END lane decision
 
   # Push the fork-built image archives to OCIR by digest and flux-push the
   # digest-pinned packages tree. No fork-authored script runs here at all, and
@@ -814,11 +1021,17 @@ jobs:
           PUBLISH_RESULT: ${{ needs.publish.result }}
           E2E_RESULT:     ${{ needs.e2e.result }}
           HEAD_SHA:       ${{ needs.resolve.outputs.head_sha }}
+          PR_NUMBER:      ${{ needs.resolve.outputs.pr_number }}
           RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PUBLISH_RESULT, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
+            const { PUBLISH_RESULT, E2E_RESULT, HEAD_SHA, PR_NUMBER, RUN_URL } = process.env;
             const { owner, repo } = context.repo;
+            // BEGIN verdict identity (byte-identical in every `E2E Tests` writer and reader)
+            const verdictOf = (pr) => ` [pr ${pr}]`;
+            const isOwnGreen = (st, pr) => !!st && st.state === 'success'
+              && typeof st.description === 'string' && st.description.endsWith(verdictOf(pr));
+            // END verdict identity
             let state, description;
             if (E2E_RESULT === 'success') {
               state = 'success';
@@ -832,6 +1045,6 @@ jobs:
             }
             await github.rest.repos.createCommitStatus({
               owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests',
-              description, target_url: RUN_URL,
+              description: description + verdictOf(PR_NUMBER), target_url: RUN_URL,
             });
             core.info(`E2E Tests → ${state}: ${description}`);

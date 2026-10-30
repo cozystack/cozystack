@@ -23,6 +23,12 @@ on:
   # an association whose approval could also satisfy the ruleset, so starting a
   # 176-minute job needs write access rather than a GitHub account.
   #
+  # Fork pull requests come through the same clause. Their review run is as
+  # unprivileged as their push run, read-only token and no secrets, and builds
+  # the same exported archives; it posts nothing itself. e2e-fork.yaml picks it
+  # up when it completes and decides from base-repo data whether this head
+  # earned the suite, on the rule `plan`'s step applies here.
+  #
   # A draft cannot be approved into the lane, and `ready_for_review` is
   # deliberately not a trigger: marking a draft ready changes no code, so a run
   # for it would rebuild what the last push already built and still earn no
@@ -179,11 +185,12 @@ jobs:
       # been earned by another pull request on the same commit, against another
       # base, and nothing in the run history can say which: a fork PR's runs,
       # re-runs, runs waiting for workflow approval and branches that share a
-      # SHA all defeat it. So every `E2E Tests` this workflow writes ends in
-      # ` [pr N]`, and a green is this pull request's exactly when it carries
-      # its own number. Anything else is foreign: it is never reused, and the
-      # opener below overwrites it with `pending` the first time this pull
-      # request's run sees it. A fork's token cannot write a status at all.
+      # SHA all defeat it. So every `E2E Tests` this workflow and e2e-fork.yaml
+      # write ends in ` [pr N]`, and a green is this pull request's exactly when
+      # it carries its own number. Anything else is foreign: it is never reused,
+      # and the opener below overwrites it with `pending` the first time this
+      # pull request's run sees it. Only the two lanes hold `statuses: write`
+      # on this repository's SHAs; a fork's token cannot write one at all.
       #
       # `reuse` is that decision, published for the opener below rather than
       # recomputed there. The opener overwrites `E2E Tests` with `pending`, so
@@ -234,9 +241,30 @@ jobs:
               core.info(`heavy=${labelled} (${context.eventName}/${context.payload.action})`);
               return;
             }
-            const heavy = !reuse;
+            // The guard above admitted this review by `author_association`, which
+            // is all an `if:` can read and which the concurrency key has to mirror.
+            // It is not the same set as write access -- MEMBER is org membership,
+            // COLLABORATOR includes read and triage -- and the submission may be
+            // for an older commit. So the suite starts only on the rule
+            // e2e-fork.yaml applies to a fork's review: the reviewer holds admin
+            // or write according to the collaborator API, and the approval is of
+            // this head. A lookup that fails starts nothing.
+            const review = context.payload.review || {};
+            let permission = 'none';
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: review.user ? review.user.login : '',
+              });
+              permission = data.permission;
+            } catch (err) {
+              core.warning(`Could not read the reviewer's permission: ${err}`);
+            }
+            const approved = review.commit_id === HEAD_SHA && ['admin', 'write'].includes(permission);
+            const heavy = approved && !reuse;
             core.setOutput('heavy', String(heavy));
-            core.info(`heavy=${heavy} (approving review)`);
+            core.info(`heavy=${heavy} (approving review by ${review.user ? review.user.login : 'unknown'}, ${permission}, commit ${review.commit_id})`);
 
       # Claim the required context for THIS run before anything can be merged on
       # the strength of the last one. Commit statuses are latest-wins per (sha,
@@ -1173,7 +1201,8 @@ jobs:
     #
     # Fork PRs never enter here: their build exports OCI archives instead of
     # pushing images, so there is no closure for this job to test. e2e-fork.yaml
-    # runs the suite for them from the privileged workflow_run and concludes the
+    # runs the suite for them from the privileged workflow_run, once the run it
+    # follows earned it on the same terms as `heavy` here, and concludes the
     # required "E2E Tests" status; for same-repo PRs e2e-report concludes it.
     #
     # `heavy` is what moves this lane off "every push". Everything ahead of it
