@@ -445,3 +445,15 @@ fluent-bit:
 scrapeRules:
   etcd:
     enabled: false
+
+# Image for the pre-delete hook that releases the VictoriaMetrics objects (see
+# templates/vm-cleanup-hook.yaml). Only needs a kubectl binary. Digest-pinned so
+# an upstream retag does not change what runs across the fleet; refresh with
+# `docker manifest inspect docker.io/clastix/kubectl:v1.32`. Same pin as the
+# etcd-operator hook.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+kubectlImage:
+  repository: docker.io/clastix/kubectl
+  tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  pullPolicy: IfNotPresent
