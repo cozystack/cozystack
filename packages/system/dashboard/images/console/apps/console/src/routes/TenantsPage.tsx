@@ -13,7 +13,7 @@ import {
   relativeTenantName,
   type TenantTreeNode,
 } from "../lib/tenant-tree.ts"
-import { TENANT_NAMESPACE_PREFIX } from "../lib/constants.ts"
+import { ROOT_TENANT_NAMESPACE, TENANT_NAMESPACE_PREFIX } from "../lib/constants.ts"
 import { formatAge } from "../lib/status.ts"
 import { TenantQuotaCompact } from "../components/QuotaDisplay.tsx"
 import type { ResourceQuota } from "../components/QuotaDisplay.tsx"
@@ -34,11 +34,17 @@ type TreeNode = TenantTreeNode
 /**
  * The Tenant CR of a namespace lives in its parent's namespace under the
  * short name: `tenant-whmcs-jzmnbwum` under `tenant-whmcs` is CR `jzmnbwum`.
- * Root-level children (`tenant-kvaps` under `tenant-root`) collapse to the
- * same rule via the plain `tenant-` prefix strip.
+ * Under the root the naming rule drops a level — a tenant `kvaps` ordered in
+ * `tenant-root` owns `tenant-kvaps` — so there the CR name is the plain
+ * prefix strip, which also names the root's own self-referential CR (`root`).
+ * Excluding the root from the prefix branch rather than dropping the branch
+ * keeps two things right at once: a root-level tenant called `root-x`
+ * resolves to the CR `root-x` and not `x`, and a self-referential node whose
+ * namespace is not `tenant-root` still names itself instead of the empty
+ * string that subtracting its own name would leave.
  */
 function tenantCrName(ns: string, parentNs: string): string {
-  return ns.startsWith(`${parentNs}-`)
+  return parentNs !== ROOT_TENANT_NAMESPACE && ns.startsWith(`${parentNs}-`)
     ? ns.slice(parentNs.length + 1)
     : ns.slice(TENANT_NAMESPACE_PREFIX.length)
 }
