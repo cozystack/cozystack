@@ -386,5 +386,9 @@ variants and opt-in on the slim ones. */}}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
+{{- /* IP addresses as a first-class resource, the class-agnostic core. Its
+       MetalLB driver is emitted from the common-packages helper instead, beside
+       the cozystack.metallb it cannot run without; enable both together. */}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $) }}
 
 {{- end }}
