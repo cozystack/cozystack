@@ -7,6 +7,11 @@
       "type": "boolean",
       "default": false
     },
+    "lockingDefaultRetention": {
+      "description": "With `locking`, keeps the default retention of the `-lock` BucketClass (COMPLIANCE, 365 days). Set to `false` to provision from the `-lock-noretention` BucketClass instead: Object Lock is enabled with no default retention, and retention is then set on the bucket or per object through the S3 API. Read at creation only.",
+      "type": "boolean",
+      "default": true
+    },
     "storagePool": {
       "description": "Selects a specific BucketClass by storage pool name.",
       "type": "string",

@@ -1,0 +1,179 @@
+suite: seaweedfs lock BucketClass without default retention
+
+# The -lock-noretention class enables Object Lock and sets no default
+# retention, so the retention is chosen afterwards through the S3 API. It
+# keeps deletionPolicy Retain like -lock: the driver deletes a bucket through
+# the filer without checking retention, so Delete would destroy objects still
+# under COMPLIANCE.
+
+templates:
+  - templates/client/cosi-bucket-class.yaml
+  - templates/storage-pool-bucket-classes.yaml
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: renders the class for a Client topology
+    template: templates/client/cosi-bucket-class.yaml
+    set:
+      topology: Client
+      filer:
+        grpcHost: seaweedfs-filer
+        grpcPort: 18888
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-lock-noretention
+    asserts:
+      - isKind:
+          of: BucketClass
+      - equal:
+          path: driverName
+          value: tenant-root.seaweedfs.objectstorage.k8s.io
+      - equal:
+          path: deletionPolicy
+          value: Retain
+      - equal:
+          path: parameters
+          value:
+            objectLockEnabled: "true"
+
+  - it: renders the class for each storage pool, with its disk type
+    template: templates/storage-pool-bucket-classes.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          fast:
+            diskType: ssd
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-fast-lock-noretention
+    asserts:
+      - isKind:
+          of: BucketClass
+      - equal:
+          path: deletionPolicy
+          value: Retain
+      - equal:
+          path: parameters
+          value:
+            disk: ssd
+            objectLockEnabled: "true"
+
+  - it: refuses a storage pool whose name ends with -lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          fast-lock-noretention:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'fast-lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a zone storage pool whose name ends with -lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      topology: MultiZone
+      replicationFactor: 1
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        zones:
+          a:
+            pools:
+              fast-lock-noretention:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.zones.a.pools key 'fast-lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          lock-noretention:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly lock
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          lock:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'lock' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a storage pool named exactly readonly
+    template: templates/seaweedfs.yaml
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        pools:
+          readonly:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.pools key 'readonly' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
+
+  - it: refuses a zone storage pool named exactly lock-noretention
+    template: templates/seaweedfs.yaml
+    set:
+      topology: MultiZone
+      replicationFactor: 1
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+      volume:
+        zones:
+          a:
+            pools:
+              lock-noretention:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorMessage: "volume.zones.a.pools key 'lock-noretention' must not be 'lock', 'lock-noretention' or 'readonly', nor end with '-lock', '-lock-noretention' or '-readonly' (reserved for COSI resources)."
