@@ -55,6 +55,35 @@ func isFirstPartyGroup(group string) bool {
 	return group == crdGroupBase || strings.HasSuffix(group, "."+crdGroupBase)
 }
 
+// checkout is a repository tree under inspection. canon is dir with every
+// symlink resolved: the yardstick a link's target is measured against.
+type checkout struct {
+	dir, canon string
+}
+
+// within reports whether path lies under root. Both must already be resolved.
+func within(root, path string) bool {
+	r, err := filepath.Rel(root, path)
+	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator))
+}
+
+// read returns the content of a file in the checkout, following symlinks only
+// while the target stays inside it. The checkout is a PR head, and the gate
+// runs where the PR's author is not trusted: a link can name any file on the
+// machine, and a manifest read through one is parsed and its parse error
+// printed to a public log. A link that leaves the checkout is an error rather
+// than a skipped file, because a skipped file reads as "no API change".
+func (c checkout) read(path string) ([]byte, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	if !within(c.canon, resolved) {
+		return nil, fmt.Errorf("%s resolves outside the checkout", rel(c.dir, path))
+	}
+	return os.ReadFile(resolved)
+}
+
 // LoadSnapshot walks a repository checkout rooted at dir and builds the full
 // API Snapshot from every source of truth: cozyrds (apps API), CRD manifests
 // (typed groups), the apiserver storage registrations (static Go groups), and
@@ -67,13 +96,19 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 		snap[r.key()] = r
 	}
 
+	canon, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err
+	}
+	c := checkout{dir: dir, canon: canon}
+
 	// Apps API: one Resource per cozyrd.
 	cozyrds, err := filepath.Glob(filepath.Join(dir, filepath.FromSlash(cozyRDGlob)))
 	if err != nil {
 		return nil, err
 	}
 	for _, path := range cozyrds {
-		data, err := os.ReadFile(path)
+		data, err := c.read(path)
 		if err != nil {
 			return nil, err
 		}
@@ -96,13 +131,13 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 	// separately and merged by group below, since a group's versions are
 	// commonly registered as several sibling APIService objects (one per
 	// version) rather than a single document listing all of them.
-	yamlFiles, err := discoverYAMLFiles(dir)
+	yamlFiles, err := c.discoverYAMLFiles()
 	if err != nil {
 		return nil, err
 	}
 	apiServices := map[resourceKey]Resource{}
 	for _, path := range yamlFiles {
-		data, err := os.ReadFile(path)
+		data, err := c.read(path)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +197,7 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 
 	// Static Go-backed aggregated groups: apiserver registrations.
 	apiserverPath := filepath.Join(dir, filepath.FromSlash(apiserverGoFile))
-	if data, err := os.ReadFile(apiserverPath); err == nil {
+	if data, err := c.read(apiserverPath); err == nil {
 		for _, res := range ParseAPIServerStorages(apiserverGoFile, data) {
 			// Do not overwrite a richer cozyrd/CRD resource that shares the
 			// same (group, plural); the apiserver entry has no schema.
@@ -194,14 +229,25 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 // adversarial file.
 const maxYAMLFileSize = 8 << 20 // 8 MiB
 
-// discoverYAMLFiles walks the crdRoots under dir and returns the path of
-// every .yaml/.yml file found, up to maxYAMLFileSize. Filtering to the CRD /
+// discoverYAMLFiles walks the crdRoots under the checkout and returns the path
+// of every .yaml/.yml file found, up to maxYAMLFileSize. Filtering to the CRD /
 // APIService documents we actually care about happens at parse time in
 // LoadSnapshot.
-func discoverYAMLFiles(dir string) ([]string, error) {
+//
+// WalkDir does not descend into a symlinked directory, but Helm does, so a
+// chart's crds/ can be a link to a directory outside the roots and ship
+// manifests this walk never sees. A link to a directory is therefore an
+// error unless its target is under a root, where the walk reaches the
+// contents by their own path anyway; every such link in the tree today is
+// of that kind (charts/cozy-lib and the like).
+func (c checkout) discoverYAMLFiles() ([]string, error) {
 	var out []string
+	var scanned []string
 	for _, root := range crdRoots {
-		base := filepath.Join(dir, root)
+		scanned = append(scanned, filepath.Join(c.canon, root))
+	}
+	for _, root := range crdRoots {
+		base := filepath.Join(c.dir, root)
 		if _, err := os.Stat(base); os.IsNotExist(err) {
 			continue
 		}
@@ -212,14 +258,32 @@ func discoverYAMLFiles(dir string) ([]string, error) {
 			if d.IsDir() {
 				return nil
 			}
-			if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
-				return nil
-			}
 			info, err := d.Info()
 			if err != nil {
 				return err
 			}
-			if info.Size() > maxYAMLFileSize {
+			size := info.Size()
+			if d.Type()&fs.ModeSymlink != 0 {
+				// A link that does not resolve is not a directory; a
+				// .yaml-named one still fails when read.
+				if target, err := filepath.EvalSymlinks(path); err == nil {
+					if st, err := os.Stat(target); err == nil {
+						if st.IsDir() {
+							for _, s := range scanned {
+								if within(s, target) {
+									return nil
+								}
+							}
+							return fmt.Errorf("%s is a symlink to a directory outside the scanned roots; manifests under it would go unread", rel(c.dir, path))
+						}
+						size = st.Size()
+					}
+				}
+			}
+			if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
+				return nil
+			}
+			if size > maxYAMLFileSize {
 				return nil
 			}
 			out = append(out, path)
