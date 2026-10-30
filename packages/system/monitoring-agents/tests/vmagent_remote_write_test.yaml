@@ -1,0 +1,65 @@
+suite: vmagent remote write targets and tenant label
+
+# The root bundle sets only global.target, and the chart defaults derive both
+# the remote write URLs and the tenant label from it. A tenant Kubernetes
+# cluster gets this chart through packages/apps/kubernetes instead, which
+# passes vmagent.remoteWrite.urls and vmagent.externalLabels.tenant and leaves
+# global.target at its default. If either value is dropped, vmagent writes to
+# cozy-monitoring services that do not exist in the tenant cluster, or labels
+# every series tenant="cozy-monitoring".
+templates:
+  - templates/vmagent.yaml
+release:
+  name: cozy-monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: root install writes to both stores of global.target and labels series with it
+    set:
+      global.target: tenant-root
+    asserts:
+      - equal:
+          path: spec.remoteWrite
+          value:
+            - url: http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
+            - url: http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
+      - equal:
+          path: spec.externalLabels.tenant
+          value: tenant-root
+
+  - it: tenant cluster writes only to the URLs its parent app passes
+    set:
+      vmagent:
+        externalLabels:
+          cluster: kubernetes-clusterprod
+          tenant: tenant-a
+        remoteWrite:
+          urls:
+            - http://vminsert-shortterm.tenant-a.svc.cozy.local:8480/insert/0/prometheus
+    asserts:
+      - equal:
+          path: spec.remoteWrite
+          value:
+            - url: http://vminsert-shortterm.tenant-a.svc.cozy.local:8480/insert/0/prometheus
+
+  - it: tenant cluster labels series with the owning tenant, not global.target
+    set:
+      vmagent:
+        externalLabels:
+          cluster: kubernetes-clusterprod
+          tenant: tenant-a
+    asserts:
+      - equal:
+          path: spec.externalLabels
+          value:
+            cluster: kubernetes-clusterprod
+            tenant: tenant-a
+
+  - it: tenant label stays a string when the value reads as a YAML scalar
+    set:
+      vmagent:
+        externalLabels:
+          tenant: "true"
+    asserts:
+      - equal:
+          path: spec.externalLabels.tenant
+          value: "true"
