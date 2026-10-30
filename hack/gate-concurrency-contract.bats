@@ -246,10 +246,45 @@ resolve_silent_conclusions() {
   [ "$gate" -lt "$arts" ]
   [ "$arts" -lt "$write" ]
 
-  for job in publish e2e report; do
-    count="$(job_block "$job" "$FORK" | code_lines | grep -c "^    if: .*needs\.resolve\.outputs\.should_run == 'true'" || true)"
+  # Matched as the whole guard line: a pattern that only has to occur in it is
+  # satisfied by `should_run == 'true' || <anything>` on the job that holds
+  # the token.
+  for job in publish e2e; do
+    count="$(job_block "$job" "$FORK" | code_lines | grep -cxF "    if: \${{ needs.resolve.outputs.should_run == 'true' }}" || true)"
     [ "${count:-0}" -eq 1 ]
   done
+  count="$(job_block report "$FORK" | code_lines | grep -cxF "    if: \${{ !cancelled() && needs.resolve.outputs.should_run == 'true' }}" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # Every other write of `should_run` is the literal `'false'`, so `true` cannot
+  # come in through `String(true)` or a variable from any other exit.
+  total="$(printf '%s\n' "$script" | grep -c "core.setOutput('should_run'," || true)"
+  falses="$(printf '%s\n' "$script" | grep -cF "core.setOutput('should_run', 'false');" || true)"
+  [ "${total:-0}" -ge 2 ]
+  [ "$falses" -eq $((total - 1)) ]
+
+  # The decision is used as computed: `lane` is assigned once, from
+  # `earnsLane`, and nothing writes to it afterwards.
+  count="$(printf '%s\n' "$script" | grep -cF 'const lane = earnsLane({' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$script" | grep -cE '(^|[^.a-zA-Z_])lane(\.[a-zA-Z_]+)? *=[^=]' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # …and so is the permission it is fed: declared, then set from the API.
+  count="$(printf '%s\n' "$script" | grep -cE '(^|[^.a-zA-Z_])permission *=[^=]' || true)"
+  [ "${count:-0}" -eq 2 ]
+
+  # A run that did not earn the lane writes the waiting `pending` from
+  # `standAside`; without it a fork PR keeps whatever green another PR left on
+  # the SHA. And a review run on a same-repo PR leaves the status alone.
+  sa="$(printf '%s\n' "$script" | awk '/const standAside = async \(\) => \{/ { f = 1 } f { print } f && /^ *};$/ { exit }')"
+  count="$(printf '%s\n' "$sa" | grep -cF "await setStatus('pending', WAITING);" || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$script" | grep -cxF '                if (!fork) {' || true)"
+  [ "${count:-0}" -eq 1 ]
+  # A lookup that fails after the head was read keeps this pull request's own
+  # green: it is a verdict a real run reached on this head.
+  count="$(printf '%s\n' "$script" | grep -cF 'if (owned && !isOwnGreen(latest, prNumber)) {' || true)"
+  [ "${count:-0}" -eq 1 ]
 
   # The decision reads base-repo data only, and the account it judges is the
   # one GitHub records as having created the triggering run.
@@ -719,6 +754,36 @@ push-no-status heavy=false reuse=false"
   [ -n "$block" ]
   count="$(printf '%s\n' "$block" | grep -cF "needs.plan.outputs.heavy == 'true'" || true)"
   [ "${count:-0}" -eq 1 ]
+  # As a top-level conjunct of the guard, on a line of its own ahead of the
+  # finalize/release alternatives: `|| heavy`, `&& (heavy || …)` or the term
+  # moved inside the release arm all keep the substring and run the suite on
+  # every push again.
+  guard="$(printf '%s\n' "$block" | sed -n '/^    if: |$/,/^    [a-z-]*:/p')"
+  heavy_at="$(printf '%s\n' "$guard" | grep -nxF "      && needs.plan.outputs.heavy == 'true'" | cut -d: -f1)"
+  arms_at="$(printf '%s\n' "$guard" | grep -nxF '      && (' | cut -d: -f1)"
+  [ -n "$heavy_at" ] && [ -n "$arms_at" ]
+  [ "$heavy_at" -lt "$arms_at" ]
+  count="$(printf '%s\n' "$guard" | grep -cxF "      && needs.plan.outputs.heavy == 'true'" || true)"
+  [ "${count:-0}" -eq 1 ]
+
+  # The reporter's branches in the order its comments argue for: a plan or
+  # candidate failure first, then the two "e2e did not run, and that is fine"
+  # cases, then the lane that was not earned, then the suite's own result.
+  # Moving the not-earned branch above docs-only makes a docs-only PR wait
+  # for an approval.
+  report="$(job_block e2e-report "$PULL_REQUESTS" | code_lines)"
+  last=0
+  for branch in "if (PLAN_RESULT !== 'success') {" \
+                "} else if (IS_RELEASE === 'true' && CANDIDATE_RESULT !== 'success') {" \
+                "} else if (CODE !== 'true') {" \
+                "} else if (IS_RELEASE === 'true' && E2E_REQUESTED !== 'true') {" \
+                "} else if (HEAVY !== 'true') {" \
+                "} else if (E2E_RESULT === 'success') {"; do
+    at="$(printf '%s\n' "$report" | grep -nF "$branch" | cut -d: -f1)"
+    [ -n "$at" ]
+    [ "$at" -gt "$last" ]
+    last="$at"
+  done
 
   plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
   [ -n "$plan_block" ]
@@ -780,6 +845,8 @@ push-no-status heavy=false reuse=false"
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$plan_block" | grep -cF 'permission = data.permission;' || true)"
   [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -cE '(^|[^.a-zA-Z_])permission *=[^=]' || true)"
+  [ "${count:-0}" -eq 2 ]
   count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('reuse', String(reuse))" || true)"
   [ "${count:-0}" -eq 1 ]
 
