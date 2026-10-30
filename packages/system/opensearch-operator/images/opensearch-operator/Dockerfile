@@ -61,7 +61,7 @@
 # skip-unusable-drain-exclusion both adds and quotes as context, so it has to
 # come after it. A rename that reorders them fails the build rather than
 # producing a wrong binary.
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
 ARG GOPROXY
 
 # Keep in step with the chart version pulled by `make update`: the chart's
