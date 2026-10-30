@@ -1,0 +1,572 @@
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - name: two of three StatefulSet pods on one node
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-0", node="node-a", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-1", node="node-a", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-2", node="node-b", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-0", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-1", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-2", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 59m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: StatefulSet
+              owner_name: db
+              node: node-a
+              severity: warning
+              exported_instance: tenant-a/db
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of StatefulSet tenant-a/db are on node node-a in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+
+  - name: StatefulSet pods spread over three nodes
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-0", node="node-a", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-1", node="node-b", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-2", node="node-c", created_by_kind="StatefulSet", created_by_name="db"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-0", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-1", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="db-2", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 120m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: five ReplicaSet pods on three nodes
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-aaaaa", node="node-a", created_by_kind="ReplicaSet", created_by_name="worker-7c8d9"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-bbbbb", node="node-a", created_by_kind="ReplicaSet", created_by_name="worker-7c8d9"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-ccccc", node="node-b", created_by_kind="ReplicaSet", created_by_name="worker-7c8d9"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-ddddd", node="node-b", created_by_kind="ReplicaSet", created_by_name="worker-7c8d9"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-eeeee", node="node-c", created_by_kind="ReplicaSet", created_by_name="worker-7c8d9"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-aaaaa", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-bbbbb", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-ccccc", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-ddddd", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="worker-7c8d9-eeeee", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 120m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: DaemonSet surge pod next to the old one
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-x7k2p", node="node-a", created_by_kind="DaemonSet", created_by_name="node-agent"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-q9z4m", node="node-a", created_by_kind="DaemonSet", created_by_name="node-agent"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-b5n8w", node="node-b", created_by_kind="DaemonSet", created_by_name="node-agent"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-x7k2p", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-q9z4m", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="cozy-system", pod="node-agent-b5n8w", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 120m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: two pods of one Job on one node
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="backup-29345678-h2k4m", node="node-a", created_by_kind="Job", created_by_name="backup-29345678"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="backup-29345678-p8r6t", node="node-a", created_by_kind="Job", created_by_name="backup-29345678"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="backup-29345678-h2k4m", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="backup-29345678-p8r6t", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: etcd members of one EtcdCluster on one node
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-x7k2p", node="node-a", created_by_kind="EtcdMember", created_by_name="etcd-x7k2p"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-q9z4m", node="node-a", created_by_kind="EtcdMember", created_by_name="etcd-q9z4m"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-b5n8w", node="node-b", created_by_kind="EtcdMember", created_by_name="etcd-b5n8w"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-0", node="node-b", created_by_kind="EtcdMember", created_by_name="etcd-0"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-1", node="node-c", created_by_kind="EtcdMember", created_by_name="etcd-1"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-2", node="node-c", created_by_kind="EtcdMember", created_by_name="etcd-2"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-x7k2p", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-q9z4m", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="etcd-b5n8w", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-0", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-1", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-b", pod="etcd-2", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: EtcdCluster
+              owner_name: etcd
+              node: node-a
+              severity: warning
+              exported_instance: tenant-a/etcd
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of EtcdCluster tenant-a/etcd are on node node-a in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-b
+              owner_kind: EtcdCluster
+              owner_name: etcd
+              node: node-c
+              severity: warning
+              exported_instance: tenant-b/etcd
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of EtcdCluster tenant-b/etcd are on node node-c in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+
+  - name: replacement pod next to its terminating predecessor for twenty minutes
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-aaaaa", node="node-a", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-bbbbb", node="node-b", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '1x30 stale'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-ccccc", node="node-b", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '_x10 1x140'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-aaaaa", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-bbbbb", phase="Running", node="node-c"}'
+        values: '1x30 stale'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-ccccc", phase="Running", node="node-c"}'
+        values: '_x10 1x140'
+    alert_rule_test:
+      - eval_time: 29m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 75m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 120m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: the same overlap held past the hour
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-aaaaa", node="node-a", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-bbbbb", node="node-b", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '1x100 stale'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-ccccc", node="node-b", created_by_kind="ReplicaSet", created_by_name="web-6b8f4"}'
+        values: '_x10 1x140'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-aaaaa", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-bbbbb", phase="Running", node="node-c"}'
+        values: '1x100 stale'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="web-6b8f4-ccccc", phase="Running", node="node-c"}'
+        values: '_x10 1x140'
+    alert_rule_test:
+      - eval_time: 69m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 71m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: ReplicaSet
+              owner_name: web-6b8f4
+              node: node-b
+              severity: warning
+              exported_instance: tenant-a/web-6b8f4
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of ReplicaSet tenant-a/web-6b8f4 are on node node-b in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+      - eval_time: 105m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: a cordoned node does not count until it is uncordoned
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '0x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '0x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x30 0x120'
+      - series: 'kube_node_spec_taint{job="kube-state-metrics", cluster="cozystack", node="node-c", key="node.kubernetes.io/unschedulable", value="", effect="NoSchedule"}'
+        values: '1x30 stale'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-0", node="node-a", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-1", node="node-a", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-2", node="node-b", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-0", phase="Running", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-1", phase="Running", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-2", phase="Running", node="node-a"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 90m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 92m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: StatefulSet
+              owner_name: kv
+              node: node-a
+              severity: warning
+              exported_instance: tenant-a/kv
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of StatefulSet tenant-a/kv are on node node-a in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+
+  - name: a node that is down does not count
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '0x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '0x150'
+      - series: 'kube_node_spec_unschedulable{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '0x150'
+      - series: 'kube_node_spec_taint{job="kube-state-metrics", cluster="cozystack", node="node-c", key="node.kubernetes.io/unreachable", value="", effect="NoSchedule"}'
+        values: '1x150'
+      - series: 'kube_node_spec_taint{job="kube-state-metrics", cluster="cozystack", node="node-c", key="node.kubernetes.io/unreachable", value="", effect="NoExecute"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-0", node="node-a", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-1", node="node-a", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-2", node="node-b", created_by_kind="StatefulSet", created_by_name="kv"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-0", phase="Running", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-1", phase="Running", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kv-2", phase="Running", node="node-a"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+      - eval_time: 120m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: pods that are not running do not count
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-aaaaa", node="node-a", created_by_kind="ReplicaSet", created_by_name="api-5c6d7"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-bbbbb", node="node-a", created_by_kind="ReplicaSet", created_by_name="api-5c6d7"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-ccccc", node="node-b", created_by_kind="ReplicaSet", created_by_name="api-5c6d7"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-aaaaa", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-bbbbb", phase="Running", node="node-c"}'
+        values: '0x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-bbbbb", phase="Failed", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="api-5c6d7-ccccc", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: one pod each in two clusters that share workload and node names
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="kubernetes-example", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="kubernetes-example", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="kubernetes-example", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="kube-system", pod="coredns-5d78c9869d-x7k2p", node="node-a", created_by_kind="ReplicaSet", created_by_name="coredns-5d78c9869d"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="kubernetes-example", namespace="kube-system", pod="coredns-5d78c9869d-q9z4m", node="node-a", created_by_kind="ReplicaSet", created_by_name="coredns-5d78c9869d"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="kube-system", pod="coredns-5d78c9869d-x7k2p", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="kubernetes-example", namespace="kube-system", pod="coredns-5d78c9869d-q9z4m", phase="Running", node="node-b"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+
+  - name: ReplicaSet, CNPG Cluster and StrimziPodSet pods on one node
+    interval: 1m
+    input_series:
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-a"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-b"}'
+        values: '1x150'
+      - series: 'kube_node_info{job="kube-state-metrics", cluster="cozystack", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-h2k4m", node="node-a", created_by_kind="ReplicaSet", created_by_name="rfs-cache-6f7d8b9c5d"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-p8r6t", node="node-a", created_by_kind="ReplicaSet", created_by_name="rfs-cache-6f7d8b9c5d"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-w3x5z", node="node-b", created_by_kind="ReplicaSet", created_by_name="rfs-cache-6f7d8b9c5d"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-1", node="node-a", created_by_kind="Cluster", created_by_name="postgres-db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-2", node="node-b", created_by_kind="Cluster", created_by_name="postgres-db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-3", node="node-b", created_by_kind="Cluster", created_by_name="postgres-db"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-0", node="node-c", created_by_kind="StrimziPodSet", created_by_name="kafka-kafka"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-1", node="node-c", created_by_kind="StrimziPodSet", created_by_name="kafka-kafka"}'
+        values: '1x150'
+      - series: 'kube_pod_info{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-2", node="node-a", created_by_kind="StrimziPodSet", created_by_name="kafka-kafka"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-h2k4m", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-p8r6t", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="rfs-cache-6f7d8b9c5d-w3x5z", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-1", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-2", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="postgres-db-3", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-0", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-1", phase="Running", node="node-c"}'
+        values: '1x150'
+      - series: 'kube_pod_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", pod="kafka-kafka-2", phase="Running", node="node-c"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: workload-placement
+        alertname: PodReplicasColocated
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: ReplicaSet
+              owner_name: rfs-cache-6f7d8b9c5d
+              node: node-a
+              severity: warning
+              exported_instance: tenant-a/rfs-cache-6f7d8b9c5d
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of ReplicaSet tenant-a/rfs-cache-6f7d8b9c5d are on node node-a in cluster
+                cozystack, although the cluster has a schedulable node for each of its pods. Losing this
+                node stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: Cluster
+              owner_name: postgres-db
+              node: node-b
+              severity: warning
+              exported_instance: tenant-a/postgres-db
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of Cluster tenant-a/postgres-db are on node node-b in cluster cozystack,
+                although the cluster has a schedulable node for each of its pods. Losing this node
+                stops these pods together, which can cost a quorum-based workload its quorum. The
+                scheduler does not move running pods, so they stay together until they are recreated.
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              owner_kind: StrimziPodSet
+              owner_name: kafka-kafka
+              node: node-c
+              severity: warning
+              exported_instance: tenant-a/kafka-kafka
+              service: workload-placement
+            exp_annotations:
+              summary: Pods of one workload share a node.
+              description: >-
+                2 running pods of StrimziPodSet tenant-a/kafka-kafka are on node node-c in cluster
+                cozystack, although the cluster has a schedulable node for each of its pods. Losing
+                this node stops these pods together, which can cost a quorum-based workload its quorum.
+                The scheduler does not move running pods, so they stay together until they are
+                recreated.
