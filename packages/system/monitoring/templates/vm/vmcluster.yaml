@@ -18,9 +18,11 @@ spec:
       # it's usually more than default 30
       maxLabelsPerTimeseries: "60"
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vminsert" .name "ScheduleAnyway") | nindent 4 }}
     resources: {}
   vmselect:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vmselect" .name "DoNotSchedule") | nindent 4 }}
     resources: {}
     extraArgs:
       search.maxUniqueTimeseries: "600000"
@@ -46,6 +48,7 @@ spec:
               storage: 2Gi
   vmstorage:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vmstorage" .name "DoNotSchedule") | nindent 4 }}
     resources: {}
     storage:
       volumeClaimTemplate:

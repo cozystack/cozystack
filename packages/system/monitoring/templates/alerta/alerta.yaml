@@ -421,6 +421,7 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicaCount: {{ include "monitoring.alertmanager.replicas" $ }}
   configSecret: alertmanager
+  {{- include "monitoring.topologySpreadConstraints" (list $ "vmalertmanager" "alertmanager" "DoNotSchedule") | nindent 2 }}
   {{- if and $emailEnabled $email.authUsername }}
   secrets:
   - {{ $emailPasswordSecret | quote }}
