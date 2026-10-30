@@ -289,7 +289,7 @@ resolve_silent_conclusions() {
   # The `!` in front of the group comes in as an argument: hack/bats-no-negated-assert.bats
   # reads a `!(` anywhere in a joined line as a negated command, quoted or not.
   opener_if="$(printf 'if: ${{ !github.event.pull_request.head.repo.fork && %s(%s) }}' '!' \
-    "steps.heavy.outputs.heavy != 'true' && steps.heavy.outputs.prior == 'success'")"
+    "steps.heavy.outputs.heavy != 'true' && steps.heavy.outputs.reuse == 'true'")"
   count="$(printf '%s\n' "$plan_block" | grep -cF "$opener_if" || true)"
   [ "${count:-0}" -eq 1 ]
 
@@ -514,16 +514,116 @@ resolve_silent_conclusions() {
   [ "${count:-0}" -eq 2 ]
 
   # The two axes it decides from: the label EVENT, and whether this head SHA
-  # already carries a green verdict to reuse. The status read happens once and
-  # is published as `prior`, because the opener's guard needs the same reading
-  # and the opener has already overwritten it by the time anything else could
-  # look.
+  # already carries a green verdict this pull request may reuse. The status
+  # read happens once and the decision is published as `reuse`, because the
+  # opener's guard needs the same decision and the opener has already
+  # overwritten the status by the time anything else could look.
   count="$(printf '%s\n' "$plan_block" | grep -cF "context.eventName !== 'pull_request_review'" || true)"
   [ "${count:-0}" -eq 1 ]
   count="$(printf '%s\n' "$plan_block" | grep -cF 'getCombinedStatusForRef' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$plan_block" | grep -cF "prior !== 'success'" || true)"
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'const heavy = !reuse;' || true)"
   [ "${count:-0}" -eq 1 ]
-  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('prior', prior)" || true)"
+  count="$(printf '%s\n' "$plan_block" | grep -cF "core.setOutput('reuse', String(reuse))" || true)"
   [ "${count:-0}" -eq 1 ]
+
+  # A green is reusable only when this pull request's own lane wrote it, which
+  # the status says itself (see the verdict identity test below). Reusing any
+  # green on the SHA instead keeps one another pull request earned on the same
+  # commit against another base, and the opener's guard reads like it still
+  # holds.
+  count="$(printf '%s\n' "$plan_block" | grep -cF 'const reuse = isOwnGreen(found, PR_NUMBER);' || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(printf '%s\n' "$plan_block" | grep -c '^ *PR_NUMBER: \${{ github\.event\.pull_request\.number }}$' || true)"
+  [ "${count:-0}" -ge 1 ]
+}
+
+# Every `BEGIN verdict identity` … `END verdict identity` block in a workflow,
+# one per line group, separated by a line holding only `--`. Read without
+# `code_lines`, because the markers are comments; only the code lines between
+# them are printed.
+verdict_identity_blocks() {
+  grep -v '^ *// END verdict identity' "$1" \
+    | awk '/\/\/ BEGIN verdict identity/ { if (n++) print "--"; inside = 1; next }
+           inside && /^ *const verdictOf|^ *const isOwnGreen|^ *&& typeof st\.description/ { print; next }
+           inside { inside = 0 }'
+}
+
+@test "a verdict names the pull request that earned it, and only its own is reused" {
+  # A commit status is keyed on the SHA alone, so a green on a head can be
+  # another pull request's, earned on the same commit against another base.
+  # Every writer of `E2E Tests` in this workflow therefore appends ` [pr N]`,
+  # and a green is
+  # reused only when it carries this pull request's number. The rule is one
+  # block of text, copied into every script that reads or writes the context,
+  # and the copies have to be the same text or the two sides disagree about
+  # whose green it is.
+  blocks="$(verdict_identity_blocks "$PULL_REQUESTS")"
+  [ -n "$blocks" ]
+  first="$(printf '%s\n' "$blocks" | awk '/^--$/ { exit } { print }')"
+  [ -n "$first" ]
+  n="$(printf '%s\n' "$blocks" | grep -c '^ *const verdictOf' || true)"
+  # plan's decision step, plan's opener and e2e-report.
+  [ "${n:-0}" -eq 3 ]
+  others="$(printf '%s\n' "$blocks" | grep -v '^--$' | sort | uniq -c | awk '$1 != 3' | wc -l | tr -d ' ')"
+  [ "${others:-1}" -eq 0 ]
+
+  # Every write appends the marker; a write without it leaves a green no rule
+  # will ever reuse, and a second approval pays for the suite again.
+  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep -cF "+ verdictOf(PR_NUMBER)," || true)"
+  [ "${count:-0}" -eq 1 ]
+  count="$(job_block e2e-report "$PULL_REQUESTS" | code_lines | grep -cF "description: description + verdictOf(PR_NUMBER)," || true)"
+  [ "${count:-0}" -eq 1 ]
+  # The number the marker carries is the pull request's own, the event's.
+  # Any other value marks every green as foreign, or as another's.
+  same="$(code_lines < "$PULL_REQUESTS" | grep '^ *PR_NUMBER:')"
+  [ "$(printf '%s\n' "$same" | wc -l | tr -d ' ')" -eq 3 ]
+  count="$(printf '%s\n' "$same" | grep -c '^ *PR_NUMBER: \${{ github\.event\.pull_request\.number }}$' || true)"
+  [ "${count:-0}" -eq 3 ]
+
+  if ! command -v node >/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      echo "FAIL: node is required in CI to run the verdict identity rule" >&2
+      false
+    fi
+    echo "node unavailable; skipping"
+    return 0
+  fi
+  driver="$BATS_TEST_TMPDIR/identity.js"
+  printf '%s\n' "$first" > "$driver"
+  cat >> "$driver" <<'JS'
+const st = (state, description) => ({ context: 'E2E Tests', state, description });
+const cases = {
+  'own-green': [st('success', 'in-tree e2e passed [pr 42]'), '42'],
+  'own-green-fork-lane': [st('success', 'fork e2e passed (privileged run) [pr 42]'), '42'],
+  'other-pr-green': [st('success', 'in-tree e2e passed [pr 7]'), '42'],
+  'longer-number-green': [st('success', 'in-tree e2e passed [pr 142]'), '42'],
+  'unmarked-green': [st('success', 'in-tree e2e passed'), '42'],
+  'marker-not-at-end': [st('success', 'in-tree e2e passed [pr 42] (copied)'), '42'],
+  'own-pending': [st('pending', 'e2e in progress [pr 42]'), '42'],
+  'own-red': [st('failure', 'in-tree e2e did not pass [pr 42]'), '42'],
+  'no-description': [{ context: 'E2E Tests', state: 'success' }, '42'],
+  'no-status': [null, '42'],
+};
+const out = Object.entries(cases).map(([k, [s, pr]]) => `${k}=${isOwnGreen(s, pr)}`);
+out.push(`written=${'in-tree e2e passed' + verdictOf('42')}`);
+require('fs').writeFileSync(1, out.join('\n') + '\n');
+JS
+  got="$(node "$driver")"
+  want="own-green=true
+own-green-fork-lane=true
+other-pr-green=false
+longer-number-green=false
+unmarked-green=false
+marker-not-at-end=false
+own-pending=false
+own-red=false
+no-description=false
+no-status=false
+written=in-tree e2e passed [pr 42]"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: the verdict identity rule changed" >&2
+    diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2 || true
+    false
+  fi
 }

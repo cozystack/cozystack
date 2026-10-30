@@ -134,6 +134,9 @@ jobs:
       # further down (`Select E2E tests` and `FULL_E2E`) — this output is only
       # about whether the lane runs at all.
       heavy: ${{ steps.heavy.outputs.heavy }}
+      # Whether the green already on this head counts for this pull request;
+      # see the step. `e2e-report` reads it only to say which state it left.
+      reuse: ${{ steps.heavy.outputs.reuse }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -152,44 +155,77 @@ jobs:
       # needs `pull-requests: write`, which a fork's read-only token lacks.
       #
       # An approving review earns it unless this exact head SHA already carries
-      # a green `E2E Tests`. Two approvals are normal here, and without the
-      # check the second one cancels the live suite and pays ~176 minutes again
-      # for an answer the SHA already has -- on a change whose whole argument is
-      # the cost of running it more than once. Only `success` dedupes: a red or
-      # unset status has to stay re-runnable, since re-running the run is how a
-      # flaked suite is cleared and a re-run replays the original event.
+      # a green `E2E Tests` that this pull request can reuse. Two approvals are
+      # normal here, and without the check a second one landing after the
+      # suite passed pays ~176 minutes again for an answer the SHA already has
+      # -- on a change whose whole argument is the cost of running it more
+      # than once. Only `success` dedupes: a red or unset status has to stay
+      # re-runnable, since re-running the run is how a flaked suite is cleared
+      # and a re-run replays the original event.
       #
-      # `prior` is that reading, published for the opener below rather than
+      # What this cannot dedupe is a second approval landing while the first
+      # one's suite is still running. Concurrency is resolved before any step
+      # runs, and an admissible approval belongs in the main group, so it
+      # cancels that run; this step then reads the `pending` the cancelled
+      # run opened and starts the suite again. Any other run of this pull
+      # request in the main group cancels a running suite the same way, a
+      # re-run of the push run or a reopen included, and not being heavy it
+      # leaves the waiting `pending`; re-running the cancelled run or approving
+      # again restores the suite. The key cannot tell those runs apart before
+      # they start.
+      #
+      # A green is reusable only when this pull request's own lane wrote it.
+      # The status is keyed on the SHA alone, so a green on this head may have
+      # been earned by another pull request on the same commit, against another
+      # base, and nothing in the run history can say which: a fork PR's runs,
+      # re-runs, runs waiting for workflow approval and branches that share a
+      # SHA all defeat it. So every `E2E Tests` this workflow writes ends in
+      # ` [pr N]`, and a green is this pull request's exactly when it carries
+      # its own number. Anything else is foreign: it is never reused, and the
+      # opener below overwrites it with `pending` the first time this pull
+      # request's run sees it. A fork's token cannot write a status at all.
+      #
+      # `reuse` is that decision, published for the opener below rather than
       # recomputed there. The opener overwrites `E2E Tests` with `pending`, so
       # this step is the last point at which the previous verdict is legible,
       # and the opener needs it: a run that will not re-verify the SHA must not
-      # clobber the green it already has.
+      # clobber a green it is allowed to keep.
       #
-      # Fails OPEN on both counts. A status list this cannot read leaves `prior`
-      # unset, which runs a suite that may not be needed and claims a context
-      # that may already be green -- never the reverse.
+      # Fails OPEN on both counts. A status list this cannot read counts as no
+      # green at all, which runs a suite that may not be needed and claims a
+      # context that may already be green -- never the reverse. A status written
+      # before the marker existed is foreign by the same rule, which costs one
+      # repeated suite per pull request open at the change.
       - name: Decide whether this run earns the E2E lane
         id: heavy
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         with:
           script: |
-            const { HEAD_SHA } = process.env;
-            let prior = 'unset';
+            const { HEAD_SHA, PR_NUMBER } = process.env;
+            // BEGIN verdict identity (byte-identical in every `E2E Tests` writer and reader)
+            const verdictOf = (pr) => ` [pr ${pr}]`;
+            const isOwnGreen = (st, pr) => !!st && st.state === 'success'
+              && typeof st.description === 'string' && st.description.endsWith(verdictOf(pr));
+            // END verdict identity
+            let found = null;
             try {
               const { data } = await github.rest.repos.getCombinedStatusForRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 ref: HEAD_SHA,
+                per_page: 100,
               });
-              const found = data.statuses.find((st) => st.context === 'E2E Tests');
-              if (found) prior = found.state;
+              found = data.statuses.find((st) => st.context === 'E2E Tests') || null;
             } catch (err) {
               core.warning(`Could not read the E2E Tests status for ${HEAD_SHA}: ${err}`);
             }
-            core.setOutput('prior', prior);
-            core.info(`E2E Tests on ${HEAD_SHA} was ${prior}`);
+            core.info(`E2E Tests on ${HEAD_SHA}: ${found ? `${found.state} "${found.description}"` : 'unset'}`);
+            const reuse = isOwnGreen(found, PR_NUMBER);
+            core.setOutput('reuse', String(reuse));
+            core.info(`reuse=${reuse} (pull request ${PR_NUMBER})`);
 
             if (context.eventName !== 'pull_request_review') {
               const labelled = context.payload.action === 'labeled'
@@ -198,7 +234,7 @@ jobs:
               core.info(`heavy=${labelled} (${context.eventName}/${context.payload.action})`);
               return;
             }
-            const heavy = prior !== 'success';
+            const heavy = !reuse;
             core.setOutput('heavy', String(heavy));
             core.info(`heavy=${heavy} (approving review)`);
 
@@ -213,14 +249,14 @@ jobs:
       # status says so at the start and concludes it in e2e-report.
       #
       # Skipped when this run will neither re-verify the SHA nor conclude the
-      # context: `heavy` false with a green already on the head means a second
+      # context: `heavy` false with a reusable green on the head means a second
       # approving review, a reopen, or a re-run of a run that already passed.
       # Claiming the context there would replace that green with a `pending`
       # that `e2e-report` deliberately never concludes, leaving the pull request
       # unmergeable until someone pushed — the gate wedging itself on the good
-      # path. Every other case still claims it, including a fresh head with no
-      # status at all, where the `pending` is what blocks the merge until the
-      # lane is earned.
+      # path. Every other case still claims it, including a head with no status
+      # at all, where the `pending` is what blocks the merge until the lane is
+      # earned, and a head carrying a green this pull request did not earn.
       #
       # Same-repo only. A fork's `pull_request` token is read-only, so this call
       # would 403 and fail `plan` on every fork PR, and that read-only token is
@@ -234,23 +270,30 @@ jobs:
       # oversight, since a read-only token cannot post a status at any point in
       # the run, and bounded by the build. §10 records it.
       - name: Open the "E2E Tests" status for this run
-        if: ${{ !github.event.pull_request.head.repo.fork && !(steps.heavy.outputs.heavy != 'true' && steps.heavy.outputs.prior == 'success') }}
+        if: ${{ !github.event.pull_request.head.repo.fork && !(steps.heavy.outputs.heavy != 'true' && steps.heavy.outputs.reuse == 'true') }}
         # A transient status-API failure here must not take the run with it.
         # This step runs at the top of `plan`, and `plan` is what `checks`,
         # `build`, `build-talos`, `finalize` and `e2e` all hang off, so a
         # failure costs a full rebuild for nothing. Skipping the opener only
-        # degrades to the behaviour that preceded it — the terminal status
-        # still gets posted by `e2e-report`, and a run that dies before that
-        # leaves the merge blocked either way.
+        # degrades to the behaviour that preceded it — `e2e-report` still
+        # writes the terminal status, or writes this same `pending` again when
+        # the lane was not earned, and a run that dies before that leaves the
+        # merge blocked either way.
         continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAVY: ${{ steps.heavy.outputs.heavy }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { HEAD_SHA, HEAVY, RUN_URL } = process.env;
+            const { HEAD_SHA, PR_NUMBER, HEAVY, RUN_URL } = process.env;
+            // BEGIN verdict identity (byte-identical in every `E2E Tests` writer and reader)
+            const verdictOf = (pr) => ` [pr ${pr}]`;
+            const isOwnGreen = (st, pr) => !!st && st.state === 'success'
+              && typeof st.description === 'string' && st.description.endsWith(verdictOf(pr));
+            // END verdict identity
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -261,9 +304,9 @@ jobs:
               // and it is the ordinary case rather than a stalled run, so it
               // has to say which of the two it is. "In progress" on a run that
               // is never going to report is how a gate stops being read.
-              description: HEAVY === 'true'
+              description: (HEAVY === 'true'
                 ? 'e2e in progress — this run has not reported yet'
-                : 'waiting for an approving review (or the e2e/run label)',
+                : 'waiting for an approving review (or the e2e/run or e2e/full label)') + verdictOf(PR_NUMBER),
               target_url: RUN_URL,
             });
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -1617,6 +1660,7 @@ jobs:
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
           HEAVY: ${{ needs.plan.outputs.heavy }}
+          REUSE: ${{ needs.plan.outputs.reuse }}
           CANDIDATE_RESULT: ${{ needs.verify-release-candidate.result }}
           IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
           # Either label is an explicit ask for the suite on a promote PR, and
@@ -1624,10 +1668,16 @@ jobs:
           # has to answer to both or it reports a skip over a suite that ran.
           E2E_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/full') || contains(github.event.pull_request.labels.*.name, 'e2e/run') }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, CANDIDATE_RESULT, IS_RELEASE, E2E_REQUESTED, HEAVY, HEAD_SHA, RUN_URL } = process.env;
+            const { PLAN_RESULT, CODE, E2E_RESULT, CANDIDATE_RESULT, IS_RELEASE, E2E_REQUESTED, HEAVY, REUSE, HEAD_SHA, PR_NUMBER, RUN_URL } = process.env;
+            // BEGIN verdict identity (byte-identical in every `E2E Tests` writer and reader)
+            const verdictOf = (pr) => ` [pr ${pr}]`;
+            const isOwnGreen = (st, pr) => !!st && st.state === 'success'
+              && typeof st.description === 'string' && st.description.endsWith(verdictOf(pr));
+            // END verdict identity
             let state, description;
             if (PLAN_RESULT !== 'success') {
               state = 'failure';
@@ -1649,9 +1699,10 @@ jobs:
               state = 'success';
               description = 'release promotion — verified at rc, e2e not repeated (add e2e/full to force a run)';
             } else if (HEAVY !== 'true') {
-              // The expensive lane has not been earned on this head yet: no
-              // approving review, and neither e2e label applied. Leave the
-              // `pending` the opener in `plan` wrote and post nothing.
+              // This run did not earn the expensive lane: no approving review
+              // and neither e2e label applied, or an approval on a head whose
+              // green it may keep. The status stays where the opener in `plan`
+              // put it.
               //
               // Deliberately not `failure`. Fail-closed would also block the
               // merge, and the final branch below would in fact produce one
@@ -1670,8 +1721,22 @@ jobs:
               // the intended reading: the ask is on the pull request and this
               // head has not answered it, so the gate waits rather than
               // reporting a skip it was told not to take.
-              core.info('E2E Tests left pending: the suite runs on approval, or on the e2e/run label');
-              return;
+              //
+              // Two states reach here. The opener stood aside because the head
+              // carries this pull request's own green (`reuse`): post nothing,
+              // and say so, since a log reading "left pending" over a green
+              // looks like the wedge the opener avoids. Otherwise the opener
+              // wrote `pending`, and it is written again here rather than
+              // trusted to have landed: the opener is `continue-on-error`, and
+              // a write it lost would leave a green another pull request put on
+              // this SHA standing as this one's verdict. The write is the same
+              // one, so repeating it costs nothing.
+              if (REUSE === 'true') {
+                core.info('E2E Tests left as it was: this head already carries a passing verdict, so the suite was not repeated');
+                return;
+              }
+              state = 'pending';
+              description = 'waiting for an approving review (or the e2e/run or e2e/full label)';
             } else if (E2E_RESULT === 'success') {
               state = 'success';
               description = 'in-tree e2e passed';
@@ -1686,7 +1751,7 @@ jobs:
                 sha: HEAD_SHA,
                 state,
                 context: 'E2E Tests',
-                description,
+                description: description + verdictOf(PR_NUMBER),
                 target_url: RUN_URL,
               });
             } catch (err) {
