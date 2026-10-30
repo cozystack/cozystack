@@ -1,0 +1,139 @@
+suite: external listener requires SCRAM-SHA-512 credentials
+
+# With external: true the chart opens port 9094 on a public LoadBalancer
+# address. It used to render that listener without an authentication block, so
+# any client that reached the address could produce and consume.
+
+templates:
+  - templates/kafka.yaml
+  - templates/users.yaml
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: kafka-test
+  namespace: tenant-test
+
+tests:
+  - it: requires SCRAM-SHA-512 on the external listener
+    template: templates/kafka.yaml
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+            authentication:
+              type: scram-sha-512
+
+  - it: keeps requiring credentials when TLS is turned off on the external listener
+    template: templates/kafka.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+            authentication:
+              type: scram-sha-512
+
+  - it: leaves the internal listeners as they are
+    template: templates/kafka.yaml
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: plain
+            port: 9092
+            type: internal
+            tls: false
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: tls
+            port: 9093
+            type: internal
+            tls: true
+
+  - it: renders no external listener without external access
+    template: templates/kafka.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  - it: renders no KafkaUser by default
+    template: templates/users.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: declares one SCRAM-SHA-512 KafkaUser per user, named after the release
+    template: templates/users.yaml
+    set:
+      users:
+        app: {}
+        analytics: {}
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: KafkaUser
+      - equal:
+          path: spec.authentication.type
+          value: scram-sha-512
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: kafka-test
+      - matchRegex:
+          path: metadata.name
+          pattern: ^kafka-test-(analytics|app)$
+
+  - it: lets the tenant read each user's generated credentials Secret
+    template: templates/dashboard-resourcemap.yaml
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            resourceNames:
+              - kafka-test-clients-ca-cert
+              - kafka-test-cluster-ca-cert
+              - kafka-test-app
+            verbs: ["get", "list", "watch"]
+
+  - it: refuses a user name that is not a valid object name
+    template: templates/users.yaml
+    set:
+      users:
+        App_1: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid Kafka user name "App_1"'
+
+  - it: refuses a user whose Secret would collide with a Strimzi cluster Secret
+    template: templates/users.yaml
+    set:
+      users:
+        cluster-ca-cert: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Kafka user name "cluster-ca-cert" is reserved'
