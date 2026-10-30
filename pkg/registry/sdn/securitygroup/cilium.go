@@ -44,25 +44,24 @@ type CiliumNetworkPolicySpec struct {
 	// it to the SecurityGroup's own membership label.
 	EndpointSelector metav1.LabelSelector `json:"endpointSelector,omitempty"`
 
-	// Ingress is the list of allowed inbound traffic rules. It is always
-	// serialized (an empty list, not omitted) and the projection guarantees it is
-	// non-nil. The backing CiliumNetworkPolicy CRD requires at least one rule
-	// section to be present (spec anyOf: ingress|ingressDeny|egress|egressDeny),
-	// so a rules-less (membership-only) SecurityGroup would otherwise project to a
-	// selector-only spec the cilium.io/v2 API rejects synchronously. An empty
-	// ingress list is the CRD's documented no-op ("if omitted or empty, this rule
-	// does not apply at ingress"), and enableDefaultDeny defaults to false for a
-	// direction with no rules, so the always-present list keeps the policy
-	// schema-valid while leaving the member pods' connectivity untouched. The
-	// non-nil guarantee matters because the CRD has no nullable fields: a nil
-	// slice without omitempty would marshal to null and be rejected.
-	Ingress []CiliumIngressRule `json:"ingress"`
+	// Ingress is the list of allowed inbound traffic rules.
+	Ingress []CiliumIngressRule `json:"ingress,omitempty"`
 
-	// Egress is the list of allowed outbound traffic rules. Unlike Ingress it
-	// keeps omitempty: ingress is the guaranteed-present carrier that satisfies the
-	// CRD anyOf in every case, so egress is emitted only when there are egress
-	// rules.
+	// Egress is the list of allowed outbound traffic rules.
 	Egress []CiliumEgressRule `json:"egress,omitempty"`
+
+	// EnableDefaultDeny overrides Cilium's per-direction default-deny posture.
+	// The projection sets it only for a membership-only SecurityGroup; see
+	// membershipOnlySpec.
+	EnableDefaultDeny *CiliumDefaultDeny `json:"enableDefaultDeny,omitempty"`
+}
+
+// CiliumDefaultDeny mirrors the cilium.io/v2 enableDefaultDeny block. A nil
+// direction leaves Cilium's default in place: deny for a direction that has
+// rules, allow otherwise.
+type CiliumDefaultDeny struct {
+	Ingress *bool `json:"ingress,omitempty"`
+	Egress  *bool `json:"egress,omitempty"`
 }
 
 // CiliumIngressRule mirrors a single cilium.io/v2 ingress rule. fromApp/fromSG
@@ -170,6 +169,26 @@ func (in *CiliumNetworkPolicySpec) DeepCopyInto(out *CiliumNetworkPolicySpec) {
 			in.Egress[i].DeepCopyInto(&out.Egress[i])
 		}
 	}
+	if in.EnableDefaultDeny != nil {
+		out.EnableDefaultDeny = in.EnableDefaultDeny.DeepCopy()
+	}
+}
+
+// DeepCopy returns a deep copy of the receiver.
+func (in *CiliumDefaultDeny) DeepCopy() *CiliumDefaultDeny {
+	if in == nil {
+		return nil
+	}
+	out := new(CiliumDefaultDeny)
+	if in.Ingress != nil {
+		v := *in.Ingress
+		out.Ingress = &v
+	}
+	if in.Egress != nil {
+		v := *in.Egress
+		out.Egress = &v
+	}
+	return out
 }
 
 // DeepCopy returns a deep copy of the receiver.
