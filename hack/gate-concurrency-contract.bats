@@ -96,28 +96,64 @@ label_names() {
     | sort -u
 }
 
-# One guard's review-axis predicates, normalised to the fact each one asserts.
-# The admission side is written with `==`/`contains` and the concurrency key's
-# complement with `!=`/`!contains`, so both reduce to the same three tokens and
-# the same requirement can be put to either. Normalising rather than matching
-# the whole clause is deliberate: the whole-clause pin this replaces lived in
-# promote-gate-contract.bats, broke on every unrelated edit to `plan`'s guard,
-# and still could not tell a weakened clause from a reworded one.
+# The review clause of one guard, read from stdin: the parenthesised group that
+# follows the event-name test, up to the parenthesis that closes it. `admit`
+# finds it the way a job guard writes it (`!= 'pull_request_review' || (`),
+# `reject` the way the concurrency key writes its complement (`==
+# 'pull_request_review' && (`), so a guard whose connective was flipped has no
+# clause to read and fails every comparison below. With `rest`, prints the input
+# with that clause cut out instead.
+#
+# Scoped to the clause rather than the whole guard so the label half cannot
+# answer for it: a predicate read off the whole line is satisfied by the same
+# expression written anywhere in it, and the direction and the connective are
+# only meaningful inside the group they belong to.
+review_clause() {
+  tr '\n' ' ' | awk -v side="$1" -v mode="${2:-clause}" '
+    {
+      if (side == "admit") a = "github.event_name != \047pull_request_review\047 || ("
+      else a = "github.event_name == \047pull_request_review\047 && ("
+      i = index($0, a)
+      if (!i) { if (mode == "rest") print; exit }
+      open = i + length(a) - 1
+      depth = 0
+      for (k = open; k <= length($0); k++) {
+        c = substr($0, k, 1)
+        if (c == "(") depth++
+        else if (c == ")") { depth--; if (depth == 0) break }
+      }
+      if (mode == "rest") print substr($0, 1, i - 1) substr($0, k + 1)
+      else print substr($0, open, k - open + 1)
+    }'
+}
+
+# One review clause's predicates, each normalised to the fact it asserts and to
+# which way round it asserts it: `admit` for the form a job guard requires,
+# `reject` for the form the key's complement requires. The fact alone proves
+# two guards name the same predicates, not that they agree on them: flipping
+# `pull_request.state == 'open'` to `!=` in `plan` keeps the fact and turns the
+# lane off for every open pull request. Normalising
+# rather than matching the whole clause is deliberate: the whole-clause pin this
+# replaces lived in promote-gate-contract.bats, broke on every unrelated edit to
+# `plan`'s guard, and still could not tell a weakened clause from a reworded
+# one.
 review_predicates() {
   grep -oE "github\.event\.review\.state [!=]= 'approved'|github\.event\.pull_request\.state [!=]= 'open'|!?contains\(fromJSON\('\[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"\]'\), github\.event\.review\.author_association\)" \
-    | sed -e 's/.*review\.state.*/approved/' \
-          -e 's/.*pull_request\.state.*/open/' \
-          -e 's/.*author_association.*/write-access/' \
+    | sed -e "s/^github\.event\.review\.state == .*/approved:admit/" \
+          -e "s/^github\.event\.review\.state != .*/approved:reject/" \
+          -e "s/^github\.event\.pull_request\.state == .*/open:admit/" \
+          -e "s/^github\.event\.pull_request\.state != .*/open:reject/" \
+          -e "s/^contains(.*/write-access:admit/" \
+          -e "s/^!contains(.*/write-access:reject/" \
     | sort -u
 }
 
-# Which way round those predicates are written, so the key cannot pass by
-# carrying the admission form. A key that admits what `plan` admits puts the
-# publishing run in the `-noop` group and skips the run that was going to post.
+review_facts() {
+  cut -d: -f1 | sort -u
+}
+
 review_polarity() {
-  grep -oE "github\.event\.review\.state [!=]= 'approved'" \
-    | sed -E 's/.*state (..) .*/\1/' \
-    | sort -u
+  cut -d: -f2 | sort -u
 }
 
 # Conclusions `resolve` treats as "not a verdict" and posts nothing for.
@@ -187,13 +223,15 @@ resolve_silent_conclusions() {
   # into the main group makes e2e-fork.yaml post red on a suite that was never
   # going to run. Complementary again: NOT(… OR (C AND NOT F)) keeps `OR F`.
   # Dropping the term from one side alone is what re-opens the wedge this whole
-  # test is about, and neither side reads wrong on its own.
-  count="$(printf '%s\n' "$line" | grep -c 'github\.event\.pull_request\.head\.repo\.fork' || true)"
+  # test is about, and neither side reads wrong on its own. Counted outside the
+  # review clause, so a fork term added there cannot stand in for this one.
+  count="$(printf '%s\n' "$line" | review_clause reject rest \
+    | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
   # `plan`'s own guard, not its steps': one of those carries the same bare
   # expression for an unrelated reason (see the opener assertion below).
-  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep '^    if:' \
-    | grep -c 'github\.event\.pull_request\.head\.repo\.fork' || true)"
+  count="$(job_block plan "$PULL_REQUESTS" | code_lines | grep '^    if:' | review_clause admit rest \
+    | grep -o 'github\.event\.pull_request\.head\.repo\.fork' | wc -l | tr -d ' ')"
   [ "${count:-0}" -eq 1 ]
 
   count="$(code_lines < "$PULL_REQUESTS" | grep -c '^  cancel-in-progress: true$' || true)"
@@ -374,8 +412,9 @@ resolve_silent_conclusions() {
   # `github.event.label.name` and a review submission carries none, so a guard
   # could gain, lose or weaken its review clause without moving a single
   # assertion. `plan` is the reference here as it is there.
-  expected="$(job_block plan "$PULL_REQUESTS" | code_lines | review_predicates)"
+  expected="$(job_block plan "$PULL_REQUESTS" | code_lines | review_clause admit | review_predicates)"
   [ -n "$expected" ]
+  facts="$(printf '%s\n' "$expected" | review_facts)"
 
   # Three facts, not one. `approved` alone admits a review from any account
   # with read access, which on a public repository is everyone, and each
@@ -384,36 +423,48 @@ resolve_silent_conclusions() {
   # also fires on a closed PR as readily as an open one. The ruleset counts
   # approvals from write access only, so a guard that admits less than all
   # three is looser than the gate it stands in for.
-  [ "$(printf '%s\n' "$expected" | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(printf '%s\n' "$facts" | wc -l | tr -d ' ')" -eq 3 ]
+  [ "$(printf '%s\n' "$expected" | review_polarity)" = "admit" ]
 
   # Required per job, for the reason the label test gives: `verify-release-candidate`
   # and `resolve_assets` reach `plan` through no `needs`, so a missing clause
   # there is not a disagreement between guards but a job that runs when `plan`
   # does not. `e2e-report` is the one that shipped without it and posted red on
   # a `changes_requested` submission (run 33750114876).
+  #
+  # Compared as fact AND direction, and the clause must be a pure conjunction:
+  # an `||` inside it admits a submission that meets any one of the facts,
+  # which is the same loosening as dropping the other three.
   for job in plan verify-release-candidate resolve_assets e2e-report; do
     block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
     [ -n "$block" ]
 
-    names="$(printf '%s\n' "$block" | review_predicates)"
+    clause="$(printf '%s\n' "$block" | review_clause admit)"
+    [ -n "$clause" ]
+    names="$(printf '%s\n' "$clause" | review_predicates)"
     [ "$names" = "$expected" ]
-
-    polarity="$(printf '%s\n' "$block" | review_polarity)"
-    [ "$polarity" = "==" ]
+    count="$(printf '%s\n' "$clause" | grep -o '||' | wc -l | tr -d ' ')"
+    [ "${count:-0}" -eq 0 ]
 
     count="$(printf '%s\n' "$block" | grep -c "github\.event_name != 'pull_request_review'" || true)"
     [ "${count:-0}" -eq 1 ]
   done
 
-  # …and the key is the complement, term for term and the other way round.
+  # …and the key is the complement, term for term and the other way round: the
+  # same facts, every one of them negated, joined by `||`. A key that admits
+  # what `plan` admits puts the publishing run in the `-noop` group and leaves
+  # the run that was going to post cancelled; a key that rejects less than
+  # `plan` does lets a discarded submission cancel the live suite.
   line="$(code_lines < "$PULL_REQUESTS" | grep '^  group: pr-')"
   [ -n "$line" ]
 
-  names="$(printf '%s\n' "$line" | review_predicates)"
-  [ "$names" = "$expected" ]
-
-  polarity="$(printf '%s\n' "$line" | review_polarity)"
-  [ "$polarity" = "!=" ]
+  clause="$(printf '%s\n' "$line" | review_clause reject)"
+  [ -n "$clause" ]
+  names="$(printf '%s\n' "$clause" | review_predicates)"
+  [ "$(printf '%s\n' "$names" | review_facts)" = "$facts" ]
+  [ "$(printf '%s\n' "$names" | review_polarity)" = "reject" ]
+  count="$(printf '%s\n' "$clause" | grep -o '&&' | wc -l | tr -d ' ')"
+  [ "${count:-0}" -eq 0 ]
 
   count="$(printf '%s\n' "$line" | grep -c "github\.event_name == 'pull_request_review'" || true)"
   [ "${count:-0}" -eq 1 ]
@@ -426,7 +477,7 @@ resolve_silent_conclusions() {
   # here.
   for job in $(job_names "$PULL_REQUESTS"); do
     block="$(job_block "$job" "$PULL_REQUESTS" | code_lines)"
-    names="$(printf '%s\n' "$block" | review_predicates)"
+    names="$(printf '%s\n' "$block" | review_clause admit | review_predicates)"
     if [ -n "$names" ]; then
       [ "$names" = "$expected" ]
     else
