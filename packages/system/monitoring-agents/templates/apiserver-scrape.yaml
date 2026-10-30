@@ -9,6 +9,9 @@ spec:
   - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
     port: https
     scheme: https
+    {{- with .Values.vmagent.apiserverMaxScrapeSize }}
+    max_scrape_size: {{ . | quote }}
+    {{- end }}
     relabelConfigs:
     - action: labeldrop
       regex: (endpoint|namespace|pod|container)
