@@ -612,6 +612,25 @@ jobs:
         with:
           cosign-release: v3.1.3
 
+      # The stable release ships the rc's image digests, so their signatures
+      # are the rc's too: tags.yaml signed each index in the repository that
+      # finalize's retag copies the digest within, where cosign keeps the
+      # signature. Checked here, before any stable asset is uploaded, with the
+      # rc tree's script, so an rc cut from a tree without it is promoted as it
+      # always was, and one whose signatures are missing never reaches the
+      # promote PR.
+      - name: Verify the rc image signatures
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY: ghcr.io/cozystack/cozystack
+          RC_TAG: ${{ needs.parse.outputs.rc_tag }}
+        run: |
+          if [ -f hack/sign-release-images.sh ]; then
+            hack/sign-release-images.sh --verify-only packages "$REGISTRY"
+          else
+            echo "::notice::${RC_TAG} was cut from a tree without hack/sign-release-images.sh, so its images carry no signature to check"
+          fi
+
       - name: Create draft stable release and upload assets
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

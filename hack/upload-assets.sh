@@ -22,6 +22,11 @@ assets+=(
   _out/assets/cozypkg-*.tar.gz
   _out/assets/cozypkg-checksums.txt
   _out/assets/openapi.json
+  # Written by hack/sign-release-images.sh and hack/collect-image-sboms.sh in
+  # prepare-release, before this runs: the images the release pins and their
+  # SBOMs, which the checksums below then cover.
+  _out/assets/cozystack-images.txt
+  _out/assets/cozystack-images-sbom.tar.gz
 )
 
 # Before the first upload, so that a release never carries assets without the
