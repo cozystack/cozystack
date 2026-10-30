@@ -226,11 +226,13 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 // untrusted PR head checkouts with no other size guard; real chart
 // CRD/APIService manifests in this repo are well under a megabyte, so this
 // is generous headroom, not a tight fit, and only bounds a pathological or
-// adversarial file.
+// adversarial file. A file past it fails the run rather than being skipped:
+// Helm ships a manifest of any size, so one padded with comments past the cap
+// would otherwise read as "no API change".
 const maxYAMLFileSize = 8 << 20 // 8 MiB
 
 // discoverYAMLFiles walks the crdRoots under the checkout and returns the path
-// of every .yaml/.yml file found, up to maxYAMLFileSize. Filtering to the CRD /
+// of every .yaml/.yml file found, none past maxYAMLFileSize. Filtering to the CRD /
 // APIService documents we actually care about happens at parse time in
 // LoadSnapshot.
 //
@@ -284,7 +286,7 @@ func (c checkout) discoverYAMLFiles() ([]string, error) {
 				return nil
 			}
 			if size > maxYAMLFileSize {
-				return nil
+				return fmt.Errorf("%s is %d bytes, past the %d the gate reads; a manifest it skipped would read as no API change", rel(c.dir, path), size, maxYAMLFileSize)
 			}
 			out = append(out, path)
 			return nil

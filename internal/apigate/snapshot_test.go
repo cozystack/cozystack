@@ -185,17 +185,15 @@ func TestLoadSnapshotThroughSymlinkedCheckoutRoot(t *testing.T) {
 	}
 }
 
-func TestLoadSnapshotSkipsOversizedFileBehindLink(t *testing.T) {
+func TestLoadSnapshotRejectsOversizedFileBehindLink(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, "packages/system/widget-rd/cozyrds/widget.yaml", sampleCozyRD)
 	writeTree(t, root, "packages/chart/big.txt", sampleCRD+"# "+strings.Repeat("x", maxYAMLFileSize)+"\n")
 	linkTree(t, root, "packages/chart/crds/resource.yaml", "../big.txt")
 
-	snap, err := LoadSnapshot(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := snap[widgetsKey]; ok {
-		t.Fatal("the size cap measured the link, not the file behind it")
+	// Measured on the file behind the link, and refused, not skipped: before
+	// the cap was an error a link to a padded manifest read as "no API change".
+	if _, err := LoadSnapshot(root); err == nil || !strings.Contains(err.Error(), "past the") {
+		t.Fatalf("an oversized file behind a link was not refused: %v", err)
 	}
 }
