@@ -1,3 +1,11 @@
+{{- $spreadConstraints := list }}
+{{- with dig "scheduling" "globalAppTopologySpreadConstraints" "" (.Values._cluster | default dict) }}
+{{-   $policy := fromYaml . }}
+{{-   $spreadConstraints = dig "topologySpreadConstraints" (list) $policy }}
+{{-   if or (not (kindIs "slice" $spreadConstraints)) (not $spreadConstraints) }}
+{{-     fail (trim (printf "harbor: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list. %s" (get $policy "Error"))) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
@@ -16,6 +24,21 @@ metadata:
 spec:
   sentinel:
     replicas: 3
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" (printf "%s-redis" $.Values.harbor.fullnameOverride) "app.kubernetes.io/component" "sentinel")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+    {{- else }}
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ .Values.harbor.fullnameOverride }}-redis
+          app.kubernetes.io/component: sentinel
+    {{- end }}
     resources:
       limits:
         cpu: 100m
@@ -25,6 +48,21 @@ spec:
         memory: 64Mi
   redis:
     replicas: {{ .Values.redis.replicas }}
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" (printf "%s-redis" $.Values.harbor.fullnameOverride) "app.kubernetes.io/component" "redis")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+    {{- else }}
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ .Values.harbor.fullnameOverride }}-redis
+          app.kubernetes.io/component: redis
+    {{- end }}
     resources:
       limits:
         cpu: "1"
