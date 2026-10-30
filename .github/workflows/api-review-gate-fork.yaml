@@ -215,6 +215,9 @@ jobs:
         id: detect
         run: |
           set -uo pipefail
+          # api-gate exits 2 for a sizeable change; the runner's default `bash -e`
+          # would end the step there, before the code is read.
+          set +e
           "${RUNNER_TEMP}/api-gate" \
             --base "${RUNNER_TEMP}/base" \
             --head "${RUNNER_TEMP}/head" \
