@@ -50,7 +50,7 @@ RUN ./hack/build-go.sh
 # CNI_PLUGINS_VERSION above -- it is about the VERSIONS matching, not about
 # which plugins exist.
 #
-# talos-cni-plugins-checked-against: v1.14.2
+# talos-cni-plugins-checked-against: v1.14.4
 ARG TARGETARCH
 ARG CNI_PLUGINS_VERSION=v1.9.1
 # SHA-256 of cni-plugins-linux-<arch>-<version>.tgz, from the release's per-asset

@@ -8,7 +8,7 @@ Talos Linux v1.12 introduced a userspace OOM handler, enabled by default, that r
 
 Setting a priority on a system component to stop these kills looks like a fix and changes nothing about them. Take that claim narrowly, because priority is far from inert elsewhere: it still drives scheduler preemption, kubelet eviction ordering, and the `oom_score_adj` kubelet hands the kernel OOM killer. None of those three is what kills these pods. The one ordering input this handler has is the Kubernetes **QoS class**, inferred from the cgroup path rather than from any pod object — a different axis from priority, so a `system-node-critical` pod with no memory limit is an ordinary candidate like any other.
 
-The handler scores each pod cgroup with a CEL expression. The default in Talos v1.14.2, the version Cozystack currently ships for host nodes, is:
+The handler scores each pod cgroup with a CEL expression. The default in Talos v1.14.4, the version Cozystack currently ships for host nodes, is:
 
 ```
 memory_max.hasValue() ? 0.0 :
@@ -155,7 +155,7 @@ Both halves of that signature — `OOM controller triggered`, then `no eligible 
 
 ## When the trigger itself is the problem
 
-Giving system components limits stops them being *victims*. It does not stop the handler *triggering*, and a node under genuine sustained pressure will keep firing. The v1.14.2 default trigger is:
+Giving system components limits stops them being *victims*. It does not stop the handler *triggering*, and a node under genuine sustained pressure will keep firing. The v1.14.4 default trigger is:
 
 ```
 (multiply_qos_vectors(d_qos_memory_full_total, {System: 8.0, Podruntime: 4.0}) > 3000.0 &&
