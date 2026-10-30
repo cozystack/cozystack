@@ -10,11 +10,11 @@ name: API Review Gate (fork)
 # fork's run executes the fork's own copy of the workflow, so its conclusion is
 # whatever the fork wants it to be. This workflow runs from the DEFAULT branch
 # and reaches the verdict itself, from inputs a fork cannot forge: the detector
-# built from the base branch, reading the PR head as data, plus the base repo's
+# built from the default branch, reading the PR head as data, plus the base repo's
 # PR and review APIs. The fork's run is used only as a trigger.
 #
 # Fork code never executes here. The head is fetched into a worktree that only
-# the base-built detector reads, in a job whose token can write nothing; the jobs
+# the default-branch detector reads, in a job whose token can write nothing; the jobs
 # that can write statuses never see the head at all. That is why this is a
 # workflow_run and not a pull_request_target run, which would offer fork code a
 # privileged token for no gain.
@@ -152,8 +152,8 @@ jobs:
             core.setOutput('should_run', 'true');
 
   # The only job that touches fork bytes, so its token can write nothing and it
-  # reaches no secret. The detector is built from the merge base, as in the
-  # unprivileged gate, or else from the default branch; never from the head.
+  # reaches no secret. The detector is built from the default branch, never
+  # from the head or the merge base.
   detect:
     name: Detect sizeable API changes
     needs: [resolve]
@@ -194,23 +194,22 @@ jobs:
           fi
           merge_base="$(git merge-base "${HEAD_SHA}" "origin/${BASE_REF}")"
           echo "Merge base: ${merge_base}"
-          # Symlinks land as plain files, so a fork cannot point a manifest the
-          # detector reads at a file elsewhere on the runner and have it echoed
-          # into the public log. The detector never follows the tree's own
-          # directory links, so the verdict is unchanged.
-          git -c core.symlinks=false worktree add --detach "${RUNNER_TEMP}/head" "${HEAD_SHA}"
+          # Links stay links: a checkout that flattened them would let a fork hide
+          # a CRD behind one from the detector while Helm still ships it, and the
+          # verdict would differ from the one the same-repo gate reaches. The
+          # detector refuses a link that leaves the tree, so what a link names
+          # elsewhere on the runner is never read into the public log.
+          git worktree add --detach "${RUNNER_TEMP}/head" "${HEAD_SHA}"
           git worktree add --detach "${RUNNER_TEMP}/base" "${merge_base}"
 
+      # Always from the default branch, the commit this workflow and its approval
+      # rule come from. Not from the merge base: a fork's author chooses that,
+      # and an old one would select an old detector, so a fix to the detector
+      # would not reach the PRs that most need it.
       - name: Build api-gate
         run: |
           set -euo pipefail
-          if [ -d "${RUNNER_TEMP}/base/cmd/api-gate" ]; then
-            build_dir="${RUNNER_TEMP}/base"
-          else
-            build_dir="${GITHUB_WORKSPACE}"
-            echo "The merge base predates api-gate; building it from the default branch."
-          fi
-          ( cd "${build_dir}" && go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate )
+          ( cd "${GITHUB_WORKSPACE}" && go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate )
 
       - name: Detect sizeable API changes
         id: detect
