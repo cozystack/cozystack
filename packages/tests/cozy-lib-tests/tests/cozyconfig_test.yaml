@@ -1,0 +1,81 @@
+# ./tests/cozyconfig_test.yaml
+suite: cozyconfig helpers survive an uninjected _cluster and _namespace
+
+templates:
+  - templates/tests/cozyconfig.yaml
+
+# `_cluster` and `_namespace` are injected by the platform through valuesFrom on
+# the cozystack-values Secret. A chart rendered on its own therefore has neither,
+# which is the state of `helm lint`, a plain `helm template`, and any suite that
+# does not set them. These helpers must degrade to their empty defaults there
+# rather than abort the render, because every consumer of this library inherits
+# whatever they do.
+
+tests:
+  - it: returns empty defaults when the platform injected nothing
+    # No `set:` at all: this is the uninjected state, and it needs no mocking.
+    asserts:
+      - equal: {path: 'data["root-host"]', value: ""}
+      - equal: {path: 'data["bundle-name"]', value: ""}
+      - equal: {path: 'data["images-registry"]', value: ""}
+      - equal: {path: 'data["ipv4-cluster-cidr"]', value: ""}
+      - equal: {path: 'data["ipv4-service-cidr"]', value: ""}
+      - equal: {path: 'data["ipv4-join-cidr"]', value: ""}
+      - equal: {path: 'data["scheduling"]', value: ""}
+      - equal: {path: 'data["branding"]', value: ""}
+      - equal: {path: 'data["ns-host"]', value: ""}
+      - equal: {path: 'data["ns-etcd"]', value: ""}
+      - equal: {path: 'data["ns-ingress"]', value: ""}
+      - equal: {path: 'data["ns-monitoring"]', value: ""}
+      - equal: {path: 'data["ns-seaweedfs"]', value: ""}
+
+  - it: returns the injected values unchanged when the platform did inject them
+    # The other half of the guard: making the helpers survive an absent map must
+    # not change what they return when the map is present.
+    set:
+      _cluster:
+        root-host: example.com
+        bundle-name: paas-full
+        images-registry: registry.example.com
+        ipv4-cluster-cidr: 10.244.0.0/16
+        ipv4-service-cidr: 10.96.0.0/16
+        ipv4-join-cidr: 100.64.0.0/16
+        scheduling:
+          nodeSelector:
+            node-role.kubernetes.io/worker: ""
+        branding:
+          logo:
+            light: /logos/light.svg
+      _namespace:
+        host: tenant.example.com
+        etcd: etcd-ns
+        ingress: ingress-ns
+        monitoring: monitoring-ns
+        seaweedfs: seaweedfs-ns
+    asserts:
+      - equal: {path: 'data["root-host"]', value: "example.com"}
+      - equal: {path: 'data["bundle-name"]', value: "paas-full"}
+      - equal: {path: 'data["images-registry"]', value: "registry.example.com"}
+      - equal: {path: 'data["ipv4-cluster-cidr"]', value: "10.244.0.0/16"}
+      - equal: {path: 'data["ipv4-service-cidr"]', value: "10.96.0.0/16"}
+      - equal: {path: 'data["ipv4-join-cidr"]', value: "100.64.0.0/16"}
+      - equal: {path: 'data["ns-host"]', value: "tenant.example.com"}
+      - equal: {path: 'data["ns-etcd"]', value: "etcd-ns"}
+      - equal: {path: 'data["ns-ingress"]', value: "ingress-ns"}
+      - equal: {path: 'data["ns-monitoring"]', value: "monitoring-ns"}
+      - equal: {path: 'data["ns-seaweedfs"]', value: "seaweedfs-ns"}
+      # scheduling and branding are the two helpers whose body was rewritten
+      # rather than wrapped, so they need the present-map half most. Their
+      # value is a whole YAML document, and it is pinned as one: a substring
+      # match here would survive the loss of the `toYaml` that produces it,
+      # because the key name also appears in Go's default map formatting.
+      - equal:
+          path: 'data["scheduling"]'
+          value: |-
+            nodeSelector:
+              node-role.kubernetes.io/worker: ""
+      - equal:
+          path: 'data["branding"]'
+          value: |-
+            logo:
+              light: /logos/light.svg
