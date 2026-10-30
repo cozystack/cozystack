@@ -189,6 +189,31 @@ JS
   [ -s "$6/calls" ] || { echo "step '$3' recorded nothing" >&2; return 1; }
 }
 
+# finalize decides in Resolve draft release and publishes in Publish draft
+# release, which gets the decision as step outputs wired to env in the workflow.
+# Runs both and reads that wiring from the workflow itself, so a renamed output
+# or env key fails here instead of publishing with an empty release id. The
+# publish step's calls and log land in <out>, the resolve step's in <out>.resolve.
+#
+#   run_publish <tree> <releases.json> <out> <tag>
+run_publish() {
+  run_step "$FINALIZE" finalize 'Resolve draft release' "$1" "$2" "$3.resolve" "$4" || return 1
+  [ "$(tail -n 1 "$3.resolve/calls")" = ok ] || {
+    echo "Resolve draft release did not finish:" >&2
+    sed 's/^/  /' "$3.resolve/calls" "$3.resolve/log" >&2; return 1; }
+  wiring="$(yq '.jobs.finalize.steps[] | select(.name == "Publish draft release") | .env | to_entries | .[] | .key + " " + .value' "$FINALIZE")"
+  [ -n "$wiring" ] || { echo "Publish draft release is wired to no env" >&2; return 1; }
+  exports=""
+  while read -r key expr; do
+    name="$(printf '%s' "$expr" | sed -n 's/^\${{ steps\.resolve\.outputs\.\([a-z_]*\) }}$/\1/p')"
+    [ -n "$name" ] || { echo "$key is not wired to a Resolve draft release output: $expr" >&2; return 1; }
+    exports="$exports export $key='$(sed -n "s/^setOutput $name=//p" "$3.resolve/calls")';"
+  done <<EOF
+$wiring
+EOF
+  ( eval "$exports"; run_step "$FINALIZE" finalize 'Publish draft release' "$1" "$2" "$3" "$4" )
+}
+
 # The body finalize publishes for v1.7.0 in place of one over 100000 bytes.
 LINK_V170='The release notes for v1.7.0 are too long for a GitHub release description; the full changelog is [docs/changelogs/v1.7.0.md](https://github.com/cozystack/cozystack/blob/v1.7.0/docs/changelogs/v1.7.0.md).'
 
@@ -530,8 +555,8 @@ v1.6.0=reject:format"
   return 0
 }
 
-# finalize's Publish draft release step, run as the workflow carries it, one
-# merge-commit tree per case. Whatever the tree holds, the release is
+# finalize's Resolve and Publish draft release steps, run as the workflow carries
+# them, one merge-commit tree per case. Whatever the tree holds, the release is
 # published: with the release notes, else the changelog, else the draft's own
 # body, and with a link in place of anything over 100000 bytes, since the tags
 # already exist and a body GitHub refuses would strand the release.
@@ -562,10 +587,10 @@ EOF
 
   for spec in notes:$notes blanknotes:$cl changelog:$cl at:$cl over:link multibyte:link overnotes:link neither:none blank:none; do
     c="${spec%%:*}"; want="${spec#*:}"
-    run_step "$FINALIZE" finalize 'Publish draft release' "$tmp/$c" "$tmp/releases.json" "$tmp/out.$c" v1.7.0
+    run_publish "$tmp/$c" "$tmp/releases.json" "$tmp/out.$c" v1.7.0
     with_body=' body'
     [ "$want" != none ] || with_body=''
-    expected="$(printf 'ok\nsetOutput make_latest=true\nupdateRelease 1 draft=false make_latest=true prerelease=false%s\n' "$with_body")"
+    expected="$(printf 'ok\nupdateRelease 1 draft=false make_latest=true prerelease=false%s\n' "$with_body")"
     [ "$(sort "$tmp/out.$c/calls")" = "$expected" ] || {
       echo "$c: finalize did something other than publishing v1.7.0:" >&2
       sed 's/^/  /' "$tmp/out.$c/calls" "$tmp/out.$c/log" >&2; exit 1; }
@@ -590,6 +615,50 @@ EOF
   rm -rf "$tmp"
 }
 
+# The draft lookup is the first thing finalize does after the tags exist, and it
+# runs before the retag, so a release with no draft stops the job while no stable
+# image name has been written.
+@test "finalize: a missing draft fails in Resolve draft release, before anything is published" {
+  need_node
+  tmp="$(mktemp -d)"
+  printf '[{"id": 2, "draft": false, "prerelease": false, "tag_name": "v1.6.5", "name": "v1.6.5", "body": "v1.6.5"}]\n' > "$tmp/releases.json"
+  mkdir -p "$tmp/tree"
+  run_step "$FINALIZE" finalize 'Resolve draft release' "$tmp/tree" "$tmp/releases.json" "$tmp/out" v1.7.0
+  grep -qF 'threw Draft release for v1.7.0 not found' "$tmp/out/calls" || {
+    echo "a missing draft did not stop Resolve draft release:" >&2
+    sed 's/^/  /' "$tmp/out/calls" "$tmp/out/log" >&2; exit 1; }
+  if grep -q '^updateRelease' "$tmp/out/calls"; then
+    echo "Resolve draft release wrote to a release it could not resolve" >&2; exit 1
+  fi
+  rm -rf "$tmp"
+}
+
+# An older patch cut after a newer minor must not take `latest`: it is published
+# without it, and the newest release is asserted as latest again.
+@test "finalize: an older patch is published without latest and the newest release keeps it" {
+  need_node
+  tmp="$(mktemp -d)"
+  cat > "$tmp/releases.json" <<'EOF'
+[
+  {"id": 5, "draft": true, "prerelease": false, "tag_name": "v1.6.6", "name": "v1.6.6", "body": "draft"},
+  {"id": 3, "draft": false, "prerelease": false, "tag_name": "v1.7.0", "name": "v1.7.0", "body": "v1.7.0"},
+  {"id": 2, "draft": false, "prerelease": false, "tag_name": "v1.6.5", "name": "v1.6.5", "body": "v1.6.5"}
+]
+EOF
+  mkdir -p "$tmp/tree/docs/changelogs"
+  write_changelog "$tmp/tree/docs/changelogs/v1.6.6.md" 1.6.6
+  run_publish "$tmp/tree" "$tmp/releases.json" "$tmp/out" v1.6.6
+  want="ok
+updateRelease 3 make_latest=true
+updateRelease 5 draft=false make_latest=false prerelease=false body"
+  [ "$(sort "$tmp/out/calls")" = "$want" ] || {
+    echo "an older patch did not leave latest with v1.7.0:" >&2
+    sed 's/^/  /' "$tmp/out/calls" "$tmp/out/log" >&2; exit 1; }
+  grep -qx 'setOutput make_latest=false' "$tmp/out.resolve/calls" || {
+    echo "Resolve draft release did not decide make_latest=false for an older patch" >&2; exit 1; }
+  rm -rf "$tmp"
+}
+
 # A release with no release notes publishes exactly what finalize published
 # before they existed. Every shipped changelog is a fixture; one over 100000
 # bytes, which GitHub may refuse, publishes the link instead.
@@ -604,7 +673,16 @@ EOF
     mkdir -p "$tmp/$tag/docs/changelogs"
     cp "$f" "$tmp/$tag/docs/changelogs/"
     printf '[{"id": 1, "draft": true, "prerelease": false, "tag_name": "%s", "name": "%s", "body": "draft"}]\n' "$tag" "$tag" > "$tmp/$tag.json"
-    run_step "$FINALIZE" finalize 'Publish draft release' "$tmp/$tag" "$tmp/$tag.json" "$tmp/out.$tag" "$tag"
+    run_publish "$tmp/$tag" "$tmp/$tag.json" "$tmp/out.$tag" "$tag"
+    # The prerelease flag reaches Publish as an output of Resolve, so it is
+    # asserted here, on every shipped tag, rather than assumed from the body.
+    case "$tag" in
+      *-*) flags='make_latest=false prerelease=true' ;;
+      *)   flags='make_latest=true prerelease=false' ;;
+    esac
+    grep -qxF "updateRelease 1 draft=false $flags body" "$tmp/out.$tag/calls" || {
+      echo "$tag: published with the wrong flags, want $flags:" >&2
+      sed 's/^/  /' "$tmp/out.$tag/calls" >&2; exit 1; }
     if [ "$(wc -c < "$f")" -le 100000 ]; then
       cmp -s "$tmp/out.$tag/body.1" "$f" || { echo "$tag: not published byte for byte" >&2; exit 1; }
       verbatim=$((verbatim + 1))
