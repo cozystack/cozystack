@@ -91,12 +91,30 @@ make generate       # Regenerate values.schema.json + README.md from values.yaml
 
 Build environment variables:
 
-- `REGISTRY` — Docker registry (default `ghcr.io/cozystack/cozystack`).
+- `REGISTRY` — target registry for the build (default `ghcr.io/cozystack/cozystack`). CI overrides it per workflow — see [Registries](#registries).
 - `PUSH=1` / `LOAD=0` — control buildx push/load behaviour.
 - `LOAD=1 PUSH=0` — load images locally instead of pushing. Builds for the host architecture only, because the classic docker image store cannot load a multi-platform index.
 - `PLATFORM` — the buildx platforms. Defaults to `linux/amd64,linux/arm64` for anything but `LOAD=1`, so a push from either architecture publishes an index both can run. Needs a `docker-container` builder (`BUILDER`) or a docker daemon on the containerd image store, with QEMU registered for the non-native half. Compiling builder stages run natively on `$BUILDPLATFORM` and cross-compile for the target, but every `RUN` step of a stage that runs on the target platform (package installs, `setcap`, install scripts, patch steps) still runs emulated. `packages/core/testing` pins `linux/amd64`, because it carries an x86 KVM sandbox. `packages/core/talos` builds the Talos installer and release assets for the arches in `PLATFORM` with the upstream imager, which needs no QEMU for either; its matchbox image carries the amd64 and arm64 kernel and initramfs whatever `PLATFORM` says, because it network-boots machines of either arch.
 - `PUSHED_TAGS_LOG` — a file the `image-tags` macro appends every pushed `<repo>:<tag>` to, one per line. Unset by default; the release build sets it so `hack/stitch-multiarch.sh` can move every tag it pushed, versioned ones included, onto the multi-arch index. The append happens at recipe expansion, so `make -n` writes it too.
 - `CACHE_TAG` — the tag of the mode=max build cache each image reads (and writes under `WRITE_CACHE=1`). Defaults to `buildcache`. Apart from the Talos installer and matchbox in the release job, CI builds one architecture per job, and builds arm64 images only for pre-release tags and in a nightly build of main: the images are built again on native arm64 runners under `<tag>-arm64` with `CACHE_TAG=buildcache-arm64`, which only the nightly writes. The talos and testing packages get no arm64 leg: the release job builds the Talos installer and matchbox for both arches itself, and testing is amd64 only. For a pre-release, `hack/stitch-multiarch.sh` then joins each pair into one index, `hack/verify-multiarch.sh` fails the rc on any pinned image that is not an amd64+arm64 index, and the packages artifact is republished pinned on the index digests; see `docs/release.md`. The stitch skips any image whose digest is also pinned in a file it does not rewrite, which then fails that gate; the kamaji control-plane provider's gzipped manifest is the one such copy it does rewrite (see `docs/agents/image-refs.md`).
+
+### Registries
+
+Cozystack publishes to two registries with different trust levels. They are **not** interchangeable, and the `REGISTRY` default above applies only to a local build.
+
+| | `iad.ocir.io/idyksih5sir9/cozystack` (OCIR) | `ghcr.io/cozystack/cozystack` (GHCR) |
+| --- | --- | --- |
+| Role | CI build registry | Public release registry |
+| Holds | PR images (`pr-<N>-<sha>`, in-tree and fork), `main` and release-line builds, the shared buildx cache | releases, release candidates, nightlies |
+| Written by | [`pull-requests.yaml`](../../.github/workflows/pull-requests.yaml), [`build-main.yaml`](../../.github/workflows/build-main.yaml), [`build-release.yaml`](../../.github/workflows/build-release.yaml), [`e2e-fork.yaml`](../../.github/workflows/e2e-fork.yaml) | [`tags.yaml`](../../.github/workflows/tags.yaml), [`promote-rc.yaml`](../../.github/workflows/promote-rc.yaml), [`pull-requests-release.yaml`](../../.github/workflows/pull-requests-release.yaml), [`nightly.yaml`](../../.github/workflows/nightly.yaml) |
+| Read by | e2e, and developers installing a PR build | end users |
+| Auth to push | `OCIR_USER` / `OCIR_TOKEN` repo secrets | `GITHUB_TOKEN` + `permissions: packages: write` |
+
+Both allow anonymous pull, so a job that only pulls images needs no registry credentials — the e2e sandbox has no registry login at all, in-tree or fork.
+
+A release never travels between the two. [`tags.yaml`](../../.github/workflows/tags.yaml) builds an rc straight into GHCR, reading the OCIR build cache read-only, and promotion copies that rc's digests onto the stable tag **within GHCR** once the rc has gone green ([`hack/promote-retag.sh`](../../hack/promote-retag.sh)). Nothing is rebuilt, so a released image is bit-for-bit the image that was tested. The one path that does move images OCIR → GHCR is [`nightly.yaml`](../../.github/workflows/nightly.yaml), which mirrors the latest `main` build by digest. [`retention.yaml`](../../.github/workflows/retention.yaml) prunes the temporary versions on the GHCR side: dated nightly tags, and the `promotion-*` candidate artifacts an abandoned promotion leaves behind.
+
+The practical rule: **treat GHCR as user-facing and OCIR as scratch.** A wrong or overwritten tag in OCIR costs a rebuild; in GHCR it reaches whoever installs next. See [`release.md`](../release.md) for the full release and nightly flow.
 
 ### Values schema generation
 
