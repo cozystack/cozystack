@@ -34,6 +34,18 @@ type ApplicationStatusApplyConfiguration struct {
 	Namespace *string `json:"namespace,omitempty"`
 	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
 	ExternalIPsCount *int32 `json:"externalIPsCount,omitempty"`
+	// InstallFailures is the install failure count of the underlying HelmRelease.
+	// It counts only attempts that recorded a Helm release, so a failure to
+	// render or apply the chart shows only as Ready=False. It resets when the
+	// desired state (generation, chart version, values) changes, and on success
+	// only under the RetryOnFailure strategy, so a Ready release may carry it.
+	InstallFailures *int64 `json:"installFailures,omitempty"`
+	// UpgradeFailures is the upgrade failure count of the underlying HelmRelease,
+	// with the same counting and reset rules as InstallFailures.
+	UpgradeFailures *int64 `json:"upgradeFailures,omitempty"`
+	// LastAttemptedReleaseAction is the last release action (install or upgrade)
+	// the underlying HelmRelease attempted.
+	LastAttemptedReleaseAction *string `json:"lastAttemptedReleaseAction,omitempty"`
 }
 
 // ApplicationStatusApplyConfiguration constructs a declarative configuration of the ApplicationStatus type for use with
@@ -76,5 +88,29 @@ func (b *ApplicationStatusApplyConfiguration) WithNamespace(value string) *Appli
 // If called multiple times, the ExternalIPsCount field is set to the value of the last call.
 func (b *ApplicationStatusApplyConfiguration) WithExternalIPsCount(value int32) *ApplicationStatusApplyConfiguration {
 	b.ExternalIPsCount = &value
+	return b
+}
+
+// WithInstallFailures sets the InstallFailures field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the InstallFailures field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithInstallFailures(value int64) *ApplicationStatusApplyConfiguration {
+	b.InstallFailures = &value
+	return b
+}
+
+// WithUpgradeFailures sets the UpgradeFailures field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UpgradeFailures field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithUpgradeFailures(value int64) *ApplicationStatusApplyConfiguration {
+	b.UpgradeFailures = &value
+	return b
+}
+
+// WithLastAttemptedReleaseAction sets the LastAttemptedReleaseAction field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the LastAttemptedReleaseAction field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithLastAttemptedReleaseAction(value string) *ApplicationStatusApplyConfiguration {
+	b.LastAttemptedReleaseAction = &value
 	return b
 }
