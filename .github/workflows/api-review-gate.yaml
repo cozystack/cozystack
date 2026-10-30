@@ -191,14 +191,18 @@ jobs:
           # An APPROVED review by any API owner satisfies the gate, but only
           # each reviewer's *latest* review *on the current head commit* counts:
           # this drops approvals that a later commit invalidated, and approvals
-          # an owner subsequently superseded with CHANGES_REQUESTED. GitHub
-          # forbids self-approval, so a sizeable PR authored by an owner still
-          # needs the other owner.
+          # an owner subsequently superseded with CHANGES_REQUESTED or that was
+          # dismissed. A COMMENTED review is dropped before picking the latest:
+          # GitHub does not let a comment withdraw an approval, and the review
+          # trigger skips comments, so counting one here would make the verdict
+          # depend on which event happened to re-run the gate. GitHub forbids
+          # self-approval, so a sizeable PR authored by an owner still needs the
+          # other owner. api-review-gate-fork.yaml applies the same rule.
           approvals="$(
             gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate |
             jq -rs --arg head "${HEAD_SHA}" '
               add
-              | map(select(.commit_id == $head))
+              | map(select(.commit_id == $head and .state != "COMMENTED"))
               | sort_by(.submitted_at // "")
               | group_by(.user.login)
               | map(last)
@@ -224,6 +228,37 @@ jobs:
           echo "::error::This PR makes a sizeable API change (new group, new resource, or breaking change) and needs an approving review from one of: ${API_OWNERS}. See the job summary for details."
           exit 1
 
+  # A dismissal or a request for changes can turn a green head red, and until
+  # the evaluation reports, about a minute later, the old `success` would still
+  # let the PR merge. Same opener as the "E2E Tests" lane. Pushes need none: a
+  # new head SHA starts with no status. Losing it to a transient API error only
+  # reopens that window, so it must not fail the run.
+  api-gate-pending:
+    name: Mark API review gate as re-evaluating
+    if: >-
+      ${{ github.event_name == 'pull_request_review'
+      && github.event.review.state != 'commented'
+      && !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      statuses: write
+    steps:
+      - name: Report pending "API Review Gate" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { HEAD_SHA, RUN_URL } = process.env;
+            const { owner, repo } = context.repo;
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state: 'pending',
+              context: 'API Review Gate', description: 're-evaluating after a review',
+              target_url: RUN_URL,
+            });
+
   # Publish the required "API Review Gate" commit status. Separate from the
   # evaluating job for the reasons in the header: the gate must not be a job
   # name, and a run that reached no verdict must post nothing.
@@ -237,12 +272,14 @@ jobs:
   #
   # Fork PRs skip this job. Their GITHUB_TOKEN is read-only on BOTH the
   # `pull_request` and `pull_request_review` triggers, so no run of this workflow
-  # can post a status for a fork; api-review-gate-fork.yaml concludes the context
-  # for them from a privileged workflow_run. Until it does, the required status is
-  # unposted and the fork PR is not mergeable — fail-closed by construction.
+  # can post a status for a fork, and its verdict could not be relayed anyway: a
+  # fork's run executes the fork's copy of this file. api-review-gate-fork.yaml
+  # evaluates fork PRs again from the default branch. Until it does, the required
+  # status is unposted and the fork PR is not mergeable — fail-closed by
+  # construction.
   api-gate-report:
     name: Report API review gate status
-    needs: [api-review-gate]
+    needs: [api-gate-pending, api-review-gate]
     if: >-
       ${{ !cancelled()
       && !github.event.pull_request.head.repo.fork

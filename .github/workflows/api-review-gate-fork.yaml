@@ -1,102 +1,365 @@
 name: API Review Gate (fork)
 
 # Privileged publisher for the "API Review Gate" merge gate on FORK pull
-# requests, mirroring the split e2e-fork.yaml uses for "E2E Tests"
+# requests, after the split e2e-fork.yaml uses for "E2E Tests"
 # (docs/agents/e2e-testing.md §10).
 #
-# A fork PR cannot publish its own merge gate: the GITHUB_TOKEN is read-only for
-# pull requests from a fork on BOTH the `pull_request` and the
-# `pull_request_review` trigger, so no run of api-review-gate.yaml can call
-# createCommitStatus for a fork — the read-only restriction is not specific to
-# `pull_request`. This workflow runs from the DEFAULT branch after that run
-# completes, so it holds a write-capable token, and concludes the status on the
-# PR head SHA.
+# No run of api-review-gate.yaml can post a status for a fork: the GITHUB_TOKEN
+# is read-only for a fork PR on both the `pull_request` and the
+# `pull_request_review` trigger. Nor can that run's verdict be relayed, because a
+# fork's run executes the fork's own copy of the workflow, so its conclusion is
+# whatever the fork wants it to be. This workflow runs from the DEFAULT branch
+# and reaches the verdict itself, from inputs a fork cannot forge: the detector
+# built from the base branch, reading the PR head as data, plus the base repo's
+# PR and review APIs. The fork's run is used only as a trigger.
 #
-# Nothing untrusted runs here, and nothing needs to: the evaluation already
-# happened in the unprivileged run. The only inputs are that run's conclusion and
-# its head SHA — base-repo payload data a fork cannot forge — so this workflow
-# checks nothing out, builds nothing, and executes no fork-authored code. That is
-# the whole reason the gate is not a `pull_request_target` run, which would hand
-# fork code a privileged token to reach the same result.
+# Fork code never executes here. The head is fetched into a worktree that only
+# the base-built detector reads, in a job whose token can write nothing; the jobs
+# that can write statuses never see the head at all. That is why this is a
+# workflow_run and not a pull_request_target run, which would offer fork code a
+# privileged token for no gain.
 #
-# Same-repo PRs are published by api-review-gate.yaml's `api-gate-report` job;
-# this workflow no-ops for them (see the job guard), so the two publishers are
-# mutually exclusive and can never clobber each other.
+# Two ways in:
+#   - workflow_run, after any gate run that evaluated: a push, or a review on a
+#     PR whose runs need no maintainer approval. Full evaluation.
+#   - schedule, for reviews on PRs from external contributors. The repository
+#     makes every run from them wait for a maintainer's approval, and a run in
+#     `action_required` never fires workflow_run, so an API owner's approval
+#     would otherwise not reach the status until a maintainer approved the
+#     review-triggered run. The sweep never runs the detector. It moves only a
+#     status that the full evaluation set after finding a sizeable change,
+#     between "needs an approving review" and "approved", as the reviews on the
+#     head commit now dictate. A fork PR whose push run still awaits approval
+#     has no status to move and stays unmergeable, as it does for "E2E Tests".
+#
+# Same-repo PRs are published by api-review-gate.yaml's `api-gate-report`. Every
+# path here acts only on PRs whose head lives in another repository, decided
+# from the base repo's PR list: for a `pull_request_review` run on a fork PR,
+# `workflow_run.head_repository` names the BASE repository and
+# `workflow_run.pull_requests` is empty, so neither can tell a fork apart.
 
 on:
   workflow_run:
     workflows: ["API Review Gate"]
     types: [completed]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
 
-# Supersede a stale publish when the fork pushes again. Keyed by fork repo plus
-# branch because the PR number is not available at workflow level. Safe to cancel:
-# statuses are per-SHA, and a newer gate run publishes its own.
+# Keyed by head SHA: a newer evaluation of the same commit reads newer reviews,
+# so it may supersede an older one, while a push gets a new SHA and leaves the
+# old commit's run alone. A cancelled or skipped gate run evaluated nothing and
+# `resolve` ignores it; in the shared group it would still cancel the live run
+# that owns the SHA after that run had posted `pending`, leaving nothing to
+# conclude it. Keyed by its own run id, it can cancel only itself.
 concurrency:
-  group: api-review-gate-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  group: >-
+    api-review-gate-fork-${{
+    github.event_name != 'workflow_run' && 'sweep'
+    || (github.event.workflow_run.conclusion == 'cancelled'
+    || github.event.workflow_run.conclusion == 'skipped')
+    && format('discarded-{0}', github.event.workflow_run.id)
+    || github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  report:
-    name: Report fork API review gate status
-    # Fork PRs only: the head repository differs from the base repository.
+  resolve:
+    name: Resolve fork PR
+    # A `commented` review skips every job of the gate run, so it concludes
+    # `skipped`; a run superseded by a newer one concludes `cancelled`. Neither is
+    # a reason to re-evaluate. A fork can force either outcome by editing its copy
+    # of the gate, which can only withhold a re-evaluation: a push then leaves no
+    # status at all, and a withdrawn approval is caught by the sweep.
     if: >-
-      ${{ github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name }}
+      ${{ github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion != 'cancelled'
+      && github.event.workflow_run.conclusion != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      pull-requests: read
       statuses: write
+    outputs:
+      should_run: ${{ steps.r.outputs.should_run }}
+      pr_number: ${{ steps.r.outputs.pr_number }}
+      base_ref: ${{ steps.r.outputs.base_ref }}
     steps:
-      - name: Report "API Review Gate" commit status
+      - name: Resolve fork PR and claim "API Review Gate"
+        id: r
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          GATE_RUN_URL: ${{ github.event.workflow_run.html_url }}
         with:
           script: |
-            const { HEAD_SHA, CONCLUSION, GATE_RUN_URL } = process.env;
+            const { HEAD_SHA } = process.env;
             const { owner, repo } = context.repo;
-
-            // Validate before the SHA flows into a status target.
+            core.setOutput('should_run', 'false');
             if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
               core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
               return;
             }
+            const setStatus = (state, description) => github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state, context: 'API Review Gate', description,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
 
-            // Publish only a real verdict. A `commented` review skips every job in
-            // the gate run (conclusion `skipped`); a run cancelled by the
-            // concurrency group never evaluated; a fork run still awaiting
-            // maintainer approval concludes `action_required`. In every one of those
-            // cases the previous status on this SHA is still the correct one, and
-            // writing over it would either invent a pass or clobber a green.
-            // Declining to post is also fail-closed: on a SHA that never got a
-            // status the required context stays "Expected" and blocks the merge.
-            if (CONCLUSION !== 'success' && CONCLUSION !== 'failure') {
-              core.info(`gate run concluded '${CONCLUSION}' — posting nothing`);
+            // The association endpoint does not index fork heads, so match the
+            // open PR list on the head SHA, as e2e-fork.yaml's `resolve` does.
+            // A closed or merged PR never counts.
+            const openPrs = await github.paginate(
+              github.rest.pulls.list,
+              { owner, repo, state: 'open', per_page: 100 },
+            );
+            const atHead = openPrs.filter(p => p.head && p.head.sha === HEAD_SHA);
+            const isFork = p => !p.head.repo || p.head.repo.full_name !== `${owner}/${repo}`;
+            if (!atHead.some(isFork)) {
+              core.info(`no open fork PR has head ${HEAD_SHA} — nothing to publish`);
+              return;
+            }
+            // The status lands on the SHA, so it would speak for every PR at this
+            // head while being computed from one of them.
+            if (atHead.length !== 1) {
+              await setStatus('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${atHead.length}`);
+              return;
+            }
+            const pr = atHead[0];
+            if (!/^[A-Za-z0-9._\/-]+$/.test(pr.base.ref)) {
+              core.setFailed(`unexpected base ref '${pr.base.ref}'`);
               return;
             }
 
-            // A workflow_run payload carries no job outputs, so unlike the
-            // same-repo `api-gate-report` this cannot separate "needs an API owner
-            // approval" from "the evaluation broke". target_url points at the gate
-            // run, whose job summary spells the verdict out.
-            const state = CONCLUSION === 'success' ? 'success' : 'failure';
-            const description = state === 'success'
-              ? 'API review gate satisfied'
-              : 'API review gate not satisfied — see the gate run';
+            // Claimed before the minute-long evaluation, so a dismissal cannot
+            // leave a stale `success` mergeable meanwhile.
+            await setStatus('pending', 're-evaluating in the privileged fork workflow');
+            core.setOutput('pr_number', String(pr.number));
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('should_run', 'true');
 
-            try {
-              await github.rest.repos.createCommitStatus({
-                owner, repo, sha: HEAD_SHA, state,
-                context: 'API Review Gate', description, target_url: GATE_RUN_URL,
-              });
-            } catch (err) {
-              // Fail loudly and fail-closed: an unposted required status stays
-              // "Expected", which blocks the merge.
-              core.setFailed(`Failed to report API Review Gate status: ${err}`);
+  # The only job that touches fork bytes, so its token can write nothing and it
+  # reaches no secret. The detector is built from the merge base, as in the
+  # unprivileged gate, or else from the default branch; never from the head.
+  detect:
+    name: Detect sizeable API changes
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sizeable: ${{ steps.detect.outputs.sizeable }}
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+      BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # From the default branch's go.mod, and with no cache: a cache saved here
+      # would be keyed in the default branch's scope.
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Materialize head and merge-base worktrees
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head" "${BASE_REF}"
+          got="$(git rev-parse FETCH_HEAD)"
+          if [ "${got}" != "${HEAD_SHA}" ]; then
+            echo "::error::PR head moved: refs/pull/${PR_NUMBER}/head is ${got}, resolved ${HEAD_SHA}"
+            exit 1
+          fi
+          merge_base="$(git merge-base "${HEAD_SHA}" "origin/${BASE_REF}")"
+          echo "Merge base: ${merge_base}"
+          # Symlinks land as plain files, so a fork cannot point a manifest the
+          # detector reads at a file elsewhere on the runner and have it echoed
+          # into the public log. The detector never follows the tree's own
+          # directory links, so the verdict is unchanged.
+          git -c core.symlinks=false worktree add --detach "${RUNNER_TEMP}/head" "${HEAD_SHA}"
+          git worktree add --detach "${RUNNER_TEMP}/base" "${merge_base}"
+
+      - name: Build api-gate
+        run: |
+          set -euo pipefail
+          if [ -d "${RUNNER_TEMP}/base/cmd/api-gate" ]; then
+            build_dir="${RUNNER_TEMP}/base"
+          else
+            build_dir="${GITHUB_WORKSPACE}"
+            echo "The merge base predates api-gate; building it from the default branch."
+          fi
+          ( cd "${build_dir}" && go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate )
+
+      - name: Detect sizeable API changes
+        id: detect
+        run: |
+          set -uo pipefail
+          "${RUNNER_TEMP}/api-gate" \
+            --base "${RUNNER_TEMP}/base" \
+            --head "${RUNNER_TEMP}/head" \
+            --format markdown > "${RUNNER_TEMP}/report.md"
+          code=$?
+          set -e
+          cat "${RUNNER_TEMP}/report.md"
+          { echo "## API Review Gate (fork PR #${PR_NUMBER})"; echo; cat "${RUNNER_TEMP}/report.md"; } >> "$GITHUB_STEP_SUMMARY"
+          case "${code}" in
+            0) echo "sizeable=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "sizeable=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::api-gate failed with exit code ${code}"; exit "${code}" ;;
+          esac
+
+  # Publishes the verdict of a workflow_run evaluation, or sweeps on a schedule.
+  # One script for both, so the approval rule exists once in this file.
+  conclude:
+    name: Report fork API review gate status
+    needs: [resolve, detect]
+    if: >-
+      ${{ !cancelled()
+      && (github.event_name != 'workflow_run'
+      || needs.resolve.outputs.should_run == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Checkout the gate workflow
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: .github/workflows/api-review-gate.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # api-review-gate.yaml owns the list, so the two publishers cannot drift.
+      # Read from the default branch, which is where this workflow runs from.
+      - name: Read API owners
+        id: owners
+        run: |
+          set -euo pipefail
+          owners="$(yq -r '.env.API_OWNERS' .github/workflows/api-review-gate.yaml)"
+          if ! [[ "${owners}" =~ ^[A-Za-z0-9-]+(\ [A-Za-z0-9-]+)*$ ]]; then
+            echo "::error::unexpected API_OWNERS '${owners}' in api-review-gate.yaml"
+            exit 1
+          fi
+          echo "owners=${owners}" >> "$GITHUB_OUTPUT"
+
+      - name: Report "API Review Gate" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          API_OWNERS: ${{ steps.owners.outputs.owners }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          DETECT_RESULT: ${{ needs.detect.result }}
+          SIZEABLE: ${{ needs.detect.outputs.sizeable }}
+        with:
+          script: |
+            const { API_OWNERS, HEAD_SHA, PR_NUMBER, DETECT_RESULT, SIZEABLE } = process.env;
+            const { owner, repo } = context.repo;
+            const owners = new Set(API_OWNERS.toLowerCase().split(' '));
+            // The same descriptions api-gate-report posts. The sweep reads the
+            // first two back as state, so change them only together with it.
+            const APPROVED = 'sizeable API change approved by an API owner';
+            const NEEDS_PREFIX = 'sizeable API change needs an approving review from: ';
+            const NEEDS = NEEDS_PREFIX + API_OWNERS;
+
+            const setStatus = (sha, state, description) => github.rest.repos.createCommitStatus({
+              owner, repo, sha, state, context: 'API Review Gate', description,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+
+            // The rule of api-review-gate.yaml's approval step: each reviewer's
+            // latest non-comment review on this exact commit, so an approval of an
+            // older commit, a dismissed one and one superseded by a request for
+            // changes all fail to count.
+            const ownerApproved = async (pull_number, sha) => {
+              const reviews = await github.paginate(
+                github.rest.pulls.listReviews,
+                { owner, repo, pull_number, per_page: 100 },
+              );
+              const latest = new Map();
+              for (const r of reviews) {
+                if (!r.user || r.commit_id !== sha || r.state === 'COMMENTED') continue;
+                const login = r.user.login.toLowerCase();
+                const prev = latest.get(login);
+                if (!prev || (r.submitted_at || '') >= (prev.submitted_at || '')) latest.set(login, r);
+              }
+              return [...latest].some(([login, r]) => owners.has(login) && r.state === 'APPROVED');
+            };
+
+            if (context.eventName === 'workflow_run') {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: Number(PR_NUMBER) });
+              // A push since `resolve` started a newer run, which owns the new head.
+              if (pr.state !== 'open' || pr.head.sha !== HEAD_SHA) {
+                core.info(`PR #${PR_NUMBER} is no longer open at ${HEAD_SHA} — posting nothing`);
+                return;
+              }
+              if (DETECT_RESULT === 'success' && SIZEABLE === 'false') {
+                await setStatus(HEAD_SHA, 'success', 'no sizeable API change');
+              } else if (DETECT_RESULT === 'success' && SIZEABLE === 'true') {
+                const ok = await ownerApproved(pr.number, HEAD_SHA);
+                await setStatus(HEAD_SHA, ok ? 'success' : 'failure', ok ? APPROVED : NEEDS);
+              } else {
+                await setStatus(HEAD_SHA, 'failure', 'gate evaluation did not complete — see the run for details');
+              }
               return;
             }
-            core.info(`API Review Gate → ${state}: ${description}`);
+
+            // Sweep. One GraphQL page returns 100 open PRs with the gate's status
+            // on each head, which keeps a 15-minute cadence well inside the
+            // GITHUB_TOKEN rate limit; reviews are fetched only for the few PRs
+            // whose status the reviews can move.
+            const query = `query($owner: String!, $repo: String!, $cursor: String) {
+              repository(owner: $owner, name: $repo) {
+                pullRequests(states: OPEN, first: 100, after: $cursor) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes {
+                    number
+                    isCrossRepository
+                    headRefOid
+                    commits(last: 1) { nodes { commit { oid status {
+                      context(name: "API Review Gate") { state description creator { login } }
+                    } } } }
+                  }
+                }
+              }
+            }`;
+            let cursor = null;
+            let errors = 0;
+            do {
+              const page = (await github.graphql(query, { owner, repo, cursor })).repository.pullRequests;
+              for (const pr of page.nodes) {
+                const commit = pr.commits.nodes[0]?.commit;
+                const status = commit?.status?.context;
+                // Only a status a workflow posted: a fork's own runs cannot post
+                // one, so on a fork head that means this workflow.
+                if (!pr.isCrossRepository || !status || commit.oid !== pr.headRefOid
+                    || status.creator?.login !== 'github-actions') continue;
+                const description = status.description || '';
+                const awaiting = status.state === 'FAILURE' && description.startsWith(NEEDS_PREFIX);
+                const approved = status.state === 'SUCCESS' && description === APPROVED;
+                if (!awaiting && !approved) continue;
+                try {
+                  const ok = await ownerApproved(pr.number, pr.headRefOid);
+                  if (awaiting && ok) {
+                    await setStatus(pr.headRefOid, 'success', APPROVED);
+                    core.info(`#${pr.number}: approved by an API owner → success`);
+                  } else if (approved && !ok) {
+                    await setStatus(pr.headRefOid, 'failure', NEEDS);
+                    core.info(`#${pr.number}: API owner approval withdrawn → failure`);
+                  }
+                } catch (err) {
+                  errors++;
+                  core.warning(`#${pr.number}: ${err}`);
+                }
+              }
+              cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+            } while (cursor);
+            if (errors) core.setFailed(`${errors} PR(s) could not be swept`);
