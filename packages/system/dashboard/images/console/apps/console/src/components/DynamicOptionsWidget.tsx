@@ -42,6 +42,7 @@ export function DynamicOptionsWidget(props: WidgetProps) {
   ]?.source
 
   const rootFormData = (registry?.formContext as { rootFormData?: unknown })?.rootFormData
+  const serverDefaults = !!registry?.formContext?.serverDefaults
   const { name: source, parameterised } = resolveSource(rawSource, rootFormData)
 
   // A parameterised source is deliberately absent from the Option list — it
@@ -106,7 +107,10 @@ export function DynamicOptionsWidget(props: WidgetProps) {
     <select
       id={id}
       value={currentValue}
-      onChange={(e) => onChange(e.target.value || undefined)}
+      onChange={(e) => {
+        hasAutoDefaulted.current = true
+        onChange(serverDefaults ? e.target.value : e.target.value || undefined)
+      }}
       disabled={disabled || readonly}
       required={required}
       className="w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 py-2 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"

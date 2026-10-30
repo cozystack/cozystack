@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router"
 import { ChevronLeft, FileCode, FormInput } from "lucide-react"
 import yaml from "js-yaml"
 import { Button, Spinner, cn } from "@cozystack/ui"
-import { useK8sCreate, useK8sUpdate, K8sApiError } from "@cozystack/k8s-client"
+import { useK8sClient, useK8sCreate, useK8sUpdate, K8sApiError } from "@cozystack/k8s-client"
 import { APPS_GROUP, APPS_VERSION } from "@cozystack/types"
 import {
   useApplicationDefinition,
@@ -14,6 +14,7 @@ import { useTenantContext } from "../lib/tenant-context.tsx"
 import { useResourceBasePath } from "../lib/portal.ts"
 import { composeResource } from "../lib/app-resource.ts"
 import { prepareUpdateSpec } from "../lib/prepare-update.ts"
+import { isObject } from "../lib/server-form.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
 
 // Lazy-load the YAML editor so monaco and its workers are code-split into their
@@ -23,6 +24,15 @@ const YamlEditor = lazy(() =>
 )
 
 type Mode = "form" | "yaml"
+
+type Preview = { status: "loading" } | { status: "ready" } | { status: "failed"; error: string }
+
+// The preview only has to pass the API's name checks, so it uses a short plain
+// name unless the user came in with one.
+const PREVIEW_NAME = "preview"
+// Cap for a preview that gets no answer at all, such as a hanging admission
+// webhook. An error response opens the form at once and does not wait for it.
+const PREVIEW_TIMEOUT_MS = 8000
 
 interface ApplicationOrderPageProps {
   /** When provided, the page pre-fills the form with this spec and PUTs on save. */
@@ -38,10 +48,11 @@ export function ApplicationOrderPage({
   const routeParams = useParams<{ appName: string }>()
   const appName = appNameOverride ?? routeParams.appName
   const { data: ad, isLoading, error } = useApplicationDefinition(appName)
-  const { tenantNamespace } = useTenantContext()
+  const { tenantNamespace, isLoading: tenantLoading } = useTenantContext()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const basePath = useResourceBasePath()
+  const client = useK8sClient()
 
   const [name, setName] = useState(editMode?.name ?? searchParams.get("name") ?? "")
   const [spec, setSpec] = useState<unknown>(editMode?.initialSpec ?? {})
@@ -65,6 +76,85 @@ export function ApplicationOrderPage({
   }, [editMode])
 
   const plural = ad?.spec?.application.plural ?? ""
+  const isEditing = !!editMode
+  const [preview, setPreview] = useState<Preview>({ status: "loading" })
+  const [previewName, setPreviewName] = useState(searchParams.get("name") ?? "")
+  const [previewSpec, setPreviewSpec] = useState<Record<string, unknown>>({})
+  const [previewRun, setPreviewRun] = useState(0)
+  const [loadedPlural, setLoadedPlural] = useState(plural)
+  if (!isEditing && plural && loadedPlural !== plural) {
+    setLoadedPlural(plural)
+    setSpec({})
+    setPreviewSpec({})
+    setPreview({ status: "loading" })
+    setMode("form")
+    setYamlText("")
+  }
+  // Without a tenant the preview cannot start, so only a tenant list that is still
+  // loading keeps the form waiting.
+  const previewPending = !isEditing && preview.status === "loading" && (!!tenantNamespace || tenantLoading)
+
+  const draft = useMemo(() => {
+    try {
+      let draftName = name
+      let draftSpec = spec
+      let document: Record<string, unknown> | null = null
+      if (mode === "yaml") {
+        const parsed = yaml.load(yamlText)
+        if (!isObject(parsed)) throw new Error("Application YAML must be an object")
+        document = parsed
+        if (isObject(parsed.metadata) && typeof parsed.metadata.name === "string") draftName = parsed.metadata.name
+        draftSpec = parsed.spec ?? {}
+      }
+      if (!isObject(draftSpec)) throw new Error("Application spec must be an object")
+      const body = ad && tenantNamespace ? composeResource(ad, tenantNamespace, draftName, draftSpec) : null
+      return { body, document, error: null }
+    } catch (err) {
+      return { body: null, document: null, error: (err as Error).message }
+    }
+  }, [ad, tenantNamespace, name, spec, mode, yamlText])
+  // One dry-run create when the page opens: the server returns the spec with
+  // installation and developer defaults, and the form starts from it. Edits do
+  // not trigger more previews, the real create validates and applies defaults.
+  useEffect(() => {
+    if (isEditing || !ad || !tenantNamespace || !plural) return
+    // Only a pending preview runs: a settled one must survive a tenant switch
+    // without replacing what the user typed. Retry and a new kind set it pending.
+    if (preview.status !== "loading") return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const body = composeResource(ad, tenantNamespace, previewName || PREVIEW_NAME, previewSpec)
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the request timed out")), PREVIEW_TIMEOUT_MS)
+    })
+    Promise.race([client.dryRunCreate(APPS_GROUP, APPS_VERSION, plural, body, tenantNamespace), timeout])
+      .then((result) => {
+        const prepared = result.spec ?? {}
+        if (!isObject(prepared)) throw new Error("the server returned a non-object application spec")
+        if (!active) return
+        setSpec(prepared)
+        setPreview({ status: "ready" })
+      })
+      .catch((err: Error) => {
+        if (!active) return
+        setPreview({ status: "failed", error: err.message })
+      })
+      .finally(() => clearTimeout(timer))
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [client, ad, tenantNamespace, plural, isEditing, previewName, previewSpec, previewRun, preview.status])
+
+  const retryPreview = () => {
+    // The preview carries the current draft, so the answer completes it and keeps
+    // what the user typed since the failure.
+    const current = draft.body?.spec
+    setPreviewSpec(isObject(current) ? current : {})
+    setPreviewName(name)
+    setPreview({ status: "loading" })
+    setPreviewRun((run) => run + 1)
+  }
 
   const create = useK8sCreate({
     apiGroup: APPS_GROUP,
@@ -94,12 +184,9 @@ export function ApplicationOrderPage({
   /** Switch into form mode: parse YAML back to name/spec. */
   const enterForm = () => {
     try {
-      const parsed = yaml.load(yamlText) as {
-        metadata?: { name?: string }
-        spec?: unknown
-      }
-      if (parsed?.metadata?.name) setName(parsed.metadata.name)
-      if (parsed?.spec !== undefined) setSpec(parsed.spec)
+      if (draft.error || !draft.body) throw new Error(draft.error ?? "Application is unavailable")
+      setName(draft.body.metadata.name)
+      setSpec(draft.body.spec ?? {})
       setYamlError(null)
       setMode("form")
     } catch (err) {
@@ -109,22 +196,15 @@ export function ApplicationOrderPage({
 
   /** Build resource from whichever editor is currently active. */
   const snapshot = () => {
-    if (mode === "yaml") {
-      const parsed = yaml.load(yamlText) as {
-        metadata?: { name?: string }
-        spec?: unknown
-      }
-      return {
-        name: parsed?.metadata?.name ?? name,
-        spec: parsed?.spec ?? spec,
-      }
-    }
-    return { name, spec }
+    if (draft.error || !draft.body) throw new Error(draft.error ?? "Application is unavailable")
+    return { name: draft.body.metadata.name, spec: draft.body.spec ?? {} }
   }
 
   const submit = async () => {
     if (!ad || !tenantNamespace) return
-    const snap = snapshot()
+    let snap: ReturnType<typeof snapshot>
+    try { snap = snapshot() }
+    catch (err) { setYamlError((err as Error).message); return }
     if (!snap.name) {
       alert("Please set a resource name.")
       return
@@ -214,6 +294,7 @@ export function ApplicationOrderPage({
               <button
                 type="button"
                 aria-pressed={mode === "form"}
+                disabled={previewPending}
                 onClick={() => (mode === "yaml" ? enterForm() : undefined)}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all",
@@ -227,6 +308,7 @@ export function ApplicationOrderPage({
               <button
                 type="button"
                 aria-pressed={mode === "yaml"}
+                disabled={previewPending}
                 onClick={() => (mode === "form" ? enterYaml() : undefined)}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all",
@@ -250,7 +332,7 @@ export function ApplicationOrderPage({
               variant="primary"
               size="sm"
               onClick={submit}
-              disabled={create.isPending || update.isPending || !tenantNamespace}
+              disabled={create.isPending || update.isPending || !tenantNamespace || previewPending}
             >
               {(create.isPending || update.isPending) && <Spinner className="text-white" />}
               {editMode ? "Save" : "Deploy"}
@@ -259,7 +341,18 @@ export function ApplicationOrderPage({
         </div>
       </div>
 
-      {mode === "form" ? (
+      {!isEditing && preview.status === "failed" && (
+        <div role="alert" className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800">
+          Could not load the platform's initial settings ({preview.error}). The form starts empty, and the API still fills omitted fields when you deploy.
+          {mode === "form" && <button type="button" onClick={retryPreview} className="ml-2 underline">Retry</button>}
+        </div>
+      )}
+
+      {previewPending ? (
+        <div role="status" className="flex items-center gap-2 p-8 text-slate-500">
+          <Spinner /> Loading initial settings…
+        </div>
+      ) : mode === "form" ? (
         <div className="flex-1 overflow-auto bg-slate-50 p-4">
           <div className="space-y-3">
             <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -289,6 +382,7 @@ export function ApplicationOrderPage({
                   formData={spec}
                   onChange={setSpec}
                   immutableMode={editMode ? "enforce" : "off"}
+                  defaulting="server"
                 />
               </div>
             )}
@@ -296,9 +390,9 @@ export function ApplicationOrderPage({
         </div>
       ) : (
         <div className="flex flex-1 flex-col bg-white">
-          {yamlError && (
+          {(draft.error || yamlError) && (
             <div className="border-b border-red-200 bg-red-50 px-6 py-2 text-xs text-red-700">
-              {yamlError}
+              {draft.error ?? yamlError}
             </div>
           )}
           <div className="flex-1">
@@ -309,7 +403,7 @@ export function ApplicationOrderPage({
                 </div>
               }
             >
-              <YamlEditor value={yamlText} onChange={setYamlText} />
+              <YamlEditor value={yamlText} onChange={(value) => { setYamlError(null); setYamlText(value) }} />
             </Suspense>
           </div>
         </div>

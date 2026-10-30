@@ -18,6 +18,7 @@ import { AdditionalPropertiesField } from "./AdditionalPropertiesField.tsx"
 import { FreeformObjectField } from "./FreeformObjectField.tsx"
 import { ResourceQuotasField } from "./ResourceQuotasField.tsx"
 import { SourceField } from "./SourceField.tsx"
+import { serverFormStateBehavior, preserveEmptyStrings, withoutSchemaDefaults } from "../lib/server-form.ts"
 import "./schema-form.css"
 
 /**
@@ -215,6 +216,7 @@ interface SchemaFormProps {
    * flows.
    */
   immutableMode?: "enforce" | "off"
+  defaulting?: "schema" | "server"
 }
 
 export interface SchemaFormHandle {
@@ -234,6 +236,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
   onChange,
   children,
   immutableMode,
+  defaulting = "schema",
 }: SchemaFormProps, ref) {
   const formRef = useRef<Form>(null)
   useImperativeHandle(
@@ -256,8 +259,8 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
   }, [openAPISchema])
 
   const schema = useMemo<RJSFSchema>(
-    () => sanitizeSchema(parsedSchema) as RJSFSchema,
-    [parsedSchema],
+    () => sanitizeSchema(defaulting === "server" ? withoutSchemaDefaults(parsedSchema) : parsedSchema) as RJSFSchema,
+    [parsedSchema, defaulting],
   )
 
   const onChangeRef = useRef(onChange)
@@ -273,12 +276,13 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
   // getDefaultFormState would re-emit defaults computed from the stale initial
   // formData and wipe whatever the user already typed.
   useEffect(() => {
+    if (defaulting === "server") return
     if (!schema || Object.keys(schema).length === 0) return
     if (emittedSchemaRef.current === schema) return
     emittedSchemaRef.current = schema
     const defaults = getDefaultFormState(validator, schema, formDataRef.current ?? {}, schema)
     onChangeRef.current(defaults)
-  }, [schema])
+  }, [schema, defaulting])
 
   const immutablePaths = useMemo<ImmutablePath[]>(
     () => (immutableMode === "enforce" ? findImmutablePaths(parsedSchema) : []),
@@ -320,8 +324,8 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
       }
     }
 
-    return addImmutableReadonly(schema, withSensitive, immutablePaths)
-  }, [keysOrder, schema, immutablePaths])
+    return addImmutableReadonly(schema, defaulting === "server" ? preserveEmptyStrings(schema, withSensitive) : withSensitive, immutablePaths)
+  }, [keysOrder, schema, immutablePaths, defaulting])
 
   const customFields = useMemo(
     () => ({
@@ -352,6 +356,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
         schema={schema}
         uiSchema={uiSchema}
         formData={formData}
+        experimental_defaultFormStateBehavior={defaulting === "server" ? serverFormStateBehavior : undefined}
         validator={validator}
         templates={templatesWithoutSubmit}
         widgets={customWidgets}
@@ -360,7 +365,7 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
         // choice made elsewhere in the form — the VMs of the import source the
         // user just picked. Handing the whole object down is what lets an
         // option source name reference a sibling field.
-        formContext={{ rootFormData: formData }}
+        formContext={{ rootFormData: formData, serverDefaults: defaulting === "server" }}
         onChange={(e) => onChange(e.formData)}
         liveValidate={false}
         showErrorList={false}
