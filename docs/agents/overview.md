@@ -118,11 +118,11 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
 
-**No new `lookup`.** Do not add a `lookup` to a chart template unless the operator or a maintainer has authorized that specific one. A lookup reads cluster state at render time, and nothing triggers a reconcile of the HelmRelease when the object it reads changes, so the release keeps the stale answer until something unrelated upgrades it. `helm template` and helm-unittest see only the empty branch of a lookup, so the other branch goes untested.
+**No `lookup` that copies another object into the render.** A `lookup` reads cluster state at render time, and nothing re-renders the HelmRelease when that state changes, so whatever it copied into the output (a bucket name, an endpoint, a CA, a list of StorageClasses) stays stale until something unrelated upgrades the release. Lookups of this kind already in the charts have caused failures, and several have since been moved to values, so they are not precedent: do not add one of this kind unless a maintainer has authorized that specific one.
 
-The lookups already in the charts are not precedent: the project has worked to remove them, and they spread because agents copied them. The accepted exception is a check that an object, such as a Secret, exists, where the render converges on the same output however often it runs.
+A `lookup` is fine when a repeated render gives the same output and carries nothing from another object into it: checking that an object exists, keeping a generated Secret's value, keeping an immutable field of the chart's own live object, or a guard that `fail`s on an unsafe change. Keep its empty branch rendering, because offline `helm template` and helm-unittest without a `kubernetesProvider` mock see only that branch; test the other branch with such a mock.
 
-To use a fact about the cluster instead, have the Cozystack API or a controller write it into the release's values, read the state at run time in a hook or Job, or move the logic into a controller.
+To use a fact about the cluster instead, read it from values: `_cluster` and `_namespace` in the `cozystack-values` Secret, or `valuesFrom` on a specific Secret, whose content change is a values change and so upgrades the release. Ask whether an API is served with `.Capabilities.APIVersions.Has`, since a `lookup` on an unserved group aborts the whole render. Otherwise check at run time in a hook or Job, or let a controller own the object.
 
 ### Go Code
 - Follow standard **Go conventions** and idioms
