@@ -63,6 +63,8 @@
   number of milli-CPUs (a CPU quantity finer than 1m is invalid for the VPA
   admission webhook and meaningless for the scheduler).
 
+  A memory below 1Mi fails the render, see cozy-lib.resources.checkMemory.
+
   The template now expects **one flat map** as input (no nested `requests:` /
   `limits:` sections).  Each value in that map is taken as the *limit* for the
   corresponding resource.  Usage example:
@@ -87,6 +89,31 @@
     devices.com/nvidia: "1"   # = limit
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
+{{-   include "cozy-lib.resources.checkMemory" (index . 0) }}
+{{-   include "cozy-lib.resources.requestsAndLimits" . }}
+{{- end }}
+
+{{- /*
+  A quantity without a unit counts bytes, so a memory of `8` typed for 8Gi
+  sizes the container at 8 bytes and nothing else refuses it. Every preset is
+  128Mi or more, so a floor of 1Mi only stops that kind of slip.
+*/}}
+{{- define "cozy-lib.resources.checkMemory" }}
+{{-   if hasKey . "memory" }}
+{{-     $memory := index . "memory" }}
+{{-     if not (kindIs "invalid" $memory) }}
+{{-       if lt (include "cozy-lib.resources.toFloat" $memory | float64) (include "cozy-lib.resources.toFloat" "1Mi" | float64) }}
+{{-         fail (printf "memory (%v) must be at least 1Mi. A value without a unit is read as bytes, so add the unit, such as 512Mi or 8Gi." $memory) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
+{{- /*
+  sanitize without the memory floor. flatten renders a ResourceQuota with it,
+  where a memory of 0 is a valid quota that allows none.
+*/}}
+{{- define "cozy-lib.resources.requestsAndLimits" }}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
 {{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
 {{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
@@ -199,7 +226,7 @@
 
 {{- define "cozy-lib.resources.flatten" -}}
 {{-   $out := dict -}}
-{{-   $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{-   $res := include "cozy-lib.resources.requestsAndLimits" . | fromYaml -}}
 {{-   range $section, $values := $res }}
 {{-     range $k, $v := $values }}
 {{-       with include "cozy-lib.resources.flattenResource" (list $section $k) }}
