@@ -1,0 +1,83 @@
+suite: init-script never takes over or drops a system database
+
+# Each of postgres, template0 and template1 used to be accepted in databases and
+# handled like an application database: owned by <db>_admin, given the
+# auto-grant event trigger, and on removal sent to DROP DATABASE, which fails on
+# all three (template databases cannot be dropped, and the Job is connected to
+# postgres) and wedged every later upgrade. template1 also passed the takeover
+# on to every database created afterwards.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: refuses postgres in databases
+    set:
+      databases:
+        postgres: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.postgres is refused: \"postgres\" is a PostgreSQL system database"
+
+  - it: refuses template0 in databases
+    set:
+      databases:
+        template0: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.template0 is refused: \"template0\" is a PostgreSQL system database"
+
+  - it: refuses template1 in databases
+    set:
+      databases:
+        template1: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.template1 is refused: \"template1\" is a PostgreSQL system database"
+
+  - it: still accepts an application database whose name contains a system name
+    set:
+      databases:
+        postgres_app: {}
+        mytemplate1: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "postgres_app"'
+
+  # A release that a previous version let manage a system database still carries
+  # its comment. The delete pass must never select it, whatever values say.
+  - it: never lists a system database for DROP DATABASE
+    set:
+      databases:
+        appdb: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DELETE_DBS=\$\(for db in \$MANAGED_DBS; do case " postgres template0 template1 \$DEFINED_DBS " in \*" \$db "\*\) :;; \*\) echo \$db;; esac; done\)'
+
+  - it: hands a taken-over system database back before the delete pass
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "SYSTEM_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN \\('postgres', 'template0', 'template1'\\)\"\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*REASSIGN OWNED BY %I TO CURRENT_USER.*DROP OWNED BY %I.*ALTER SCHEMA public OWNER TO pg_database_owner.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
