@@ -308,12 +308,18 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
     const withSensitive = addSensitiveStringWidgets(schema, withAdditionalProps)
 
     // Override resourceQuotas field with structured quota editor.
-    // Scoped to schemas where resourceQuotas has additionalProperties: {type: "string"}
-    // (the cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
+    // Scoped to schemas where resourceQuotas values are quantities (the
+    // cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
+    // The chart types them as int-or-string, which sanitizeSchema turns into
+    // `["string", "integer"]`, so accept a string type or a type array that
+    // includes "string".
     const rqSchema = schema.properties?.resourceQuotas as
       | { additionalProperties?: { type?: unknown } }
       | undefined
-    if (rqSchema && rqSchema.additionalProperties?.type === "string") {
+    const rqValueType = rqSchema?.additionalProperties?.type
+    const rqValueIsString =
+      rqValueType === "string" || (Array.isArray(rqValueType) && rqValueType.includes("string"))
+    if (rqSchema && rqValueIsString) {
       withSensitive.resourceQuotas = {
         ...withSensitive.resourceQuotas,
         "ui:field": "ResourceQuotasField",

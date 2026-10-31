@@ -58,8 +58,14 @@ export function keysOrderToUiSchema(
  * Schema validators don't understand. The ones we care about:
  *
  *   - `x-kubernetes-int-or-string` together with `anyOf: [{integer},{string}]`
- *     — the field accepts either; we let the form render a text input and
- *     cast on submit.
+ *     — the field accepts either. We drop the anyOf (RJSF would render it as a
+ *     variant selector) and set `type: ["string", "integer"]`. String first so
+ *     RJSF picks StringField: typed values stay strings, so a fractional `0.5`
+ *     is emitted as "0.5" rather than the JSON float 0.5 — which the chart's own
+ *     values.schema.json (anyOf integer|string, enforced by helm-controller)
+ *     would reject, failing the HelmRelease. The integer member still accepts a
+ *     stored or default whole number such as `cpu: 1`, which was the field's
+ *     original "must be string" bug.
  *   - `x-kubernetes-preserve-unknown-fields: true` on an object without
  *     properties — arbitrary nested values allowed. Left as a "raw" object
  *     (handled via additionalProperties: true).
@@ -85,7 +91,13 @@ export function sanitizeSchema(schema: any): any {
   }
 
   if (schema["x-kubernetes-int-or-string"]) {
-    out.type = "string"
+    // ["string", "integer"], not a bare "string": collapsing to "string"
+    // rejected the numeric form of a quantity — including the schema's own
+    // numeric default (`default: 1`) — with "must be string". String first
+    // keeps StringField so typed values stay strings (a fractional "0.5" that
+    // the chart schema accepts, not the float 0.5 it rejects); integer still
+    // accepts a stored/default whole number. See the header comment.
+    out.type = ["string", "integer"]
   }
   if (schema["x-kubernetes-preserve-unknown-fields"] && !schema.properties) {
     out.type = "object"

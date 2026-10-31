@@ -70,6 +70,7 @@ function Shell({ username }: { username?: string }) {
       version={config.version || import.meta.env.VITE_APP_VERSION}
       logoSvg={config.logoSvg}
       logoText={config.logoText}
+      logoHeight={config.logoHeight}
       username={username}
     >
       <CommandPalette />

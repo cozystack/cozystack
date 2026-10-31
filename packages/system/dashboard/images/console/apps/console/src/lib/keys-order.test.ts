@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
+import validator from "@rjsf/validator-ajv8"
 import { keysOrderToUiSchema, sanitizeSchema } from "./keys-order.ts"
+
+// The quantity pattern cozystack emits for int-or-string resource fields.
+const QUANTITY_PATTERN =
+  "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
 
 describe("keysOrderToUiSchema", () => {
   it("returns empty object for missing/empty input", () => {
@@ -50,13 +55,44 @@ describe("sanitizeSchema", () => {
     expect(sanitizeSchema(input)).toEqual(input)
   })
 
-  it("coerces x-kubernetes-int-or-string to string type and drops anyOf", () => {
+  it("coerces x-kubernetes-int-or-string to [string, integer] and drops anyOf", () => {
     const out = sanitizeSchema({
       "x-kubernetes-int-or-string": true,
+      pattern: QUANTITY_PATTERN,
       anyOf: [{ type: "integer" }, { type: "string" }],
     })
-    expect(out.type).toBe("string")
+    // string first so RJSF picks StringField and keeps typed values as strings;
+    // integer still accepted for a stored/default whole number.
+    expect(out.type).toEqual(["string", "integer"])
     expect(out.anyOf).toBeUndefined()
+    // The pattern survives so junk strings are still rejected.
+    expect(out.pattern).toBe(QUANTITY_PATTERN)
+  })
+
+  it("int-or-string field accepts an integer and quantity strings, rejects a float and junk", () => {
+    // Oracle is ajv via @rjsf/validator-ajv8, matching the chart's own
+    // values.schema.json (anyOf integer|string): a JSON float like 0.5 is
+    // invalid there and fails the HelmRelease, so the form must not accept it;
+    // the fractional value belongs as the string "0.5".
+    const schema = sanitizeSchema({
+      description: "CPU limit.",
+      default: 1,
+      "x-kubernetes-int-or-string": true,
+      pattern: QUANTITY_PATTERN,
+      anyOf: [{ type: "integer" }, { type: "string" }],
+    })
+    const errors = (v: unknown) =>
+      validator.validateFormData(v, schema as never).errors.map((e) => e.message)
+    // Stored/default whole number must be accepted — the original bug.
+    expect(errors(1)).toEqual([])
+    // Fractional and suffixed quantities are valid as strings.
+    expect(errors("0.5")).toEqual([])
+    expect(errors("500m")).toEqual([])
+    expect(errors("1")).toEqual([])
+    // A JSON float must be rejected (the chart schema rejects it too).
+    expect(errors(0.5).length).toBeGreaterThan(0)
+    // Nonsense is still rejected by the pattern.
+    expect(errors("bad!!").length).toBeGreaterThan(0)
   })
 
   it("coerces x-kubernetes-preserve-unknown-fields on a propertyless object", () => {

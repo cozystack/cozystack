@@ -16,6 +16,7 @@ interface AppShellProps {
   children?: ReactNode
   logoSvg?: string
   logoText?: string
+  logoHeight?: number | string
 }
 
 export function AppShell({
@@ -30,6 +31,7 @@ export function AppShell({
   children,
   logoSvg,
   logoText,
+  logoHeight,
 }: AppShellProps) {
   const [scrolled, setScrolled] = useState(false)
 
@@ -45,6 +47,7 @@ export function AppShell({
         scrolled={scrolled}
         logoSvg={logoSvg}
         logoText={logoText}
+        logoHeight={logoHeight}
       />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar sections={sections} />

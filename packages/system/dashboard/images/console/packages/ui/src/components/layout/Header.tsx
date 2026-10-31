@@ -24,6 +24,22 @@ interface HeaderProps {
   scrolled?: boolean
   logoSvg?: string
   logoText?: string
+  /** Logo height in px. Defaults to 36 and is clamped to a sane range so a
+   *  square logo can be enlarged without a bad config value deforming the bar.
+   *  Accepts a numeric string too, since branding config.json may ship "48". */
+  logoHeight?: number | string
+}
+
+const DEFAULT_LOGO_HEIGHT = 36
+const MIN_LOGO_HEIGHT = 16
+const MAX_LOGO_HEIGHT = 80
+
+function resolveLogoHeight(height?: number | string): number {
+  // A blank string is "unset", not zero: Number("") is 0, which would clamp to
+  // the minimum. Treat it as NaN so it falls back to the default.
+  const n = typeof height === "string" ? (height.trim() === "" ? NaN : Number(height)) : height
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_LOGO_HEIGHT
+  return Math.max(MIN_LOGO_HEIGHT, Math.min(MAX_LOGO_HEIGHT, n))
 }
 
 const DEFAULT_TABS: HeaderTab[] = [
@@ -41,20 +57,29 @@ export function Header({
   scrolled,
   logoSvg,
   logoText,
+  logoHeight,
 }: HeaderProps) {
   const location = useLocation()
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const resolvedLogoHeight = resolveLogoHeight(logoHeight)
 
   return (
     <header
       className={cn(
-        "flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 transition-shadow duration-200",
+        // min-h (not a fixed h) so a taller logo grows the bar instead of
+        // overflowing the border; the default 36px logo keeps the old 56px bar.
+        "flex min-h-[3.5rem] shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-1.5 transition-shadow duration-200",
         scrolled && "shadow-sm",
       )}
     >
       <div className="flex items-center gap-6">
         <Link to="/" className="flex items-center gap-2">
-          <Logo className="h-9 w-auto" svgContent={logoSvg} text={logoText} />
+          <Logo
+            className="w-auto"
+            style={{ height: resolvedLogoHeight }}
+            svgContent={logoSvg}
+            text={logoText}
+          />
           {version && (
             <span className="text-xs font-medium text-slate-400">{version}</span>
           )}

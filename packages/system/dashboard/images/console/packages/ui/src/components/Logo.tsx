@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react"
 import logoUrl from "../assets/logo.svg"
 
 interface LogoProps {
@@ -7,20 +8,29 @@ interface LogoProps {
   svgContent?: string
   /** Plain text label to render when no SVG is provided. */
   text?: string
+  /** Inline styles, used by the header to set an explicit logo height. */
+  style?: CSSProperties
 }
 
-export function Logo({ className, title = "Cozystack", svgContent, text }: LogoProps) {
+export function Logo({ className, title = "Cozystack", svgContent, text, style }: LogoProps) {
   if (svgContent) {
     return (
       <img
         src={`data:image/svg+xml;base64,${svgContent}`}
         alt={title}
         className={className}
+        style={style}
       />
     )
   }
   if (text) {
-    return <span className={className}>{text}</span>
+    // inline-flex + items-center so a configured height (style.height) centers
+    // the label vertically instead of leaving it pinned to the top.
+    return (
+      <span className={`${className ?? ""} inline-flex items-center`} style={style}>
+        {text}
+      </span>
+    )
   }
-  return <img src={logoUrl} alt={title} className={className} />
+  return <img src={logoUrl} alt={title} className={className} style={style} />
 }

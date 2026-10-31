@@ -1,0 +1,34 @@
+suite: console config.json logoHeight wiring
+templates:
+  - templates/configmap.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# logoHeight lets a square branding logo be shown larger than the default. The
+# key must survive the pick allow-list in configmap.yaml, otherwise the console
+# option is dead because config.json never carries the value.
+
+tests:
+  - it: writes logoHeight when branding.logoHeight is set
+    set:
+      _cluster:
+        root-host: example.org
+        branding:
+          logoHeight: 48
+    asserts:
+      - matchRegex:
+          path: data["config.json"]
+          pattern: '"logoHeight":48'
+
+  - it: omits logoHeight when branding.logoHeight is unset
+    set:
+      _cluster:
+        root-host: example.org
+        branding:
+          logoSvg: ABC
+    asserts:
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: logoHeight
