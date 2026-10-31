@@ -42,6 +42,14 @@ rules:
 - apiGroups: ["ipam.cluster.x-k8s.io"]
   resources: ["ipaddressclaims", "ipaddresses"]
   verbs: ["get", "list", "watch"]
+# External access of a machine: the EndpointSlice behind the Service the
+# annotation networking.cozystack.io/service names, and that Service's ports.
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
 # Events
 - apiGroups: [""]
   resources: ["events"]

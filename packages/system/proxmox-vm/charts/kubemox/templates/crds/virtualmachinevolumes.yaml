@@ -113,10 +113,19 @@ spec:
                   can only attach disks that live on its own node.
                 minLength: 1
                 type: string
+              optical:
+                default: false
+                description: |-
+                  Optical makes the volume a CD-ROM image rather than a disk: the file
+                  is kept as iso content of Storage, needs no holder, and a
+                  VirtualMachine attaches it read-only as a cdrom. Its source is an
+                  http or upload source, or a volume id of iso content.
+                type: boolean
               size:
                 description: |-
                   Size is the size of the disk in GiB. It can be raised later, which
-                  grows the volume in place; it cannot be lowered.
+                  grows the volume in place; it cannot be lowered. Ignored for an
+                  optical volume, whose size is that of the image.
                 minimum: 1
                 type: integer
               source:
@@ -145,6 +154,42 @@ spec:
                     required:
                     - name
                     type: object
+                  http:
+                    description: |-
+                      HTTP downloads an image and imports it. The operator fetches the URL
+                      itself and streams the bytes into the storage through the Proxmox
+                      upload API, so the hypervisor never talks to the URL; the file is
+                      removed once the disk is populated from it.
+                    properties:
+                      storage:
+                        description: |-
+                          Storage with the import (or, for an optical volume, iso) content type
+                          on the volume's node that receives the file. Defaults to the
+                          volume's storage.
+                        type: string
+                      url:
+                        description: |-
+                          URL of the image: qcow2, raw, vmdk or an OVA, told apart by the
+                          extension of the URL's path. For an optical volume, an ISO.
+                        pattern: ^https?://
+                        type: string
+                    required:
+                    - url
+                    type: object
+                  upload:
+                    description: |-
+                      Upload waits for an image to be uploaded by hand. The operator
+                      publishes where it expects the file in status.uploadTarget and
+                      populates the disk once a file of that name, with any extension,
+                      appears there; the file is removed afterwards.
+                    properties:
+                      storage:
+                        description: |-
+                          Storage with the import (or, for an optical volume, iso) content type
+                          on the volume's node that receives the file. Defaults to the
+                          volume's storage.
+                        type: string
+                    type: object
                   volume:
                     description: |-
                       Volume is a Proxmox volume id to copy from, such as
@@ -155,8 +200,9 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-validations:
-                - message: exactly one of volume or disk must be set
-                  rule: has(self.volume) != has(self.disk)
+                - message: exactly one of volume, disk, http or upload must be set
+                  rule: '[has(self.volume), has(self.disk), has(self.http), has(self.upload)].filter(x,
+                    x).size() == 1'
               storage:
                 description: |-
                   Storage is the Proxmox storage the volume is allocated on, as it
@@ -287,6 +333,32 @@ spec:
                   holder while the disk is free, on the VirtualMachine named in
                   AttachedTo otherwise.
                 type: string
+              uploadTarget:
+                description: |-
+                  UploadTarget is where an upload source expects its file, set while the
+                  operator waits for it.
+                properties:
+                  content:
+                    description: 'Content type the file is uploaded as: import, or
+                      iso for an optical volume.'
+                    type: string
+                  filename:
+                    description: |-
+                      Filename the file has to carry, without its extension; any extension
+                      Proxmox accepts for the content type does.
+                    type: string
+                  node:
+                    description: Node whose storage receives the file.
+                    type: string
+                  storage:
+                    description: Storage that receives the file.
+                    type: string
+                required:
+                - content
+                - filename
+                - node
+                - storage
+                type: object
               volume:
                 description: |-
                   Volume is the current Proxmox volume id. It changes whenever the disk

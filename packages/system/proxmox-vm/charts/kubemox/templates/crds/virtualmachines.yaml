@@ -131,6 +131,12 @@ spec:
                   Pool is the Proxmox resource pool the machine is created in. It is
                   applied at creation; a change afterwards is not applied.
                 type: string
+              startOnce:
+                description: |-
+                  StartOnce starts the machine once, when it is created or first found
+                  stopped, and then leaves it alone: a machine that stops stays stopped.
+                  Only meaningful with EnableAutoStart on, which it narrows.
+                type: boolean
               tags:
                 description: |-
                   Tags are Proxmox tags kept on the machine next to the operator's own
@@ -763,6 +769,11 @@ spec:
                   reconciled successfully.
                 format: int64
                 type: integer
+              startedOnce:
+                description: |-
+                  StartedOnce records that a machine with spec.startOnce has had its one
+                  start; the operator does not start it again.
+                type: boolean
               status:
                 description: Status is the QEMU status of the Virtual Machine (state,
                   node, uptime, id, IP address, os info)
