@@ -35,7 +35,7 @@
 {{- end -}}
 {{- $catalog := dict -}}
 {{- range $key, $value := $cm.data -}}
-{{- if or (eq $key "connection") (eq $key "defaultNode") -}}
+{{- if or (eq $key "connection") (eq $key "defaultNode") (eq $key "defaultNetwork") -}}
 {{- $_ := set $catalog $key $value -}}
 {{- else if or (eq $key "allowedNodes") (eq $key "dnsServers") -}}
 {{- /* fromYaml only yields a map; a YAML list needs fromYamlArray. */ -}}
@@ -51,12 +51,15 @@
   The sizing of the machine on Proxmox, as JSON {cores, sockets, memoryMiB,
   extra: {qm option: value}}: from `resources` when it sizes the VM in full
   (the same whole-number rules as on kubevirt, through domainResources),
-  otherwise from the catalog's entry for `instanceType`. The RT series is not
-  in the catalog on purpose; the failure text says so.
+  otherwise from the catalog's entry for `instanceType`. An entry's `realtime`
+  marker (the RT series) becomes the node's CPU affinity from the catalog's
+  realtimeCores, or nothing when the node lists none; it is not a qm option.
+  Called as (list $catalog $root $node).
 */}}
 {{- define "virtual-machine.proxmoxSizing" -}}
 {{- $catalog := index . 0 -}}
 {{- $root := index . 1 -}}
+{{- $node := index . 2 -}}
 {{- $domain := include "virtual-machine.domainResources" $root | fromJson -}}
 {{- $cores := dig "cpu" "cores" 0 $domain -}}
 {{- $sockets := dig "cpu" "sockets" 0 $domain -}}
@@ -73,18 +76,25 @@
 {{- $types := $catalog.instancetypes | default dict -}}
 {{- $entry := index $types $type -}}
 {{- if not $entry -}}
-{{- if hasPrefix "rt1." $type -}}
-{{- fail (printf "instanceType %q is a realtime type, which the proxmox substrate does not offer: Proxmox gives no realtime guarantee. Pick a u1, o1, d1, m1 or cx1 type, or size the VM with resources." $type) -}}
-{{- end -}}
 {{- fail (printf "instanceType %q is not in the platform's Proxmox catalog (known: %s)" $type (join ", " (keys $types | sortAlpha))) -}}
 {{- end -}}
 {{- $extra := dict -}}
 {{- range $k, $v := $entry -}}
-{{- if not (has $k (list "cores" "sockets" "memoryMiB")) -}}
+{{- if not (has $k (list "cores" "sockets" "memoryMiB" "realtime")) -}}
 {{- $_ := set $extra $k $v -}}
 {{- end -}}
 {{- end -}}
+{{- if $entry.realtime -}}
+{{- with index ($catalog.realtimeCores | default dict) $node -}}
+{{- $_ := set $extra "affinity" (toString .) -}}
+{{- end -}}
+{{- end -}}
 {{- $sizing = dict "cores" (int $entry.cores) "sockets" (int ($entry.sockets | default 1)) "memoryMiB" (int $entry.memoryMiB) "extra" $extra -}}
+{{- end -}}
+{{- /* cpuModel names the qm cpu type, as it names the libvirt model on kubevirt;
+       it wins over the class default of the instance type. */ -}}
+{{- with $root.Values.cpuModel -}}
+{{- $_ := set $sizing.extra "cpu" . -}}
 {{- end -}}
 {{- $sizing | toJson -}}
 {{- end -}}

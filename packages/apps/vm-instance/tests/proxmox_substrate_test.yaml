@@ -3,7 +3,7 @@ suite: vm-instance on the proxmox substrate renders a kubemox VirtualMachine
 # The catalog and the disks are objects the chart reads with lookup; both are
 # mocked here. The tests pin the mapping of instanceType, instanceProfile,
 # disks and networks through the catalog, the claims and the NoCloud Secret,
-# and the refusals for what the substrate cannot do.
+# and that every value that works on kubevirt maps to something here.
 release:
   name: vm-instance-web
   namespace: tenant-test
@@ -50,6 +50,12 @@ kubernetesProvider:
           - pve1
         dnsServers: |
           - 10.0.0.1
+        defaultNetwork: lan
+        realtimeCores: |
+          pve1: "4-7"
+        storageClasses: |
+          replicated:
+            storage: shared-rdma
         networks: |
           lan:
             bridge: vmbr0
@@ -92,6 +98,16 @@ kubernetesProvider:
             numa: true
             hugepages: "2"
             balloon: 0
+          rt1.small:
+            cores: 1
+            sockets: 1
+            memoryMiB: 2048
+            cpu: host
+            numa: true
+            hugepages: "1024"
+            cpuunits: 10000
+            balloon: 0
+            realtime: true
     - apiVersion: proxmox.alperen.cloud/v1alpha1
       kind: VirtualMachineVolume
       metadata:
@@ -251,13 +267,30 @@ tests:
         equal:
           path: spec.vmSpec.network[0].vlan
           value: 101
-  - it: refuses a realtime instance type with the reason
+  - it: pins a realtime instance type to the node's realtime cores and drops the marker
     template: templates/proxmox-vm.yaml
     set:
       instanceType: rt1.small
+    documentIndex: 2
     asserts:
-      - failedTemplate:
-          errorPattern: "realtime type, which the proxmox substrate does not offer"
+      - equal:
+          path: spec.additionalConfig.affinity
+          value: "4-7"
+      - equal:
+          path: spec.additionalConfig.hugepages
+          value: "1024"
+      - notExists:
+          path: spec.additionalConfig.realtime
+  - it: lets cpuModel override the CPU type of the instance type
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceType: cx1.large
+      cpuModel: EPYC-Rome
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.additionalConfig.cpu
+          value: EPYC-Rome
   - it: refuses a disk on another node
     template: templates/proxmox-vm.yaml
     set:
@@ -267,20 +300,85 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "lives on Proxmox node \"pve2\" while an earlier disk lives on \"pve1\""
-  - it: refuses a machine without networks
+  - it: puts a machine without networks into the platform's default network, as the pod network would
     template: templates/proxmox-vm.yaml
     set:
       networks: []
     asserts:
-      - failedTemplate:
-          errorPattern: "a Proxmox VM has no pod network"
-  - it: refuses external access, gpus and a RerunOnFailure strategy with pointers
+      - documentIndex: 0
+        equal:
+          path: spec.poolRef.name
+          value: lan-pool
+      - documentIndex: 2
+        equal:
+          path: spec.vmSpec.network[0].bridge
+          value: vmbr0
+  - it: takes the deprecated subnets as networks
     template: templates/proxmox-vm.yaml
     set:
-      external: true
+      networks: []
+      subnets:
+        - name: tenant
+    documentIndex: 2
     asserts:
-      - failedTemplate:
-          errorPattern: "external access is not available on the proxmox substrate yet"
+      - equal:
+          path: spec.vmSpec.network[0].vlan
+          value: 101
+  - it: accepts netplanDhcp, since the address is the platform's either way
+    template: templates/proxmox-vm.yaml
+    set:
+      netplanDhcp: true
+    asserts:
+      - hasDocuments:
+          count: 3
+  - it: publishes an external machine through the kubevirt Service without a selector and names it for the operator
+    templates:
+      - templates/proxmox-vm.yaml
+      - templates/service.yaml
+    set:
+      external: true
+      externalMethod: WholeIP
+      externalPorts: []
+    asserts:
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 2
+        equal:
+          path: metadata.annotations["networking.cozystack.io/service"]
+          value: vm-instance-web
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/service.yaml
+        equal:
+          path: spec.type
+          value: LoadBalancer
+      - template: templates/service.yaml
+        notExists:
+          path: spec.selector
+      - template: templates/service.yaml
+        equal:
+          path: spec.externalTrafficPolicy
+          value: Cluster
+      - template: templates/service.yaml
+        equal:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+          value: "true"
+  - it: boots a UEFI machine without disks from the default disk class's storage on the default node
+    template: templates/proxmox-vm.yaml
+    set:
+      instanceProfile: windows.11
+      disks: []
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.nodeName
+          value: pve1
+      - equal:
+          path: spec.vmSpec.firmware.efiDisk.storage
+          value: shared-rdma
+      - equal:
+          path: spec.vmSpec.firmware.tpm.storage
+          value: shared-rdma
   - it: maps gpus to PCI mappings of the cluster
     template: templates/proxmox-vm.yaml
     set:
@@ -312,13 +410,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'gpu "amd.com/MI300" is not one of the GPUs the platform maps on Proxmox \(known: nvidia.com/GA102GL_A10, nvidia.com/display\)'
-  - it: refuses an unsupported runStrategy
+  - it: starts a RerunOnFailure or Once machine like an Always one
     template: templates/proxmox-vm.yaml
     set:
       runStrategy: RerunOnFailure
+    documentIndex: 2
     asserts:
-      - failedTemplate:
-          errorPattern: "runStrategy \"RerunOnFailure\" is not available on the proxmox substrate"
+      - equal:
+          path: spec.enableAutoStart
+          value: true
   - it: refuses a disk that does not exist on this substrate
     template: templates/proxmox-vm.yaml
     set:
