@@ -70,13 +70,17 @@ catalog:
   allowedNodes: []
   ## @param {[]string} catalog.dnsServers - Resolvers written into the cloud-init network configuration of a machine.
   dnsServers: []
+  ## @param {string} catalog.defaultNetwork - The entry of `networks` a vm-instance with an empty `networks` list is attached to: what stands in for the pod network a KubeVirt machine gets by default. Per-tenant VPC subnet on this platform.
+  defaultNetwork: ""
+  ## @param {map} catalog.realtimeCores - Host cores a realtime (rt1.*) machine is pinned to, per node: `{<node>: "<qm affinity, e.g. 4-7>"}`. A node without an entry runs rt1 machines unpinned.
+  realtimeCores: {}
   ## @param {map} catalog.storageClasses - What a vm-disk `storageClass` means on Proxmox: `{<class>: {storage: <proxmox storage id>}}`.
   storageClasses: {}
   ## @param {map} catalog.images - What a vm-disk `source.image.name` means on Proxmox: `{<name>: <volume id>}`, either a file on a storage with the import content type (`local:import/debian-13.qcow2`) or the disk of a template (`local-zfs:base-9001-disk-0`).
   images: {}
   ## @param {map} catalog.networks - What a vm-instance `networks[].name` means on Proxmox: `{<name>: {bridge: <bridge>, vlan: <tag or 0>, ipPool: <InClusterIPPool in the tenant namespace>}}`. The pool gives each port its address through an IPAddressClaim.
   networks: {}
-  ## @param {map} catalog.profiles - What a vm-instance `instanceProfile` means on Proxmox. The defaults below cover the KubeVirt preference names; override an entry to change it.
+  ## @param {map} catalog.profiles - What a vm-instance `instanceProfile` means on Proxmox. The defaults below cover every KubeVirt preference name the platform ships for this CPU architecture (hack/check-catalog-coverage.sh keeps them in step); override an entry to change it.
   # GPU and other PCI passthrough. A tenant's `gpus[].name` is looked up here
   # and becomes `hostpciN: mapping=<mapping>` on the machine: the mapping is a
   # cluster-wide PCI mapping of the PVE cluster (Datacenter → Resource Mappings,
@@ -107,6 +111,47 @@ catalog:
       scsiController: virtio-scsi-single
       efiPreEnrolledKeys: true
       tpm: false
+    # Windows before 10 boots from SeaBIOS on an i440fx board; ostype picks
+    # the qm defaults (clock, hv enlightenments) for that generation.
+    _windows-2k12: &windows2k12
+      ostype: win8
+      bios: seabios
+      machine: pc
+      scsiController: virtio-scsi-single
+    _windows-2k8: &windows2k8
+      ostype: w2k8
+      bios: seabios
+      machine: pc
+      scsiController: virtio-scsi-single
+    _windows-7: &windows7
+      ostype: win7
+      bios: seabios
+      machine: pc
+      scsiController: virtio-scsi-single
+    _windows-xp: &windowsXp
+      ostype: wxp
+      bios: seabios
+      machine: pc
+      scsiController: lsi
+    _windows-2k3: &windows2k3
+      ostype: w2k3
+      bios: seabios
+      machine: pc
+      scsiController: lsi
+    # The generic and legacy Linux preferences of KubeVirt: linux.efi boots
+    # UEFI without Secure Boot keys, virtiotransitional and legacy take the
+    # i440fx board with the older virtio controller.
+    _linux-efi: &linuxEfi
+      ostype: l26
+      bios: ovmf
+      machine: q35
+      scsiController: virtio-scsi-single
+      efiPreEnrolledKeys: false
+    _linux-legacy: &linuxLegacy
+      ostype: l26
+      bios: seabios
+      machine: pc
+      scsiController: virtio-scsi-pci
     ubuntu: *linux
     debian: *linux
     fedora: *linux
@@ -132,3 +177,26 @@ catalog:
     windows.2k16.virtio: *windowsLegacy
     windows.2k19: *windowsLegacy
     windows.2k19.virtio: *windowsLegacy
+    windows.2k12: *windows2k12
+    windows.2k12.virtio: *windows2k12
+    windows.2k8: *windows2k8
+    windows.2k8.virtio: *windows2k8
+    windows.7: *windows7
+    windows.7.virtio: *windows7
+    windows.xp: *windowsXp
+    windows.2k3: *windows2k3
+    linux: *linux
+    linux.efi: *linuxEfi
+    linux.virtiotransitional: *linuxLegacy
+    legacy: *linuxLegacy
+    oraclelinux: *linux
+    rhel.7: *linux
+    rhel.7.desktop: *linux
+    rhel.8.desktop: *linux
+    rhel.8.dpdk: *linux
+    rhel.9.desktop: *linux
+    rhel.9.dpdk: *linux
+    rhel.9.realtime: *linux
+    centos.stream9.desktop: *linux
+    centos.stream9.dpdk: *linux
+    centos.stream10.desktop: *linux

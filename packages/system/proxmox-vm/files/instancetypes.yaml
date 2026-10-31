@@ -281,6 +281,86 @@ o1.xlarge:
   sockets: 1
   memoryMiB: 16384
   balloon: 8192
+rt1.2xlarge:
+  cores: 8
+  sockets: 1
+  memoryMiB: 32768
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.4xlarge:
+  cores: 16
+  sockets: 1
+  memoryMiB: 65536
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.8xlarge:
+  cores: 32
+  sockets: 1
+  memoryMiB: 131072
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.large:
+  cores: 2
+  sockets: 1
+  memoryMiB: 8192
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.medium:
+  cores: 1
+  sockets: 1
+  memoryMiB: 4096
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.micro:
+  cores: 1
+  sockets: 1
+  memoryMiB: 1024
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.small:
+  cores: 1
+  sockets: 1
+  memoryMiB: 2048
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
+rt1.xlarge:
+  cores: 4
+  sockets: 1
+  memoryMiB: 16384
+  cpu: host
+  numa: true
+  hugepages: "1024"
+  cpuunits: 10000
+  balloon: 0
+  realtime: true
 u1.2xlarge:
   cores: 8
   sockets: 1

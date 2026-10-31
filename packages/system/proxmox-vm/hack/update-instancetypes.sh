@@ -2,8 +2,10 @@
 # Turns the KubeVirt cluster instance types into the sizing a Proxmox VM gets
 # for the same name, so that `instanceType: u1.medium` means the same on both
 # substrates. Each entry carries what qm needs: cores, sockets, memory in MiB,
-# and the class-specific extras. The RT series is left out: Proxmox gives no
-# realtime guarantee, so the chart refuses those names rather than pretending.
+# and the class-specific extras. The RT series gets the nearest Proxmox has:
+# host CPU, NUMA, 1 GiB hugepages, the highest CPU weight and, when the catalog
+# lists cores for the node, a CPU affinity; there is no SCHED_FIFO, which the
+# chart says in its notes.
 set -euo pipefail
 src=${1:?path to instancetypes.yaml}
 command -v yq >/dev/null || { echo "need yq" >&2; exit 1; }
@@ -14,7 +16,6 @@ yq -r '
   select(.kind == "VirtualMachineClusterInstancetype")
   | .metadata.name as $name
   | .metadata.labels as $l
-  | select(($l["instancetype.kubevirt.io/class"] // "") != "realtime")
   | [$name,
      ($l["instancetype.kubevirt.io/cpu"] | tonumber),
      ($l["instancetype.kubevirt.io/memory"]),
@@ -34,6 +35,10 @@ yq -r '
         # Dedicated CPUs, hugepages and NUMA on KubeVirt; the nearest Proxmox has
         # is the host CPU model, NUMA on, 2 MiB hugepages, and no balloon.
         printf '  cpu: host\n  numa: true\n  hugepages: "2"\n  balloon: 0\n' ;;
+      realtime)
+        # realtime is a marker the chart turns into the node's affinity from
+        # the catalog and drops; the rest are qm options.
+        printf '  cpu: host\n  numa: true\n  hugepages: "1024"\n  cpuunits: 10000\n  balloon: 0\n  realtime: true\n' ;;
       dedicated.vcpu)
         # The D series pins vCPUs; the host CPU model and no balloon is what
         # Proxmox offers without a CPU set.
