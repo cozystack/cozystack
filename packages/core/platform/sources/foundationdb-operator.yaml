@@ -20,3 +20,9 @@ spec:
       install:
         namespace: cozy-foundationdb-operator
         releaseName: foundationdb-operator
+        # helm-controller leaves existing CRDs alone on upgrade, so a cluster
+        # installed before v1.6.0 keeps the v2.13.0 schema under the v2.30.0
+        # operator, and the apiserver prunes the fields added since,
+        # status.backupDetails.restorable among them. The schema diff adds
+        # fields and drops none, so replace is safe.
+        upgradeCRDs: CreateReplace
