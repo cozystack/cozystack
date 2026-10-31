@@ -106,6 +106,7 @@ suite: assertion override
 templates: [templates/single.yaml, templates/multi.yaml]
 tests:
   - it: checks only the single-document template
+    template: templates/multi.yaml
     documentIndex: 0
     asserts:
       - template: templates/single.yaml
@@ -138,4 +139,36 @@ EOF
         false
     fi
     grep -q 'resource_test.yaml:6: use documentSelector' output
+}
+
+@test "rejects a singular test template overriding a single-document suite" {
+    write_suite single
+    sed -i '/  - it:/a\    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a positional selector on the test template override" >&2
+        false
+    fi
+    grep -q 'use documentSelector.*templates/multi.yaml' output
+}
+
+@test "allows a singular test template selecting one document" {
+    write_suite multi
+    sed -i '/  - it:/a\    template: templates/single.yaml' packages/apps/example/tests/resource_test.yaml
+    python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
+}
+
+@test "plural test templates take precedence over the singular test template" {
+    write_suite multi
+    sed -i '/  - it:/a\    templates: [templates/single.yaml]\n    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
+}
+
+@test "an empty plural test override falls back to the singular template" {
+    write_suite single
+    sed -i '/  - it:/a\    templates: []\n    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a positional selector after an empty plural override" >&2
+        false
+    fi
+    grep -q 'use documentSelector.*templates/multi.yaml' output
 }

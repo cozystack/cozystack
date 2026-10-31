@@ -50,7 +50,9 @@ def check(base):
             if not suite:
                 continue
             for test in suite.get("tests", []):
-                templates = test.get("templates", suite.get("templates", ["templates/*"]))
+                templates = test.get("templates") or (
+                    [test["template"]] if test.get("template")
+                    else suite.get("templates", ["templates/*"]))
                 for assertion in test.get("asserts", []):
                     index = assertion.get("documentIndex", test.get("documentIndex", {}))
                     number = index.get("line")
