@@ -364,10 +364,6 @@ jobs:
         with:
           path: _out/envtest
           key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
-      - name: Check new Helm document indices
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       # -k is required, not cosmetic: unit-tests and test-controllers are two
       # independent goals on the same command line, and without -k make stops
       # handing out new work the moment any unit-tests prerequisite fails —
@@ -380,6 +376,11 @@ jobs:
       - name: Run Bats unit tests for docs-only changes
         if: needs.plan.outputs.code == 'false'
         run: make bats-unit-tests
+      - name: Check new Helm document indices
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

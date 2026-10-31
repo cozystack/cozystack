@@ -66,7 +66,8 @@ EOF
     write_suite multi
     git -c user.name=Test -c user.email=test@example.org commit -qm existing
     base=$(git rev-parse HEAD)
-    sed -i 's/spec.missing/spec.other/' packages/apps/example/tests/resource_test.yaml
+    sed 's/spec.missing/spec.other/' packages/apps/example/tests/resource_test.yaml > changed.yaml
+    mv changed.yaml packages/apps/example/tests/resource_test.yaml
     python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
 }
 
@@ -133,17 +134,37 @@ EOF
 
 @test "rejects a positional selector whose value is on a separate line" {
     write_suite multi
-    sed -i 's/documentIndex: 0/documentIndex:\n      0/' packages/apps/example/tests/resource_test.yaml
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: multiline index
+templates: [templates/multi.yaml]
+tests:
+  - it: checks a resource
+    documentIndex:
+      0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
     if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
         echo "accepted a multiline positional selector" >&2
         false
     fi
-    grep -q 'resource_test.yaml:6: use documentSelector' output
+    grep -q 'resource_test.yaml:5: use documentSelector' output
 }
 
 @test "rejects a singular test template overriding a single-document suite" {
     write_suite single
-    sed -i '/  - it:/a\    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: test template override
+templates: [templates/single.yaml]
+tests:
+  - it: checks a resource
+    template: templates/multi.yaml
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
     if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
         echo "accepted a positional selector on the test template override" >&2
         false
@@ -153,22 +174,161 @@ EOF
 
 @test "allows a singular test template selecting one document" {
     write_suite multi
-    sed -i '/  - it:/a\    template: templates/single.yaml' packages/apps/example/tests/resource_test.yaml
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: test template override
+templates: [templates/multi.yaml]
+tests:
+  - it: checks a resource
+    template: templates/single.yaml
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
     python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
 }
 
 @test "plural test templates take precedence over the singular test template" {
     write_suite multi
-    sed -i '/  - it:/a\    templates: [templates/single.yaml]\n    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: test template override
+templates: [templates/multi.yaml]
+tests:
+  - it: checks a resource
+    templates: [templates/single.yaml]
+    template: templates/multi.yaml
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
     python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
 }
 
 @test "an empty plural test override falls back to the singular template" {
     write_suite single
-    sed -i '/  - it:/a\    templates: []\n    template: templates/multi.yaml' packages/apps/example/tests/resource_test.yaml
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: test template override
+templates: [templates/single.yaml]
+tests:
+  - it: checks a resource
+    templates: []
+    template: templates/multi.yaml
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
     if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
         echo "accepted a positional selector after an empty plural override" >&2
         false
     fi
     grep -q 'use documentSelector.*templates/multi.yaml' output
+}
+
+@test "does not check vendored chart suites" {
+    mkdir -p packages/apps/example/charts/sub/templates packages/apps/example/charts/sub/tests
+    cp packages/apps/example/templates/multi.yaml packages/apps/example/charts/sub/templates/
+    cat > packages/apps/example/charts/sub/tests/resource_test.yaml <<'EOF'
+suite: upstream resource selection
+templates: [templates/multi.yaml]
+tests:
+  - it: checks an upstream resource
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
+    git add .
+    python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
+}
+
+@test "a new test-level index overrides existing assertion indices" {
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: index inheritance
+templates: [templates/multi.yaml]
+tests:
+  - it: checks a resource
+    asserts:
+      - notExists:
+          path: spec.missing
+        documentIndex: 0
+      - notExists:
+          path: spec.other
+        documentIndex: 0
+EOF
+    git add .
+    git -c user.name=Test -c user.email=test@example.org commit -qm existing
+    base=$(git rev-parse HEAD)
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: index inheritance
+templates: [templates/multi.yaml]
+tests:
+  - it: checks a resource
+    documentIndex: 1
+    asserts:
+      - notExists:
+          path: spec.missing
+        documentIndex: 0
+      - notExists:
+          path: spec.other
+        documentIndex: 0
+EOF
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a new inherited positional selector" >&2
+        false
+    fi
+    grep -q 'resource_test.yaml:5: use documentSelector' output
+}
+
+@test "allows a pure suite rename with existing indices" {
+    write_suite multi
+    git -c user.name=Test -c user.email=test@example.org commit -qm existing
+    base=$(git rev-parse HEAD)
+    git mv packages/apps/example/tests/resource_test.yaml packages/apps/example/tests/renamed_test.yaml
+    python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base"
+}
+
+@test "checks added index lines in a renamed suite" {
+    write_suite multi
+    git -c user.name=Test -c user.email=test@example.org commit -qm existing
+    base=$(git rev-parse HEAD)
+    git mv packages/apps/example/tests/resource_test.yaml packages/apps/example/tests/renamed_test.yaml
+    cat > packages/apps/example/tests/renamed_test.yaml <<'EOF'
+suite: resource selection
+templates:
+  - templates/multi.yaml
+tests:
+  - it: checks a resource
+    documentIndex: 1
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a new positional selector in a renamed suite" >&2
+        false
+    fi
+    grep -q 'renamed_test.yaml:6: use documentSelector' output
+}
+
+@test "an empty suite template list includes nested chart templates" {
+    mkdir packages/apps/example/templates/nested
+    mv packages/apps/example/templates/multi.yaml packages/apps/example/templates/nested/
+    cat > packages/apps/example/tests/resource_test.yaml <<'EOF'
+suite: default templates
+templates: []
+tests:
+  - it: checks a resource
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.missing
+EOF
+    git add .
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a positional selector with default templates" >&2
+        false
+    fi
+    grep -q 'use documentSelector.*templates/nested/multi.yaml' output
 }

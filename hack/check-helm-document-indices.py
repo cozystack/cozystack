@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reject added positional selectors on multi-resource Helm templates.
 
-Usage: hack/check-helm-document-indices.py <base-ref>
+Usage: python3 hack/check-helm-document-indices.py <base-ref>
 Requires mikefarah/yq, like the chart test tooling. Existing indices are left
 alone. This static check counts --- separated blocks with a top-level kind;
 it does not evaluate conditional documents or resources emitted by helpers/ranges.
@@ -20,22 +20,25 @@ def git(*args):
 
 def check(base):
     root = Path(git("rev-parse", "--show-toplevel").strip())
-    paths = git("diff", "--name-only", "--diff-filter=ACMR", base, "--",
-                "packages/*/*/tests/*_test.yaml").splitlines()
+    additions = {}
+    path = None
+    for line in git("diff", "--no-ext-diff", "-M", "--unified=0", base, "--",
+                    ":(glob)packages/*/*/tests/*_test.yaml").splitlines():
+        if line.startswith("diff --git "):
+            path = None
+        elif line.startswith("+++ b/"):
+            path = line[6:]
+            additions[path] = set()
+        elif line.startswith("@@"):
+            number = int(re.search(r"\+(\d+)", line).group(1))
+        elif path and line.startswith("+"):
+            if "documentIndex" in line:
+                additions[path].add(number)
+            number += 1
+        elif line.startswith(" "):
+            number += 1
     errors = []
-    for path in paths:
-        added = set()
-        for line in git("diff", "--no-ext-diff", "--unified=0", base, "--", path).splitlines():
-            if line.startswith("@@"):
-                number = int(re.search(r"\+(\d+)", line).group(1))
-            elif line.startswith(("+++", "---", "diff ", "index ", "\\")):
-                continue
-            elif line.startswith("+"):
-                if "documentIndex" in line:
-                    added.add(number)
-                number += 1
-            elif line.startswith(" "):
-                number += 1
+    for path, added in additions.items():
         if not added:
             continue
 
@@ -52,9 +55,9 @@ def check(base):
             for test in suite.get("tests", []):
                 templates = test.get("templates") or (
                     [test["template"]] if test.get("template")
-                    else suite.get("templates", ["templates/*"]))
+                    else suite.get("templates") or ["templates/**/*"])
                 for assertion in test.get("asserts", []):
-                    index = assertion.get("documentIndex", test.get("documentIndex", {}))
+                    index = test.get("documentIndex") or assertion.get("documentIndex", {})
                     number = index.get("line")
                     if number not in added:
                         continue
@@ -77,5 +80,5 @@ def check(base):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        sys.exit("usage: check-helm-document-indices.py <base-ref>")
+        sys.exit("usage: python3 hack/check-helm-document-indices.py <base-ref>")
     sys.exit(check(sys.argv[1]))
