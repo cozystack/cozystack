@@ -5,6 +5,9 @@ locking: false
 ## @x-cozystack-options {source: storagepool}
 storagePool: ""
 
+## @param {bool} ui=true - Deploys the web UI (s3manager) with its Service and its Ingress or HTTPRoute at `<bucket>.<tenant host>`. Set to `false` to run the bucket without them.
+ui: true
+
 ## @typedef {struct} User - Bucket user configuration.
 ## @field {bool} [readonly] - Whether the user has read-only access.
 
