@@ -14,9 +14,9 @@
 {{-   $networks = list (dict "name" $catalog.defaultNetwork) }}
 {{- end }}
 {{- $runStrategy := .Values.runStrategy | default "Always" }}
-{{- /* kubemox has one power switch. RerunOnFailure and Once both start the
-       machine; neither restart-on-crash nor stop-after-first-run exists on
-       this substrate yet, which NOTES.txt says. */}}
+{{- /* kubemox has one power switch plus startOnce. RerunOnFailure starts
+       the machine like Always (no restart on a guest crash without PVE HA,
+       which NOTES.txt says); Once starts it a single time. */}}
 {{- $autoStart := has $runStrategy (list "Always" "RerunOnFailure" "Once") }}
 {{- $profile := include "virtual-machine.proxmoxProfile" (list $catalog .) | fromJson }}
 {{- $gpus := include "virtual-machine.proxmoxGPUs" (list $catalog .) | fromJsonArray }}
@@ -124,6 +124,9 @@ spec:
          it does not stop a running machine either: the stop subresource does
          that, so setting Halted here does not. */}}
   enableAutoStart: {{ $autoStart }}
+  {{- if eq $runStrategy "Once" }}
+  startOnce: true
+  {{- end }}
   tags:
     - cozystack
     - {{ .Release.Namespace }}

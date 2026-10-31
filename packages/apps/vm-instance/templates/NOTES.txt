@@ -11,8 +11,8 @@ kubevirt; where Proxmox has no exact counterpart, the nearest one is used:
   node, but a crash of the guest is not restarted without Proxmox HA.
 {{- end }}
 {{- if eq $strategy "Once" }}
-- runStrategy Once behaves as Always until the operator learns to stop after
-  the first run: the machine is started and kept running.
+- runStrategy Once starts the machine a single time; once it stops, it stays
+  stopped until the strategy changes.
 {{- end }}
 {{- if hasPrefix "rt1." (.Values.instanceType | toString) }}
 - the realtime instance type pins the machine to the node's realtime cores

@@ -119,6 +119,15 @@ kubernetesProvider:
     - apiVersion: proxmox.alperen.cloud/v1alpha1
       kind: VirtualMachineVolume
       metadata:
+        name: vm-disk-installer
+        namespace: tenant-test
+      spec:
+        nodeName: pve1
+        storage: local
+        optical: true
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
         name: vm-disk-elsewhere
         namespace: tenant-test
       spec:
@@ -410,7 +419,7 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'gpu "amd.com/MI300" is not one of the GPUs the platform maps on Proxmox \(known: nvidia.com/GA102GL_A10, nvidia.com/display\)'
-  - it: starts a RerunOnFailure or Once machine like an Always one
+  - it: starts a RerunOnFailure machine like an Always one
     template: templates/proxmox-vm.yaml
     set:
       runStrategy: RerunOnFailure
@@ -419,6 +428,35 @@ tests:
       - equal:
           path: spec.enableAutoStart
           value: true
+      - notExists:
+          path: spec.startOnce
+  - it: starts a Once machine a single time
+    template: templates/proxmox-vm.yaml
+    set:
+      runStrategy: Once
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.enableAutoStart
+          value: true
+      - equal:
+          path: spec.startOnce
+          value: true
+  - it: puts an optical disk on an IDE port whatever bus was asked
+    template: templates/proxmox-vm.yaml
+    set:
+      disks:
+        - name: web-system
+        - name: installer
+          bus: sata
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.vmSpec.disk[1]
+          value:
+            device: ide0
+            volumeRef:
+              name: vm-disk-installer
   - it: refuses a disk that does not exist on this substrate
     template: templates/proxmox-vm.yaml
     set:

@@ -35,7 +35,7 @@
 {{- end -}}
 {{- $catalog := dict -}}
 {{- range $key, $value := $cm.data -}}
-{{- if or (eq $key "connection") (eq $key "defaultNode") (eq $key "defaultNetwork") -}}
+{{- if or (eq $key "connection") (eq $key "defaultNode") (eq $key "defaultNetwork") (eq $key "importStorage") -}}
 {{- $_ := set $catalog $key $value -}}
 {{- else if or (eq $key "allowedNodes") (eq $key "dnsServers") -}}
 {{- /* fromYaml only yields a map; a YAML list needs fromYamlArray. */ -}}
@@ -142,6 +142,9 @@
 {{- end -}}
 {{- $node = $volNode -}}
 {{- $bus := $disk.bus | default "scsi" -}}
+{{- /* A CD-ROM goes on an IDE port, as the kubevirt side puts it on sata: the
+       bus the user gave a disk does not apply to an optical one. */ -}}
+{{- if dig "spec" "optical" false $vol -}}{{- $bus = "ide" -}}{{- end -}}
 {{- if not (hasKey $counters $bus) -}}
 {{- fail (printf "disk %q: bus %q is not one of scsi, virtio, sata, ide" $disk.name $bus) -}}
 {{- end -}}

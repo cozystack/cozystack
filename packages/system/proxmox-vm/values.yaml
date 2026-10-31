@@ -72,6 +72,8 @@ catalog:
   dnsServers: []
   ## @param {string} catalog.defaultNetwork - The entry of `networks` a vm-instance with an empty `networks` list is attached to: what stands in for the pod network a KubeVirt machine gets by default. Per-tenant VPC subnet on this platform.
   defaultNetwork: ""
+  ## @param {string} catalog.importStorage - Storage, present on every node, with the `import` and `iso` content types: where a vm-disk with an http or upload source lands before it is imported, and where an optical vm-disk keeps its ISO.
+  importStorage: ""
   ## @param {map} catalog.realtimeCores - Host cores a realtime (rt1.*) machine is pinned to, per node: `{<node>: "<qm affinity, e.g. 4-7>"}`. A node without an entry runs rt1 machines unpinned.
   realtimeCores: {}
   ## @param {map} catalog.storageClasses - What a vm-disk `storageClass` means on Proxmox: `{<class>: {storage: <proxmox storage id>}}`.

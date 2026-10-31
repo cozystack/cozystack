@@ -27,6 +27,7 @@ data:
   allowedNodes: {{ .Values.catalog.allowedNodes | toYaml | quote }}
   dnsServers: {{ .Values.catalog.dnsServers | toYaml | quote }}
   defaultNetwork: {{ .Values.catalog.defaultNetwork | default "" | quote }}
+  importStorage: {{ .Values.catalog.importStorage | default "" | quote }}
   realtimeCores: {{ .Values.catalog.realtimeCores | default dict | toYaml | quote }}
   storageClasses: {{ .Values.catalog.storageClasses | toYaml | quote }}
   images: {{ .Values.catalog.images | toYaml | quote }}

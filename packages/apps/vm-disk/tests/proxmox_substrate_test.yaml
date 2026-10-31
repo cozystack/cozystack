@@ -30,6 +30,7 @@ kubernetesProvider:
       data:
         connection: pve
         defaultNode: pve1
+        importStorage: local
         allowedNodes: |
           - pve1
           - pve2
@@ -120,30 +121,51 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "image \"windows\" is not in the platform's Proxmox catalog"
-  - it: refuses upload, http and optical with a pointer to what to do instead
+  - it: hands an upload source to the operator with the platform's import storage
     template: templates/proxmox-volume.yaml
     set:
       source:
         upload: {}
     asserts:
-      - failedTemplate:
-          errorPattern: "source.upload is not available on the proxmox substrate"
-  - it: refuses an http source
+      - equal:
+          path: spec.source.upload.storage
+          value: local
+  - it: hands an http source to the operator, which fetches it itself
     template: templates/proxmox-volume.yaml
     set:
       source:
         http:
           url: https://example.org/x.qcow2
     asserts:
-      - failedTemplate:
-          errorPattern: "source.http is not available on the proxmox substrate yet"
-  - it: refuses an optical disk
+      - equal:
+          path: spec.source.http
+          value:
+            url: https://example.org/x.qcow2
+            storage: local
+      - equal:
+          path: spec.storage
+          value: local-zfs
+  - it: keeps an optical disk as an ISO on the import storage
+    template: templates/proxmox-volume.yaml
+    set:
+      optical: true
+      source:
+        http:
+          url: https://example.org/x.iso
+    asserts:
+      - equal:
+          path: spec.optical
+          value: true
+      - equal:
+          path: spec.storage
+          value: local
+  - it: refuses an optical disk without an image, as a blank CD-ROM is nothing
     template: templates/proxmox-volume.yaml
     set:
       optical: true
     asserts:
       - failedTemplate:
-          errorPattern: "optical disks are not available on the proxmox substrate yet"
+          errorPattern: "an optical disk needs an image"
   - it: refuses an unknown substrate
     template: templates/proxmox-volume.yaml
     set:
