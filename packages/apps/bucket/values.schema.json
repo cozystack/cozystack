@@ -15,6 +15,11 @@
         "source": "storagepool"
       }
     },
+    "ui": {
+      "description": "Deploys the web UI (s3manager) with its Service and its Ingress or HTTPRoute at `\u003cbucket\u003e.\u003ctenant host\u003e`. Set to `false` to run the bucket without them.",
+      "type": "boolean",
+      "default": true
+    },
     "users": {
       "description": "Users configuration map.",
       "type": "object",

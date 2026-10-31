@@ -23,3 +23,4 @@ spec:
   values:
     bucketName: {{ .Release.Name }}
     users: {{ .Values.users | toJson }}
+    ui: {{ .Values.ui }}

@@ -1,3 +1,4 @@
+{{- if .Values.ui }}
 {{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $endpoint := printf "s3.%s" $host }}
 {{- range $name, $user := .Values.users }}
@@ -37,3 +38,4 @@ spec:
           requests:
             cpu: 100m
             memory: 128Mi
+{{- end }}
