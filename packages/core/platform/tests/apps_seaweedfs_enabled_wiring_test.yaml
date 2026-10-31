@@ -1,0 +1,30 @@
+suite: apps.yaml wires seaweedfs.rootEnabled into _cluster
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+tests:
+  - it: writes seaweedfs-enabled true by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*seaweedfs-enabled:\s*"true"'
+
+  - it: writes seaweedfs-enabled false when seaweedfs.rootEnabled is disabled
+    set:
+      seaweedfs.rootEnabled: false
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*seaweedfs-enabled:\s*"false"'
+
+  - it: falls back to true (no panic) when seaweedfs is null
+    set:
+      seaweedfs: null
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*seaweedfs-enabled:\s*"true"'
