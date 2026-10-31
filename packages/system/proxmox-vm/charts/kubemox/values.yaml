@@ -36,7 +36,7 @@ image:
   # -- Image pull policy for Kubemox
   pullPolicy: Always
   # -- Kubemox image tag, see https://github.com/alperencelik/kubemox/releases for the tags
-  tag: "pskep-9e0381c"
+  tag: "pskep-58c4f64"
 metrics:
   serviceMonitor:
     # -- Prometheus ServiceMonitor enabled

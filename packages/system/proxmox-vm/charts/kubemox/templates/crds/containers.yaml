@@ -139,10 +139,14 @@ spec:
                           type: string
                       type: object
                     type: array
+                  features:
+                    description: Features is the Proxmox features string, for example
+                      nesting=1,keyctl=1.
+                    type: string
                   image:
                     description: |-
                       Image pulls an OCI image into Proxmox storage and clones from the resulting template CT.
-                      Mutually exclusive with Name.
+                      Mutually exclusive with Name and OSTemplate.
                     properties:
                       reference:
                         description: Reference is the OCI image (for example nginx:alpine).
@@ -164,20 +168,72 @@ spec:
                     type: integer
                   name:
                     description: Name of the template container on Proxmox to clone
-                      from (mutually exclusive with Image)
+                      from (mutually exclusive with Image and OSTemplate)
+                    type: string
+                  nameserver:
+                    description: 'Nameserver is the DNS server, or several separated
+                      by spaces. Default: the host''s.'
                     type: string
                   network:
                     description: Networks is the list of networks
                     items:
+                      description: 'ContainerTemplateNetwork is one NIC: the first
+                        is eth0, the next eth1, and so on.'
                       properties:
                         bridge:
                           description: Bridge is the name of the bridge
                           type: string
+                        firewall:
+                          description: Firewall enables the Proxmox firewall on the
+                            NIC.
+                          type: boolean
+                        gateway:
+                          description: Gateway is the IPv4 default gateway of the
+                            NIC.
+                          type: string
+                        ip:
+                          description: 'IP is the IPv4 address in CIDR notation, dhcp,
+                            or manual. Default: dhcp.'
+                          pattern: ^(dhcp|manual|([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2})$
+                          type: string
                         model:
                           description: Name is the name of the network
                           type: string
+                        mtu:
+                          description: 'MTU of the NIC. Default: the bridge''s.'
+                          maximum: 65535
+                          minimum: 64
+                          type: integer
+                        vlan:
+                          description: VLAN is the Proxmox VLAN tag (1-4094) of the
+                            NIC. Omit for untagged traffic on the bridge.
+                          format: int32
+                          maximum: 4094
+                          minimum: 1
+                          type: integer
                       type: object
                     type: array
+                  osTemplate:
+                    description: |-
+                      OSTemplate is a volume to create the container from: a container template archive or an OCI
+                      image archive that is already on a storage, e.g. local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst.
+                      Mutually exclusive with Name and Image.
+                    type: string
+                  searchDomain:
+                    description: 'SearchDomain is the DNS search domain. Default:
+                      the host''s.'
+                    type: string
+                  sshPublicKeys:
+                    description: SSHPublicKeys are written to root's authorized_keys
+                      on create.
+                    items:
+                      type: string
+                    type: array
+                  unprivileged:
+                    description: |-
+                      Unprivileged creates the container with its root mapped to an unprivileged user on the host.
+                      Applied on create only.
+                    type: boolean
                 type: object
             required:
             - connectionRef
@@ -187,11 +243,19 @@ spec:
             x-kubernetes-validations:
             - message: ConnectionRef is required once set
               rule: '!has(oldSelf.connectionRef) || has(self.connectionRef)'
-            - message: Set exactly one of template.name or template.image
-              rule: (has(self.template.name) && self.template.name != "") != has(self.template.image)
-            - message: template.disk is required when template.image is set (rootfs
-                volume)
-              rule: '!has(self.template.image) || (size(self.template.disk) > 0)'
+            - message: Set exactly one of template.name, template.image or template.osTemplate
+              rule: '[has(self.template.name) && self.template.name != "", has(self.template.image),
+                has(self.template.osTemplate) && self.template.osTemplate != ""].filter(x,
+                x).size() == 1'
+            - message: template.disk is required when template.image or template.osTemplate
+                is set (rootfs volume)
+              rule: '!(has(self.template.image) || has(self.template.osTemplate))
+                || (has(self.template.disk) && size(self.template.disk) > 0)'
+            - message: template.sshPublicKeys and template.unprivileged apply on create
+                only; a clone (template.name) inherits them from its template
+              rule: '!has(self.template.name) || self.template.name == "" || ((!has(self.template.sshPublicKeys)
+                || size(self.template.sshPublicKeys) == 0) && !(has(self.template.unprivileged)
+                && self.template.unprivileged))'
             - message: template.image.reference and template.image.storage are required
                 when template.image is set
               rule: '!has(self.template.image) || (has(self.template.image.reference)
