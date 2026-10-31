@@ -29,6 +29,7 @@ var (
 type vmInfo struct {
 	Namespace  string
 	Name       string
+	UID        types.UID
 	Connection string
 	Node       string
 	VMID       int64
@@ -40,7 +41,7 @@ func lookupVM(ctx context.Context, dyn dynamic.Interface, namespace, name string
 	if err != nil {
 		return nil, err
 	}
-	info := &vmInfo{Namespace: namespace, Name: name}
+	info := &vmInfo{Namespace: namespace, Name: name, UID: obj.GetUID()}
 	info.Connection, _, _ = unstructured.NestedString(obj.Object, "spec", "connectionRef", "name")
 	info.Node, _, _ = unstructured.NestedString(obj.Object, "status", "status", "node")
 	info.State, _, _ = unstructured.NestedString(obj.Object, "status", "status", "state")

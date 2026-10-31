@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -37,6 +39,9 @@ const (
 	// stopWait is how long stop watches the shutdown task: past the 10 s
 	// Proxmox waits for a machine's lock, which is how a shutdown fails.
 	stopWait = 15 * time.Second
+	// stopFollow is how long a shutdown is followed after the caller got its
+	// answer: past the timeout the hypervisor gives the guest.
+	stopFollow = 5 * time.Minute
 )
 
 // server is the aggregated API.
@@ -46,8 +51,11 @@ type server struct {
 	dyn         dynamic.Interface
 	connections *connectionResolver
 	// dial is how a console reaches the hypervisor; tests replace it.
-	upgrader websocket.Upgrader
-	stopWait time.Duration
+	upgrader   websocket.Upgrader
+	stopWait   time.Duration
+	stopFollow time.Duration
+	// follows counts the shutdowns followed after the answer went out.
+	follows sync.WaitGroup
 }
 
 func newServer(auth *frontProxyAuth, core kubernetes.Interface, dyn dynamic.Interface) *server {
@@ -57,6 +65,7 @@ func newServer(auth *frontProxyAuth, core kubernetes.Interface, dyn dynamic.Inte
 		dyn:         dyn,
 		connections: newConnectionResolver(dyn, core),
 		stopWait:    stopWait,
+		stopFollow:  stopFollow,
 		upgrader: websocket.Upgrader{
 			HandshakeTimeout: handshakeTimeout,
 			Subprotocols:     []string{"binary", consoleSubprotocol},
@@ -318,7 +327,7 @@ func (s *server) stop(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 			writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "resolving the hypervisor connection failed")
 			return
 		}
-		if err := s.shutdown(r.Context(), client, vm); err != nil {
+		if err := s.shutdown(r.Context(), log, client, vm); err != nil {
 			s.hypervisorFailed(log, vm, err)
 			code, msg := hypervisorStatus(err)
 			writeStatus(w, code, metav1.StatusReasonInternalError, msg)
@@ -329,12 +338,9 @@ func (s *server) stop(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	accepted(w, "stop requested")
 }
 
-// shutdown powers off a running machine and reports a shutdown that fails.
-//
-// shortcut: a task still going after stopWait counts as accepted, so a failure
-// after that goes unnoticed; forceStop makes one unlikely, follow the task to
-// its end if it shows up in practice.
-func (s *server) shutdown(ctx context.Context, client *pveClient, vm *vmInfo) error {
+// shutdown powers off a running machine and reports a shutdown that fails. One
+// still going after stopWait counts as accepted and is followed from there.
+func (s *server) shutdown(ctx context.Context, log *slog.Logger, client *pveClient, vm *vmInfo) error {
 	running, err := client.running(ctx, vm.Node, vm.VMID)
 	if err != nil || !running {
 		return err
@@ -343,9 +349,59 @@ func (s *server) shutdown(ctx context.Context, client *pveClient, vm *vmInfo) er
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.stopWait)
+	wait, cancel := context.WithTimeout(ctx, s.stopWait)
 	defer cancel()
-	return client.waitTask(ctx, "shutdown", vm.Node, upid)
+	err = client.waitTask(wait, "shutdown", vm.Node, upid)
+	if !errors.Is(err, errTaskRunning) {
+		return err
+	}
+	s.follows.Add(1)
+	go s.followShutdown(log, client, vm, upid)
+	return nil
+}
+
+// followShutdown watches a shutdown after the caller got its answer. An event
+// on the machine is the only way left to tell a failure to the tenant.
+//
+// shortcut: a restart of the proxy drops what it follows, so that failure is
+// not reported; keep the task in the object's status if that shows up.
+func (s *server) followShutdown(log *slog.Logger, client *pveClient, vm *vmInfo, upid string) {
+	defer s.follows.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), s.stopFollow)
+	defer cancel()
+	err := client.waitTask(ctx, "shutdown", vm.Node, upid)
+	if errors.Is(err, errTaskRunning) {
+		err = &pveTaskError{Op: "shutdown", Exit: "still running after " + s.stopFollow.String()}
+	}
+	if err == nil {
+		return
+	}
+	s.hypervisorFailed(log, vm, err)
+	_, msg := hypervisorStatus(err)
+	if err = s.warnStopFailed(vm, msg); err != nil {
+		log.Error("recording the failed stop failed", "error", err)
+	}
+}
+
+func (s *server) warnStopFailed(vm *vmInfo, message string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	now := metav1.Now()
+	_, err := s.core.CoreV1().Events(vm.Namespace).Create(ctx, &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s.%x", vm.Name, now.UnixNano()), Namespace: vm.Namespace},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: vmGroup + "/v1alpha1", Kind: "VirtualMachine",
+			Namespace: vm.Namespace, Name: vm.Name, UID: vm.UID,
+		},
+		Type:           corev1.EventTypeWarning,
+		Reason:         "StopFailed",
+		Message:        message,
+		Source:         corev1.EventSource{Component: "proxmox-console-proxy"},
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
+	}, metav1.CreateOptions{})
+	return err
 }
 
 func (s *server) restart(w http.ResponseWriter, r *http.Request, log *slog.Logger, vm *vmInfo) {

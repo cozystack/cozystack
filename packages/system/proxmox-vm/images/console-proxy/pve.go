@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -220,8 +221,11 @@ func (c *pveClient) shutdown(ctx context.Context, node string, vmid int64) (stri
 	return upid, err
 }
 
-// waitTask follows a task until it ends and reports one that failed. It
-// returns nil when ctx ends first: the task is then still going.
+// errTaskRunning says a task outlived the wait for it.
+var errTaskRunning = errors.New("the task is still running")
+
+// waitTask follows a task until it ends and reports one that failed, or
+// errTaskRunning when ctx ends first.
 func (c *pveClient) waitTask(ctx context.Context, op, node, upid string) error {
 	path := "/nodes/" + url.PathEscape(node) + "/tasks/" + url.PathEscape(upid) + "/status"
 	for {
@@ -231,7 +235,7 @@ func (c *pveClient) waitTask(ctx context.Context, op, node, upid string) error {
 		}
 		if err := c.get(ctx, op, path, &task); err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return errTaskRunning
 			}
 			return err
 		}
@@ -243,7 +247,7 @@ func (c *pveClient) waitTask(ctx context.Context, op, node, upid string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return errTaskRunning
 		case <-time.After(taskPoll):
 		}
 	}
