@@ -30,7 +30,7 @@ tests:
           pattern: ^tcp-keepalive 0$
       - lengthEqual:
           path: spec.redis.customConfig
-          count: 2
+          count: 3
 
   - it: "renders min-replicas-to-write when set"
     set:

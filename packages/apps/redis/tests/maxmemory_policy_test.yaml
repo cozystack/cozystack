@@ -1,0 +1,189 @@
+suite: Redis eviction policy
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: preserves the Redis default eviction policy
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.customConfig
+          value:
+            - tcp-keepalive 0
+            - loglevel notice
+            - maxmemory-policy noeviction
+
+  - it: renders noeviction
+    set:
+      maxmemoryPolicy: noeviction
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy noeviction
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders allkeys-lru
+    set:
+      maxmemoryPolicy: allkeys-lru
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy allkeys-lru
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders allkeys-lfu
+    set:
+      maxmemoryPolicy: allkeys-lfu
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy allkeys-lfu
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders volatile-lru
+    set:
+      maxmemoryPolicy: volatile-lru
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy volatile-lru
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders volatile-lfu
+    set:
+      maxmemoryPolicy: volatile-lfu
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy volatile-lfu
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders allkeys-random
+    set:
+      maxmemoryPolicy: allkeys-random
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy allkeys-random
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders volatile-random
+    set:
+      maxmemoryPolicy: volatile-random
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy volatile-random
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: renders volatile-ttl
+    set:
+      maxmemoryPolicy: volatile-ttl
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy volatile-ttl
+      - lengthEqual:
+          path: spec.redis.customConfig
+          count: 3
+
+  - it: preserves replication and authentication settings with a custom policy
+    set:
+      maxmemoryPolicy: allkeys-lru
+      minReplicasToWrite: 1
+      minReplicasMaxLag: 5
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.customConfig
+          value:
+            - tcp-keepalive 0
+            - loglevel notice
+            - maxmemory-policy allkeys-lru
+            - min-replicas-to-write 1
+            - min-replicas-max-lag 5
+      - equal:
+          path: spec.auth.secretPath
+          value: my-redis-auth
+
+  - it: rejects an unknown policy
+    set:
+      maxmemoryPolicy: invalid-policy
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects an empty policy
+    set:
+      maxmemoryPolicy: ""
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a non-string policy
+    set:
+      maxmemoryPolicy: 42
+    asserts:
+      - failedTemplate: {}
+
+  - it: preserves the default when the policy is null
+    set:
+      maxmemoryPolicy: null
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy noeviction

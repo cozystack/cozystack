@@ -45,6 +45,9 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+	// Redis `maxmemory-policy`: eviction policy used when a nonzero `maxmemory` limit is reached. Defaults to `noeviction`, which refuses writes rather than evicting keys.
+	// +kubebuilder:default:="noeviction"
+	MaxmemoryPolicy MaxmemoryPolicy `json:"maxmemoryPolicy"`
 	// Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.
 	// +kubebuilder:validation:Minimum=0
 	MinReplicasToWrite *int `json:"minReplicasToWrite,omitempty"`
@@ -79,6 +82,9 @@ type TLS struct {
 
 // +kubebuilder:validation:Enum="no";"optional";"yes"
 type AuthClients string
+
+// +kubebuilder:validation:Enum="noeviction";"allkeys-lru";"allkeys-lfu";"volatile-lru";"volatile-lfu";"allkeys-random";"volatile-random";"volatile-ttl"
+type MaxmemoryPolicy string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
