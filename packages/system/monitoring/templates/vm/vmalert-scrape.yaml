@@ -1,3 +1,4 @@
+{{- with first .Values.metricsStorages }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
@@ -13,5 +14,6 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/component: monitoring
-      app.kubernetes.io/instance: vmalert
+      app.kubernetes.io/instance: vmalert-{{ .name }}
       app.kubernetes.io/name: vmalert
+{{- end }}
