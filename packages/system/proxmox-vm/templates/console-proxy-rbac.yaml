@@ -13,7 +13,7 @@ rules:
   - virtualmachines
   - proxmoxconnections
   verbs: ["get", "list", "watch"]
-# start/stop set spec.powerState; kubemox does the rest.
+# start/stop set spec.enableAutoStart.
 - apiGroups: ["proxmox.alperen.cloud"]
   resources:
   - virtualmachines

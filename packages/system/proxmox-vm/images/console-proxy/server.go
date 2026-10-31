@@ -210,9 +210,9 @@ func (s *server) subresource(w http.ResponseWriter, r *http.Request, user *userI
 
 	switch sub {
 	case "start":
-		s.power(w, log, vm, "Running")
+		s.start(w, log, vm)
 	case "stop":
-		s.power(w, log, vm, "Stopped")
+		s.stop(w, r, log, vm)
 	case "restart":
 		s.restart(w, r, log, vm)
 	case "vnc":
@@ -267,19 +267,60 @@ func (s *server) client(ctx context.Context, vm *vmInfo) (*pveClient, error) {
 	return s.connections.get(ctx, vm.Connection)
 }
 
-func (s *server) power(w http.ResponseWriter, log *slog.Logger, vm *vmInfo, state string) {
-	if err := setPowerState(context.Background(), s.dyn, vm.Namespace, vm.Name, state); err != nil {
-		log.Error("setting powerState failed", "error", err)
+func (s *server) setAutoStart(w http.ResponseWriter, log *slog.Logger, vm *vmInfo, on bool) bool {
+	if err := setAutoStart(context.Background(), s.dyn, vm.Namespace, vm.Name, on); err != nil {
+		log.Error("setting enableAutoStart failed", "error", err)
 		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "updating the VirtualMachine failed")
-		return
+		return false
 	}
-	log.Info("power state requested", "powerState", state)
+	return true
+}
+
+func accepted(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusAccepted, metav1.Status{
 		TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
 		Status:   metav1.StatusSuccess,
 		Code:     http.StatusAccepted,
-		Message:  "powerState " + state + " requested",
+		Message:  message,
 	})
+}
+
+// start leaves the starting to kubemox, which starts a machine it finds
+// stopped while enableAutoStart is on.
+func (s *server) start(w http.ResponseWriter, log *slog.Logger, vm *vmInfo) {
+	if !s.setAutoStart(w, log, vm, true) {
+		return
+	}
+	log.Info("start requested")
+	accepted(w, "start requested")
+}
+
+// stop turns enableAutoStart off first, or kubemox would start the machine
+// again, and then shuts it down: kubemox never powers a machine off.
+//
+// shortcut: the state is kubemox's last poll, so a machine started under a
+// minute ago reads stopped and takes a second stop; read status/current from
+// the hypervisor if that shows up in practice.
+func (s *server) stop(w http.ResponseWriter, r *http.Request, log *slog.Logger, vm *vmInfo) {
+	if !s.setAutoStart(w, log, vm, false) {
+		return
+	}
+	if vm.placed() && vm.State == "running" {
+		client, err := s.client(r.Context(), vm)
+		if err != nil {
+			log.Error("resolving the hypervisor failed", "error", err)
+			writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "resolving the hypervisor connection failed")
+			return
+		}
+		if err := client.shutdown(r.Context(), vm.Node, vm.VMID); err != nil {
+			s.hypervisorFailed(log, vm, err)
+			code, msg := hypervisorStatus(err)
+			writeStatus(w, code, metav1.StatusReasonInternalError, msg)
+			return
+		}
+	}
+	log.Info("stop requested", "node", vm.Node, "vmid", vm.VMID)
+	accepted(w, "stop requested")
 }
 
 func (s *server) restart(w http.ResponseWriter, r *http.Request, log *slog.Logger, vm *vmInfo) {
@@ -304,12 +345,7 @@ func (s *server) restart(w http.ResponseWriter, r *http.Request, log *slog.Logge
 		return
 	}
 	log.Info("reboot requested", "node", vm.Node, "vmid", vm.VMID)
-	writeJSON(w, http.StatusAccepted, metav1.Status{
-		TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
-		Status:   metav1.StatusSuccess,
-		Code:     http.StatusAccepted,
-		Message:  "reboot requested",
-	})
+	accepted(w, "reboot requested")
 }
 
 func (s *server) hypervisorFailed(log *slog.Logger, vm *vmInfo, err error) {

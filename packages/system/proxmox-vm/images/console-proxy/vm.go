@@ -33,7 +33,6 @@ type vmInfo struct {
 	Node       string
 	VMID       int64
 	State      string
-	PowerState string
 }
 
 func lookupVM(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*vmInfo, error) {
@@ -43,7 +42,6 @@ func lookupVM(ctx context.Context, dyn dynamic.Interface, namespace, name string
 	}
 	info := &vmInfo{Namespace: namespace, Name: name}
 	info.Connection, _, _ = unstructured.NestedString(obj.Object, "spec", "connectionRef", "name")
-	info.PowerState, _, _ = unstructured.NestedString(obj.Object, "spec", "powerState")
 	info.Node, _, _ = unstructured.NestedString(obj.Object, "status", "status", "node")
 	info.State, _, _ = unstructured.NestedString(obj.Object, "status", "status", "state")
 	info.VMID, _, _ = unstructured.NestedInt64(obj.Object, "status", "status", "id")
@@ -56,9 +54,10 @@ func lookupVM(ctx context.Context, dyn dynamic.Interface, namespace, name string
 // placed reports whether kubemox has created the machine on the hypervisor.
 func (v *vmInfo) placed() bool { return v.VMID > 0 && v.Node != "" }
 
-// setPowerState asks kubemox for a power state: Running or Stopped.
-func setPowerState(ctx context.Context, dyn dynamic.Interface, namespace, name, state string) error {
-	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"powerState": state}})
+// setAutoStart sets enableAutoStart, which decides whether kubemox starts a
+// machine it finds stopped.
+func setAutoStart(ctx context.Context, dyn dynamic.Interface, namespace, name string, on bool) error {
+	patch, err := json.Marshal(map[string]any{"spec": map[string]any{"enableAutoStart": on}})
 	if err != nil {
 		return err
 	}
