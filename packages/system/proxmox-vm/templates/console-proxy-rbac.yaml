@@ -7,10 +7,12 @@ kind: ClusterRole
 metadata:
   name: proxmox-console-proxy
 rules:
-# Where a machine runs (node, vmid, state) and which connection to use.
+# Where a machine runs (node, vmid, state), where a volume waits for its
+# image (status.uploadTarget) and which connection to use.
 - apiGroups: ["proxmox.alperen.cloud"]
   resources:
   - virtualmachines
+  - virtualmachinevolumes
   - proxmoxconnections
   verbs: ["get", "list", "watch"]
 # start/stop set spec.enableAutoStart.

@@ -95,7 +95,7 @@ tests:
           path: rules
           content:
             apiGroups: ["proxmox.alperen.cloud"]
-            resources: ["virtualmachines", "proxmoxconnections"]
+            resources: ["virtualmachines", "virtualmachinevolumes", "proxmoxconnections"]
             verbs: ["get", "list", "watch"]
       - documentIndex: 0
         contains:
