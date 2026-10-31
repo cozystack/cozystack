@@ -21,7 +21,7 @@ import (
 )
 
 // The Proxmox VE API, as far as a console needs it: a VNC or terminal ticket
-// for a machine, the websocket that ticket opens, and a reboot.
+// for a machine, the websocket that ticket opens, and its power.
 
 const (
 	pveDefaultPort    = "8006"
@@ -39,6 +39,17 @@ type pveError struct {
 }
 
 func (e *pveError) Error() string { return fmt.Sprintf("hypervisor %s: HTTP %d", e.Op, e.Status) }
+
+// pveTaskError is a task the hypervisor accepted and then failed. Exit is
+// Proxmox's own text and names its files, so it stays in the log.
+type pveTaskError struct {
+	Op   string
+	Exit string
+}
+
+func (e *pveTaskError) Error() string {
+	return fmt.Sprintf("hypervisor %s: task ended with %q", e.Op, e.Exit)
+}
 
 // pveClient talks to one Proxmox VE API endpoint with one API token.
 type pveClient struct {
@@ -100,8 +111,20 @@ func (c *pveClient) post(ctx context.Context, op, path string, form url.Values, 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", c.token)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.do(req, op, out)
+}
+
+func (c *pveClient) get(ctx context.Context, op, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api2/json"+path, nil)
+	if err != nil {
+		return err
+	}
+	return c.do(req, op, out)
+}
+
+func (c *pveClient) do(req *http.Request, op string, out any) error {
+	req.Header.Set("Authorization", c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("hypervisor %s: %w", op, err)
@@ -168,15 +191,62 @@ func (c *pveClient) reboot(ctx context.Context, node string, vmid int64) error {
 	return c.post(ctx, "reboot", qemuPath(node, vmid)+"/status/reboot", nil, nil)
 }
 
-// shutdownTimeout is how many seconds a guest gets to power off before the
-// hypervisor stops it.
-const shutdownTimeout = "180"
+const (
+	// shutdownTimeout is how many seconds a guest gets to power off before
+	// the hypervisor stops it.
+	shutdownTimeout = "180"
+	// taskPoll is how often a task the proxy waits for is looked at.
+	taskPoll = 500 * time.Millisecond
+)
+
+// running asks the hypervisor whether the machine runs. kubemox's status is up
+// to a poll old, and older once it stops watching a machine.
+func (c *pveClient) running(ctx context.Context, node string, vmid int64) (bool, error) {
+	var status struct {
+		Status string `json:"status"`
+	}
+	if err := c.get(ctx, "status", qemuPath(node, vmid)+"/status/current", &status); err != nil {
+		return false, err
+	}
+	return status.Status == "running", nil
+}
 
 // shutdown asks the guest to power off and has the hypervisor stop it if it
-// does not. It returns once the task is queued.
-func (c *pveClient) shutdown(ctx context.Context, node string, vmid int64) error {
+// does not. It returns the task, which is only queued at this point.
+func (c *pveClient) shutdown(ctx context.Context, node string, vmid int64) (string, error) {
 	form := url.Values{"timeout": {shutdownTimeout}, "forceStop": {"1"}}
-	return c.post(ctx, "shutdown", qemuPath(node, vmid)+"/status/shutdown", form, nil)
+	var upid string
+	err := c.post(ctx, "shutdown", qemuPath(node, vmid)+"/status/shutdown", form, &upid)
+	return upid, err
+}
+
+// waitTask follows a task until it ends and reports one that failed. It
+// returns nil when ctx ends first: the task is then still going.
+func (c *pveClient) waitTask(ctx context.Context, op, node, upid string) error {
+	path := "/nodes/" + url.PathEscape(node) + "/tasks/" + url.PathEscape(upid) + "/status"
+	for {
+		var task struct {
+			Status     string `json:"status"`
+			ExitStatus string `json:"exitstatus"`
+		}
+		if err := c.get(ctx, op, path, &task); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if task.Status == "stopped" {
+			if task.ExitStatus == "OK" || strings.HasPrefix(task.ExitStatus, "WARNINGS") {
+				return nil
+			}
+			return &pveTaskError{Op: op, Exit: task.ExitStatus}
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(taskPoll):
+		}
+	}
 }
 
 // dialConsole opens the websocket a vncproxy or termproxy ticket is for.
