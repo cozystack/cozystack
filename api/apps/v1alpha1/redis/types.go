@@ -45,7 +45,7 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
-	// Redis `maxmemory-policy`: eviction policy used when a nonzero `maxmemory` limit is reached. Defaults to `noeviction`, which refuses writes rather than evicting keys.
+	// Redis `maxmemory-policy`: eviction policy used when a nonzero `maxmemory` limit is reached. Defaults to `noeviction`, which refuses writes rather than evicting keys. The chart does not set `maxmemory`; this policy has no effect until a nonzero limit is configured.
 	// +kubebuilder:default:="noeviction"
 	MaxmemoryPolicy MaxmemoryPolicy `json:"maxmemoryPolicy"`
 	// Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.
