@@ -94,45 +94,6 @@ assert_file_contains() {
   return 1
 }
 
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  # A missing file must fail rather than vacuously pass: a bare `! grep -q`
-  # succeeds on an unreadable path, which is indistinguishable from "the file
-  # exists and does not carry the label". awk exits 2 on an unreadable path,
-  # which folded into an if reads the same way, so the file is checked first.
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  # Branched on awk's exact status, not on truthiness. awk exits 1 for "no line
-  # matched" and 2 for "I could not evaluate this" -- an unparseable regex, most
-  # of all. Folded into `if ... then fail; fi`, both land in the passing branch,
-  # so the assertion "this pattern is absent" is satisfied by the matcher giving
-  # up. That is the wrong direction for a negative assertion: a positive one
-  # fails loudly when its matcher breaks and gets fixed, this one goes green and
-  # stays green. Every claim in this file about something NOT appearing rests on
-  # the three-way split below.
-  # `|| _rc=$?` rather than a bare call: both runners set -e, and awk exiting 1
-  # for "no match" -- the ordinary success case here -- would otherwise abort the
-  # test before the branch below ever runs. The `if` form this replaces was
-  # exempt only because conditions are exempt.
-  local _rc=0
-  awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}" || _rc=$?
-  case "${_rc}" in
-    0)
-      printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-      return 1
-      ;;
-    1) return 0 ;;
-    *)
-      printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
-      return 1
-      ;;
-  esac
-}
-
 # COZY_REPORT_DIR is set inline in each test below rather than through a helper,
 # which is the opposite of what the node-join suite does. The difference is
 # deliberate and shrinks to one line: there the assignment carries a ten-line

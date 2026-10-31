@@ -300,36 +300,6 @@ assert_file_contains() {
   return 1
 }
 
-# The sibling suites' three-way split, and here for the same reason. A bare
-# `! grep -q` succeeds on a file that does not exist, which is
-# indistinguishable from the file existing without the pattern; and awk exits 1
-# for "no line matched" and 2 for "I could not evaluate this", so folding those
-# together lets a broken matcher satisfy a negative assertion. A positive
-# assertion fails loudly when its matcher breaks and gets fixed; this one would
-# go green and stay green.
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-  local _rc=0
-
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}" || _rc=$?
-  case "${_rc}" in
-    0)
-      printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-      return 1
-      ;;
-    1) return 0 ;;
-    *)
-      printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
-      return 1
-      ;;
-  esac
-}
-
 # The ceilings both budget guards below price their sums from, read out of the
 # helper rather than restated in each. They are the same numbers held against
 # two different bounds -- the phase budget from below, the operation window from

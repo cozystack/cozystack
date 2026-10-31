@@ -83,37 +83,6 @@ assert_file_contains() {
   return 1
 }
 
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  # A missing file must fail rather than vacuously pass: a bare `! grep -q`
-  # succeeds on an unreadable path, which is indistinguishable from "the file
-  # exists and does not carry the pattern".
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  # Branched on awk's exact status. awk exits 1 for "no line matched" and 2 for
-  # "I could not evaluate this"; folded together, a negative assertion is
-  # satisfied by its own matcher giving up, which is the direction that goes
-  # green and stays green.
-  local _rc=0
-  awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}" || _rc=$?
-  case "${_rc}" in
-    0)
-      printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-      cat "${file}" >&2
-      return 1
-      ;;
-    1) return 0 ;;
-    *)
-      printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
-      return 1
-      ;;
-  esac
-}
-
 # The shape sizing object, as the `shapeConfig` subpath serves it: a flat object of
 # sizing numbers with one string in it, pretty-printed because the service is free
 # to answer either way and the reader buffers its whole input for that reason.
