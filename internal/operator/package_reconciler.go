@@ -27,6 +27,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -97,6 +98,11 @@ type PackageReconciler struct {
 	// must be set whenever the limit is, because Kubernetes otherwise defaults each
 	// request to the limit and reserves that much at schedule time.
 	SystemNamespaceMemoryRequest resource.Quantity
+
+	// ImageOverridesSecret is the Secret whose _cluster.image-overrides table
+	// every generated HelmRelease applies as a post-renderer. Empty means
+	// imageoverrides.DefaultSecret.
+	ImageOverridesSecret types.NamespacedName
 }
 
 // buildHelmReleaseSpec assembles the Spec applied to every generated
@@ -247,6 +253,29 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, nil
 	}
 
+	imageOverridesSecret := r.ImageOverridesSecret
+	if imageOverridesSecret.Name == "" {
+		imageOverridesSecret = imageoverrides.DefaultSecret
+	}
+	// An unreadable table fails the Package rather than installing its releases
+	// without the overrides: on an air-gapped cluster that would pull images the
+	// nodes cannot reach, and the error would surface as an image pull failure
+	// far from its cause.
+	imageOverrides, imageOverridesFound, err := imageoverrides.Load(ctx, r.Client, imageOverridesSecret)
+	if err != nil {
+		logger.Error(err, "failed to load image overrides")
+		meta.SetStatusCondition(&pkg.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "ImageOverridesInvalid",
+			Message: fmt.Sprintf("Failed to load image overrides: %v", err),
+		})
+		if err := r.Status().Update(ctx, pkg); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Create HelmReleases for components with Install section
 	helmReleaseCount := 0
 	var skippedPrivileged []string
@@ -320,6 +349,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			},
 			Spec: r.buildHelmReleaseSpec(component.Install, artifactName),
 		}
+		hr.Spec.PostRenderers = imageoverrides.PostRenderers(imageOverrides)
 
 		// Add valuesFrom for cozystack-values secret unless disabled by annotation on PackageSource
 		if packageSource.GetAnnotations()[AnnotationSkipCozystackValues] != "true" {
@@ -389,7 +419,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			hr.Annotations["cozyhr.cozystack.io/values-files"] = strings.Join(component.ValuesFiles, ",")
 		}
 
-		if err := r.createOrUpdateHelmRelease(ctx, hr); err != nil {
+		if err := r.createOrUpdateHelmRelease(ctx, hr, !imageOverridesFound); err != nil {
 			logger.Error(err, "failed to reconcile HelmRelease", "name", releaseName, "namespace", namespace)
 			meta.SetStatusCondition(&pkg.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
@@ -454,8 +484,10 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	return ctrl.Result{}, nil
 }
 
-// createOrUpdateHelmRelease creates or updates a HelmRelease
-func (r *PackageReconciler) createOrUpdateHelmRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
+// createOrUpdateHelmRelease creates or updates a HelmRelease. With
+// keepPostRenderers an existing release keeps its post-renderers, because hr
+// was built while the image override table could not be read.
+func (r *PackageReconciler) createOrUpdateHelmRelease(ctx context.Context, hr *helmv2.HelmRelease, keepPostRenderers bool) error {
 	existing := &helmv2.HelmRelease{}
 	key := types.NamespacedName{
 		Name:      hr.Name,
@@ -497,6 +529,9 @@ func (r *PackageReconciler) createOrUpdateHelmRelease(ctx context.Context, hr *h
 	hr.SetAnnotations(annotations)
 
 	hr.Spec.Suspend = existing.Spec.Suspend
+	if keepPostRenderers {
+		hr.Spec.PostRenderers = existing.Spec.PostRenderers
+	}
 	// Update Spec
 	existing.Spec = hr.Spec
 	existing.SetLabels(hr.GetLabels())
@@ -1638,6 +1673,29 @@ func (r *PackageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 							break
 						}
 					}
+				}
+				return requests
+			}),
+		).
+		// Every generated HelmRelease carries the override table, so a change
+		// to it has to reach every Package.
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				key := r.ImageOverridesSecret
+				if key.Name == "" {
+					key = imageoverrides.DefaultSecret
+				}
+				if obj.GetNamespace() != key.Namespace || obj.GetName() != key.Name {
+					return nil
+				}
+				packageList := &cozyv1alpha1.PackageList{}
+				if err := mgr.GetClient().List(ctx, packageList); err != nil {
+					return nil
+				}
+				requests := make([]reconcile.Request, 0, len(packageList.Items))
+				for _, pkg := range packageList.Items {
+					requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: pkg.Name}})
 				}
 				return requests
 			}),

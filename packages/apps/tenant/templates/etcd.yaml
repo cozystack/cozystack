@@ -13,6 +13,7 @@ metadata:
     apps.cozystack.io/application.group: apps.cozystack.io
     apps.cozystack.io/application.name: etcd
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   # This release creates a VMPodScrape resource guarded by the
   # victoria-metrics-operator admission webhook (failurePolicy: Fail). On a cold
   # install the operator can be briefly unavailable on :9443, so gate on its
