@@ -1,5 +1,6 @@
 {{- $vmName := include "virtual-machine.fullname" . -}}
 {{- $namespace := .Release.Namespace -}}
+{{- $jobName := printf "%s-update-hook" .Release.Name | trunc 63 | trimSuffix "-" -}}
 
 {{- $existingVM := lookup "kubevirt.io/v1" "VirtualMachine" $namespace $vmName -}}
 {{- $existingService := lookup "v1" "Service" $namespace $vmName -}}
@@ -48,7 +49,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: "{{ $.Release.Name }}-update-hook"
+  name: "{{ $jobName }}"
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "0"
@@ -57,7 +58,7 @@ spec:
   template:
     metadata:
       labels:
-        app: "{{ $.Release.Name }}-update-hook"
+        app: "{{ $jobName }}"
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
       serviceAccountName: {{ $.Release.Name }}-update-hook

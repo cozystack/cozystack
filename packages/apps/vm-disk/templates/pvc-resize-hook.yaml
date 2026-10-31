@@ -15,7 +15,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: "{{ .Release.Name }}-volume-resize-hook"
+  name: {{ printf "%s-volume-resize-hook" .Release.Name | trunc 63 | trimSuffix "-" | quote }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "0"

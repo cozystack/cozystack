@@ -1,0 +1,127 @@
+suite: tenant cleanup Job name budget
+
+# The API server copies a Job's name into the job-name label of its pods, and a
+# label value takes 63 characters at most, while a nested tenant namespace may
+# take all 63 by itself. Every tenant's cleanup Job runs in cozy-system, where
+# cutting the namespace alone could give a parent and its child one Job, and the
+# child's before-hook-creation would delete the parent's while it runs. So a
+# name that does not fit is the namespace cut to 48 characters, a hash of the
+# whole namespace and -cleanup. The ServiceAccount, Role and RoleBinding have no
+# such limit and keep the full name.
+
+templates:
+  - templates/cleanup-job.yaml
+
+tests:
+  - it: keeps <namespace>-cleanup for a tenant under tenant-root
+    release:
+      name: tenant-test
+      namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test-cleanup
+
+  - it: keeps <namespace>-cleanup for a short nested tenant
+    release:
+      name: tenant-child
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test-child-cleanup
+
+  - it: keeps the name when it lands exactly on 63 characters
+    release:
+      name: tenant-0123456789abcdefghijk
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijk-cleanup
+
+  - it: shortens the name for a 63-character namespace
+    release:
+      name: tenant-0123456789abcdefghijklmnopqrs
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcd-7b3e3e-cleanup
+      - matchRegex:
+          path: metadata.name
+          pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+      - equal:
+          path: spec.template.metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcd-7b3e3e-cleanup
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrs-cleanup
+
+  # Cut to 63 characters, the parent below and its child named clea would both
+  # be tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmn-clea.
+  - it: gives a parent its own Job name
+    release:
+      name: tenant-0123456789abcdefghijklmn
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcd-571020-cleanup
+
+  - it: gives the child that would collide with that parent another Job name
+    release:
+      name: tenant-clea
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmn
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcd-ec5e9b-cleanup
+
+  - it: does not end the cut namespace with a dash
+    release:
+      name: tenant-abcdefghijklmno
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz0123456789abcd
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz0123456789abcd-477f49-cleanup
+
+  - it: leaves the RBAC objects on the full name for a 63-character namespace
+    release:
+      name: tenant-0123456789abcdefghijklmnopqrs
+      namespace: tenant-abcdefghijklmnopqrstuvwxyz
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrs-cleanup
+        documentSelector:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: tenant-abcdefghijklmnopqrstuvwxyz-0123456789abcdefghijklmnopqrs-cleanup
+        documentSelector:
+          path: kind
+          value: RoleBinding

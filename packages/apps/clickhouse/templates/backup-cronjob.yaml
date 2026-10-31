@@ -18,11 +18,19 @@
 */}}
 {{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
 {{ $image := .Files.Get "images/backup.json" | fromJson }}
+{{- /* The CronJob controller starts each Job as <name>-<timestamp>, so the API
+       refuses a CronJob name over 52 characters. Cutting the release name to
+       fit could give two releases one CronJob, so a name that does not fit
+       keeps a hash of the full release name instead. */}}
+{{- $cronJobName := printf "%s-backup" .Release.Name }}
+{{- if gt (len $cronJobName) 52 }}
+{{- $cronJobName = printf "%s-%s-backup" (.Release.Name | trunc 38 | trimSuffix "-") (.Release.Name | sha256sum | trunc 6) }}
+{{- end }}
 
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ .Release.Name }}-backup
+  name: {{ $cronJobName }}
 spec:
   schedule: "{{ .Values.backup.schedule }}"
   concurrencyPolicy: Forbid
