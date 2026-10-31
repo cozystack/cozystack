@@ -137,8 +137,8 @@ tests:
           value: pve1
       - documentIndex: 2
         equal:
-          path: spec.powerState
-          value: Running
+          path: spec.enableAutoStart
+          value: true
       - documentIndex: 2
         equal:
           path: spec.vmSpec.memory
@@ -236,7 +236,7 @@ tests:
         equal:
           path: spec.vmSpec.firmware.tpm.storage
           value: local-zfs
-  - it: maps Halted and Manual to the power state and tags a VLAN port
+  - it: turns off auto start for Halted and tags a VLAN port
     template: templates/proxmox-vm.yaml
     set:
       runStrategy: Halted
@@ -245,8 +245,8 @@ tests:
     asserts:
       - documentIndex: 2
         equal:
-          path: spec.powerState
-          value: Stopped
+          path: spec.enableAutoStart
+          value: false
       - documentIndex: 2
         equal:
           path: spec.vmSpec.network[0].vlan

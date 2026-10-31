@@ -168,6 +168,17 @@ func (c *pveClient) reboot(ctx context.Context, node string, vmid int64) error {
 	return c.post(ctx, "reboot", qemuPath(node, vmid)+"/status/reboot", nil, nil)
 }
 
+// shutdownTimeout is how many seconds a guest gets to power off before the
+// hypervisor stops it.
+const shutdownTimeout = "180"
+
+// shutdown asks the guest to power off and has the hypervisor stop it if it
+// does not. It returns once the task is queued.
+func (c *pveClient) shutdown(ctx context.Context, node string, vmid int64) error {
+	form := url.Values{"timeout": {shutdownTimeout}, "forceStop": {"1"}}
+	return c.post(ctx, "shutdown", qemuPath(node, vmid)+"/status/shutdown", form, nil)
+}
+
 // dialConsole opens the websocket a vncproxy or termproxy ticket is for.
 func (c *pveClient) dialConsole(ctx context.Context, node string, vmid int64, t *consoleTicket) (*websocket.Conn, error) {
 	q := url.Values{"port": {string(t.Port)}, "vncticket": {t.Ticket}}

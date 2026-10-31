@@ -19,9 +19,8 @@
 {{- if not $networks }}
 {{-   fail "a Proxmox VM has no pod network; attach at least one of the platform's networks in networks (see the catalog's networks)" }}
 {{- end }}
-{{- $powerState := dict "Always" "Running" "Halted" "Stopped" "Manual" "Manual" }}
 {{- $runStrategy := .Values.runStrategy | default "Always" }}
-{{- if not (hasKey $powerState $runStrategy) }}
+{{- if not (has $runStrategy (list "Always" "Halted" "Manual")) }}
 {{-   fail (printf "runStrategy %q is not available on the proxmox substrate; use Always, Halted or Manual" $runStrategy) }}
 {{- end }}
 {{- $sizing := include "virtual-machine.proxmoxSizing" (list $catalog .) | fromJson }}
@@ -114,8 +113,10 @@ spec:
   connectionRef:
     name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
   deletionProtection: false
+  {{- /* kubemox has one power switch. Off, it leaves a new machine stopped and
+         never starts one, but it does not stop a running machine either: the
+         stop subresource does that, so setting Halted here does not. */}}
   enableAutoStart: {{ eq $runStrategy "Always" }}
-  powerState: {{ index $powerState $runStrategy }}
   tags:
     - cozystack
     - {{ .Release.Namespace }}

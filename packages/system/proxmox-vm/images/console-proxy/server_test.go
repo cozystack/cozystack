@@ -33,9 +33,12 @@ const (
 
 // fakePVE is the Proxmox API as the proxy uses it.
 type fakePVE struct {
-	t       *testing.T
-	srv     *httptest.Server
-	reboots atomic.Int32
+	t         *testing.T
+	srv       *httptest.Server
+	reboots   atomic.Int32
+	shutdowns atomic.Int32
+	// onShutdown, when set, runs as the shutdown request arrives.
+	onShutdown func()
 	// generatedPassword, when set, is returned by vncproxy as the password
 	// the VNC server expects instead of the ticket.
 	generatedPassword string
@@ -82,6 +85,21 @@ func newFakePVE(t *testing.T) *fakePVE {
 		f.reboots.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:reboot"})
 	})
+	mux.HandleFunc("POST "+base+"/status/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if err := r.ParseForm(); err != nil || r.Form.Get("forceStop") != "1" || r.Form.Get("timeout") == "" {
+			http.Error(w, "forceStop=1 and a timeout expected", http.StatusBadRequest)
+			return
+		}
+		if f.onShutdown != nil {
+			f.onShutdown()
+		}
+		f.shutdowns.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:shutdown"})
+	})
 	mux.HandleFunc("GET "+base+"/vncwebsocket", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
 			http.Error(w, "no", http.StatusUnauthorized)
@@ -111,6 +129,20 @@ func newFakePVE(t *testing.T) *fakePVE {
 	return f
 }
 
+// autoStart reads enableAutoStart off the VirtualMachine.
+func (e *testEnv) autoStart(t *testing.T) bool {
+	t.Helper()
+	vm, err := e.dyn.Resource(vmGVR).Namespace("tenant-a").Get(context.Background(), "vm-instance-demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, found, err := unstructured.NestedBool(vm.Object, "spec", "enableAutoStart")
+	if err != nil || !found {
+		t.Fatalf("enableAutoStart: found=%v err=%v", found, err)
+	}
+	return on
+}
+
 // endpoint is host:port, as a ProxmoxConnection names it.
 func (f *fakePVE) endpoint() string { return strings.TrimPrefix(f.srv.URL, "https://") }
 
@@ -130,8 +162,8 @@ func vmObject(state string) *unstructured.Unstructured {
 		"metadata":   map[string]any{"name": "vm-instance-demo", "namespace": "tenant-a"},
 		"spec": map[string]any{
 			"name": "vm-instance-demo", "nodeName": testNode,
-			"connectionRef": map[string]any{"name": "pve"},
-			"powerState":    "Running",
+			"connectionRef":   map[string]any{"name": "pve"},
+			"enableAutoStart": true,
 		},
 		"status": map[string]any{"status": map[string]any{
 			"id": int64(testVMID), "node": testNode, "state": state,
@@ -277,23 +309,27 @@ func TestDiscovery(t *testing.T) {
 func TestPowerSubresources(t *testing.T) {
 	env := newTestEnv(t, "running", allowAlice)
 
+	// kubemox would start the machine again if the shutdown came first.
+	env.pve.onShutdown = func() {
+		if env.autoStart(t) {
+			t.Error("enableAutoStart still on when the shutdown arrived")
+		}
+	}
 	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
 	}
-	vm, err := env.dyn.Resource(vmGVR).Namespace("tenant-a").Get(context.Background(), "vm-instance-demo", metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after stop: true")
 	}
-	if got, _, _ := unstructured.NestedString(vm.Object, "spec", "powerState"); got != "Stopped" {
-		t.Fatalf("powerState after stop: %q", got)
+	if env.pve.shutdowns.Load() != 1 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
 	}
 	if resp, _ := env.do(t, http.MethodPost, vmPath+"/start", "alice"); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("start: %d", resp.StatusCode)
 	}
-	vm, _ = env.dyn.Resource(vmGVR).Namespace("tenant-a").Get(context.Background(), "vm-instance-demo", metav1.GetOptions{})
-	if got, _, _ := unstructured.NestedString(vm.Object, "spec", "powerState"); got != "Running" {
-		t.Fatalf("powerState after start: %q", got)
+	if !env.autoStart(t) {
+		t.Fatal("enableAutoStart after start: false")
 	}
 
 	if resp, status := env.do(t, http.MethodPut, vmPath+"/restart", "alice"); resp.StatusCode != http.StatusAccepted {
@@ -324,6 +360,20 @@ func TestPowerSubresources(t *testing.T) {
 		if resp.StatusCode != tc.want {
 			t.Errorf("%s: %d, want %d", name, resp.StatusCode, tc.want)
 		}
+	}
+}
+
+func TestStopOfAStoppedMachineOnlyTurnsOffAutoStart(t *testing.T) {
+	env := newTestEnv(t, "stopped", allowAlice)
+	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after stop: true")
+	}
+	if env.pve.shutdowns.Load() != 0 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
 	}
 }
 
