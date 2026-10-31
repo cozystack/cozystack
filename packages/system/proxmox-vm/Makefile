@@ -9,7 +9,7 @@ include ../../../hack/package.mk
 # volumeRef, enableAutoStart and firmware, IPAM ports, NoCloud, podLabels, cloneable
 # volumes), the chart comes from the fork that carries them, built by its CI
 # from the pskep branch and named after the commit it was built from.
-CHART_VERSION=0.7.0-pskep-58c4f64
+CHART_VERSION=0.7.0-pskep-cc88de7
 
 .PHONY: image image-console-proxy test test-go test-helm
 
