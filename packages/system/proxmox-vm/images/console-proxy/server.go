@@ -34,6 +34,9 @@ const (
 	consoleSubprotocol = "plain.kubevirt.io"
 
 	handshakeTimeout = 30 * time.Second
+	// stopWait is how long stop watches the shutdown task: past the 10 s
+	// Proxmox waits for a machine's lock, which is how a shutdown fails.
+	stopWait = 15 * time.Second
 )
 
 // server is the aggregated API.
@@ -44,6 +47,7 @@ type server struct {
 	connections *connectionResolver
 	// dial is how a console reaches the hypervisor; tests replace it.
 	upgrader websocket.Upgrader
+	stopWait time.Duration
 }
 
 func newServer(auth *frontProxyAuth, core kubernetes.Interface, dyn dynamic.Interface) *server {
@@ -52,6 +56,7 @@ func newServer(auth *frontProxyAuth, core kubernetes.Interface, dyn dynamic.Inte
 		core:        core,
 		dyn:         dyn,
 		connections: newConnectionResolver(dyn, core),
+		stopWait:    stopWait,
 		upgrader: websocket.Upgrader{
 			HandshakeTimeout: handshakeTimeout,
 			Subprotocols:     []string{"binary", consoleSubprotocol},
@@ -248,6 +253,10 @@ func (s *server) authorize(ctx context.Context, user *userInfo, verb, namespace,
 // refused token is the platform's problem, not the tenant's, and the
 // answer says no more than that.
 func hypervisorStatus(err error) (int, string) {
+	var te *pveTaskError
+	if errors.As(err, &te) {
+		return http.StatusBadGateway, fmt.Sprintf("the hypervisor could not finish the %s, it may be busy with the machine; try again", te.Op)
+	}
 	var pe *pveError
 	if errors.As(err, &pe) {
 		switch pe.Status {
@@ -296,23 +305,20 @@ func (s *server) start(w http.ResponseWriter, log *slog.Logger, vm *vmInfo) {
 }
 
 // stop turns enableAutoStart off first, or kubemox would start the machine
-// again, and then shuts it down: kubemox never powers a machine off.
-//
-// shortcut: the state is kubemox's last poll, so a machine started under a
-// minute ago reads stopped and takes a second stop; read status/current from
-// the hypervisor if that shows up in practice.
+// again, and then shuts it down: kubemox never powers a machine off. The flag
+// stays off if the shutdown fails: the request stands and stop can be repeated.
 func (s *server) stop(w http.ResponseWriter, r *http.Request, log *slog.Logger, vm *vmInfo) {
 	if !s.setAutoStart(w, log, vm, false) {
 		return
 	}
-	if vm.placed() && vm.State == "running" {
+	if vm.placed() {
 		client, err := s.client(r.Context(), vm)
 		if err != nil {
 			log.Error("resolving the hypervisor failed", "error", err)
 			writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "resolving the hypervisor connection failed")
 			return
 		}
-		if err := client.shutdown(r.Context(), vm.Node, vm.VMID); err != nil {
+		if err := s.shutdown(r.Context(), client, vm); err != nil {
 			s.hypervisorFailed(log, vm, err)
 			code, msg := hypervisorStatus(err)
 			writeStatus(w, code, metav1.StatusReasonInternalError, msg)
@@ -321,6 +327,25 @@ func (s *server) stop(w http.ResponseWriter, r *http.Request, log *slog.Logger, 
 	}
 	log.Info("stop requested", "node", vm.Node, "vmid", vm.VMID)
 	accepted(w, "stop requested")
+}
+
+// shutdown powers off a running machine and reports a shutdown that fails.
+//
+// shortcut: a task still going after stopWait counts as accepted, so a failure
+// after that goes unnoticed; forceStop makes one unlikely, follow the task to
+// its end if it shows up in practice.
+func (s *server) shutdown(ctx context.Context, client *pveClient, vm *vmInfo) error {
+	running, err := client.running(ctx, vm.Node, vm.VMID)
+	if err != nil || !running {
+		return err
+	}
+	upid, err := client.shutdown(ctx, vm.Node, vm.VMID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.stopWait)
+	defer cancel()
+	return client.waitTask(ctx, "shutdown", vm.Node, upid)
 }
 
 func (s *server) restart(w http.ResponseWriter, r *http.Request, log *slog.Logger, vm *vmInfo) {

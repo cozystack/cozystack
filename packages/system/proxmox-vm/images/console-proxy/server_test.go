@@ -29,6 +29,8 @@ const (
 	testVMID   = 100
 	testTicket = "PVEVNC:ticket-with-more-than-eight-bytes"
 	testTermTk = "PVETERM:ticket"
+
+	testShutdownUPID = "UPID:pve1:00109516:046EC5FB:6AE57C90:qmshutdown:100:kubemox@pve!cozy:"
 )
 
 // fakePVE is the Proxmox API as the proxy uses it.
@@ -39,6 +41,12 @@ type fakePVE struct {
 	shutdowns atomic.Int32
 	// onShutdown, when set, runs as the shutdown request arrives.
 	onShutdown func()
+	// status is what the hypervisor says about the machine.
+	status string
+	// taskExit, when set, is how the shutdown task ends; taskRunning keeps it
+	// going instead.
+	taskExit    string
+	taskRunning bool
 	// generatedPassword, when set, is returned by vncproxy as the password
 	// the VNC server expects instead of the ticket.
 	generatedPassword string
@@ -98,7 +106,28 @@ func newFakePVE(t *testing.T) *fakePVE {
 			f.onShutdown()
 		}
 		f.shutdowns.Add(1)
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:shutdown"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": testShutdownUPID})
+	})
+	mux.HandleFunc("GET "+base+"/status/current", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": f.status}})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/"+testNode+"/tasks/"+testShutdownUPID+"/status", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		task := map[string]any{"status": "stopped", "exitstatus": "OK"}
+		switch {
+		case f.taskRunning:
+			task = map[string]any{"status": "running"}
+		case f.taskExit != "":
+			task["exitstatus"] = f.taskExit
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": task})
 	})
 	mux.HandleFunc("GET "+base+"/vncwebsocket", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
@@ -174,6 +203,7 @@ func vmObject(state string) *unstructured.Unstructured {
 func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.SubjectAccessReviewSpec) bool) *testEnv {
 	t.Helper()
 	env := &testEnv{pve: newFakePVE(t), pki: newTestPKI(t, "front-proxy-client")}
+	env.pve.status = vmState
 
 	connection := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
@@ -210,7 +240,9 @@ func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.
 	if err := auth.load(context.Background(), core); err != nil {
 		t.Fatal(err)
 	}
-	env.proxy = httptest.NewUnstartedServer(newServer(auth, core, env.dyn).handler())
+	srv := newServer(auth, core, env.dyn)
+	srv.stopWait = time.Second
+	env.proxy = httptest.NewUnstartedServer(srv.handler())
 	env.proxy.TLS = &tls.Config{ClientAuth: tls.RequestClientCert, MinVersion: tls.VersionTLS12}
 	env.proxy.StartTLS()
 	t.Cleanup(env.proxy.Close)
@@ -374,6 +406,56 @@ func TestStopOfAStoppedMachineOnlyTurnsOffAutoStart(t *testing.T) {
 	}
 	if env.pve.shutdowns.Load() != 0 {
 		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
+	}
+}
+
+// kubemox's status can say stopped while the machine has just been started.
+func TestStopAsksTheHypervisorWhetherTheMachineRuns(t *testing.T) {
+	env := newTestEnv(t, "stopped", allowAlice)
+	env.pve.status = "running"
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.pve.shutdowns.Load() != 1 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
+	}
+}
+
+func TestStopReportsAShutdownThatFails(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskExit = "can't lock file '/var/lock/qemu-server/lock-100.conf' - got timeout"
+
+	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if strings.Contains(status.Message, "/var/lock") {
+		t.Fatalf("Proxmox's own text reached the caller: %q", status.Message)
+	}
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after a failed stop: true")
+	}
+
+	env.pve.taskExit = ""
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second stop: %d %s", resp.StatusCode, status.Message)
+	}
+}
+
+func TestStopAcceptsAShutdownStillGoing(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskRunning = true
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+}
+
+// Proxmox ends a task that worked but logged warnings with WARNINGS: <count>.
+func TestStopAcceptsAShutdownWithWarnings(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskExit = "WARNINGS: 1"
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
 	}
 }
 
