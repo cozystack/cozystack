@@ -31,6 +31,7 @@ const (
 	testTermTk = "PVETERM:ticket"
 
 	testShutdownUPID = "UPID:pve1:00109516:046EC5FB:6AE57C90:qmshutdown:100:kubemox@pve!cozy:"
+	testUploadUPID   = "UPID:pve1:0010A001:046EC700:6AE57D00:imgcopy::kubemox@pve!cozy:"
 )
 
 // fakePVE is the Proxmox API as the proxy uses it.
@@ -50,6 +51,15 @@ type fakePVE struct {
 	// generatedPassword, when set, is returned by vncproxy as the password
 	// the VNC server expects instead of the ticket.
 	generatedPassword string
+	// uploaded is the last file that arrived on the storage: its form
+	// fields and bytes. uploadExit, when set, is how the import task ends.
+	uploaded   *uploadedFile
+	uploadExit string
+}
+
+type uploadedFile struct {
+	Content, Filename string
+	Bytes             []byte
 }
 
 func newFakePVE(t *testing.T) *fakePVE {
@@ -126,6 +136,45 @@ func newFakePVE(t *testing.T) *fakePVE {
 			task = map[string]any{"status": "running"}
 		case f.taskExit != "":
 			task["exitstatus"] = f.taskExit
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": task})
+	})
+	mux.HandleFunc("POST /api2/json/nodes/"+testNode+"/storage/local/upload", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		// pveproxy refuses a body of unknown length.
+		if r.ContentLength < 0 {
+			http.Error(w, "Content-Length required", http.StatusLengthRequired)
+			return
+		}
+		reader, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		up := &uploadedFile{}
+		for {
+			part, err := reader.NextPart()
+			if err != nil {
+				break
+			}
+			data, _ := io.ReadAll(part)
+			switch part.FormName() {
+			case "content":
+				up.Content = string(data)
+			case "filename":
+				up.Filename, up.Bytes = part.FileName(), data
+			}
+		}
+		f.uploaded = up
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": testUploadUPID})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/"+testNode+"/tasks/"+testUploadUPID+"/status", func(w http.ResponseWriter, r *http.Request) {
+		task := map[string]any{"status": "stopped", "exitstatus": "OK"}
+		if f.uploadExit != "" {
+			task["exitstatus"] = f.uploadExit
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": task})
 	})
@@ -212,6 +261,27 @@ func vmObject(state string) *unstructured.Unstructured {
 	}}
 }
 
+// volumeObject is a kubemox VirtualMachineVolume; waiting gives it the
+// uploadTarget kubemox publishes for an upload source without a file yet.
+func volumeObject(name string, waiting bool) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
+		"kind":       "VirtualMachineVolume",
+		"metadata":   map[string]any{"name": name, "namespace": "tenant-a"},
+		"spec": map[string]any{
+			"connectionRef": map[string]any{"name": "pve"},
+			"nodeName":      testNode, "storage": "local-zfs", "size": int64(20),
+		},
+		"status": map[string]any{"phase": "Pending"},
+	}}
+	if waiting {
+		obj.Object["status"].(map[string]any)["uploadTarget"] = map[string]any{
+			"node": testNode, "storage": "local", "content": "import", "filename": name,
+		}
+	}
+	return obj
+}
+
 func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.SubjectAccessReviewSpec) bool) *testEnv {
 	t.Helper()
 	env := &testEnv{pve: newFakePVE(t), pki: newTestPKI(t, "front-proxy-client")}
@@ -229,7 +299,7 @@ func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.
 	scheme := runtime.NewScheme()
 	env.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
 		vmGVR: "VirtualMachineList", connectionGVR: "ProxmoxConnectionList",
-	}, vmObject(vmState), connection)
+	}, vmObject(vmState), connection, volumeObject("vm-disk-data", true), volumeObject("vm-disk-ready", false))
 
 	core := kubefake.NewClientset(
 		&corev1.Secret{
@@ -325,6 +395,9 @@ func TestDiscovery(t *testing.T) {
 		if !r.Namespaced {
 			t.Errorf("%s is not namespaced", r.Name)
 		}
+	}
+	if got := names["virtualmachinevolumes/upload"]; len(got) != 1 || got[0] != "create" {
+		t.Errorf("virtualmachinevolumes/upload verbs: %v", got)
 	}
 	for sub, verb := range map[string]string{"vnc": "get", "console": "get", "start": "update", "stop": "update", "restart": "update"} {
 		if got := names["virtualmachines/"+sub]; len(got) != 1 || got[0] != verb {

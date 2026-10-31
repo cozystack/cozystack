@@ -51,6 +51,20 @@ tests:
             verbs:
               - update
 
+  - it: lets a tenant upload the image of a vm-disk that waits for one
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:use:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["subresources.proxmox.cozystack.io"]
+            resources:
+              - virtualmachinevolumes/upload
+            verbs:
+              - create
+
   - it: lets a tenant admin read the kubemox VirtualMachine as it reads the KubeVirt one
     documentSelector:
       path: metadata.name
