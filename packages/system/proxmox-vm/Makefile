@@ -25,7 +25,11 @@ update:
 instancetypes:
 	./hack/update-instancetypes.sh ../kubevirt-instancetypes/templates/instancetypes.yaml > files/instancetypes.yaml
 
-test: test-helm test-go
+test: test-helm test-go test-coverage
+
+.PHONY: test-coverage
+test-coverage:
+	./hack/check-catalog-coverage.sh
 
 test-helm:
 	helm unittest .
