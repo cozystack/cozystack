@@ -241,18 +241,22 @@ tests:
           errorMessage: 'controlPlane.apiServer.extraArgs contains "--secure-port=6444" — the tenant control plane sets --secure-port itself and drops every entry naming it before the kube-apiserver sees the list, so this entry has no effect, and written without =value it leaves its value behind as an argument the apiserver refuses. Remove the entry; the description of controlPlane.apiServer.extraArgs lists every flag the control plane owns.'
 
   - it: leaves spec.admissionControllers out by default, so the control plane keeps its own default set
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
     asserts:
       - notExists:
           path: spec.admissionControllers
-        documentIndex: 1
 
   - it: leaves spec.admissionControllers out for an explicitly empty list
     set:
       controlPlane.apiServer.admissionControllers: []
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
     asserts:
       - notExists:
           path: spec.admissionControllers
-        documentIndex: 1
 
   - it: renders controlPlane.apiServer.admissionControllers into spec.admissionControllers verbatim
     set:

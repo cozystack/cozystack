@@ -364,6 +364,10 @@ jobs:
         with:
           path: _out/envtest
           key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+      - name: Check new Helm document indices
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       # -k is required, not cosmetic: unit-tests and test-controllers are two
       # independent goals on the same command line, and without -k make stops
       # handing out new work the moment any unit-tests prerequisite fails —
