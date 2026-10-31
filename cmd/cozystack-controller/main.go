@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -50,9 +51,11 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	"github.com/cozystack/cozystack/internal/telemetry"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -202,8 +205,10 @@ func main() {
 		// Scope the shared Secret informer so the WildcardSecret reconciler's
 		// cluster-wide Secret watch does not cache every Secret (and its key
 		// material) in memory. Only managed wildcard replicas and the values
-		// channel are cached; no other reconciler reads Secrets through THIS
-		// (the manager's) typed Secret cache. See wildcardsecret.SecretCacheByObject.
+		// channel are cached; besides wildcardsecret, only the
+		// ApplicationDefinition release reconciler reads Secrets through THIS
+		// (the manager's) typed Secret cache, and only the values channel, for
+		// the image override table. See wildcardsecret.SecretCacheByObject.
 		//
 		// The CA-extraction reconciler does NOT use this cache at all — neither its
 		// typed Secret informer nor a metadata one. A metadata informer for
@@ -265,6 +270,9 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("applicationdefinition-helm-reconciler"),
+		ImageOverrides: func(ctx context.Context) ([]kustomize.Image, bool, error) {
+			return imageoverrides.Load(ctx, mgr.GetClient(), imageoverrides.DefaultSecret)
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
 		os.Exit(1)

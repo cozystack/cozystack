@@ -200,6 +200,9 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceSecret }}
         - --platform-source-secret={{ .Values.cozystackOperator.platformSourceSecret }}
         {{- end }}
+        {{- if .Values.cozystackOperator.fluxImageOverrides }}
+        - {{ printf "--flux-image-overrides=%s" (toJson .Values.cozystackOperator.fluxImageOverrides) | quote }}
+        {{- end }}
         {{- $hasEndpointEnv := or (eq .Values.cozystackOperator.variant "talos") (eq .Values.cozystackOperator.variant "generic") }}
         {{- if or .Values.cozystackOperator.platformVersion $hasEndpointEnv }}
         env:
