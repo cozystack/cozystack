@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,9 @@ const (
 	// own RBAC on this group, against a mistake in that RBAC.
 	vmGroup    = "proxmox.alperen.cloud"
 	vmResource = "virtualmachines"
+	// A caller who may read the kubemox VirtualMachineVolume of a tenant's
+	// vm-disk may put the image it waits for on it.
+	volumeResource = "virtualmachinevolumes"
 
 	// The subprotocol KubeVirt's serial console negotiates; the dashboard
 	// asks for it and reads binary frames only.
@@ -90,6 +95,7 @@ func (s *server) handler() http.Handler {
 	mux.Handle("GET /openapi/v3", s.authenticated(s.openAPIv3))
 	mux.Handle("GET /openapi/v3/", s.authenticated(s.openAPIv3))
 	mux.Handle(apiPrefix+"/namespaces/{namespace}/virtualmachines/{name}/{subresource}", s.authenticated(s.subresource))
+	mux.Handle("POST "+apiPrefix+"/namespaces/{namespace}/virtualmachinevolumes/{name}/upload", s.authenticated(s.volumeUpload))
 	return mux
 }
 
@@ -148,6 +154,10 @@ func (s *server) discoverResources(w http.ResponseWriter, _ *http.Request, _ *us
 			resource("start", "update"),
 			resource("stop", "update"),
 			resource("restart", "update"),
+			{
+				Name: volumeResource + "/upload", Namespaced: true,
+				Group: apiGroup, Version: apiVersion, Kind: "VirtualMachineVolume", Verbs: []string{"create"},
+			},
 		},
 	})
 }
@@ -198,16 +208,7 @@ func (s *server) subresource(w http.ResponseWriter, r *http.Request, user *userI
 		writeStatus(w, http.StatusUnauthorized, metav1.StatusReasonUnauthorized, "the front proxy named no user")
 		return
 	}
-	allowed, err := s.authorize(r.Context(), user, verb, namespace, name)
-	if err != nil {
-		log.Error("authorization check failed", "error", err)
-		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "authorization check failed")
-		return
-	}
-	if !allowed {
-		log.Info("forbidden")
-		writeStatus(w, http.StatusForbidden, metav1.StatusReasonForbidden,
-			fmt.Sprintf("%s %s.%s %q is forbidden for %s", verb, vmResource, vmGroup, name, user.Name))
+	if !s.authorized(w, r, log, user, verb, vmResource, namespace, name) {
 		return
 	}
 
@@ -236,7 +237,24 @@ func (s *server) subresource(w http.ResponseWriter, r *http.Request, user *userI
 	}
 }
 
-func (s *server) authorize(ctx context.Context, user *userInfo, verb, namespace, name string) (bool, error) {
+// authorized asks the apiserver whether the caller may do verb on the kubemox
+// object and answers the caller when not.
+func (s *server) authorized(w http.ResponseWriter, r *http.Request, log *slog.Logger, user *userInfo, verb, resource, namespace, name string) bool {
+	allowed, err := s.authorize(r.Context(), user, verb, resource, namespace, name)
+	if err != nil {
+		log.Error("authorization check failed", "error", err)
+		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "authorization check failed")
+		return false
+	}
+	if !allowed {
+		log.Info("forbidden")
+		writeStatus(w, http.StatusForbidden, metav1.StatusReasonForbidden,
+			fmt.Sprintf("%s %s.%s %q is forbidden for %s", verb, resource, vmGroup, name, user.Name))
+	}
+	return allowed
+}
+
+func (s *server) authorize(ctx context.Context, user *userInfo, verb, resource, namespace, name string) (bool, error) {
 	extra := make(map[string]authorizationv1.ExtraValue, len(user.Extra))
 	for k, v := range user.Extra {
 		extra[k] = v
@@ -247,7 +265,7 @@ func (s *server) authorize(ctx context.Context, user *userInfo, verb, namespace,
 			Groups: user.Groups,
 			Extra:  extra,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Group: vmGroup, Resource: vmResource, Verb: verb, Namespace: namespace, Name: name,
+				Group: vmGroup, Resource: resource, Verb: verb, Namespace: namespace, Name: name,
 			},
 		},
 	}
@@ -430,11 +448,121 @@ func (s *server) restart(w http.ResponseWriter, r *http.Request, log *slog.Logge
 }
 
 func (s *server) hypervisorFailed(log *slog.Logger, vm *vmInfo, err error) {
+	s.forgetRefused(vm.Connection, err)
+	log.Error("hypervisor request failed", "node", vm.Node, "vmid", vm.VMID, "error", err)
+}
+
+// forgetRefused drops a connection the hypervisor refused, so that the next
+// request reads its token again.
+func (s *server) forgetRefused(connection string, err error) {
 	var pe *pveError
 	if errors.As(err, &pe) && (pe.Status == http.StatusUnauthorized || pe.Status == http.StatusForbidden) {
-		s.connections.forget(vm.Connection)
+		s.connections.forget(connection)
 	}
-	log.Error("hypervisor request failed", "node", vm.Node, "vmid", vm.VMID, "error", err)
+}
+
+// imageExtensions is what the hypervisor imports under each content type.
+var imageExtensions = map[string][]string{
+	"import": {"qcow2", "raw", "vmdk", "ova"},
+	"iso":    {"iso", "img"},
+}
+
+// imageExtension is the extension the uploaded file gets on the storage,
+// taken from the filename the caller gives in the query or in
+// Content-Disposition, and checked against what the content type imports.
+func imageExtension(r *http.Request, content string) (string, error) {
+	filename := r.URL.Query().Get("filename")
+	if filename == "" {
+		if _, params, err := mime.ParseMediaType(r.Header.Get("Content-Disposition")); err == nil {
+			filename = params["filename"]
+		}
+	}
+	if filename == "" {
+		return "", errors.New("name the image file: ?filename=<name>.<ext> or a Content-Disposition header with filename")
+	}
+	ext := strings.ToLower(strings.TrimPrefix(path.Ext(filename), "."))
+	allowed := imageExtensions[content]
+	for _, a := range allowed {
+		if ext == a {
+			return ext, nil
+		}
+	}
+	return "", fmt.Errorf("%q is not an image the volume takes; the file name has to end in .%s", filename, strings.Join(allowed, ", ."))
+}
+
+// volumeUpload puts an image where kubemox waits for it: the storage file a
+// vm-disk with source.upload is populated from. The body is the image and
+// goes to the hypervisor as it arrives; its size has to be known.
+func (s *server) volumeUpload(w http.ResponseWriter, r *http.Request, user *userInfo) {
+	namespace, name := r.PathValue("namespace"), r.PathValue("name")
+	log := slog.With("namespace", namespace, "volume", name, "subresource", "upload", "user", user.Name)
+	if user.Name == "" {
+		writeStatus(w, http.StatusUnauthorized, metav1.StatusReasonUnauthorized, "the front proxy named no user")
+		return
+	}
+	if !s.authorized(w, r, log, user, "get", volumeResource, namespace, name) {
+		return
+	}
+	vol, err := lookupVolume(r.Context(), s.dyn, namespace, name)
+	if err != nil {
+		if isNotFound(err) {
+			writeStatus(w, http.StatusNotFound, metav1.StatusReasonNotFound, fmt.Sprintf("virtualmachinevolumes.%s %q not found", vmGroup, name))
+			return
+		}
+		log.Error("reading VirtualMachineVolume failed", "error", err)
+		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "reading the VirtualMachineVolume failed")
+		return
+	}
+	if vol.Upload == nil {
+		writeStatus(w, http.StatusConflict, metav1.StatusReasonConflict,
+			"the volume is not waiting for an upload: only a vm-disk with source.upload takes one, and only until its image has arrived")
+		return
+	}
+	ext, err := imageExtension(r, vol.Upload.Content)
+	if err != nil {
+		writeStatus(w, http.StatusBadRequest, metav1.StatusReasonBadRequest, err.Error())
+		return
+	}
+	if r.ContentLength <= 0 {
+		writeStatus(w, http.StatusLengthRequired, metav1.StatusReasonBadRequest, "Content-Length is required: the hypervisor wants the size of the image up front")
+		return
+	}
+	if vol.Connection == "" {
+		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "the VirtualMachineVolume names no ProxmoxConnection")
+		return
+	}
+	client, err := s.connections.get(r.Context(), vol.Connection)
+	if err != nil {
+		log.Error("resolving the hypervisor failed", "error", err)
+		writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError, "resolving the hypervisor connection failed")
+		return
+	}
+	t := vol.Upload
+	filename := t.Filename + "." + ext
+	log = log.With("node", t.Node, "storage", t.Storage, "filename", filename, "size", r.ContentLength)
+	log.Info("upload started")
+	volid, err := client.upload(r.Context(), t.Node, t.Storage, t.Content, filename, r.Body, r.ContentLength)
+	if err != nil {
+		s.forgetRefused(vol.Connection, err)
+		log.Error("upload failed", "error", err)
+		// The task's exit is the hypervisor's own words on the file, which
+		// here are the uploader's to see.
+		var te *pveTaskError
+		if errors.As(err, &te) {
+			writeStatus(w, http.StatusBadGateway, metav1.StatusReasonInternalError, "the hypervisor rejected the upload: "+te.Exit)
+			return
+		}
+		code, msg := hypervisorStatus(err)
+		writeStatus(w, code, metav1.StatusReasonInternalError, msg)
+		return
+	}
+	log.Info("upload finished", "volid", volid)
+	writeJSON(w, http.StatusCreated, metav1.Status{
+		TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
+		Status:   metav1.StatusSuccess,
+		Code:     http.StatusCreated,
+		Message:  volid,
+	})
 }
 
 // consoleSession is the part shared by vnc and console: refuse what cannot

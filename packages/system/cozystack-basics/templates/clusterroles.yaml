@@ -225,6 +225,14 @@ rules:
   - virtualmachines/restart
   verbs:
   - update
+# The image a vm-disk with source.upload waits for goes through the same
+# proxy; the proxy asks for "get" on the kubemox VirtualMachineVolume, which
+# the vm-disk release grants its tenant.
+- apiGroups: ["subresources.proxmox.cozystack.io"]
+  resources:
+  - virtualmachinevolumes/upload
+  verbs:
+  - create
 - apiGroups:
   - core.cozystack.io
   resources:

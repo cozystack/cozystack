@@ -23,6 +23,9 @@ var (
 	connectionGVR = schema.GroupVersionResource{
 		Group: "proxmox.alperen.cloud", Version: "v1alpha1", Resource: "proxmoxconnections",
 	}
+	volumeGVR = schema.GroupVersionResource{
+		Group: "proxmox.alperen.cloud", Version: "v1alpha1", Resource: "virtualmachinevolumes",
+	}
 )
 
 // vmInfo is where a VirtualMachine runs, as kubemox last observed it.
@@ -54,6 +57,35 @@ func lookupVM(ctx context.Context, dyn dynamic.Interface, namespace, name string
 
 // placed reports whether kubemox has created the machine on the hypervisor.
 func (v *vmInfo) placed() bool { return v.VMID > 0 && v.Node != "" }
+
+// volumeInfo is a VirtualMachineVolume as far as an upload needs it.
+type volumeInfo struct {
+	Namespace  string
+	Name       string
+	Connection string
+	// Upload is where kubemox waits for the file of an upload source; nil
+	// while the volume waits for nothing.
+	Upload *uploadTarget
+}
+
+// uploadTarget is kubemox's status.uploadTarget: the storage file it imports
+// the volume from once it appears, under Filename with any extension.
+type uploadTarget struct {
+	Node, Storage, Content, Filename string
+}
+
+func lookupVolume(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*volumeInfo, error) {
+	obj, err := dyn.Resource(volumeGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	info := &volumeInfo{Namespace: namespace, Name: name}
+	info.Connection, _, _ = unstructured.NestedString(obj.Object, "spec", "connectionRef", "name")
+	if t, found, _ := unstructured.NestedStringMap(obj.Object, "status", "uploadTarget"); found && t["filename"] != "" {
+		info.Upload = &uploadTarget{Node: t["node"], Storage: t["storage"], Content: t["content"], Filename: t["filename"]}
+	}
+	return info, nil
+}
 
 // setAutoStart sets enableAutoStart, which decides whether kubemox starts a
 // machine it finds stopped.

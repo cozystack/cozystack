@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -125,8 +128,12 @@ func (c *pveClient) get(ctx context.Context, op, path string, out any) error {
 }
 
 func (c *pveClient) do(req *http.Request, op string, out any) error {
+	return c.send(c.http, req, op, out)
+}
+
+func (c *pveClient) send(client *http.Client, req *http.Request, op string, out any) error {
 	req.Header.Set("Authorization", c.token)
-	resp, err := c.http.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("hypervisor %s: %w", op, err)
 	}
@@ -251,6 +258,49 @@ func (c *pveClient) waitTask(ctx context.Context, op, node, upid string) error {
 		case <-time.After(taskPoll):
 		}
 	}
+}
+
+// uploadWait is how long the task that moves an uploaded file into its
+// storage is followed. The bytes are on the node by then; a copy of a large
+// image onto another filesystem is what takes time.
+const uploadWait = 30 * time.Minute
+
+// upload streams size bytes of body to a storage of node as a file of the
+// content type, the way the PVE UI uploads, and waits for the hypervisor to
+// move it into place. It returns the file's volume id.
+func (c *pveClient) upload(ctx context.Context, node, storage, content, filename string, body io.Reader, size int64) (string, error) {
+	var head bytes.Buffer
+	mw := multipart.NewWriter(&head)
+	if err := mw.WriteField("content", content); err != nil {
+		return "", err
+	}
+	if _, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {fmt.Sprintf(`form-data; name="filename"; filename=%q`, filename)},
+		"Content-Type":        {"application/octet-stream"},
+	}); err != nil {
+		return "", err
+	}
+	tail := "\r\n--" + mw.Boundary() + "--\r\n"
+	path := "/nodes/" + url.PathEscape(node) + "/storage/" + url.PathEscape(storage) + "/upload"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api2/json"+path,
+		io.MultiReader(&head, body, strings.NewReader(tail)))
+	if err != nil {
+		return "", err
+	}
+	// pveproxy insists on the length of the whole upload.
+	req.ContentLength = int64(head.Len()) + size + int64(len(tail))
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	var upid string
+	// The client's timeout fits a request that answers at once, not a transfer.
+	if err := c.send(&http.Client{Transport: c.http.Transport}, req, "upload", &upid); err != nil {
+		return "", err
+	}
+	wait, cancel := context.WithTimeout(ctx, uploadWait)
+	defer cancel()
+	if err := c.waitTask(wait, "upload", node, upid); err != nil {
+		return "", err
+	}
+	return storage + ":" + content + "/" + filename, nil
 }
 
 // dialConsole opens the websocket a vncproxy or termproxy ticket is for.
