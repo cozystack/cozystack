@@ -157,7 +157,7 @@ spec:
           kind: Role
           metadata:
             name: mongodb-test-dashboard-resources
-          (length(rules)): 3
+          (length(rules)): 6
           (length(rules[?contains(resources, 'secrets')])): 1
           (rules[?contains(resources, 'secrets')].resourceNames[]):
           - mongodb-test-credentials
@@ -344,21 +344,23 @@ spec:
           metadata:
             name: mongodb-test-ssl-internal-old
 ---
-# Logical-dump backup half of the MongoDB backup flow, driving the validated
+# Logical-dump backup and to-copy RestoreJob round-trip, driving the validated
 # example scripts (examples/backups/mongodb) as the harness so the test and the
-# documented flow can never drift. run-all.sh runs Bucket -> source MongoDB
-# (backup.enabled) + sentinel document -> ad-hoc BackupJob against the
-# cozy-default BackupClass (waits Succeeded), and SKIP_RESTORE=1 stops it there
-# — the in-cluster witness that a psmdb-operator backup is actually taken.
+# documented flow can never drift. run-all.sh provisions a Bucket, brings up a
+# source MongoDB with backup.enabled and writes a sentinel document into it,
+# waits for an ad-hoc BackupJob against the cozy-default BackupClass, then
+# brings up an empty target MongoDB, waits for a to-copy RestoreJob and asserts
+# the sentinel round-tripped through S3 into the copy while the source stays
+# untouched. That makes it the in-cluster witness that a psmdb-operator backup
+# is both taken and restorable end to end.
 #
-# The to-copy restore half is deliberately uncovered. A to-copy restore replays
-# the source cluster's system users into the target, so the target's own
-# generated credentials stop authenticating and the harness cannot read the
-# sentinel back out of the restored copy (#3832). Returning full round-trip
-# coverage once that is fixed means dropping both SKIP_RESTORE below and the
-# marker check beside it: the complete flow never prints that line, so removing
-# only the variable trades this failure for a marker mismatch. The test keeps
-# its round-trip name for that return.
+# The sentinel is read back as the target's own databaseAdmin, from the
+# target's own users Secret, so the step also proves the restore left the
+# target's system users alone. A to-copy restore copies only the databases the
+# target declares (demo, in 20-mongodb-target.yaml), and the RestoreJob reports
+# Succeeded only once the target cluster reports ready again. A restore that
+# replays the source's users instead ends in an authentication failure on that
+# read, which is how #3832 showed up here.
 #
 # Same harness-driving shape as mariadb-2-backup-roundtrip
 # (hack/e2e-chainsaw/mariadb/chainsaw-test.yaml): a single run step pre-cleans
@@ -392,6 +394,17 @@ spec:
       kind: PerconaServerMongoDB
       name: mongodb-mongodb-src
   - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mongodb-mongodb-target
+  # The RestoreJob waits on this cluster's state after the restore, and its
+  # status message carries the operator's reconcile error when it never comes
+  # back.
+  - describe:
+      apiVersion: psmdb.percona.com/v1
+      kind: PerconaServerMongoDB
+      name: mongodb-mongodb-target
+  - describe:
       apiVersion: psmdb.percona.com/v1
       kind: PerconaServerMongoDBBackup
   - describe:
@@ -407,6 +420,11 @@ spec:
   # upload or TLS handshake leaves its error in those Pods' logs.
   - podLogs:
       selector: app.kubernetes.io/instance=mongodb-mongodb-src
+      tail: 200
+  # The restore runs in the target's pbm agent, and a lost login to the target
+  # shows up in its mongod log as AuthenticationFailed.
+  - podLogs:
+      selector: app.kubernetes.io/instance=mongodb-mongodb-target
       tail: 200
   steps:
   - name: run
@@ -425,30 +443,30 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh
         check:
           ($error == null): true
-    # The 42m budget covers what this step drives: bucket provisioning, a
+    # The 48m budget covers what this step drives, bucket provisioning, a
     # single-replica source MongoDB coming up (psmdb reconcile, PVC bind, image
-    # pull, pbm-agent sidecars) and the logical dump to S3 (convention 6:
-    # justified in-line). It is not lowered for the skipped restore because
-    # run-all.sh's own per-wait budgets up to the backup already exceed it, so
-    # this is the ceiling that fires either way. run-all.sh fails fast on a
-    # terminal BackupJob phase and stalled HelmReleases rather than polling out
-    # the budget. Sized with the 660s bucket and source HR waits in run-all.sh.
+    # pull, pbm-agent sidecars), the logical dump to S3, an empty target
+    # MongoDB, and the to-copy restore with its verify (convention 6, justified
+    # in-line). That is the 30m this round-trip had before the bucket, source
+    # and target HR waits in run-all.sh went from 300s to 660s, grown by the 6m
+    # each of them gained. run-all.sh fails fast on terminal BackupJob and
+    # RestoreJob phases and on stalled HelmReleases rather than polling out the
+    # budget.
     - script:
-        timeout: 42m
+        timeout: 48m
         content: |
           set -eu
           cd ../../..
           [ -x examples/backups/mongodb/run-all.sh ] || { echo "mongodb backup example scripts not found at examples/backups/mongodb" >&2; exit 1; }
           COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
-            SKIP_RESTORE=1 examples/backups/mongodb/run-all.sh
+            examples/backups/mongodb/run-all.sh
         check:
           ($error == null): true
-          # Exit zero alone is also what a completed round-trip returns, so the
-          # marker is what tells the skipped flow from the full one — and what
-          # fails the step if SKIP_RESTORE stops reaching the harness. run-all.sh
-          # logs through stderr. The phrase is the skip branch's own line, minus
-          # its colon, which YAML would read as a mapping separator in the key.
-          (contains($stderr, 'stopping after a successful backup')): true
+          # Exit zero alone does not prove the restore ran, run-all.sh also
+          # exits zero when SKIP_RESTORE reaches it. Its last line is printed
+          # only after the copy and the untouched source were both read back,
+          # and it goes to stderr like the rest of its log.
+          (contains($stderr, 'left untouched by the to-copy restore')): true
     finally:
     # Removes every resource the harness created (chainsaw did not apply them,
     # so they are not part of automatic cleanup) — including the operator-side

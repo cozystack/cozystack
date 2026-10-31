@@ -157,7 +157,7 @@ databases: {}
 ## @field {bool} enabled - Enable regular backups.
 ## @field {bool} [useSystemBucket] - Opt-in: back up to the platform system bucket without supplying S3 credentials. The cozy-default MongoDB BackupClass injects the storage at BackupJob time; tenants do not set s3AccessKey/s3SecretKey/destinationPath/endpointURL, and backups scope to `<namespace>/<application>`. Scheduling moves to a BackupClass Plan; `schedule`, `retentionPolicy` and PITR are ignored while this is on, and this flow has no retention yet (see docs/operations/backup-classes.md). Requires `backup.enabled: true` (the pbm agents run on that flag); the chart refuses the combination with `enabled: false` at render time; the schema carries the same rule as a marker for the UI and for the day the apiserver enforces CEL on application schemas (cozystack/cozystack#2657), which it does not yet. A release that has not yet rendered this flag (its cluster still carries the chart's scheduled tasks and PITR) holds a BackupJob until it does, so the tenant's own storage is never injected over.
 ## @field {string} [schedule] - Cron schedule for automated backups. Ignored when useSystemBucket is true (scheduling moves to the BackupClass Plan).
-## @field {string} [retentionPolicy] - Retention policy (e.g. "30d"). Ignored when useSystemBucket is true (no engine-side retention on that flow).
+## @field {string} [retentionPolicy] - Number of backups to keep, the newest ones. It counts backups, not days, so "30" and the older form "30d" both keep the 30 newest backups, which with an hourly schedule is about 30 hours. "0" keeps every backup. Ignored when useSystemBucket is true (no engine-side retention on that flow).
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/). Ignored when useSystemBucket is true (the driver injects the platform bucket).
 ## @field {string} [endpointURL] - S3 endpoint URL for uploads. Ignored when useSystemBucket is true (the strategy supplies the platform endpoint).
 ## @field {bool} [insecureSkipTLSVerify] - Skip TLS verification for the S3 endpoint (self-signed, e.g. in-cluster seaweedfs). Ignored when useSystemBucket is true (the platform backupStorage knob applies instead).
@@ -182,12 +182,16 @@ backup:
 ##
 
 ## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
-## @field {bool} enabled - Whether to restore from a backup.
+## @field {bool} enabled - Restore the backup named in `backupName` into this application. First create or update the application with `backup.enabled=true` and `bootstrap.enabled=false`, wait until the database and its backup agents are ready, then set `bootstrap.enabled=true`. Enabling backups and bootstrap in the same change is not supported.
 ## @field {string} [recoveryTime] - Timestamp for point-in-time recovery; empty means latest.
 ## @field {string} backupName - Name of backup to restore from.
+## @field {string} [destinationPath] - S3 path the backup to restore was written to, like s3://bucket/path/. Leave empty to restore from `backup.destinationPath`. Set it to the backup path of the source application when restoring its backup, so this application keeps writing its own backups to `backup.destinationPath` and not into the folder of the source. It is read with the endpoint and credentials from `backup`.
+## @field {[]string} [databases] - Databases to restore from the backup, for example when the backup comes from another application. Only the listed databases are restored, and this application keeps its own users, both the system users and the ones from `users`. Users and roles are not restored from the backup, and databases that are not listed are not restored. Names must match the backup exactly, a name the backup does not have restores nothing. Leave empty to restore the whole backup together with its users, which replace the users of this application. `admin`, `config` and `local` cannot be listed.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
   enabled: false
   recoveryTime: ""
   backupName: ""
+  destinationPath: ""
+  databases: []

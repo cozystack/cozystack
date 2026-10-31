@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -109,6 +111,25 @@ const (
 	// Default deadline on a RestoreJob waiting for the operator Restore to
 	// terminate. Tenants override via spec.options.restoreTimeoutSeconds.
 	psmdbDefaultRestoreDeadline = 30 * time.Minute
+
+	// psmdbRestoreTargetSettle is how long after the operator restore is first
+	// seen ready the driver waits before it believes the target cluster's own
+	// state. The operator rewrites PerconaServerMongoDB status only at the end of
+	// a reconcile that changes it, and by default requeues each cluster every 5s
+	// through one worker shared by all clusters, so a ready read right after the
+	// replay can predate the reconcile that finds the cluster unreachable. A
+	// minute covers a dozen such reconciles of an idle operator.
+	psmdbRestoreTargetSettle = time.Minute
+
+	// psmdbRestoreCondReplayed latches on the RestoreJob when the operator
+	// restore is first seen ready. psmdbRestoreTargetSettle runs from its
+	// LastTransitionTime, so the wait survives requeues and controller restarts.
+	psmdbRestoreCondReplayed = "OperatorRestoreCompleted"
+
+	psmdbReasonFullReplayed      = "FullRestoreReplayed"
+	psmdbReasonSelectiveReplayed = "SelectiveRestoreReplayed"
+	psmdbReasonWaitingForTarget  = "WaitingForTargetReady"
+	psmdbReasonTargetNotReady    = "TargetNotReadyAfterRestore"
 
 	// psmdbLiveReadGrace bounds how long past the backup deadline the driver keeps
 	// deferring a cancel it cannot confirm: the live re-read of the operator CR
@@ -1686,6 +1707,29 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 			fmt.Sprintf("waiting for target psmdb.percona.com/PerconaServerMongoDB %s/%s to enable backups", target.Namespace, targetPSMDBName))
 	}
 
+	// The operator runs whatever its CR said when it was created, so the checks
+	// below that shape the restore apply only until then.
+	existingRestore, err := r.findMongoDBRestoreForJob(ctx, restoreJob)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// A latched replay has done its work. If its CR is deleted while the job
+	// waits for the target, creating it again would replay the backup over what
+	// the target took in since, so the wait goes on without it.
+	if existingRestore == nil && apimeta.IsStatusConditionTrue(restoreJob.Status.Conditions, psmdbRestoreCondReplayed) {
+		return r.awaitMongoDBTargetReady(ctx, restoreJob, nil, targetCluster, options)
+	}
+	// Percona can fail the restore permanently if PBM has not reported its version yet.
+	if existingRestore == nil && (targetCluster.Status.State != psmdbtypes.StateReady || targetCluster.Status.BackupVersion == "") {
+		msg := fmt.Sprintf("target psmdb.percona.com/PerconaServerMongoDB %s/%s is not ready for restore (state=%q, backupVersion=%q); waiting for the database and its backup agents",
+			target.Namespace, targetPSMDBName, targetCluster.Status.State, targetCluster.Status.BackupVersion)
+		deadline := options.effectiveRestoreDeadline()
+		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", fmt.Sprintf("%s; not resolved within %s", msg, deadline))
+		}
+		return r.requeueMongoDBRestoreWaiting(ctx, restoreJob, "TargetPerconaServerMongoDBNotReady", msg)
+	}
+
 	// Re-point the restore at the TARGET cluster's own S3 credentials when a safe
 	// swap applies. On the legacy flow the backupSource carries the SOURCE
 	// release's -s3-creds Secret, which is deleted together with the source app —
@@ -1712,10 +1756,6 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		// pruned mid-replay is its error to report, not grounds to mark a restore
 		// still in progress Failed.
 		if source.S3.CredentialsSecret != "" {
-			existingRestore, err := r.findMongoDBRestoreForJob(ctx, restoreJob)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
 			if existingRestore == nil {
 				if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: source.S3.CredentialsSecret}, &corev1.Secret{}); err != nil {
 					if !apierrors.IsNotFound(err) {
@@ -1734,26 +1774,33 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 	}
 
-	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr)
+	// An in-place restore puts the cluster back as the backup has it, users
+	// included. A to-copy restore must not, see mongodbToCopySelective.
+	var selective *psmdbtypes.SelectiveRestoreOpts
+	if existingRestore == nil && target.AppName != backup.Spec.ApplicationRef.Name {
+		app := &mongodbapp.MongoDB{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+			return r.markRestoreJobFailedReason(ctx, restoreJob, mongodbReasonToCopyRefused, fmt.Sprintf(
+				"target MongoDB application %s/%s not found. A to-copy restore copies the databases the target application declares under spec.databases, so it needs the application and not only its PerconaServerMongoDB",
+				target.Namespace, target.AppName))
+		}
+		sharded := targetCluster.Spec.Sharding != nil && targetCluster.Spec.Sharding.Enabled
+		if selective, err = mongodbToCopySelective(app, sharded, pitr != nil); err != nil {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, mongodbReasonToCopyRefused, err.Error())
+		}
+	}
+
+	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr, selective)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
 	}
 
 	switch state := mdbRestore.Status.State; {
 	case state == psmdbtypes.StateReady:
-		now := metav1.Now()
-		restoreJob.Status.CompletedAt = &now
-		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
-		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionTrue,
-			Reason:  "RestoreCompleted",
-			Message: fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s completed", mdbRestore.Namespace, mdbRestore.Name),
-		})
-		if err := r.Status().Update(ctx, restoreJob); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.awaitMongoDBTargetReady(ctx, restoreJob, mdbRestore, targetCluster, options)
 
 	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
 		message := mdbRestore.Status.Error
@@ -1790,6 +1837,95 @@ func (r *RestoreJobReconciler) requeueMongoDBRestoreWaiting(ctx context.Context,
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: psmdbPollInterval}, nil
+}
+
+// awaitMongoDBTargetReady finishes a restore the operator reports ready. That
+// verdict covers pbm's replay alone. A logical restore that replaced the
+// target's system users reaches it too, while the operator, which logs in with
+// the target's users Secret, has lost the cluster it just restored. So the
+// RestoreJob succeeds only once the target cluster reports ready again, read no
+// earlier than psmdbRestoreTargetSettle after the replay, and fails at the
+// restore deadline otherwise with the likely cause. A replay that ends close to
+// the deadline still gets the whole settle window before it can fail.
+//
+// The first call latches the replay on the RestoreJob, with what the operator
+// restore did, and every later call reads that latch alone. mdbRestore is nil
+// once the operator CR is gone after the latch.
+func (r *RestoreJobReconciler) awaitMongoDBTargetReady(ctx context.Context, rj *backupsv1alpha1.RestoreJob, mdbRestore *psmdbtypes.PerconaServerMongoDBRestore, cluster *psmdbtypes.PerconaServerMongoDB, options MongoDBRestoreOptions) (ctrl.Result, error) {
+	clusterRef := fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDB %s/%s", cluster.Namespace, cluster.Name)
+	state := cluster.Status.State
+	if state == "" {
+		state = "unset"
+	}
+
+	if !apimeta.IsStatusConditionTrue(rj.Status.Conditions, psmdbRestoreCondReplayed) {
+		reason, note := psmdbReasonFullReplayed, ""
+		if mdbRestore.Spec.Selective != nil {
+			reason, note = psmdbReasonSelectiveReplayed, mongodbRestoredDatabasesNote(mdbRestore.Spec.Selective)
+		}
+		apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+			Type:    psmdbRestoreCondReplayed,
+			Status:  metav1.ConditionTrue,
+			Reason:  reason,
+			Message: fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s completed%s", mdbRestore.Namespace, mdbRestore.Name, note),
+		})
+	}
+	replayed := apimeta.FindStatusCondition(rj.Status.Conditions, psmdbRestoreCondReplayed)
+
+	settled := time.Since(replayed.LastTransitionTime.Time) >= psmdbRestoreTargetSettle
+	if settled && cluster.Status.State == psmdbtypes.StateReady {
+		now := metav1.Now()
+		rj.Status.CompletedAt = &now
+		rj.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+		apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "RestoreCompleted",
+			Message: fmt.Sprintf("%s, and %s reports ready", replayed.Message, clusterRef),
+		})
+		if err := r.Status().Update(ctx, rj); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	deadline := options.effectiveRestoreDeadline()
+	if settled && rj.Status.StartedAt != nil && time.Since(rj.Status.StartedAt.Time) > deadline {
+		return r.markRestoreJobFailedReason(ctx, rj, psmdbReasonTargetNotReady,
+			mongodbTargetNotReadyMessage(replayed.Message, clusterRef, cluster, replayed.Reason == psmdbReasonSelectiveReplayed, deadline))
+	}
+	return r.requeueMongoDBRestoreWaiting(ctx, rj, psmdbReasonWaitingForTarget, fmt.Sprintf(
+		"%s, waiting for %s to report ready at least %s after that (state now %s)", replayed.Message, clusterRef, psmdbRestoreTargetSettle, state))
+}
+
+// mongodbRestoredDatabasesNote names what a selective restore copied.
+func mongodbRestoredDatabasesNote(selective *psmdbtypes.SelectiveRestoreOpts) string {
+	dbs := make([]string, 0, len(selective.Namespaces))
+	for _, ns := range selective.Namespaces {
+		dbs = append(dbs, strings.TrimSuffix(ns, ".*"))
+	}
+	return fmt.Sprintf(", it copied the databases %s and kept the target's own users", strings.Join(dbs, ", "))
+}
+
+// mongodbTargetNotReadyMessage names what most likely keeps a target down after
+// a restore the operator called done. A full restore replays the backup's
+// system users, which match the target's users Secret only while the target is
+// the cluster the backup was taken from and that Secret has not changed since.
+func mongodbTargetNotReadyMessage(replayed, clusterRef string, cluster *psmdbtypes.PerconaServerMongoDB, selective bool, deadline time.Duration) string {
+	state := cluster.Status.State
+	if state == "" {
+		state = "unset"
+	}
+	detail := "state " + state
+	if cluster.Status.Message != "" {
+		detail += ", operator message " + strconv.Quote(cluster.Status.Message)
+	}
+	cause := "The restore replayed the backup's system users, so the likely cause is that they no longer match the target's users Secret and the operator cannot authenticate to the cluster. That happens when the backup predates a change of that Secret, for example when the application was deleted and created again under the same name"
+	if selective {
+		cause = "The restore left the target's users as they were, so look at the operator message and at the target's mongod pods"
+	}
+	return fmt.Sprintf("%s, but %s did not report ready again before the restore deadline of %s, which spec.options.restoreTimeoutSeconds overrides (%s). %s",
+		replayed, clusterRef, deadline, detail, cause)
 }
 
 // errTransientRestoreSource marks a backup-source resolution failure that a
@@ -1892,7 +2028,7 @@ func (r *RestoreJobReconciler) findMongoDBRestoreForJob(ctx context.Context, rj 
 // ensureMongoDBRestore creates a PerconaServerMongoDBRestore CR labelled with
 // the RestoreJob, or returns the existing one if a previous reconcile already
 // created it.
-func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, targetClusterName string, source *psmdbtypes.BackupSource, pitr *psmdbtypes.PITRSpec) (*psmdbtypes.PerconaServerMongoDBRestore, error) {
+func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, targetClusterName string, source *psmdbtypes.BackupSource, pitr *psmdbtypes.PITRSpec, selective *psmdbtypes.SelectiveRestoreOpts) (*psmdbtypes.PerconaServerMongoDBRestore, error) {
 	if existing, err := r.findMongoDBRestoreForJob(ctx, rj); err != nil || existing != nil {
 		return existing, err
 	}
@@ -1910,6 +2046,7 @@ func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *bac
 			ClusterName:  targetClusterName,
 			BackupSource: source,
 			PITR:         pitr,
+			Selective:    selective,
 		},
 	}
 	if err := r.Create(ctx, obj); err != nil {
@@ -1919,9 +2056,10 @@ func (r *RestoreJobReconciler) ensureMongoDBRestore(ctx context.Context, rj *bac
 }
 
 // mongodbRestoreTarget captures the resolved target for a MongoDB restore.
-// In-place and to-copy are treated identically: both create a
-// PerconaServerMongoDBRestore CR pointing (via clusterName) at the named target
-// cluster. Callers infer the mode from AppName != backup.Spec.ApplicationRef.Name.
+// In-place and to-copy both create a PerconaServerMongoDBRestore CR pointing
+// (via clusterName) at the named target cluster, and differ only in what it
+// takes from the backup (see mongodbToCopySelective). Callers infer the mode
+// from AppName != backup.Spec.ApplicationRef.Name.
 type mongodbRestoreTarget struct {
 	Namespace string
 	AppName   string
@@ -1950,6 +2088,58 @@ func (r *RestoreJobReconciler) resolveMongoDBRestoreTarget(restoreJob *backupsv1
 		}
 	}
 	return t
+}
+
+// mongodbReasonToCopyRefused is the Ready reason of a to-copy restore refused
+// before anything reached the operator, so the target is left as it was.
+const mongodbReasonToCopyRefused = "ToCopyRestoreRefused"
+
+// mongodbReservedDatabases belong to the cluster itself. The pbm CLI refuses
+// them in --ns, but the operator passes spec.selective to the agents without
+// that check, so the driver makes it.
+var mongodbReservedDatabases = []string{"admin", "config", "local"}
+
+// mongodbToCopySelective returns the selective restore a to-copy restore runs.
+// A full logical restore replays the source cluster's admin.system.users into
+// the target, after which neither the operator nor the target's own users
+// Secrets authenticate to it. Copying the source's users Secret over instead
+// would hand one application's credentials to another. So the target keeps
+// its users, withUsersAndRoles stays false, and only the databases the target
+// application declares are restored, the ones its users hold roles on. A
+// target that declares none is refused, since restoring nothing and restoring
+// the source's users are both wrong.
+func mongodbToCopySelective(app *mongodbapp.MongoDB, sharded, pitr bool) (*psmdbtypes.SelectiveRestoreOpts, error) {
+	ref := app.Namespace + "/" + app.Name
+	var declared map[string]json.RawMessage
+	if app.Spec.Databases != nil && len(app.Spec.Databases.Raw) > 0 {
+		if err := json.Unmarshal(app.Spec.Databases.Raw, &declared); err != nil {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s is not a map keyed by database name (%v)", ref, err)
+		}
+	}
+	if len(declared) == 0 {
+		return nil, fmt.Errorf("a to-copy restore keeps the users of MongoDB application %s and copies only the databases it declares under spec.databases, and it declares none. Declare every database to copy there, with an empty roles map if no user needs it yet (spec.databases.<name>.roles: {}), and create the RestoreJob again", ref)
+	}
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	namespaces := make([]string, 0, len(names))
+	for _, name := range names {
+		// "*" would make the selection "*.*", which percona-backup-mongodb reads as
+		// a full restore, users included.
+		if name == "" || strings.ContainsAny(name, `/\. "$*`) || strings.ContainsFunc(name, unicode.IsSpace) {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s has %q, which is not a database name. A name cannot be empty or contain whitespace or any of / \\ . \" $ *", ref, name)
+		}
+		if slices.Contains(mongodbReservedDatabases, name) {
+			return nil, fmt.Errorf("spec.databases of MongoDB application %s lists %q. The admin, config and local databases belong to the cluster and are not restored selectively, remove it from the target to copy the rest", ref, name)
+		}
+		namespaces = append(namespaces, name+".*")
+	}
+	if pitr && sharded {
+		return nil, fmt.Errorf("MongoDB application %s is sharded, and percona-backup-mongodb restores selected databases to a point in time on replica sets only. Omit recoveryTime to copy the backup as taken", ref)
+	}
+	return &psmdbtypes.SelectiveRestoreOpts{WithUsersAndRoles: false, Namespaces: namespaces}, nil
 }
 
 // ---------------------------------------------------------------------------
