@@ -6,10 +6,10 @@ load test_helper
 # the function directly through Bats' run helper.
 run_lacks_pattern() {
   run bash -eu -c '
-    . hack/test_helper.bash
+    . "$3"
     assert_file_lacks_pattern "$1" "$2"
     printf "checked\n"
-  ' _ "$@"
+  ' _ "$@" "$BATS_TEST_DIRNAME/test_helper.bash"
 }
 
 @test "a valid non-matching pattern passes under errexit" {
@@ -79,6 +79,23 @@ run_lacks_pattern() {
   fi
 
   run_lacks_pattern 'secret:' "$BATS_TEST_TMPDIR/artifact"
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'could not evaluate pattern secret:'* ]]
+}
+
+@test "a matcher error with status one cannot pass as no match" {
+  printf 'safe content\n' >"$BATS_TEST_TMPDIR/artifact"
+  mkdir "$BATS_TEST_TMPDIR/bin"
+  cat >"$BATS_TEST_TMPDIR/bin/awk" <<'SH'
+#!/bin/sh
+printf '0\n'
+printf 'awk: evaluation failed\n' >&2
+exit 1
+SH
+  chmod +x "$BATS_TEST_TMPDIR/bin/awk"
+
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" run_lacks_pattern 'secret:' "$BATS_TEST_TMPDIR/artifact"
 
   [ "$status" -eq 1 ]
   [[ "$output" == *'could not evaluate pattern secret:'* ]]
