@@ -1,4 +1,8 @@
-{{- if ne (include "virtual-machine.substrate" .) "proxmox" }}
+{{- $proxmox := eq (include "virtual-machine.substrate" .) "proxmox" }}
+{{- /* On proxmox the machine is no pod: there is nothing to select, so only
+       the external Service is rendered, and kubemox fills its EndpointSlice
+       (the annotation on the VirtualMachine names it). */}}
+{{- if or (not $proxmox) .Values.external }}
 ---
 apiVersion: v1
 kind: Service
@@ -18,15 +22,19 @@ metadata:
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
 {{- if .Values.external }}
-  externalTrafficPolicy: Local
+  {{- /* Local keeps only endpoints on the receiving node; a machine's address
+         belongs to no node, so proxmox has to spread. */}}
+  externalTrafficPolicy: {{ ternary "Cluster" "Local" $proxmox }}
     {{- if ((include "cozy-lib.network.disableLoadBalancerNodePorts" $) | fromYaml) }}
   allocateLoadBalancerNodePorts: false
     {{- end }}
 {{- else }}
   clusterIP: None
 {{- end }}
+{{- if not $proxmox }}
   selector:
     {{- include "virtual-machine.selectorLabels" . | nindent 4 }}
+{{- end }}
   ports:
 {{- if .Values.external }}
     {{- if and (eq .Values.externalMethod "WholeIP") (not .Values.externalPorts) }}

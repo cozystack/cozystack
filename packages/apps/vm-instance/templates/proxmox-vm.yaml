@@ -1,36 +1,31 @@
 {{- if eq (include "virtual-machine.substrate" .) "proxmox" }}
 {{- $catalog := include "virtual-machine.proxmoxCatalog" . | fromJson }}
 {{- $name := include "virtual-machine.fullname" . }}
-{{- /* What this substrate cannot do is refused here, not ignored: a silently
-       dropped field is how a machine without network looks healthy. */}}
-{{- if .Values.external }}
-{{-   fail "external access is not available on the proxmox substrate yet: a Proxmox VM is not a pod, so the Service and cozy-proxy path does not reach it. Publishing a VM here goes through the VPC NAT gateway, which is still in review. Set external: false." }}
-{{- end }}
-{{- if .Values.cpuModel }}
-{{-   fail "cpuModel is not available on the proxmox substrate yet; the CPU model comes from the instance type (cx1 and d1 use the host CPU). Remove cpuModel." }}
-{{- end }}
-{{- if .Values.netplanDhcp }}
-{{-   fail "netplanDhcp is not needed on the proxmox substrate: every network gets a static address from the platform's pool, written into the guest's network configuration. Remove netplanDhcp." }}
-{{- end }}
-{{- if .Values.subnets }}
-{{-   fail "subnets is deprecated; use networks" }}
-{{- end }}
-{{- $networks := .Values.networks | default list }}
+{{- /* Any values that work on kubevirt work here: what has no 1:1 on Proxmox
+       maps to the nearest thing and says so in NOTES.txt, never silently. */}}
+{{- /* subnets is the deprecated spelling of networks, as on kubevirt. */}}
+{{- $networks := concat (.Values.networks | default list) (.Values.subnets | default list) }}
 {{- if not $networks }}
-{{-   fail "a Proxmox VM has no pod network; attach at least one of the platform's networks in networks (see the catalog's networks)" }}
+{{- /* A kubevirt machine without networks sits in the pod network; the
+       platform names the tenant network that stands in for it. */}}
+{{-   if not $catalog.defaultNetwork }}
+{{-     fail "networks is empty and the platform's Proxmox catalog has no defaultNetwork: a machine without networks gets the pod network on kubevirt, and the platform has to name the network that stands in for it here (catalog.defaultNetwork in the proxmox-vm package)" }}
+{{-   end }}
+{{-   $networks = list (dict "name" $catalog.defaultNetwork) }}
 {{- end }}
 {{- $runStrategy := .Values.runStrategy | default "Always" }}
-{{- if not (has $runStrategy (list "Always" "Halted" "Manual")) }}
-{{-   fail (printf "runStrategy %q is not available on the proxmox substrate; use Always, Halted or Manual" $runStrategy) }}
-{{- end }}
-{{- $sizing := include "virtual-machine.proxmoxSizing" (list $catalog .) | fromJson }}
+{{- /* kubemox has one power switch. RerunOnFailure and Once both start the
+       machine; neither restart-on-crash nor stop-after-first-run exists on
+       this substrate yet, which NOTES.txt says. */}}
+{{- $autoStart := has $runStrategy (list "Always" "RerunOnFailure" "Once") }}
 {{- $profile := include "virtual-machine.proxmoxProfile" (list $catalog .) | fromJson }}
 {{- $gpus := include "virtual-machine.proxmoxGPUs" (list $catalog .) | fromJsonArray }}
 {{- $disks := include "virtual-machine.proxmoxDisks" . | fromJson }}
 {{- $node := .Values.proxmox.node | default $disks.node | default $catalog.defaultNode }}
 {{- if not $node }}
-{{-   fail "the machine has no node: give it a disk (it runs where its disks live), or set proxmox.node" }}
+{{-   fail "the machine has no node: the platform's Proxmox catalog has no defaultNode, and neither a disk nor proxmox.node names one" }}
 {{- end }}
+{{- $sizing := include "virtual-machine.proxmoxSizing" (list $catalog . $node) | fromJson }}
 {{- if and $disks.node (ne $node $disks.node) }}
 {{-   fail (printf "proxmox.node %q differs from the node of the machine's disks (%q); a machine can only attach disks of its own node" $node $disks.node) }}
 {{- end }}
@@ -39,11 +34,17 @@
 {{- $bios := $profile.bios | default "seabios" }}
 {{- if eq (toString $fw.bootloader) "uefi" }}{{ $bios = "ovmf" }}{{ else if eq (toString $fw.bootloader) "bios" }}{{ $bios = "seabios" }}{{ end }}
 {{- $firstDisk := first $disks.disks }}
-{{- $efiStorage := "" }}
-{{- if eq $bios "ovmf" }}
-{{-   if not $firstDisk }}{{ fail "a UEFI machine needs a disk: its EFI vars disk is created on the storage of the first one" }}{{ end }}
-{{-   $vol := lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace $firstDisk.volume }}
-{{-   $efiStorage = dig "spec" "storage" "" $vol }}
+{{- /* EFI vars and the TPM state live next to the first disk; a machine
+       without disks (ISO or PXE boot) takes the storage behind the default
+       disk class instead, the same place vm-disk would have put one. */}}
+{{- $sysStorage := "" }}
+{{- if $firstDisk }}
+{{-   $sysStorage = dig "spec" "storage" "" (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace $firstDisk.volume) }}
+{{- else }}
+{{-   $sysStorage = dig "storageClasses" "replicated" "storage" "" $catalog }}
+{{- end }}
+{{- if and (or (eq $bios "ovmf") $profile.tpm) (not $sysStorage) }}
+{{-   fail "a UEFI or TPM machine without disks needs the platform's catalog to map the storage class \"replicated\" (storageClasses.replicated in the proxmox-vm package), where its EFI vars and TPM state are created" }}
 {{- end }}
 {{- $secureBoot := $fw.secureBoot | default ($profile.efiPreEnrolledKeys | default false) }}
 {{- $catalogNetworks := $catalog.networks | default dict }}
@@ -107,16 +108,22 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "virtual-machine.labels" . | nindent 4 }}
+  {{- if .Values.external }}
+  # The Service in service.yaml has no pods to select on this substrate;
+  # kubemox keeps an EndpointSlice with the machine's addresses for it.
+  annotations:
+    networking.cozystack.io/service: {{ $name | quote }}
+  {{- end }}
 spec:
   name: {{ $name }}
   nodeName: {{ $node | quote }}
   connectionRef:
     name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
   deletionProtection: false
-  {{- /* kubemox has one power switch. Off, it leaves a new machine stopped and
-         never starts one, but it does not stop a running machine either: the
-         stop subresource does that, so setting Halted here does not. */}}
-  enableAutoStart: {{ eq $runStrategy "Always" }}
+  {{- /* Off, kubemox leaves a new machine stopped and never starts one, but
+         it does not stop a running machine either: the stop subresource does
+         that, so setting Halted here does not. */}}
+  enableAutoStart: {{ $autoStart }}
   tags:
     - cozystack
     - {{ .Release.Namespace }}
@@ -132,12 +139,12 @@ spec:
       scsiController: {{ $profile.scsiController | default "virtio-scsi-single" }}
       {{- if eq $bios "ovmf" }}
       efiDisk:
-        storage: {{ $efiStorage | quote }}
+        storage: {{ $sysStorage | quote }}
         preEnrolledKeys: {{ $secureBoot }}
       {{- end }}
-      {{- if and $profile.tpm $firstDisk }}
+      {{- if $profile.tpm }}
       tpm:
-        storage: {{ $efiStorage | default (dig "spec" "storage" "" (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace $firstDisk.volume)) | quote }}
+        storage: {{ $sysStorage | quote }}
         version: v2.0
       {{- end }}
     {{- with $disks.disks }}
@@ -187,7 +194,8 @@ spec:
   {{- $additional := merge $profileExtra $extra }}
   {{- with $additional }}
   # qm options the API has no field for: the OS type of the profile, the
-  # serial console, and the instance type's CPU model, NUMA, hugepages and balloon.
+  # serial console, the CPU model (cpuModel, or the instance type's), NUMA,
+  # hugepages, balloon, and the affinity of a realtime type.
   additionalConfig:
     {{- range $k, $v := . }}
     {{ $k }}: {{ $v | toString | quote }}

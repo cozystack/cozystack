@@ -44,7 +44,7 @@
 {{- end -}}
 {{- $catalog := dict -}}
 {{- range $key, $value := $cm.data -}}
-{{- if or (eq $key "connection") (eq $key "defaultNode") -}}
+{{- if or (eq $key "connection") (eq $key "defaultNode") (eq $key "defaultNetwork") -}}
 {{- $_ := set $catalog $key $value -}}
 {{- else if or (eq $key "allowedNodes") (eq $key "dnsServers") -}}
 {{- /* fromYaml only yields a map; a YAML list needs fromYamlArray. */ -}}

@@ -1,0 +1,40 @@
+suite: vm-instance on proxmox needs the platform to name the default network
+release:
+  name: vm-instance-bare
+  namespace: tenant-test
+templates:
+  - templates/proxmox-vm.yaml
+set:
+  substrate: proxmox
+  fullnameOverride: vm-instance-bare
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        group: ""
+        version: v1
+        resource: configmaps
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        networks: |
+          lan:
+            bridge: vmbr0
+            ipPool: lan-pool
+        instancetypes: |
+          u1.medium:
+            cores: 1
+            sockets: 1
+            memoryMiB: 4096
+tests:
+  - it: tells the platform administrator, not the tenant, when the catalog has no defaultNetwork
+    asserts:
+      - failedTemplate:
+          errorPattern: "catalog has no defaultNetwork"
