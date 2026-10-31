@@ -1,9 +1,9 @@
 apiVersion: v2
-appVersion: pskep-9e0381c
+appVersion: pskep-58c4f64
 description: A Helm chart for Kubernetes
 maintainers:
 - email: celial18@itu.edu.tr
   name: Alp Eren Celik
 name: kubemox
 type: application
-version: 0.7.0-pskep-9e0381c
+version: 0.7.0-pskep-58c4f64

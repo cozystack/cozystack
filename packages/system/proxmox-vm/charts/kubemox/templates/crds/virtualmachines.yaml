@@ -116,7 +116,9 @@ spec:
                 description: |-
                   EnableAutoStart is a flag that indicates whether the VM should automatically start when it's powered off.
                   If true, the VM will start automatically when it's powered off.
-                  If not set, it defaults to true. PowerState, when set, takes precedence.
+                  If false, the operator never starts it: a new VM is created stopped and
+                  an existing one stays in whatever power state it is in.
+                  If not set, it defaults to true.
                 type: boolean
               name:
                 description: Name is the name of the VM
@@ -128,17 +130,6 @@ spec:
                 description: |-
                   Pool is the Proxmox resource pool the machine is created in. It is
                   applied at creation; a change afterwards is not applied.
-                type: string
-              powerState:
-                description: |-
-                  PowerState is what the operator does about the machine's power.
-                  Running starts it whenever it is found stopped, Stopped stops it whenever
-                  it is found running, Manual leaves the power alone and only keeps the
-                  configuration. Unset keeps the EnableAutoStart behaviour.
-                enum:
-                - Running
-                - Stopped
-                - Manual
                 type: string
               tags:
                 description: |-

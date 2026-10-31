@@ -6,10 +6,10 @@ include ../../../hack/package.mk
 
 # The kubemox build this package vendors. Until the open upstream pull requests
 # land (alperencelik/kubemox#96, #101–#107: namespaced CRDs, VirtualMachineVolume,
-# volumeRef, power state and firmware, IPAM ports, NoCloud, podLabels, cloneable
+# volumeRef, enableAutoStart and firmware, IPAM ports, NoCloud, podLabels, cloneable
 # volumes), the chart comes from the fork that carries them, built by its CI
 # from the pskep branch and named after the commit it was built from.
-CHART_VERSION=0.7.0-pskep-9e0381c
+CHART_VERSION=0.7.0-pskep-58c4f64
 
 .PHONY: image image-console-proxy test test-go test-helm
 

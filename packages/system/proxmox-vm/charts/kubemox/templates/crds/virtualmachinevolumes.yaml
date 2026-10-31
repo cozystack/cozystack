@@ -76,6 +76,14 @@ spec:
               disk reassignment. Reassignment only works between VMs on the same node,
               which is why the node is part of the spec and immutable.
             properties:
+              cloneable:
+                default: false
+                description: |-
+                  Cloneable lets VirtualMachineVolumes in other namespaces copy this one
+                  through source.disk. Inside its own namespace a volume can always be
+                  copied. Defaults to false, so a tenant's data stays in its namespace
+                  unless the owner says otherwise.
+                type: boolean
               connectionRef:
                 description: |-
                   LocalObjectReference contains enough information to let you locate the
@@ -118,21 +126,25 @@ spec:
                 properties:
                   disk:
                     description: |-
-                      Disk is another VirtualMachineVolume in the same namespace to copy from.
-                      It has to be Ready, on the same node, and not attached to a running
-                      VirtualMachine while the copy is made.
+                      Disk is another VirtualMachineVolume to copy from. It has to be Ready,
+                      on the same node, and not attached to a VirtualMachine while the copy
+                      is made. A volume in another namespace is only copied when it is
+                      marked cloneable.
                     properties:
                       name:
-                        default: ""
-                        description: |-
-                          Name of the referent.
-                          This field is effectively required, but due to backwards compatibility is
-                          allowed to be empty. Instances of this type with an empty value here are
-                          almost certainly wrong.
-                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        description: Name of the VirtualMachineVolume to copy.
+                        minLength: 1
                         type: string
+                      namespace:
+                        description: |-
+                          Namespace of that volume. Defaults to the namespace of the volume
+                          being created. Another namespace works only when the source volume
+                          has `cloneable: true`, which is how a platform publishes golden
+                          images from one namespace to every tenant.
+                        type: string
+                    required:
+                    - name
                     type: object
-                    x-kubernetes-map-type: atomic
                   volume:
                     description: |-
                       Volume is a Proxmox volume id to copy from, such as
