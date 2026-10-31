@@ -13,28 +13,25 @@ setup() {
 assert_file_lacks_pattern() {
   local pattern="$1"
   local file="$2"
-  local _rc=0
+  local found
 
   if [ ! -f "${file}" ]; then
     printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
     return 1
   fi
-  # Validate the regex even for an empty file. Only status 1 means no match;
-  # keeping awk in an OR-list lets that normal result survive errexit.
-  awk -v pattern="${pattern}" '
+  # Validate even an empty file, and keep the match result separate from awk's
+  # status: some implementations also use status 1 for evaluation errors.
+  if ! found=$(awk -v pattern="${pattern}" '
     BEGIN { match("", pattern) }
     $0 ~ pattern { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "${file}" || _rc=$?
-  case "${_rc}" in
-    0)
-      printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-      return 1
-      ;;
-    1) return 0 ;;
-    *)
-      printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
-      return 1
-      ;;
-  esac
+    END { print found ? 1 : 0 }
+  ' "${file}"); then
+    printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
+    return 1
+  fi
+  if [ "${found}" != 0 ]; then
+    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
+    return 1
+  fi
+  return 0
 }
