@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -201,5 +202,58 @@ func TestPerListenerName_KeepsEveryNameThatWasAlreadyAdmissible(t *testing.T) {
 		if got := perListenerCertName(tgw, tc.hostname); got != tc.cert {
 			t.Errorf("perListenerCertName(%q) = %q, want %q; a changed name orders a new certificate and orphans the old Secret", tc.hostname, got, tc.cert)
 		}
+	}
+}
+
+// TestRenderWildcardCertificate_SkipsChildApexCoveredByWildcard pins the
+// dnsNames against Let's Encrypt refusing a whole order that lists a name
+// one of its wildcards covers, leaving the Gateway with no certificate.
+// A wildcard spans one label, so an apex two labels below stays listed.
+func TestRenderWildcardCertificate_SkipsChildApexCoveredByWildcard(t *testing.T) {
+	cases := []struct {
+		name        string
+		childApexes []string
+		want        []string
+	}{
+		{
+			name:        "child one label below the parent",
+			childApexes: []string{"ci.mgmt.example.com"},
+			want:        []string{"mgmt.example.com", "*.mgmt.example.com", "*.ci.mgmt.example.com"},
+		},
+		{
+			name:        "child two labels below the parent",
+			childApexes: []string{"b.ci.mgmt.example.com"},
+			want:        []string{"mgmt.example.com", "*.mgmt.example.com", "b.ci.mgmt.example.com", "*.b.ci.mgmt.example.com"},
+		},
+		{
+			name:        "covering child wildcard sorts after the apex it covers",
+			childApexes: []string{"a.z.mgmt.example.com", "z.mgmt.example.com"},
+			want:        []string{"mgmt.example.com", "*.mgmt.example.com", "*.a.z.mgmt.example.com", "*.z.mgmt.example.com"},
+		},
+		{
+			name:        "empty apex and apex outside the parent",
+			childApexes: []string{"", "alice.example.org"},
+			want:        []string{"mgmt.example.com", "*.mgmt.example.com", "alice.example.org", "*.alice.example.org"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-management"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:             "mgmt.example.com",
+					CertMode:         gatewayv1alpha1.CertModeDNS01,
+					GatewayClassName: "cilium",
+				},
+			}
+			r := &Reconciler{Scheme: newScheme(t)}
+			cert, err := r.renderWildcardCertificate(tgw, tc.childApexes)
+			if err != nil {
+				t.Fatalf("renderWildcardCertificate: %v", err)
+			}
+			if !slices.Equal(cert.Spec.DNSNames, tc.want) {
+				t.Errorf("dnsNames = %v, want %v", cert.Spec.DNSNames, tc.want)
+			}
+		})
 	}
 }
