@@ -46,7 +46,7 @@ type fakePVE struct {
 	// taskExit, when set, is how the shutdown task ends; taskRunning keeps it
 	// going instead.
 	taskExit    string
-	taskRunning bool
+	taskRunning atomic.Bool
 	// generatedPassword, when set, is returned by vncproxy as the password
 	// the VNC server expects instead of the ticket.
 	generatedPassword string
@@ -122,7 +122,7 @@ func newFakePVE(t *testing.T) *fakePVE {
 		}
 		task := map[string]any{"status": "stopped", "exitstatus": "OK"}
 		switch {
-		case f.taskRunning:
+		case f.taskRunning.Load():
 			task = map[string]any{"status": "running"}
 		case f.taskExit != "":
 			task["exitstatus"] = f.taskExit
@@ -158,6 +158,16 @@ func newFakePVE(t *testing.T) *fakePVE {
 	return f
 }
 
+// events lists the events of the tenant's namespace.
+func (e *testEnv) events(t *testing.T) []corev1.Event {
+	t.Helper()
+	list, err := e.core.CoreV1().Events("tenant-a").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list.Items
+}
+
 // autoStart reads enableAutoStart off the VirtualMachine.
 func (e *testEnv) autoStart(t *testing.T) bool {
 	t.Helper()
@@ -176,6 +186,8 @@ func (e *testEnv) autoStart(t *testing.T) bool {
 func (f *fakePVE) endpoint() string { return strings.TrimPrefix(f.srv.URL, "https://") }
 
 type testEnv struct {
+	srv    *server
+	core   *kubefake.Clientset
 	pve    *fakePVE
 	pki    *testPKI
 	proxy  *httptest.Server
@@ -188,7 +200,7 @@ func vmObject(state string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
 		"kind":       "VirtualMachine",
-		"metadata":   map[string]any{"name": "vm-instance-demo", "namespace": "tenant-a"},
+		"metadata":   map[string]any{"name": "vm-instance-demo", "namespace": "tenant-a", "uid": "vm-uid"},
 		"spec": map[string]any{
 			"name": "vm-instance-demo", "nodeName": testNode,
 			"connectionRef":   map[string]any{"name": "pve"},
@@ -240,9 +252,11 @@ func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.
 	if err := auth.load(context.Background(), core); err != nil {
 		t.Fatal(err)
 	}
-	srv := newServer(auth, core, env.dyn)
-	srv.stopWait = time.Second
-	env.proxy = httptest.NewUnstartedServer(srv.handler())
+	env.core = core
+	env.srv = newServer(auth, core, env.dyn)
+	env.srv.stopWait = 100 * time.Millisecond
+	env.srv.stopFollow = time.Minute
+	env.proxy = httptest.NewUnstartedServer(env.srv.handler())
 	env.proxy.TLS = &tls.Config{ClientAuth: tls.RequestClientCert, MinVersion: tls.VersionTLS12}
 	env.proxy.StartTLS()
 	t.Cleanup(env.proxy.Close)
@@ -444,9 +458,55 @@ func TestStopReportsAShutdownThatFails(t *testing.T) {
 
 func TestStopAcceptsAShutdownStillGoing(t *testing.T) {
 	env := newTestEnv(t, "running", allowAlice)
-	env.pve.taskRunning = true
+	env.pve.taskRunning.Store(true)
 	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.pve.taskRunning.Store(false)
+	env.srv.follows.Wait()
+	if events := env.events(t); len(events) != 0 {
+		t.Fatalf("events after a shutdown that worked: %v", events)
+	}
+}
+
+func TestStopReportsAShutdownThatFailsAfterTheAnswer(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskRunning.Store(true)
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.pve.taskExit = "can't lock file '/var/lock/qemu-server/lock-100.conf' - got timeout"
+	env.pve.taskRunning.Store(false)
+	env.srv.follows.Wait()
+
+	events := env.events(t)
+	if len(events) != 1 {
+		t.Fatalf("events: %v", events)
+	}
+	e := events[0]
+	if e.Type != corev1.EventTypeWarning || e.Reason != "StopFailed" {
+		t.Errorf("event %s/%s", e.Type, e.Reason)
+	}
+	ref := e.InvolvedObject
+	if ref.Kind != "VirtualMachine" || ref.Name != "vm-instance-demo" || ref.UID != "vm-uid" || ref.Namespace != "tenant-a" {
+		t.Errorf("event is on %+v", ref)
+	}
+	if strings.Contains(e.Message, "/var/lock") {
+		t.Errorf("Proxmox's own text reached the tenant: %q", e.Message)
+	}
+}
+
+func TestStopReportsAShutdownThatNeverEnds(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.srv.stopFollow = 100 * time.Millisecond
+	env.pve.taskRunning.Store(true)
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.srv.follows.Wait()
+	events := env.events(t)
+	if len(events) != 1 || !strings.Contains(events[0].Message, "shutdown") {
+		t.Fatalf("events: %v", events)
 	}
 }
 

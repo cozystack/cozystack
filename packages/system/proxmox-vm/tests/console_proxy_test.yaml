@@ -104,6 +104,13 @@ tests:
             apiGroups: ["proxmox.alperen.cloud"]
             resources: ["virtualmachines"]
             verbs: ["patch"]
+      - documentIndex: 0
+        contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["events"]
+            verbs: ["create"]
       - documentSelector:
           path: metadata.name
           value: proxmox-console-proxy:auth-delegator
