@@ -86,6 +86,10 @@ func (in *PerconaServerMongoDBList) DeepCopyObject() runtime.Object {
 
 func (in *PerconaServerMongoDBSpec) DeepCopyInto(out *PerconaServerMongoDBSpec) {
 	*out = *in
+	if in.Secrets != nil {
+		out.Secrets = new(PerconaServerMongoDBSecrets)
+		*out.Secrets = *in.Secrets
+	}
 	in.Backup.DeepCopyInto(&out.Backup)
 	if in.Sharding != nil {
 		out.Sharding = new(PerconaServerMongoDBSharding)

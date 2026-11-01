@@ -86,19 +86,20 @@ type PerconaServerMongoDBList struct {
 	Items           []PerconaServerMongoDB `json:"items"`
 }
 
-// PerconaServerMongoDBSpec carries only the backup sub-tree the driver reads
-// to gate on "does this cluster have on-demand backups wired up". The psmdb
-// operator only runs the percona-backup-mongodb agents (and therefore only
-// services PerconaServerMongoDBBackup CRs) when spec.backup.enabled is true
-// and at least one storage is declared; without that a Backup CR would sit in
-// "waiting"/"error" forever. The driver reads these to surface a precise
-// precondition message instead of a generic deadline hang.
+// PerconaServerMongoDBSpec carries the backup configuration and the image and
+// TLS Secret used to check the target after a restore.
 type PerconaServerMongoDBSpec struct {
-	Backup PerconaServerMongoDBBackupConfig `json:"backup,omitempty"`
+	Image   string                           `json:"image,omitempty"`
+	Secrets *PerconaServerMongoDBSecrets     `json:"secrets,omitempty"`
+	Backup  PerconaServerMongoDBBackupConfig `json:"backup,omitempty"`
 	// Sharding is read on the restore path only. It is a pointer so the
 	// server-side apply of spec.backup.storages never sends a sharding key and
 	// never takes ownership of it.
 	Sharding *PerconaServerMongoDBSharding `json:"sharding,omitempty"`
+}
+
+type PerconaServerMongoDBSecrets struct {
+	SSL string `json:"ssl,omitempty"`
 }
 
 // PerconaServerMongoDBSharding mirrors psmdb .spec.sharding down to the enabled
