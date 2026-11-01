@@ -2,9 +2,7 @@
 """Reject added positional selectors on multi-resource Helm templates.
 
 Usage: python3 hack/check-helm-document-indices.py <base-ref>
-Requires mikefarah/yq, like the chart test tooling. Existing indices are left
-alone. This static check counts --- separated blocks with a top-level kind;
-it does not evaluate conditional documents or resources emitted by helpers/ranges.
+Requires mikefarah/yq, like the chart test tooling.
 """
 
 import json
@@ -19,6 +17,11 @@ def git(*args):
 
 
 def check(base):
+    """Check added indices, leaving existing ones alone.
+
+    This static check counts --- separated blocks with a top-level kind; it does
+    not evaluate conditional documents or resources emitted by helpers/ranges.
+    """
     root = Path(git("rev-parse", "--show-toplevel").strip())
     additions = {}
     path = None
