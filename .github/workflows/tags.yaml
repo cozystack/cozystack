@@ -120,6 +120,7 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          SBOM: '1'
           PLATFORM: linux/arm64
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
           # Read the arm64 cache build-arm64-nightly.yaml keeps warm; a release
@@ -290,11 +291,14 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
-      # Only for the matchbox rebuild below: the default docker driver cannot
-      # build an index, and `use: false` keeps make build on that driver.
-      - name: Set up Buildx for matchbox (docker-container driver)
+      # Every image carries an SBOM attestation, which the default docker driver
+      # cannot attach, and the matchbox index below needs this driver too.
+      # docker.io pulls go through the mirror in hack/buildkitd.toml, as the
+      # arm64 leg's do. `use: false` keeps plain `docker build` on the default
+      # driver; the builds name this one with BUILDER.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
         if: steps.check_release.outputs.release_exists == 'false'
-        id: matchbox_buildx
+        id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           driver: docker-container
@@ -315,17 +319,16 @@ jobs:
           # The arm64 leg skips the talos package, so matchbox gets no arm64
           # half to stitch. Its Dockerfile only copies files, so both arches
           # build here without QEMU and the stamped ref pins the index.
-          make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64 BUILDER="$MATCHBOX_BUILDER"
+          make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64
         env:
-          MATCHBOX_BUILDER: ${{ steps.matchbox_buildx.outputs.name }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          SBOM: '1'
           # Cache manifests are registry-portable (oci-mediatypes=true) — read
           # them from OCIR while pushing images to GHCR. A missing :buildcache
           # ref 404s harmlessly into a cold build.
           CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
-          # amd64 here; build-arm64 builds arm64 natively. This job also
-          # builds on the default docker driver, which handles a
-          # multi-platform image only on the containerd image store.
+          # amd64 here; build-arm64 builds arm64 natively.
           PLATFORM: linux/amd64
           # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
           # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
