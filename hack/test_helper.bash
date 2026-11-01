@@ -10,6 +10,8 @@ setup() {
   strict_setup
 }
 
+# Only a successful matcher explicitly reporting no match passes; missing,
+# non-regular or unreadable files and matcher errors fail closed.
 assert_file_lacks_pattern() {
   local pattern="$1"
   local file="$2"
