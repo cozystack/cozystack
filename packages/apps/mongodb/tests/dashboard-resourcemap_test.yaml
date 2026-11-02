@@ -104,3 +104,61 @@ tests:
           path: roleRef.apiGroup
           value: rbac.authorization.k8s.io
         documentIndex: 1
+
+  - it: Role has exactly six rules
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - lengthEqual:
+          path: rules
+          count: 6
+
+  - it: grants read on the application's own cluster and bootstrap restore by name
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[3]
+          value:
+            apiGroups:
+              - psmdb.percona.com
+            resources:
+              - perconaservermongodbs
+            resourceNames:
+              - test-mongodb
+            verbs: ["get", "list", "watch"]
+      - equal:
+          path: rules[4]
+          value:
+            apiGroups:
+              - psmdb.percona.com
+            resources:
+              - perconaservermongodbrestores
+            resourceNames:
+              - test-mongodb-restore
+            verbs: ["get", "list", "watch"]
+
+  - it: grants read on the backups of the namespace and nothing wider
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[5]
+          value:
+            apiGroups:
+              - psmdb.percona.com
+            resources:
+              - perconaservermongodbbackups
+            verbs: ["get", "list", "watch"]

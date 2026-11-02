@@ -130,3 +130,45 @@ tests:
           path: spec.backupSource.s3.prefix
           value: "10"
         template: templates/restore.yaml
+
+  - it: restores from bootstrap.destinationPath and keeps backing up to backup.destinationPath
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      bootstrap:
+        enabled: true
+        backupName: "2026-10-01T02:00:21Z"
+        destinationPath: "s3://mybucket/mongodb/source/"
+      backup:
+        enabled: true
+        destinationPath: "s3://mybucket/mongodb/restored/"
+        endpointURL: "https://s3.example.org"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.prefix
+          value: mongodb/restored/
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.prefix
+          value: mongodb/source/
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://mybucket/mongodb/source/2026-10-01T02:00:21Z
+        template: templates/restore.yaml
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        template: templates/mongodb.yaml
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - equal:
+          path: spec.backupSource.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        template: templates/restore.yaml

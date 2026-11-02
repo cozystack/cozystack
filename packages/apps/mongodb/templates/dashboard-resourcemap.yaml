@@ -26,6 +26,32 @@ rules:
   resourceNames:
   - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]
+{{- /*
+  Read on the application's own operator objects, so the tenant sees the
+  cluster state, the backup names bootstrap.backupName takes, and how the
+  bootstrap restore went. Backups get generated names and cannot be granted
+  by name, so that rule covers the namespace, which holds only this tenant's
+  applications.
+*/}}
+- apiGroups:
+  - psmdb.percona.com
+  resources:
+  - perconaservermongodbs
+  resourceNames:
+  - {{ .Release.Name }}
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - psmdb.percona.com
+  resources:
+  - perconaservermongodbrestores
+  resourceNames:
+  - {{ .Release.Name }}-restore
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - psmdb.percona.com
+  resources:
+  - perconaservermongodbbackups
+  verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
