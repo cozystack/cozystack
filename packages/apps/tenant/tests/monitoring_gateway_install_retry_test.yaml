@@ -1,0 +1,104 @@
+suite: monitoring and gateway tenant HelmReleases retry a failed install in place
+
+# Named after the two releases rather than after a class. They do not share one:
+# monitoring loses storage and gateway loses a regenerable key. The tenant's
+# etcd and seaweedfs releases lose storage as well and are outside this suite,
+# so a class-shaped title here would print as PASS over members it never
+# looked at.
+#
+# Restrict rendering to the two templates asserted on, so a template this suite
+# makes no claim about cannot fail it. That is not hypothetical: at the time of
+# writing, dropping the restriction reds all four tests on keycloakgroups.yaml,
+# which errors with "index of untyped nil" on the `.Values._cluster` the
+# platform injects and this suite has no reason to set. Adding a template to
+# the list below is safe.
+templates:
+  - templates/monitoring.yaml
+  - templates/gateway.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+set:
+  monitoring: true
+  gateway: true
+
+tests:
+  # Install remediation is an uninstall in every case Flux offers, and neither
+  # release disables hooks on it, so a remediated install runs the app chart's
+  # post-delete cleanup Job. The monitoring one deletes PVCs by the
+  # apps.cozystack.io/application.name=<release>-system label, and the metrics
+  # and logs claim templates stamp exactly that label so the operator copies it
+  # onto the storage PVCs. An install that misses its budget therefore deletes
+  # the tenant's metrics and logs, which nothing reconstructs.
+  - it: retries a failed monitoring install instead of deleting the storage
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.install.strategy.retryInterval
+          value: 30s
+
+  # The gateway cleanup Job deletes the cozystack-acme-account Secret. That key
+  # regenerates on the next install, so the cost is re-registration against the
+  # ACME provider and its rate limits rather than lost data. Same mechanism,
+  # smaller stake, and worth fixing for the same reason: remediation invokes a
+  # teardown written for an honest uninstall.
+  - it: retries a failed gateway install instead of discarding the ACME account
+    asserts:
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.install.strategy.retryInterval
+          value: 30s
+
+  # The controller performs the retry of a failed install as an upgrade, so
+  # without a strategy here that retry's own failure falls through to upgrade
+  # remediation instead of retrying again.
+  - it: carries the strategy on the upgrade action the retry runs as
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.upgrade.strategy.retryInterval
+          value: 30s
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.upgrade.strategy.retryInterval
+          value: 30s
+
+  # The strategy governs a failed release. An absent release and an out-of-sync
+  # one take different branches, which consult the retry count instead and stop
+  # acting once it is exhausted.
+  - it: keeps unlimited retries for the branches the strategy does not reach
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - template: templates/gateway.yaml
+        equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
