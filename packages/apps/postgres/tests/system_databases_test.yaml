@@ -109,3 +109,15 @@ tests:
       - matchRegex:
           path: stringData["init.sh"]
           pattern: "(?s)== release system databases.*if \\[ \"\\$db\" = template1 \\]; then.*SELECT 'DROP EVENT TRIGGER IF EXISTS trigger_auto_grant', 'DROP FUNCTION auto_grant_schema_privileges\\(\\)' WHERE position\\('''template1_admin''' IN .*== delete databases"
+
+  # That clone's public schema also came from template1, owned by
+  # template1_admin; left to the orphaned-roles pass it would end up owned by
+  # cozystack:orphaned and the database owner would lose CREATE on it.
+  - it: gives an inherited public schema back to its default owner
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)if \\[ \"\\$db\" = template1 \\]; then.*SELECT format\\('ALTER SCHEMA public OWNER TO %s', .*\\) WHERE EXISTS \\(SELECT FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = 'public' AND r.rolname = 'template1_admin'\\).*== delete databases"

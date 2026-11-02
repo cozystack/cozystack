@@ -341,8 +341,9 @@ stringData:
       template0 accepts no connection, and the Job that commented it never got
       further, so only the comment is cleared. A database created from
       template1 while it was taken over inherited its trigger, naming
-      template1_admin; that copy goes too, and a declared database gets its own
-      back from the grant pass further down.
+      template1_admin, and its public schema owned by that role; the trigger
+      goes, public returns to its default owner, and a declared database gets
+      its trigger back from the grant pass further down.
     */}}
     SYSTEM_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN ('postgres', 'template0', 'template1')")
     echo "system databases to release: $SYSTEM_DBS"
@@ -362,6 +363,7 @@ stringData:
     for other in $(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"); do
     psql -v ON_ERROR_STOP=1 --echo-queries --dbname "$other" <<\EOT
     SELECT 'DROP EVENT TRIGGER IF EXISTS trigger_auto_grant', 'DROP FUNCTION auto_grant_schema_privileges()' WHERE position('''template1_admin''' IN coalesce((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('auto_grant_schema_privileges()')), '')) > 0\gexec
+    SELECT format('ALTER SCHEMA public OWNER TO %s', CASE WHEN current_setting('server_version_num')::int >= 150000 THEN 'pg_database_owner' ELSE 'CURRENT_USER' END) WHERE EXISTS (SELECT FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = 'public' AND r.rolname = 'template1_admin')\gexec
     EOT
     done
     fi
