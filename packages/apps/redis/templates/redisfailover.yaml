@@ -14,9 +14,11 @@
   watch it. One Sentinel still lets the operator find the master (its quorum is
   replicas/2+1, so 1). The operator gives the Sentinel Deployment a PDB with
   minAvailable 1 whenever Redis has two replicas or fewer, which on a single
-  Sentinel would block every node drain, so that PDB is dropped with it.
+  Sentinel would block every node drain, so that PDB is dropped with it; the
+  operator does not delete a PDB it stops managing, hence
+  hooks/sentinel-pdb.yaml.
 */}}
-{{- $sentinelReplicas := ternary 1 3 (le (int .Values.replicas) 1) -}}
+{{- $sentinelReplicas := include "redis.sentinelReplicas" . | int -}}
 {{- $sentinelPreset := $sentinel.resourcesPreset | default .Values.resourcesPreset -}}
 {{- $sentinelResources := .Values.resources -}}
 {{- if or $sentinel.resources $sentinel.resourcesPreset -}}
