@@ -10,6 +10,9 @@
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $user) }}
 {{- fail (printf "invalid Kafka user name %q: it may contain only lowercase letters, digits and \"-\", and must start and end with a letter or a digit (it becomes part of a Kubernetes object name)" $user) }}
 {{- end }}
+{{- if gt (len (printf "%s-%s" $.Release.Name $user)) 253 }}
+{{- fail (printf "Kafka user name %q is too long: %s-%s, its KafkaUser and Secret name, must fit in 253 characters" $user $.Release.Name $user) }}
+{{- end }}
 {{- if has $user $reserved }}
 {{- fail (printf "Kafka user name %q is reserved: its credentials Secret %s-%s would collide with a Secret Strimzi manages for the cluster" $user $.Release.Name $user) }}
 {{- end }}

@@ -137,3 +137,21 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'Kafka user name "cluster-ca-cert" is reserved'
+
+  - it: refuses a user whose KafkaUser name would pass 253 characters
+    template: templates/users.yaml
+    set:
+      users:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is too long: kafka-test-a+, its KafkaUser and Secret name, must fit in 253 characters'
+
+  - it: accepts a user whose KafkaUser name is exactly 253 characters
+    template: templates/users.yaml
+    set:
+      users:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: {}
+    asserts:
+      - hasDocuments:
+          count: 1

@@ -43,6 +43,11 @@ spec:
       - resourceNames:
           - kafka-{{ .name }}-clients-ca-cert
           - kafka-{{ .name }}-cluster-ca-cert
+      # The User Operator copies a KafkaUser's labels onto the Secret holding
+      # its generated password and adds strimzi.io/kind.
+      - matchLabels:
+          strimzi.io/cluster: kafka-{{ .name }}
+          strimzi.io/kind: KafkaUser
   services:
     exclude: []
     include:
