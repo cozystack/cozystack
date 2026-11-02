@@ -86,13 +86,20 @@ stringData:
       only fail (template databases cannot be dropped, and this session is
       connected to postgres), which wedged every later upgrade, so they are
       handed back instead: the auto-grant trigger goes, since it names a role
-      about to be dropped and would make every CREATE SCHEMA fail, what the
-      <db>_admin and <db>_readonly roles own or were granted there goes back to
-      the superuser, public goes back to pg_database_owner (PostgreSQL 15 and
-      later), and the comment is cleared. The orphaned-roles pass below then
-      drops the roles; it does not visit template1, hence the per-database
-      REASSIGN/DROP OWNED here. template0 accepts no connection, and the Job
-      that commented it never got further, so only the comment is cleared.
+      about to be dropped and would make every CREATE SCHEMA fail; what the
+      <db>_admin and <db>_readonly roles own there goes to a NOLOGIN
+      cozystack:orphaned role, created here if missing, and is made SECURITY
+      INVOKER, so that a tenant's SECURITY DEFINER function never ends up owned
+      by the superuser; the database itself returns to the superuser, public
+      to pg_database_owner (to the superuser before PostgreSQL 15), and the
+      comment is cleared. The orphaned-roles pass below then drops the roles;
+      it does not visit template1, hence the per-database pass here. template0
+      accepts no connection, and the Job that commented it never got further,
+      so only the comment is cleared. A database created from template1 while
+      it was taken over inherited its trigger, naming template1_admin, and
+      objects owned by that role, which the orphaned-roles pass below would
+      not reach since it only runs in postgres; both go too, and a declared
+      database gets its trigger back from the grant pass further down.
     */}}
     SYSTEM_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN ('postgres', 'template0', 'template1')")
     echo "system databases to release: $SYSTEM_DBS"
@@ -101,9 +108,22 @@ stringData:
     psql -v ON_ERROR_STOP=1 --echo-all --dbname "$db" -v db="$db" <<\EOT
     DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;
     DROP FUNCTION IF EXISTS auto_grant_schema_privileges();
-    SELECT format('REASSIGN OWNED BY %I TO CURRENT_USER', r), format('DROP OWNED BY %I', r) FROM unnest(ARRAY[:'db' || '_admin', :'db' || '_readonly']) AS r WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = r)\gexec
-    SELECT 'ALTER SCHEMA public OWNER TO pg_database_owner' WHERE current_setting('server_version_num')::int >= 150000 AND EXISTS (SELECT FROM pg_namespace WHERE nspname = 'public')\gexec
+    SELECT 'CREATE ROLE "cozystack:orphaned" NOLOGIN NOINHERIT' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'cozystack:orphaned')\gexec
+    SELECT format('REASSIGN OWNED BY %I TO "cozystack:orphaned"', r), format('DROP OWNED BY %I', r) FROM unnest(ARRAY[:'db' || '_admin', :'db' || '_readonly']) AS r WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = r)\gexec
+    ALTER DATABASE :"db" OWNER TO CURRENT_USER;
+    SELECT format('ALTER SCHEMA public OWNER TO %s', CASE WHEN current_setting('server_version_num')::int >= 150000 THEN 'pg_database_owner' ELSE 'CURRENT_USER' END) WHERE EXISTS (SELECT FROM pg_namespace WHERE nspname = 'public')\gexec
+    SELECT format('ALTER %s %s SECURITY INVOKER', CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END, p.oid::regprocedure) FROM pg_proc p WHERE p.proowner = '"cozystack:orphaned"'::regrole AND p.prosecdef\gexec
+    SELECT format('ALTER VIEW %s SET (security_invoker = true)', c.oid::regclass) FROM pg_class c WHERE c.relowner = '"cozystack:orphaned"'::regrole AND c.relkind = 'v' AND current_setting('server_version_num')::int >= 150000 AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false)\gexec
     EOT
+    fi
+    if [ "$db" = template1 ]; then
+    for other in $(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"); do
+    psql -v ON_ERROR_STOP=1 --echo-queries --dbname "$other" <<\EOT
+    SELECT 'DROP EVENT TRIGGER IF EXISTS trigger_auto_grant', 'DROP FUNCTION auto_grant_schema_privileges()' WHERE position('''template1_admin''' IN coalesce((SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('auto_grant_schema_privileges()')), '')) > 0\gexec
+    SELECT format('REASSIGN OWNED BY %I TO "cozystack:orphaned"', r), format('DROP OWNED BY %I', r) FROM unnest(ARRAY['template1_admin', 'template1_readonly']) AS r WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = r)\gexec
+    SELECT format('ALTER %s %s SECURITY INVOKER', CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END, p.oid::regprocedure) FROM pg_proc p WHERE p.proowner = '"cozystack:orphaned"'::regrole AND p.prosecdef\gexec
+    EOT
+    done
     fi
     psql -v ON_ERROR_STOP=1 --echo-all -v db="$db" <<\EOT
     COMMENT ON DATABASE :"db" IS NULL;

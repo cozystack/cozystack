@@ -80,4 +80,32 @@ tests:
           pattern: "SYSTEM_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN \\('postgres', 'template0', 'template1'\\)\"\\)"
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*REASSIGN OWNED BY %I TO CURRENT_USER.*DROP OWNED BY %I.*ALTER SCHEMA public OWNER TO pg_database_owner.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
+          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*REASSIGN OWNED BY %I TO "cozystack:orphaned"''.*DROP OWNED BY %I.*ALTER DATABASE :"db" OWNER TO CURRENT_USER;.*ALTER SCHEMA public OWNER TO %s.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
+
+  # A tenant holding <db>_admin may have created a SECURITY DEFINER function
+  # there; handed to the superuser it would run with superuser rights for
+  # anyone PUBLIC can execute it. It goes to cozystack:orphaned and is made
+  # SECURITY INVOKER, as in the orphaned-roles pass.
+  - it: never hands a released system database's objects to the superuser
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY %I TO CURRENT_USER'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)== release system databases.*ALTER %s %s SECURITY INVOKER.*ALTER VIEW %s SET \(security_invoker = true\).*== delete databases'
+
+  # A database created from template1 while it was taken over inherited the
+  # trigger naming template1_admin, which the orphaned-roles pass then drops;
+  # CREATE SCHEMA would fail there from that point on.
+  - it: drops the template1 trigger inherited by other databases
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)== release system databases.*if \\[ \"\\$db\" = template1 \\]; then.*SELECT 'DROP EVENT TRIGGER IF EXISTS trigger_auto_grant', 'DROP FUNCTION auto_grant_schema_privileges\\(\\)' WHERE position\\('''template1_admin''' IN .*== delete databases"
