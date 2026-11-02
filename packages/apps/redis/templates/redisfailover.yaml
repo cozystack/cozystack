@@ -1,3 +1,11 @@
+{{- $spreadConstraints := list }}
+{{- with dig "scheduling" "globalAppTopologySpreadConstraints" "" (.Values._cluster | default dict) }}
+{{-   $policy := fromYaml . }}
+{{-   $spreadConstraints = dig "topologySpreadConstraints" (list) $policy }}
+{{-   if or (not (kindIs "slice" $spreadConstraints)) (not $spreadConstraints) }}
+{{-     fail (trim (printf "redis: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list. %s" (get $policy "Error"))) }}
+{{-   end }}
+{{- end }}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
   {{- $password := randAlphaNum 32 | b64enc }}
@@ -25,11 +33,41 @@ metadata:
 spec:
   sentinel:
     replicas: 3
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "sentinel")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+    {{- else }}
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ .Release.Name }}
+          app.kubernetes.io/component: sentinel
+    {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   redis:
     image: "redis:{{ include "redis.versionMap" $ }}"
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
+    {{- if $spreadConstraints }}
+    topologySpreadConstraints:
+    {{- range $spreadConstraints }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "redis")))) (hasKey . "labelSelector")) | nindent 6 }}
+    {{- end }}
+    {{- else }}
+    topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ .Release.Name }}
+          app.kubernetes.io/component: redis
+    {{- end }}
     {{- with .Values.size }}
     storage:
       persistentVolumeClaim:
