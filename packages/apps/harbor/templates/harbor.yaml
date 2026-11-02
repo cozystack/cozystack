@@ -89,10 +89,38 @@ spec:
     namespace: cozy-system
   interval: 5m
   timeout: 15m
+  {{- /* This nested release owns the whole harbor workload: the Deployments,
+         the inline RedisFailover and its volume. Flux's default install
+         strategy remediates a failed install by uninstalling, and install
+         remediation is an uninstall in every case Flux offers, so a first
+         install that goes over budget is torn down between attempts and the
+         next one re-provisions the redis PVC and re-runs the master election
+         from zero. It goes over budget on a busy runner: harbor-core blocks on
+         redis, and the nginx Deployment reaches the default
+         progressDeadlineSeconds of 600s, which Flux reads as a stalled
+         resource and fails the install early. RetryOnFailure keeps the
+         manifests applied and retries the failed release, so the convergence
+         already under way continues instead of restarting. Both actions carry
+         the strategy because the controller performs that retry as an upgrade
+         and the retry's own failure would otherwise fall through to upgrade
+         remediation. The cost is that a genuine upgrade failure retries rather
+         than rolls back, which gives up no stable safety net: with retries: -1
+         and the default strategy, upgrade remediation already rolled back and
+         retried without end. The remediation blocks stay because an absent
+         release consults install and an out-of-sync one consults upgrade, both
+         by retry count rather than by strategy. The parent release that
+         renders this one already carries the same strategy, stamped by the
+         apiserver that builds it from the Application. */}}
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   valuesFrom:

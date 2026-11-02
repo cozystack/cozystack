@@ -19,10 +19,40 @@ spec:
     namespace: cozy-system
   interval: 5m
   timeout: 10m
+  {{- /* Flux's default install strategy remediates a failed install by
+         uninstalling, and install remediation is an uninstall in every case
+         Flux offers. This release does not disable hooks on it, so that
+         uninstall runs the seaweedfs chart's post-delete cleanup Job, which
+         deletes the volume PVCs by label and explicitly reclaims the
+         keep-protected CNPG Cluster holding the filer metadata, precisely
+         because nothing else removes it. An install that misses its budget
+         therefore destroys the object store's data and the metadata database
+         that indexes it, and the next attempt starts from nothing rather than
+         resuming. RetryOnFailure keeps the manifests applied and retries the
+         failed release, so no uninstall happens and the cleanup Job never runs.
+         Both actions carry the strategy because the controller performs that
+         retry as an upgrade, so on install alone the retry's own failure falls
+         through to upgrade remediation. Two things are traded away. A genuine
+         upgrade failure now retries rather than rolls back, which gives up no
+         stable safety net: with retries: -1 and the default strategy, upgrade
+         remediation already rolled back and retried without end. And the
+         uninstall was the only automatic clean slate, so an install wedged on a
+         bad resource state retries against that state until an operator removes
+         the release. For a release that owns data that is the right exchange,
+         because lost data does not come back and a wedged install does. The
+         remediation blocks stay because an absent release consults install and
+         an out-of-sync one consults upgrade, both by retry count rather than by
+         strategy. */}}
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   valuesFrom:
