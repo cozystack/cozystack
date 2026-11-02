@@ -1,0 +1,9 @@
+prometheus-operator-crds:
+  crds:
+    # Keep the CRDs on a chart uninstall. Without this a failed install that
+    # remediates by uninstalling takes the definitions with it, and the API
+    # server then garbage-collects every ServiceMonitor, PodMonitor,
+    # PrometheusRule and ScrapeConfig in the cluster. Removing this release on
+    # purpose now leaves the definitions behind to be deleted by hand.
+    annotations:
+      helm.sh/resource-policy: keep

@@ -1,0 +1,57 @@
+# The tenant addon HelmRelease that ships this chart remediates a failed
+# install by uninstalling the release, and an uninstall deletes whatever the
+# chart rendered. Deleting a CRD makes the API server garbage-collect every
+# custom resource of that kind, so an unannotated CRD here costs the cluster
+# every VolumeSnapshot it holds — the objects that carry the only reference to
+# a snapshot on the storage backend.
+#
+# The first case scopes to no template at all, so it holds every document the
+# chart renders, including a CRD that arrives in a file `make update` starts
+# fetching later. The named cases below pin which CRD each file carries, so an
+# assertion cannot pass against a document it was not meant to inspect.
+suite: volumesnapshot CRDs survive a release uninstall
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the VolumeSnapshotClass CRD
+    template: templates/volumesnapshotclasses.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: volumesnapshotclasses.snapshot.storage.k8s.io
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the VolumeSnapshotContent CRD
+    template: templates/volumesnapshotcontents.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: volumesnapshotcontents.snapshot.storage.k8s.io
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the VolumeSnapshot CRD
+    template: templates/volumesnapshots.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: volumesnapshots.snapshot.storage.k8s.io
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
