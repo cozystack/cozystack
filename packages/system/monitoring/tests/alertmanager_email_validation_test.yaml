@@ -226,3 +226,35 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email.to has an empty entry, got \"   \""
+
+  - it: rejects a template without a define action
+    set:
+      alerta.alerts.email.template: "plain text {{ .Status }}"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.template must define named templates, such as email.default.subject and email.default.html, because Alertmanager only uses the file through the names it defines"
+
+  - it: rejects a template that is not text
+    set:
+      alerta.alerts.email.template:
+        subject: "[prod]"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.template must be the text of an Alertmanager template file, got a map"
+
+  - it: names template among the fields still set when the addresses are cleared
+    set:
+      alerta.alerts.email.to: ""
+      alerta.alerts.email.from: ""
+      alerta.alerts.email.smarthost: ""
+      alerta.alerts.email.template: '{{ define "email.default.subject" }}[prod]{{ end }}'
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email to, from and smarthost must all be set to enable email alerts. To turn email off, clear every field under alerta.alerts.email. Fields still set are template"
+
+  - it: rejects a template given as a boolean instead of being dropped by the default
+    set:
+      alerta.alerts.email.template: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.template must be the text of an Alertmanager template file, got a bool"

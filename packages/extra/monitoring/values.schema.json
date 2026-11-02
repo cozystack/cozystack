@@ -379,6 +379,11 @@
                   "type": "string",
                   "default": ""
                 },
+                "template": {
+                  "description": "Text of an Alertmanager template file that changes how the emails look. Define `email.default.subject` and `email.default.html` in it to replace the subject and the HTML body Alertmanager uses for every email, for example to mark the severity or to link to Alerta. The chart stores the text in a ConfigMap named `alertmanager-email-template` and lists it among the Alertmanager templates, so Alertmanager parses it together with its configuration. A template that does not parse fails that load, a running Alertmanager keeps the configuration it already has and a pod that starts with it does not come up. A template that parses but fails on a notification, for example on a missing key, drops that email. The text must contain at least one `define` action. Empty keeps the Alertmanager defaults.",
+                  "type": "string",
+                  "default": ""
+                },
                 "to": {
                   "description": "Recipient address, or several separated by commas. A display name is accepted, such as `Oncall \u003concall@example.org\u003e`, as long as it carries no comma. Quote display names containing punctuation such as `:`, `@`, parentheses or `?`. RFC 2047 encoded words are not accepted. IP domain literals accept dotted-quad IPv4 only. IPv6 literals are rejected because Go mail parsers disagree on their syntax across versions. ASCII control characters are rejected. Addresses must be literal, so Alertmanager template actions are rejected. The accepted form is deliberately narrower than RFC 5322. The local part must be a dot-atom, with no leading, trailing or doubled dot, and quoted local parts, comments and a `mailto:` prefix are rejected. An address outside that form fails the render, because Alertmanager parses addresses only when it sends and drops the notification with no record a tenant can read.",
                   "type": "string",
