@@ -1,0 +1,18 @@
+suite: etcd alerts stay inside their release namespace
+
+release:
+  name: etcd
+  namespace: tenant-scope
+
+templates:
+  - templates/prometheus-rules.yaml
+
+tests:
+  - it: scopes every alert query to this tenant's scrape job
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[*].expr
+          pattern: 'job="tenant-scope/etcd-pod-scrape"'
+      - notMatchRegex:
+          path: spec.groups[0].rules[*].expr
+          pattern: 'job=~'
