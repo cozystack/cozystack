@@ -123,12 +123,25 @@
   {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got %q). For other issuers, extend the controller to map the name to the corresponding ACME server URL." $issuerName) }}
 {{- end }}
 {{- end }}
+{{- /*
+  The attached namespaces are the platform's own (cozy-* system namespaces
+  and default): their routes are always parented to the publishing
+  tenant's Gateway. Only that tenant lists them. Any other tenant that
+  owns a Gateway (tenant.spec.gateway=true) would otherwise make the
+  controller stamp namespace.cozystack.io/gateway=<that tenant> on every
+  platform namespace, so several Gateways would fight over the same
+  labels and the platform routes would follow the last writer. The ACME
+  challenge namespace does not depend on this list: the controller
+  always admits it on the port-80 listener.
+*/}}
 {{- $extraNs := list }}
+{{- if eq .Release.Namespace $publishingNS }}
 {{- range splitList "," ((index .Values._cluster "gateway-attached-namespaces") | default "") }}
   {{- $ns := . | trim }}
   {{- if $ns }}
     {{- $extraNs = append $extraNs $ns }}
   {{- end }}
+{{- end }}
 {{- end }}
 ---
 apiVersion: gateway.cozystack.io/v1alpha1
