@@ -76,3 +76,39 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # The pods' job-name label takes 63 characters at most; a 53-character
+  # release name plus -sentinel-pdb would pass it and Kubernetes would refuse
+  # the Job, leaving the stale PDB in place.
+  - it: keeps the Job name within 63 characters for the longest release name
+    release:
+      name: redis-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      upgrade: true
+    set:
+      replicas: 1
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: ^[a-z0-9-]{1,63}$
+      - matchRegex:
+          path: metadata.name
+          pattern: '[a-z0-9]$'
+      - equal:
+          path: spec.template.spec.containers[0].command[4]
+          value: rfs-redis-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - it: keeps the full Job name for a short release name
+    release:
+      upgrade: true
+    set:
+      replicas: 1
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-redis-sentinel-pdb

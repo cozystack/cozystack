@@ -57,7 +57,10 @@ subjects:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ $name }}
+  {{- /* The API server copies a Job's name into its pods' job-name label,
+         which takes 63 characters at most, while a release name may take 53.
+         The objects above have no such limit and keep the full name. */}}
+  name: {{ $name | trunc 63 | trimSuffix "-" }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
