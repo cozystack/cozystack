@@ -82,3 +82,35 @@ tests:
       - equal:
           path: spec.strategy.rollingUpdate.maxSurge
           value: 1
+
+  # A Proxmox template that passes a GPU through leaves gpus empty, so the
+  # chart cannot tell; the pool says so itself.
+  - it: lets a pool set maxUnavailable explicitly
+    set:
+      maxUnavailable: 1
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: honours an explicit 0 on a GPU pool
+    set:
+      maxUnavailable: 0
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  - it: refuses a negative maxUnavailable (schema minimum 0)
+    set:
+      maxUnavailable: -1
+    asserts:
+      - failedTemplate: {}
