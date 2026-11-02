@@ -83,6 +83,22 @@ jobs:
       line: ${{ steps.parse.outputs.line }}
       e2e_verification: ${{ steps.e2e-gate.outputs.verification || steps.e2e-bypass.outputs.verification }}
     steps:
+      # A dispatch runs the copy of this workflow at the ref it was dispatched
+      # from, so a dispatch from release-X.Y runs that branch's older copy (on
+      # 2026-10-16 one job instead of five) and, now that release assets are
+      # signed, would fail at the upload step after the staging branch, the
+      # promotion-* candidate and the draft already exist. docs/release.md also
+      # pins the signature identity to this workflow on main. Refuse anything
+      # else here, before the first write.
+      - name: Refuse a dispatch from any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Promote RC must be dispatched from 'main' (got '$REF'); pick 'main' as the branch and let rc_tag choose the line."
+            exit 1
+          fi
+
       # Validate the dispatch input against a strict rc pattern before it ever
       # reaches a shell or an API call. Derives the stable version, the rc
       # staging branch, and the maintenance line.
