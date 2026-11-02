@@ -1,0 +1,123 @@
+suite: init-script never takes over or drops a system database
+
+# Each of postgres, template0 and template1 used to be accepted in databases and
+# handled like an application database: owned by <db>_admin, given the
+# auto-grant event trigger, and on removal sent to DROP DATABASE, which fails on
+# all three (template databases cannot be dropped, and the Job is connected to
+# postgres) and wedged every later upgrade. template1 also passed the takeover
+# on to every database created afterwards.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: refuses postgres in databases
+    set:
+      databases:
+        postgres: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.postgres is refused: \"postgres\" is a PostgreSQL system database"
+
+  - it: refuses template0 in databases
+    set:
+      databases:
+        template0: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.template0 is refused: \"template0\" is a PostgreSQL system database"
+
+  - it: refuses template1 in databases
+    set:
+      databases:
+        template1: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "databases.template1 is refused: \"template1\" is a PostgreSQL system database"
+
+  - it: still accepts an application database whose name contains a system name
+    set:
+      databases:
+        postgres_app: {}
+        mytemplate1: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'CREATE DATABASE "postgres_app"'
+
+  # A release that a previous version let manage a system database still carries
+  # its comment. The delete pass must never select it, whatever values say.
+  - it: never lists a system database for DROP DATABASE
+    set:
+      databases:
+        appdb: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DELETE_DBS=\$\(for db in \$MANAGED_DBS; do case " postgres template0 template1 \$DEFINED_DBS " in \*" \$db "\*\) :;; \*\) echo \$db;; esac; done\)'
+
+  - it: hands a taken-over system database back before the delete pass
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "SYSTEM_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN \\('postgres', 'template0', 'template1'\\)\"\\)"
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*REASSIGN OWNED BY %I TO "cozystack:orphaned"''.*DROP OWNED BY %I.*ALTER DATABASE :"db" OWNER TO CURRENT_USER;.*ALTER SCHEMA public OWNER TO %s.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
+
+  # A tenant holding <db>_admin may have created a SECURITY DEFINER function
+  # there; handed to the superuser it would run with superuser rights for
+  # anyone PUBLIC can execute it. It goes to cozystack:orphaned and is made
+  # SECURITY INVOKER, as in the orphaned-roles pass.
+  - it: never hands a released system database's objects to the superuser
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY %I TO CURRENT_USER'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: '(?s)== release system databases.*ALTER %s %s SECURITY INVOKER.*ALTER VIEW %s SET \(security_invoker = true\).*== delete databases'
+
+  # A database created from template1 while it was taken over inherited the
+  # trigger naming template1_admin, which the orphaned-roles pass then drops;
+  # CREATE SCHEMA would fail there from that point on.
+  - it: drops the template1 trigger inherited by other databases
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)== release system databases.*if \\[ \"\\$db\" = template1 \\]; then.*SELECT 'DROP EVENT TRIGGER IF EXISTS trigger_auto_grant', 'DROP FUNCTION auto_grant_schema_privileges\\(\\)' WHERE position\\('''template1_admin''' IN .*== delete databases"
+
+  # That clone's public schema also came from template1, owned by
+  # template1_admin; left to the orphaned-roles pass it would end up owned by
+  # cozystack:orphaned and the database owner would lose CREATE on it.
+  - it: gives an inherited public schema back to its default owner
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)if \\[ \"\\$db\" = template1 \\]; then.*SELECT format\\('ALTER SCHEMA public OWNER TO %s', .*\\) WHERE EXISTS \\(SELECT FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = 'public' AND r.rolname = 'template1_admin'\\).*== delete databases"
