@@ -1,0 +1,26 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-vmagent
+spec:
+  groups:
+  - name: vmagent
+    params: {}
+    rules:
+    - alert: VMAgentScrapeSizeExceeded
+      expr: increase(vm_promscrape_max_scrape_size_exceeded_errors_total[10m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        exported_instance: '{{ $labels.namespace }}/{{ $labels.pod }}'
+        service: vmagent
+      annotations:
+        summary: vmagent refuses scrape responses larger than its size limit.
+        description: >-
+          vmagent {{ $labels.namespace }}/{{ $labels.pod }} in cluster {{ $labels.cluster }} dropped
+          scrape responses that exceed -promscrape.maxScrapeSize or the scrape's max_scrape_size.
+          The affected targets report up == 0, so TargetDown or KubeAPIDown may fire for a healthy
+          target. The counter carries no target label: find the target on the vmagent /targets
+          page, where the last error names the size limit, then raise max_scrape_size on that
+          scrape. For kube-apiserver on the management cluster this is the
+          vmagent.apiserverMaxScrapeSize value of the monitoring-agents component.
