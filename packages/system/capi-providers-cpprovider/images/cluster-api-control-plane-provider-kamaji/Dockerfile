@@ -1,20 +1,22 @@
 # Builds the clastix/cluster-api-control-plane-provider-kamaji manager
-# binary from a tagged upstream release with a small backport patch.
+# binary from a tagged upstream release with patches/ applied.
 #
-# We pin to v0.19.0 because everything after it (upstream master, the
-# unreleased v0.20.0) renames api/v1alpha1 -> api/v1alpha2 wholesale and
-# ships a CRD that serves only v1alpha2 with no conversion webhook -
-# upgrading would orphan every existing KamajiControlPlane in the wild
-# until a manual rewrite. patches/0001-backport-additional-service-ports-pr347.diff
-# brings PR #347 (AdditionalServicePorts) back to the v1alpha1 schema,
-# which our chart relies on for the talos-trustd sidecar port. Once
-# upstream ships a real migration path, drop both this Dockerfile and the
-# patch and consume vanilla upstream images directly.
+# Upstream serves only v1alpha2 since v0.20.0 (CAPI v1beta2 contract) and
+# keeps the v1alpha1 conversion webhook for its commercial channel; the
+# community PR was closed with an invitation to carry it in our own build:
+# https://github.com/clastix/cluster-api-control-plane-provider-kamaji/pull/339#issuecomment-6357975126
+# patches/0001-v1alpha1-conversion-webhook.diff is that PR, made lossless
+# (fields v1alpha1 lacks survive in the cluster.x-k8s.io/conversion-data
+# annotation) and with our v0.19.0 additionalServicePorts backport kept in
+# the v1alpha1 schema, so every KamajiControlPlane stored by
+# v0.19.0-cozystack.0 and the v1alpha1 manifests the kubernetes chart renders
+# keep working. Drop the patch once nothing reads or writes v1alpha1 and the
+# CRD status.storedVersions no longer lists it.
 FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
 ARG GOPROXY
 
 # Upstream release tag. Bump together with patches/ when refreshing.
-ARG VERSION=v0.19.0
+ARG VERSION=v0.21.0
 ARG TARGETOS
 ARG TARGETARCH
 
