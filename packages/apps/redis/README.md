@@ -79,7 +79,7 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 ### sentinel
 
-`sentinel.resources` and `sentinel.resourcesPreset` size the three Sentinel pods separately from the Redis pods. A Sentinel holds only its configuration and the failover state, so it needs a small fraction of what a Redis replica holding the dataset does. When the `sentinel` block sets neither, the Sentinel pods are sized like the Redis pods, which is how every instance was sized before these parameters existed.
+`sentinel.resources` and `sentinel.resourcesPreset` size the Sentinel pods separately from the Redis pods. A Sentinel holds only its configuration and the failover state, so it needs a small fraction of what a Redis replica holding the dataset does. When the `sentinel` block sets neither, the Sentinel pods are sized like the Redis pods, which is how every instance was sized before these parameters existed.
 
 ```yaml
 resourcesPreset: u1.small
