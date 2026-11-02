@@ -65,6 +65,11 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		*out = make([]GPU, len(*in))
 		copy(*out, *in)
 	}
+	if in.MaxUnavailable != nil {
+		in, out := &in.MaxUnavailable, &out.MaxUnavailable
+		*out = new(int)
+		**out = **in
+	}
 	out.Kubelet = in.Kubelet
 	out.Talos = in.Talos
 	out.Images = in.Images

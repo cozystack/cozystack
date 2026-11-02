@@ -108,6 +108,11 @@
         }
       }
     },
+    "maxUnavailable": {
+      "description": "Workers a rollout (instance type, image or version change) may remove before their replacement is up. Unset, it is 0, so each replacement joins before an old worker is drained, and 1 on a pool with `gpus`, whose replacement may need the very GPU the old worker holds. Set 1 on a Proxmox pool whose template passes a GPU through: the chart cannot see that GPU, and with 0 the rollout would wait for it forever.",
+      "type": "integer",
+      "minimum": 0
+    },
     "kubelet": {
       "description": "Kubelet resource reservations for this pool.",
       "type": "object",
