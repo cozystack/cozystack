@@ -1,0 +1,98 @@
+suite: node group rollout keeps capacity
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  # A rollout replaces every Machine. With maxUnavailable 1 a one-node group
+  # drained and deleted its only node as soon as the replacement Machine was
+  # created, leaving the group empty until the new node joined.
+  - it: never drains a node before its replacement is ready
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: surges up to the group ceiling
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 5
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 5
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  # CAPI rejects a RollingUpdate with maxSurge and maxUnavailable both 0.
+  - it: keeps a surge of one on a group capped at zero
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 0
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  # A replacement VM in a group with passed-through GPUs may need the very GPU
+  # the old node holds; with maxUnavailable 0 it would wait for it forever.
+  - it: lets a GPU group remove a node before its replacement is up
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 8Gi}
+          gpus:
+            - name: nvidia.com/AD102GL_L40S
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
