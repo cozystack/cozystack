@@ -2,6 +2,10 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: vm-instance
+  annotations:
+    # KubeVirt leaves a VirtualMachine's status.observedGeneration behind its
+    # generation, so kstatus never reports the VM Current and the wait never ends.
+    release.cozystack.io/helm-install-disable-wait: "true"
 spec:
   application:
     kind: VMInstance
