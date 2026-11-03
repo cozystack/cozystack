@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // LogsLimits bound what one logs request may make vlselect do.
@@ -65,6 +67,13 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 	// it rescans the whole retention every tick.
 	if strings.Contains(strings.ToLower(query), "ignore_global_time_filter") {
 		return nil, errorf(http.StatusBadRequest, "ignore_global_time_filter is not allowed")
+	}
+	// The substring check alone is bypassable: VictoriaLogs unquotes a
+	// quoted option name and joins words split by a comment. No option is
+	// needed by a tenant (the others tune concurrency or the time filter),
+	// so any options(...) block is refused.
+	if hasOptionsBlock(query) {
+		return nil, errorf(http.StatusBadRequest, "query options are not allowed")
 	}
 	out := url.Values{}
 	out.Set("query", query)
@@ -299,6 +308,42 @@ func parseTime(s string, now time.Time) (time.Time, error) {
 		return now.Add(-d), nil
 	}
 	return time.Time{}, fmt.Errorf("unsupported time %q", s)
+}
+
+// hasOptionsBlock reports whether the options keyword is followed by "(",
+// skipping whitespace and "#" comments the way the LogsQL lexer does. A
+// quoted "options" is never the keyword, but matching it too only refuses
+// a search for that literal phrase.
+func hasOptionsBlock(query string) bool {
+	lower := strings.ToLower(query)
+	for i := strings.Index(lower, "options"); i >= 0; {
+		rest := lower[i+len("options"):]
+		for rest != "" {
+			r, size := utf8.DecodeRuneInString(rest)
+			switch {
+			case unicode.IsSpace(r):
+				rest = rest[size:]
+				continue
+			case r == '#':
+				if n := strings.IndexByte(rest, '\n'); n >= 0 {
+					rest = rest[n+1:]
+				} else {
+					rest = ""
+				}
+				continue
+			}
+			break
+		}
+		if strings.HasPrefix(rest, "(") {
+			return true
+		}
+		next := strings.Index(lower[i+1:], "options")
+		if next < 0 {
+			return false
+		}
+		i += next + 1
+	}
+	return false
 }
 
 func isDigits(s string) bool {
