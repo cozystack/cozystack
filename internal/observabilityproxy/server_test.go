@@ -52,12 +52,12 @@ type mapStores map[string]string
 func (m mapStores) Resolve(ns string) (string, error) { return m[ns], nil }
 
 // newHarness wires the proxy to a fake apiserver that knows tokens "good"
-// (alice) and "bob-token" (bob), both allowed list logs in tenant-a only,
-// and to an upstream served by handler.
+// (alice) and "bob-token" (bob), both allowed list logs and metrics in
+// tenant-a only, and to an upstream served by handler.
 func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
 	h := &harness{t: t}
 	h.kube = newFakeKube(map[string]string{"good": "alice", "bob-token": "bob"}, func(_ string, a *authorizationv1.ResourceAttributes) bool {
-		return a.Namespace == "tenant-a" && a.Resource == "logs"
+		return a.Namespace == "tenant-a" && (a.Resource == "logs" || a.Resource == "metrics")
 	})
 	h.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -79,6 +79,13 @@ func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
 		h.stores = append(h.stores, store)
 		h.mu.Unlock()
 		return h.upstream.URL
+	}
+	cfg.Metrics.UpstreamURL = cfg.UpstreamURL
+	if cfg.Metrics.ShortTermStore == "" {
+		cfg.Metrics.ShortTermStore, cfg.Metrics.LongTermStore, cfg.Metrics.ShortTermRetention = "shortterm", "longterm", 72*time.Hour
+	}
+	if cfg.Metrics.Limits == (MetricsLimits{}) {
+		cfg.Metrics.Limits = testMetricsLimits()
 	}
 	if cfg.Logs == (LogsLimits{}) {
 		cfg.Logs = testLimits()
@@ -144,7 +151,9 @@ func TestServerStatusCodes(t *testing.T) {
 		{"other namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/logs/select/logsql/query", "good", http.StatusForbidden},
 		{"invalid namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/Tenant/logs/select/logsql/query", "good", http.StatusBadRequest},
 		{"unknown root", http.MethodGet, "/api/v1/namespaces/tenant-a/pods", "good", http.StatusNotFound},
-		{"namespace metrics not served yet", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/query", "good", http.StatusNotFound},
+		{"unknown metrics endpoint", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/status/tsdb", "good", http.StatusNotFound},
+		{"metrics in another namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/metrics/api/v1/query?query=up", "good", http.StatusForbidden},
+		{"metrics without token", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/query?query=up", "", http.StatusUnauthorized},
 		{"application log not served yet", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/log/select/logsql/query", "good", http.StatusNotFound},
 		{"application metrics not served yet", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/metrics/api/v1/query", "good", http.StatusNotFound},
 		{"tenant_ids not proxied", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/logs/select/tenant_ids", "good", http.StatusNotFound},
