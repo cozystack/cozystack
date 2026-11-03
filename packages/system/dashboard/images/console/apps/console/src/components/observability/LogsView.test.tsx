@@ -90,6 +90,16 @@ describe("LogsView", () => {
     expect(screen.queryByLabelText("LogsQL filter")).toBeNull()
   })
 
+  it("renders the tenant logs page as not available when kube-apiserver answers instead of the proxy", async () => {
+    const { client } = clientWith(() =>
+      Response.json({ kind: "Status", apiVersion: "v1", status: "Failure", reason: "Forbidden", code: 403 }, { status: 403 }),
+    )
+
+    renderWithK8sProvider(<LogsView scope={{ namespace: "tenant-a" }} />, { client })
+
+    expect(await screen.findByText("Logs are not available on this cluster.")).toBeInTheDocument()
+  })
+
   it("keeps the controls and explains a rejected query", async () => {
     const { client } = clientWith((endpoint, params) =>
       endpoint.endsWith("query") ? new Response("cannot parse query", { status: 400 }) : defaultHandler(endpoint, params),

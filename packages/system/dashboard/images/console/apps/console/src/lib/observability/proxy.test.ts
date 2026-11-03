@@ -79,6 +79,23 @@ describe("queryRange", () => {
     expect(err).toMatchObject({ kind: "limit", status: 422, message: "range too long" })
   })
 
+  it("treats a Kubernetes Status 403 as a cluster without the proxy route", async () => {
+    const status = { kind: "Status", apiVersion: "v1", status: "Failure", reason: "Forbidden", code: 403, message: "logs.cozystack.io \"select\" is forbidden" }
+    const { client } = clientReturning(Response.json(status, { status: 403 }))
+
+    const err = await queryRange(client, metricsRoot(ns), { query: "up", start: 0, end: 1, step: 1 }).catch((e) => e)
+
+    expect(err).toMatchObject({ kind: "not-available", status: 403 })
+  })
+
+  it("keeps the proxy's own plain-text 403 as forbidden", async () => {
+    const { client } = clientReturning(new Response("forbidden\n", { status: 403 }))
+
+    const err = await queryRange(client, metricsRoot(ns), { query: "up", start: 0, end: 1, step: 1 }).catch((e) => e)
+
+    expect(err).toMatchObject({ kind: "forbidden" })
+  })
+
   it("reports a fetch failure as a network error", async () => {
     const client = new K8sClient()
     vi.spyOn(client, "raw").mockRejectedValue(new TypeError("offline"))

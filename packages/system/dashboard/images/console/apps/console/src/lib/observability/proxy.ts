@@ -69,6 +69,17 @@ export function isScopeWide(error: unknown): boolean {
   )
 }
 
+// The proxy answers in plain text; a Kubernetes Status body means nginx sent
+// the path to kube-apiserver, which RBAC-denies or 404s a route it does not serve.
+function isKubernetesStatus(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return !!parsed && typeof parsed === "object" && "kind" in parsed && parsed.kind === "Status"
+  } catch {
+    return false
+  }
+}
+
 // Prometheus answers {"error": "..."}, VictoriaLogs and nginx answer plain text.
 function errorMessage(text: string, status: number): string {
   try {
@@ -100,7 +111,8 @@ async function proxyGet(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new ProxyError(errorKindForStatus(res.status), res.status, errorMessage(text, res.status))
+    const kind = isKubernetesStatus(text) ? "not-available" : errorKindForStatus(res.status)
+    throw new ProxyError(kind, res.status, errorMessage(text, res.status))
   }
   return res
 }
