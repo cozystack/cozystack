@@ -96,8 +96,12 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--cluster-domain must not be empty")
 	case o.logs.DefaultRange <= 0 || o.logs.MaxRange < o.logs.DefaultRange:
 		return o, errors.New("--logs-default-range must be positive and not above --logs-max-range")
-	case o.logs.MaxBuckets <= 0:
-		return o, errors.New("--logs-max-buckets must be positive")
+	// Below three buckets, or a range under three seconds, the step cap
+	// that keeps vlselect's step alignment inside the range cannot hold.
+	case o.logs.MaxBuckets < 3:
+		return o, errors.New("--logs-max-buckets must be at least 3")
+	case o.logs.MaxRange < 3*time.Second:
+		return o, errors.New("--logs-max-range must be at least 3s")
 	case o.logs.DefaultLimit <= 0 || o.logs.MaxLimit < o.logs.DefaultLimit:
 		return o, errors.New("--logs-default-limit must be positive and not above --logs-max-limit")
 	case o.logs.MaxTailResume < 0:
