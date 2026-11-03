@@ -366,3 +366,30 @@ func TestServerTailCapsAndIdle(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestServerUpstreamDeadline(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h := newHarness(t, Config{RequestTimeout: 50 * time.Millisecond}, func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	if got := h.status(http.MethodGet, logsRoot+"query", "good"); got != http.StatusGatewayTimeout {
+		t.Fatalf("slow upstream answered %d, want 504", got)
+	}
+}
+
+func TestServerTailLongLine(t *testing.T) {
+	long := `{"_msg":"` + strings.Repeat("x", 3*tailChunkBytes) + `"}`
+	h := newHarness(t, Config{}, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, long+"\n"+`{"_msg":"short"}`+"\n")
+	})
+	resp := h.do(http.MethodGet, logsRoot+"tail", "good", nil, nil)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if string(body) != long+"\n"+`{"_msg":"short"}`+"\n" {
+		t.Fatalf("long line not streamed intact: got %d bytes", len(body))
+	}
+}

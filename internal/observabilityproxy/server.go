@@ -31,6 +31,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// tailChunkBytes bounds the memory one tail holds: a longer line is passed
+// on in pieces and flushed once its end arrives.
+const tailChunkBytes = 64 << 10
+
 // maxFormBytes bounds a POST body; LogsQL queries are a few KiB at most.
 const maxFormBytes = 1 << 20
 
@@ -194,7 +198,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	req.Header.Set("AccountID", "0")
 	req.Header.Set("ProjectID", "0")
 	resp, err := s.client.Do(req)
-	if err != nil {
+	switch {
+	case err == nil:
+	case r.Context().Err() != nil:
+		return errorf(http.StatusBadGateway, "client went away")
+	case errors.Is(err, context.DeadlineExceeded):
+		return errorf(http.StatusGatewayTimeout, "log store did not answer within %s", s.cfg.RequestTimeout)
+	default:
 		slog.Warn("log store unreachable", "store", store, "error", err)
 		return errorf(http.StatusBadGateway, "log store unreachable")
 	}
@@ -249,21 +259,24 @@ func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController,
 		idle = time.AfterFunc(s.cfg.TailIdleTimeout, cancel)
 		defer idle.Stop()
 	}
-	rd := bufio.NewReader(body)
+	rd := bufio.NewReaderSize(body, tailChunkBytes)
 	for {
-		line, err := rd.ReadBytes('\n')
-		if len(line) > 0 {
+		chunk, err := rd.ReadSlice('\n')
+		if len(chunk) > 0 {
 			if idle != nil {
 				idle.Reset(s.cfg.TailIdleTimeout)
 			}
-			if _, werr := w.Write(line); werr != nil {
+			if _, werr := w.Write(chunk); werr != nil {
 				return
+			}
+			if errors.Is(err, bufio.ErrBufferFull) {
+				continue
 			}
 			if ferr := rc.Flush(); ferr != nil {
 				return
 			}
 		}
-		if err != nil {
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
 			return
 		}
 	}
