@@ -410,7 +410,7 @@ func TestValidateTenantNamespaceLength(t *testing.T) {
 			errs := r.validateTenantNamespaceLength(tt.currentNamespace, tt.tenantName)
 
 			if tt.wantError && len(errs) == 0 {
-				computed := r.computeTenantNamespace(tt.currentNamespace, tt.tenantName)
+				computed := computeTenantNamespace(tt.currentNamespace, tt.tenantName)
 				t.Errorf("expected error for parent=%q name=%q (computed=%q, len=%d), got none",
 					tt.currentNamespace, tt.tenantName, computed, len(computed))
 				return
@@ -425,7 +425,7 @@ func TestValidateTenantNamespaceLength(t *testing.T) {
 			// computed namespace string and its actual length so a
 			// regression in the message format is caught.
 			if tt.wantError {
-				computed := r.computeTenantNamespace(tt.currentNamespace, tt.tenantName)
+				computed := computeTenantNamespace(tt.currentNamespace, tt.tenantName)
 				msg := errs.ToAggregate().Error()
 				if !strings.Contains(msg, computed) {
 					t.Errorf("error message must contain computed namespace %q, got: %s", computed, msg)
