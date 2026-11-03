@@ -26,9 +26,11 @@ spec:
   selectAllByDefault: false
   # The target always carries all three identity labels, "-" when the pod
   # has no lineage ("-" is not a valid Kubernetes label value, so it never
-  # collides with a real one). That makes every exporter-supplied copy
-  # collide and be renamed to exported_* (honorLabels false), where it is
-  # dropped; the placeholder itself is removed before storage.
+  # collides with a real one). Under honorLabels false every exporter-supplied
+  # copy then collides, is renamed to exported_* and dropped. Under
+  # honorLabels true the exporter's copy wins, so such a scrape must drop
+  # these labels itself. A scrape object's own relabel rules run after these
+  # and must leave the labels alone. The placeholder is removed before storage.
   scrapeClasses:
   - name: application-identity
     default: true
