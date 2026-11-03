@@ -134,9 +134,9 @@ spec:
   - name: seed-logs
     try:
     - script:
-        # 30s forward + 4 x 15s ingests + the 30s visibility poll, each
-        # capped on its own, under a 3m op.
-        timeout: 3m
+        # 30s forward + 3 x 15s ingests + 3 x 30s visibility polls, each
+        # capped on its own, under a 4m op.
+        timeout: 4m
         content: |
           set -eu
           . ./lib.sh
@@ -147,12 +147,16 @@ spec:
           # Same namespace, another VictoriaLogs tenant: reachable only if a
           # client AccountID header got through.
           ingest tenant-test-logsa e2e-marker-account7 7
-          timeout 30 sh -ec "until curl --silent --fail '$STORE/select/logsql/query?query=e2e-marker-a' | grep -q e2e-marker-a; do sleep 1; done"
+          # All three must be searchable, or an absence checked later
+          # proves nothing.
+          for m in e2e-marker-a:0 e2e-marker-b:0 e2e-marker-account7:7; do
+            timeout 30 sh -ec "until curl --silent --fail --header 'AccountID: ${m#*:}' '$STORE/select/logsql/query?query=${m%:*}' | grep -q ${m%:*}; do sleep 1; done"
+          done
 
   - name: namespace-scope
     try:
     - script:
-        # 2 x 30s forwards + one 30s token request + 11 calls capped at 30s.
+        # 30s forward + one 30s token request + 10 calls capped at 30s.
         timeout: 8m
         content: |
           set -eu
@@ -228,9 +232,9 @@ spec:
           tail_pid=$!
           ingest tenant-test-logsa e2e-tail-early
           ingest tenant-test-logsb e2e-tail-b
-          # TODO(e2e-replace-fixed-timeouts): the hold is the property under
-          # test, not a wait for a condition: a tail must survive a minute
-          # without the client sending anything. No event can replace it.
+          # TODO(e2e-replace-fixed-timeouts): this hold stands in for a
+          # duration assertion the harness lacks; the property under test is
+          # that a tail survives a minute with the client sending nothing.
           sleep 70
           if ! kill -0 "$tail_pid" 2>/dev/null; then
             echo "FAIL: the tail closed before 70s" >&2
