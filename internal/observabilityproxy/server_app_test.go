@@ -173,9 +173,9 @@ func TestServerApplicationMetricsScope(t *testing.T) {
 		if got := r.form["extra_filters[]"]; !slices.Equal(got, []string{wantMetricsScope}) {
 			t.Errorf("%s extra_filters[] = %q", r.path, got)
 		}
-		start, herr := parseMetricsTime("start", r.form.Get("start"))
-		if herr != nil || start.After(testNow.Add(-time.Hour)) || start.Before(testNow.Add(-25*time.Hour)) {
-			t.Errorf("%s start = %s, want within the lookback before the window", r.path, r.form.Get("start"))
+		// The query's own lookback is known and shorter than the 24h cap.
+		if want := formatTime(buildMetrics(t, "api/v1/query_range", hostile).start); r.form.Get("start") != want {
+			t.Errorf("%s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 		}
 		if r.form.Get("end") != formatTime(testNow) || r.form.Get("limit") != "101" {
 			t.Errorf("%s end/limit = %s/%s", r.path, r.form.Get("end"), r.form.Get("limit"))
@@ -204,6 +204,7 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 		name       string
 		pods, pvcs []string
 		podStatus  int
+		podBody    string
 		cfg        Config
 		path       string
 		wantCode   int
@@ -218,13 +219,29 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "labels get the branches as match[]", pods: []string{"p"}, path: "api/v1/labels", wantCode: http.StatusOK, want: []string{wantIdentityBranch, podBranch}},
 		{name: "series needs match[]", path: "api/v1/series", wantCode: http.StatusBadRequest},
+		// An empty name would make pod=~"^(|p)$", which matches every
+		// series without a pod label.
+		{name: "empty pod name dropped", pods: []string{"", "p"}, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch, podBranch}},
+		{name: "only empty pod names", pods: []string{""}, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
+		{name: "lookup status error", podBody: `{"status":"error","data":["p"]}`, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
+		{name: "truncated lookup answer", podBody: `{"status":"success","data":["p"`, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.podStatus == 0 {
 				tt.podStatus = http.StatusOK
 			}
-			h := newPolicyHarness(t, tt.cfg, appMetricsUpstream(tt.pods, tt.pvcs, tt.podStatus), appPolicy, nil)
+			upstream := appMetricsUpstream(tt.pods, tt.pvcs, tt.podStatus)
+			if tt.podBody != "" {
+				upstream = func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/api/v1/label/pod/values" {
+						_, _ = io.WriteString(w, tt.podBody)
+						return
+					}
+					appMetricsUpstream(nil, nil, http.StatusOK)(w, r)
+				}
+			}
+			h := newPolicyHarness(t, tt.cfg, upstream, appPolicy, nil)
 			if got := h.status(http.MethodGet, appRoot+"db.main/metrics/"+tt.path, "good"); got != tt.wantCode {
 				t.Fatalf("status = %d, want %d", got, tt.wantCode)
 			}
@@ -280,5 +297,19 @@ func TestServerApplicationNarrowedGrant(t *testing.T) {
 		if got := h.status(http.MethodGet, appRoot+"a/"+p, "bob-token"); got != http.StatusOK {
 			t.Errorf("a/%s answered %d, want 200", p, got)
 		}
+	}
+}
+
+// An expression whose lookback cannot be bounded looks pods up from the
+// configured lookback before the window.
+func TestServerApplicationLookupUnknownLookback(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	q := url.Values{"query": {"up @ end()"}, "time": {unix(testNow)}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	r := h.requests()[0]
+	if want := formatTime(testNow.Add(-24 * time.Hour)); r.path != "/api/v1/label/pod/values" || r.form.Get("start") != want {
+		t.Fatalf("lookup %s start = %s, want %s", r.path, r.form.Get("start"), want)
 	}
 }
