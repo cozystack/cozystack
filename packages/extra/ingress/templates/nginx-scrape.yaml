@@ -9,6 +9,10 @@ spec:
     matchNames:
     - {{ .Release.Namespace }}
   podMetricsEndpoints:
+  # The series describe the Ingress objects served, in any namespace, not
+  # this controller, so the application identity the vmagent scrape class
+  # stamps from the controller pod would misattribute them; and with
+  # honorLabels an exporter-supplied identity would win over the class.
   - port: metrics
     honorLabels: true
     interval: 30s
@@ -19,6 +23,9 @@ spec:
       targetLabel: node
     - targetLabel: tier
       replacement: cluster
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
   selector:
     matchLabels:
       app.kubernetes.io/component: controller
@@ -46,6 +53,9 @@ spec:
       targetLabel: controller
     - targetLabel: tier
       replacement: cluster
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
   selector:
     matchLabels:
       app.kubernetes.io/component: controller

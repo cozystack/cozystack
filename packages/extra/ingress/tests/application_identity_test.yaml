@@ -1,0 +1,21 @@
+suite: ingress-nginx series do not carry an application identity
+templates:
+  - templates/nginx-scrape.yaml
+release:
+  name: ingress
+  namespace: tenant-root
+
+# The vmagent scrape class stamps the scraped pod's application identity on
+# every series. ingress-nginx series describe the Ingress objects it serves,
+# in whatever namespace they live (honorLabels keeps their namespace), so
+# the controller's identity would misattribute them, and with honorLabels
+# true an exporter-supplied identity would win over the class. Both
+# endpoints drop the identity instead.
+tests:
+  - it: drops the identity on every endpoint
+    asserts:
+      - equal:
+          path: spec.podMetricsEndpoints[0].metricRelabelConfigs
+          value:
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)
