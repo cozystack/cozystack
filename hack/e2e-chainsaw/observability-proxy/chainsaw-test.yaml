@@ -1,0 +1,251 @@
+# Namespace logs through the observability proxy, as the console reaches
+# them: every request goes through the console nginx (a port-forward to its
+# Service), which routes the logs root to the proxy, which authenticates the
+# bearer token, asks a SubjectAccessReview and forwards a rebuilt query to
+# the tenant's log store.
+#
+# Two sibling tenants, A (logsa) and B (logsb), both under tenant-test, so
+# both resolve to the root log store. A viewer of A reads A's logs and is
+# refused B's; parameters and headers a client adds cannot widen the scope
+# (the proxy forces the namespace filter and tenant 0:0); a live tail stays
+# open and keeps delivering lines past 60s.
+#
+# Not covered here: the OIDC gatekeeper (oauth2-proxy) in front of nginx,
+# because driving a Keycloak login needs a browser; and Fluent Bit writing
+# real pod logs, because the root log store is off in e2e and this suite
+# seeds its own (log-store.yaml).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: observability-proxy-logs
+spec:
+  catch:
+  - events: {}
+  - podLogs:
+      namespace: cozy-observability-proxy
+      selector: app.kubernetes.io/name=observability-proxy
+      tail: 100
+  - podLogs:
+      namespace: tenant-root
+      selector: app.kubernetes.io/name=e2e-observability-log-store
+      tail: 100
+  - podLogs:
+      namespace: cozy-dashboard
+      selector: app.kubernetes.io/name=console
+      tail: 100
+  steps:
+  - name: proxy-available
+    try:
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: observability-proxy
+            namespace: cozy-observability-proxy
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+
+  - name: tenants
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: logsa
+          spec: {}
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: logsb
+          spec: {}
+    # 16m: tenant-rd's 15m install timeout plus the 60s start margin; see
+    # "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md. Waited so
+    # that cleanup does not uninstall a release whose install still runs.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-logsa
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-logsb
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # The label names the store the proxy reads; the seeded store below
+    # stands in for the root one, so both namespaces must resolve to it.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-logsa
+            labels:
+              namespace.cozystack.io/monitoring: tenant-root
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-logsb
+            labels:
+              namespace.cozystack.io/monitoring: tenant-root
+
+  - name: viewer-and-store
+    try:
+    # Applying over a real root store would rewrite its Service; refuse to.
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: vlselect-generic
+            namespace: tenant-root
+    - apply:
+        file: viewer.yaml
+    - apply:
+        file: log-store.yaml
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: e2e-observability-log-store
+            namespace: tenant-root
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+
+  - name: seed-logs
+    try:
+    - script:
+        # 30s forward + 4 x 15s ingests + the 30s visibility poll, each
+        # capped on its own, under a 3m op.
+        timeout: 3m
+        content: |
+          set -eu
+          . ./lib.sh
+          trap 'for p in ${pf_pids:-}; do kill "$p" 2>/dev/null || true; done; rm -f "$body"' EXIT
+          forward tenant-root vlselect-generic 19471:9471
+          ingest tenant-test-logsa e2e-marker-a
+          ingest tenant-test-logsb e2e-marker-b
+          # Same namespace, another VictoriaLogs tenant: reachable only if a
+          # client AccountID header got through.
+          ingest tenant-test-logsa e2e-marker-account7 7
+          timeout 30 sh -ec "until curl --silent --fail '$STORE/select/logsql/query?query=e2e-marker-a' | grep -q e2e-marker-a; do sleep 1; done"
+
+  - name: namespace-scope
+    try:
+    - script:
+        # 2 x 30s forwards + one 30s token request + 11 calls capped at 30s.
+        timeout: 8m
+        content: |
+          set -eu
+          . ./lib.sh
+          trap 'for p in ${pf_pids:-}; do kill "$p" 2>/dev/null || true; done; rm -f "$body"' EXIT
+          forward cozy-dashboard cozy-dashboard-console 18080:8080
+          token=$(k -n tenant-test-logsa create token logs-viewer --duration=10m)
+          auth="Authorization: Bearer $token"
+
+          code=$(call "$LOGS_A/query?query=*")
+          expect 401 "$code" "no token"
+
+          code=$(call "$LOGS_A/query?query=*" --header "$auth")
+          expect 200 "$code" "viewer reads A"
+          grep -q e2e-marker-a "$body" || { echo "FAIL: A's own line is missing" >&2; cat "$body" >&2; exit 1; }
+          absent e2e-marker-b "viewer reads A"
+          absent e2e-marker-account7 "viewer reads A"
+
+          code=$(call "$LOGS_B/query?query=*" --header "$auth")
+          expect 403 "$code" "viewer reads B"
+
+          code=$(call "$LOGS_A/query" --header "$auth" --get \
+            --data-urlencode 'query=*' \
+            --data-urlencode 'extra_stream_filters={kubernetes_namespace_name="tenant-test-logsb"}' \
+            --data-urlencode 'extra_filters=kubernetes_namespace_name:tenant-test-logsb')
+          expect 200 "$code" "client extra filters in the query string"
+          absent e2e-marker-b "client extra filters in the query string"
+
+          code=$(call "$LOGS_A/query" --header "$auth" \
+            --data-urlencode 'query=*' \
+            --data-urlencode 'extra_stream_filters={kubernetes_namespace_name="tenant-test-logsb"}')
+          expect 200 "$code" "client extra filters in a POST form"
+          absent e2e-marker-b "client extra filters in a POST form"
+
+          code=$(call "$LOGS_A/query?query=*" --header "$auth" --header "AccountID: 7" --header "ProjectID: 0")
+          expect 200 "$code" "client AccountID header"
+          absent e2e-marker-account7 "client AccountID header"
+
+          code=$(call "$LOGS_A/query" --header "$auth" --get \
+            --data-urlencode 'query={kubernetes_namespace_name="tenant-test-logsb"}')
+          expect 200 "$code" "B's stream named in the query"
+          absent e2e-marker-b "B's stream named in the query"
+
+          code=$(call "$LOGS_A/query" --header "$auth" --get \
+            --data-urlencode 'query=options(ignore_global_time_filter=true) *')
+          expect 400 "$code" "query options"
+
+          # nginx routes on the normalised path, which is B's logs root, and
+          # forwards the raw one; the proxy must refuse it, not read B.
+          code=$(call "$LOGS_A/../../../../tenant-test-logsb/logs/select/logsql/query?query=*" --path-as-is --header "$auth")
+          expect 400 "$code" "dot segments toward B"
+
+          code=$(call "$LOGS_A/delete?query=*" --header "$auth")
+          expect 404 "$code" "an endpoint outside the allowlist"
+
+  - name: tail-outlives-a-minute
+    try:
+    - script:
+        # 2 x 30s forwards + 30s token + 3 x 15s ingests + the 70s hold +
+        # the 30s delivery poll; the tail itself is cut at 150s.
+        timeout: 6m
+        content: |
+          set -eu
+          . ./lib.sh
+          tail_out=$(mktemp)
+          trap 'kill "${tail_pid:-}" 2>/dev/null || true; for p in ${pf_pids:-}; do kill "$p" 2>/dev/null || true; done; rm -f "$body" "$tail_out"' EXIT
+          forward tenant-root vlselect-generic 19471:9471
+          forward cozy-dashboard cozy-dashboard-console 18080:8080
+          token=$(k -n tenant-test-logsa create token logs-viewer --duration=10m)
+
+          timeout 150 curl --silent --no-buffer --header "Authorization: Bearer $token" \
+            "$CONSOLE$LOGS_A/tail?query=*" > "$tail_out" &
+          tail_pid=$!
+          ingest tenant-test-logsa e2e-tail-early
+          ingest tenant-test-logsb e2e-tail-b
+          # TODO(e2e-replace-fixed-timeouts): the hold is the property under
+          # test, not a wait for a condition: a tail must survive a minute
+          # without the client sending anything. No event can replace it.
+          sleep 70
+          if ! kill -0 "$tail_pid" 2>/dev/null; then
+            echo "FAIL: the tail closed before 70s" >&2
+            cat "$tail_out" >&2
+            exit 1
+          fi
+          ingest tenant-test-logsa e2e-tail-late
+          # vlselect re-reads every second, five seconds behind now.
+          timeout 30 sh -ec "until grep -q e2e-tail-late '$tail_out'; do sleep 1; done" || {
+            echo "FAIL: a line written at 70s did not reach the open tail" >&2
+            cat "$tail_out" >&2
+            exit 1
+          }
+          grep -q e2e-tail-early "$tail_out" || { echo "FAIL: the early line is missing from the tail" >&2; exit 1; }
+          if grep -q e2e-tail-b "$tail_out"; then
+            echo "FAIL: the tail of A delivered B's line" >&2
+            exit 1
+          fi
