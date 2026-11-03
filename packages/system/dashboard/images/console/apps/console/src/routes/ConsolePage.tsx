@@ -15,6 +15,7 @@ import { MigrationSourceEditPage } from "./MigrationSourceEditPage.tsx"
 import { MigrationTaskCreatePage } from "./MigrationTaskCreatePage.tsx"
 import { MigrationTaskDetailPage } from "./MigrationTaskDetailPage.tsx"
 import { ApplicationOrderPage } from "./ApplicationOrderPage.tsx"
+import { LogsPage } from "./LogsPage.tsx"
 
 export function ConsolePage() {
   return (
@@ -96,6 +97,7 @@ export function ConsolePage() {
         path="migration/vmimporttasks/:name"
         element={<MigrationTaskDetailPage />}
       />
+      <Route path="logs" element={<LogsPage />} />
       <Route path="new/:appName" element={<ApplicationOrderPage />} />
       <Route path=":plural/:name/edit" element={<ApplicationEditRoute />} />
       <Route path=":plural/:name/*" element={<ApplicationDetailPage />} />

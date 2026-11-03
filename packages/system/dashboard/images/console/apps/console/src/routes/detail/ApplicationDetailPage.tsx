@@ -44,6 +44,7 @@ import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
 import { useApplicationConfigMaps } from "./use-app-configmaps.ts"
 import { ConfigMapsTab } from "./ConfigMapsTab.tsx"
+import { LogsTab } from "./LogsTab.tsx"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
@@ -146,6 +147,7 @@ export function ApplicationDetailPage() {
       { to: `${base}/workloads`, label: "Workloads", end: false },
       { to: `${base}/services`, label: "Services", end: false },
       { to: `${base}/metrics`, label: "Metrics", end: false },
+      { to: `${base}/logs`, label: "Logs", end: false },
       { to: `${base}/events`, label: "Events", end: false },
     )
   } else {
@@ -167,6 +169,7 @@ export function ApplicationDetailPage() {
     tabs.push(
       { to: `${base}/secrets`, label: "Secrets", end: false },
       { to: `${base}/metrics`, label: "Metrics", end: false },
+      { to: `${base}/logs`, label: "Logs", end: false },
       { to: `${base}/events`, label: "Events", end: false },
     )
   }
@@ -274,6 +277,7 @@ export function ApplicationDetailPage() {
               </Suspense>
             }
           />
+          <Route path="logs" element={<LogsTab ad={ad} instance={instance} />} />
         </Routes>
       </div>
     </div>

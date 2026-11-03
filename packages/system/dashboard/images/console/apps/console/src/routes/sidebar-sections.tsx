@@ -11,6 +11,7 @@ import {
   Layers,
   Network,
   Package,
+  ScrollText,
   Plug,
   Server,
   ToyBrick,
@@ -118,7 +119,12 @@ export function useConsoleSidebarSections(): SidebarSection[] {
       ],
     }
 
-    return [...categorySections, backupsSection, migrationSection]
+    const observabilitySection: SidebarSection = {
+      title: "Observability",
+      items: [{ label: "Logs", to: "/console/logs", icon: ScrollText }],
+    }
+
+    return [...categorySections, backupsSection, migrationSection, observabilitySection]
   }, [grouped])
 }
 

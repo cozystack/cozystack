@@ -110,6 +110,16 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
     expect(findItem(result.current, "Imports")?.to).toBe("/console/migration/vmimporttasks")
     expect(result.current.some((s) => s.title === "Migration")).toBe(true)
   })
+
+  it("offers the tenant's namespace logs in an Observability group", async () => {
+    const client = makeClient({ nodes: true, backupclasses: true })
+    const { result } = renderHook(() => useConsoleSidebarSections(), {
+      wrapper: makeWrapper(client),
+    })
+    await waitFor(() => expect(result.current.length).toBeGreaterThan(0))
+    expect(findItem(result.current, "Logs")?.to).toBe("/console/logs")
+    expect(result.current.find((s) => s.title === "Observability")?.items).toHaveLength(1)
+  })
 })
 
 function appDef(name: string, kind: string, category: string, module = false) {
