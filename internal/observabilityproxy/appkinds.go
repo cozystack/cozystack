@@ -79,7 +79,11 @@ func (k *ApplicationKinds) Kind(plural string) (string, error) {
 	}
 	var kinds []string
 	for _, obj := range objs {
-		kind, _, _ := unstructured.NestedString(obj.(*unstructured.Unstructured).Object, "spec", "application", "kind")
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			continue
+		}
+		kind, _, _ := unstructured.NestedString(u.Object, "spec", "application", "kind")
 		if kind != "" && !slices.Contains(kinds, kind) {
 			kinds = append(kinds, kind)
 		}

@@ -121,15 +121,15 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 	return applicationSelectors(ns, kind, name, lists[0], lists[1]), nil
 }
 
-// lookupNames asks for at most max+1 values, enough to tell a list over
+// lookupNames asks for at most limit+1 values, enough to tell a list over
 // the cap without reading all of it.
-func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label, match, ns string, start, end time.Time, max int) ([]string, error) {
+func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label, match, ns string, start, end time.Time, limit int) ([]string, error) {
 	params := url.Values{}
 	params.Set("match[]", match)
 	params.Set("extra_filters[]", namespaceSelector(ns))
 	params.Set("start", formatTime(start))
 	params.Set("end", formatTime(end))
-	params.Set("limit", strconv.Itoa(max+1))
+	params.Set("limit", strconv.Itoa(limit+1))
 	resp, herr := s.post(ctx, r, s.cfg.Metrics.UpstreamURL(store)+"/api/v1/label/"+label+"/values", params, "metrics store", nil)
 	if herr != nil {
 		return nil, herr
