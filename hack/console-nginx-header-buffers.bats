@@ -41,7 +41,7 @@ nginx_size_kib() {
         inblock && /^EOF$/ { inblock = 0; next }
         inblock { print }
     ' "$CONSOLE_CONTAINERFILE")
-    [ -n "$conf" ] || { echo "no /etc/nginx/conf.d/default.conf heredoc found in $CONSOLE_CONTAINERFILE" >&2; exit 1; }
+    [ -n "$conf" ] || { echo "no /etc/nginx/templates/default.conf.template heredoc found in $CONSOLE_CONTAINERFILE" >&2; exit 1; }
 
     # An extraction that silently grabbed the wrong slice would let every
     # assertion below pass on an empty-ish config, so anchor on a line the
