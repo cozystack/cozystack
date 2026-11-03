@@ -28,3 +28,7 @@ cozystackController:
     # load balancer forwards through node ports (Hetzner RobotLB), matching
     # the cozy-lib convention the charts follow.
     allocateLoadBalancerNodePorts: false
+  # GPUClass status and vGPU license copies in tenant namespaces. While it is
+  # off, the controller deletes every license copy.
+  gpu:
+    enabled: false

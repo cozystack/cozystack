@@ -37,6 +37,9 @@ spec:
         {{- if .Values.cozystackController.endpointAttachments.allocateLoadBalancerNodePorts }}
         - --endpoint-attachment-allocate-node-ports
         {{- end }}
+        {{- if .Values.cozystackController.gpu.enabled }}
+        - --enable-gpu
+        {{- end }}
         {{- with .Values.cozystackController.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
