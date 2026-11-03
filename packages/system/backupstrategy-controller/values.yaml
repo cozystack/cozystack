@@ -37,6 +37,24 @@ backupStrategyController:
       cpu: "1"
       memory: 1Gi
       ephemeral-storage: 4Gi
+  # kubernetesBackupClientImage is rendered into the Kubernetes strategy Pod,
+  # which dumps a tenant cluster's etcd prefix with etcdctl and moves it to S3
+  # with curl. Built from images/kubernetes-backup/; `make image` re-digests it.
+  kubernetesBackupClientImage: "ghcr.io/cozystack/cozystack/kubernetes-backup:v1.6.0"
+  # kubernetesBackupActiveDeadlineSeconds bounds one etcd dump/restore Job.
+  kubernetesBackupActiveDeadlineSeconds: 3600
+  # kubernetesBackupResources sizes the Kubernetes strategy Pod. The dump is held
+  # in ephemeral storage while it moves and jq reads it into memory, so a
+  # cluster with a large etcd prefix needs more of both.
+  kubernetesBackupResources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+      ephemeral-storage: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+      ephemeral-storage: 2Gi
   # The Kafka metadata strategy carries no client image here: unlike the Altinity
   # and RabbitMQ drivers, which need only curl (plus jq for Altinity), its driver
   # runs the Kafka Admin-API CLI (kafka-topics / kafka-configs), which only the

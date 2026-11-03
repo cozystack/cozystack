@@ -1,0 +1,302 @@
+{{/*
+  Two template layers, as in strategy-redis-default.yaml: Helm renders this
+  file, then the strategy controller renders the resulting CR per BackupJob.
+  Literal "{{ .Foo }}" for the second layer goes through printf.
+
+  Gated on both a Velero BSL and a resolved $bucketName: the Velero half of
+  the backup goes to the BSL and the etcd dump to the bucket. Also gated on
+  its CRD being established, for the upgrade of an existing install that
+  first ships this kind: see strategy-mongodb-default.yaml.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "kubernetes.strategy.backups.cozystack.io") -}}
+{{- if and .Values.velero.bslEnabled $bucketName $crdEstablished -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Kubernetes
+metadata:
+  name: cozy-default-kubernetes
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: {{ int .Values.backupStrategyController.kubernetesBackupActiveDeadlineSeconds }}
+      volumes:
+        {{- /*
+        The cluster's own etcd client certificate, the one its kube-apiserver
+        uses. Optional so a missing Secret fails the script with a clear cause
+        instead of wedging the Pod on FailedMount.
+        */}}
+        - name: etcd-client
+          secret:
+            secretName: {{ printf "{{ .Datastore.CertificateSecret }}" | quote }}
+            optional: true
+        {{- if .Values.backupStorage.endpointCASecretName }}
+        - name: s3-ca
+          secret:
+            secretName: {{ .Values.backupStorage.endpointCASecretName | quote }}
+            optional: true
+        {{- end }}
+      containers:
+        - name: kubernetes-backup
+          image: "{{ .Values.backupStrategyController.kubernetesBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: etcd-client
+              mountPath: /etc/etcd-client
+              readOnly: true
+            {{- if .Values.backupStorage.endpointCASecretName }}
+            - name: s3-ca
+              mountPath: /etc/s3-ca
+              readOnly: true
+            {{- end }}
+          env:
+            - name: ETCDCTL_ENDPOINTS
+              value: {{ printf "{{ .Datastore.Endpoints }}" | quote }}
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: endpoint
+                  optional: true
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: bucketName
+                  optional: true
+            - name: S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: region
+                  optional: true
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_ACCESS_KEY_ID
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cozy-backups-creds
+                  key: AWS_SECRET_ACCESS_KEY
+                  optional: true
+            - name: S3_INSECURE_SKIP_VERIFY
+              value: {{ .Values.backupStorage.insecureSkipTLSVerify | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              : "${S3_ENDPOINT:?missing endpoint in cozy-backups-creds}"
+              : "${S3_BUCKET:?missing bucketName in cozy-backups-creds}"
+              : "${S3_REGION:?missing region in cozy-backups-creds}"
+              : "${AWS_ACCESS_KEY_ID:?missing AWS_ACCESS_KEY_ID in cozy-backups-creds}"
+              : "${AWS_SECRET_ACCESS_KEY:?missing AWS_SECRET_ACCESS_KEY in cozy-backups-creds}"
+
+              MODE="{{ printf "{{ .Mode }}" }}"
+              KEY="{{ printf "{{ .ObjectKey }}" }}"
+              SCHEMA="{{ printf "{{ .Datastore.Prefix }}" }}"
+              SOURCE_SCHEMA="{{ printf "{{ .Datastore.SourcePrefix }}" }}"
+
+              case "${S3_ENDPOINT}" in
+                http://*|https://*) BASE="${S3_ENDPOINT}" ;;
+                *)                  BASE="https://${S3_ENDPOINT}" ;;
+              esac
+              TLS=""
+              case "${BASE}" in
+                https://*)
+                  if [ -f /etc/s3-ca/ca.crt ]; then TLS="--cacert /etc/s3-ca/ca.crt";
+                  elif [ -f /etc/s3-ca/tls.crt ]; then TLS="--cacert /etc/s3-ca/tls.crt";
+                  elif [ "${S3_INSECURE_SKIP_VERIFY:-false}" = "true" ]; then TLS="-k";
+                  fi
+                  ;;
+              esac
+              s3() {
+                curl -fsS ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"
+              }
+              OBJ="${BASE}/${S3_BUCKET}/${KEY}"
+              {{- /*
+              Where a restore keeps the prefix it replaces. One per backup, so
+              cleanup removes it with the dump. A restore writes it only when it
+              is absent and deletes it on success, so after a failed restore it
+              holds the prefix from before the first failed attempt and a retry
+              cannot overwrite it with a partial one.
+              */}}
+              PRE_KEY="${KEY}.pre-restore"
+              PRE_OBJ="${BASE}/${S3_BUCKET}/${PRE_KEY}"
+
+              if [ "${MODE}" = "cleanup" ]; then
+                for o in "${OBJ}" "${PRE_OBJ}"; do
+                  echo "deleting ${o#"${BASE}/"}"
+                  code=$(curl -sS -o /dev/null -w '%{http_code}' ${TLS} \
+                    --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                    --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                    -X DELETE "${o}")
+                  case "${code}" in
+                    2??|404) echo "deleted (HTTP ${code})" ;;
+                    *)       echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
+                  esac
+                done
+                exit 0
+              fi
+
+              if [ "${MODE}" = "verify" ]; then
+                s3 -I "${OBJ}" > /dev/null
+                echo "s3://${S3_BUCKET}/${KEY} exists"
+                exit 0
+              fi
+
+              {{- /*
+              The prefix comes from the TenantControlPlane: Kamaji's schema is the
+              TenantControlPlane's UID, or <namespace>_<name> for one created by
+              an older Kamaji. Refuse anything else: an empty or slash-bearing
+              value would turn the restore's `del --prefix` into a wipe of every
+              cluster in the shared etcd.
+              */}}
+              for s in "${SCHEMA}" "${SOURCE_SCHEMA}"; do
+                case "${s}" in
+                  ""|*[!a-z0-9_-]*) echo "refusing unexpected datastore prefix '${s}'" >&2; exit 1 ;;
+                esac
+              done
+              PREFIX="/${SCHEMA}/"
+              {{- /*
+              The prefix the dump was taken under. A rebuilt cluster has a new
+              TenantControlPlane and so a new schema; its keys are written under
+              the new prefix.
+              */}}
+              SOURCE_PREFIX="/${SOURCE_SCHEMA}/"
+              for f in ca.crt server.crt server.key; do
+                [ -f "/etc/etcd-client/${f}" ] || { echo "etcd client certificate is missing /etc/etcd-client/${f}" >&2; exit 1; }
+              done
+              export ETCDCTL_CACERT=/etc/etcd-client/ca.crt
+              export ETCDCTL_CERT=/etc/etcd-client/server.crt
+              export ETCDCTL_KEY=/etc/etcd-client/server.key
+
+              if [ "${MODE}" = "backup" ]; then
+                etcdctl get "${PREFIX}" --prefix -w json > /tmp/dump.json
+                count=$(jq '.kvs // [] | length' /tmp/dump.json)
+                if [ "${count}" -eq 0 ]; then
+                  echo "etcd prefix ${PREFIX} is empty" >&2
+                  exit 1
+                fi
+                echo "dumped ${count} keys under ${PREFIX}; uploading s3://${S3_BUCKET}/${KEY}"
+                s3 -X PUT --upload-file /tmp/dump.json "${OBJ}"
+              elif [ "${MODE}" = "restore" ]; then
+                {{- /*
+                Everything that can fail without touching etcd runs before the
+                prefix is deleted: the download, the check that every key belongs
+                to this cluster, and a copy of the prefix as it is now, which is
+                what an operator restores from if a failure comes after the delete.
+                */}}
+                echo "downloading s3://${S3_BUCKET}/${KEY}"
+                s3 -o /tmp/dump.json "${OBJ}"
+                jq -e '.kvs | length > 0' /tmp/dump.json >/dev/null || { echo "dump holds no keys" >&2; exit 1; }
+                jq -e --arg p "${SOURCE_PREFIX}" 'all(.kvs[]; .key | @base64d | startswith($p))' /tmp/dump.json >/dev/null \
+                  || { echo "dump holds keys outside ${SOURCE_PREFIX}" >&2; exit 1; }
+                {{- /*
+                etcdctl put cannot write an empty value, so a dump holding one
+                must stop here rather than halfway through the write.
+                */}}
+                jq -e 'all(.kvs[]; (.value // "") != "")' /tmp/dump.json >/dev/null \
+                  || { echo "dump holds a key with an empty value, which etcdctl cannot write" >&2; exit 1; }
+                jq -r '.kvs[] | [.key, .value] | @tsv' /tmp/dump.json > /tmp/kvs.tsv
+                {{- /*
+                Only a definite answer decides about the copy: an existing one is
+                kept, a missing one is taken, and any other reply (a 5xx, a
+                timeout) stops the restore while the prefix is still intact,
+                rather than overwriting the copy an earlier failed restore left.
+                */}}
+                code=$(curl -sS -o /dev/null -w '%{http_code}' -I ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  "${PRE_OBJ}") || code=000
+                case "${code}" in
+                  200) echo "keeping s3://${S3_BUCKET}/${PRE_KEY} from an earlier failed restore" ;;
+                  404)
+                    etcdctl get "${PREFIX}" --prefix -w json > /tmp/before.json
+                    echo "saving the current prefix to s3://${S3_BUCKET}/${PRE_KEY}"
+                    s3 -X PUT --upload-file /tmp/before.json "${PRE_OBJ}"
+                    ;;
+                  *) echo "cannot tell whether s3://${S3_BUCKET}/${PRE_KEY} exists: HTTP ${code}" >&2; exit 1 ;;
+                esac
+                {{- /*
+                Delete first so keys created after the backup do not survive the
+                restore. Events and master leases are bound to etcd leases that
+                did not survive; written back without one they would never expire,
+                so they are skipped. They are matched as whole top-level resources
+                under the prefix, not as a path segment anywhere, which would also
+                drop every object in a namespace named "events".
+                */}}
+                {{- /*
+                The termination message tells the driver that this Pod got as far
+                as changing the prefix: only then is the control plane left
+                stopped after a failure.
+                */}}
+                echo writing > /dev/termination-log
+                etcdctl del "${PREFIX}" --prefix
+                n=0
+                while IFS="$(printf '\t')" read -r k v; do
+                  key=$(printf '%s' "${k}" | base64 -d)
+                  rel="${key#"${SOURCE_PREFIX}"}"
+                  case "${rel}" in events/*|masterleases/*) continue ;; esac
+                  printf '%s' "${v}" | base64 -d > /tmp/value
+                  etcdctl put "${PREFIX}${rel}" < /tmp/value > /dev/null
+                  n=$((n + 1))
+                done < /tmp/kvs.tsv
+                echo "restored ${n} keys under ${PREFIX}"
+                code=$(curl -sS -o /dev/null -w '%{http_code}' ${TLS} \
+                  --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
+                  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+                  -X DELETE "${PRE_OBJ}") || code=000
+                case "${code}" in
+                  2??|404) echo "dropped s3://${S3_BUCKET}/${PRE_KEY}" ;;
+                  *) echo "WARNING: could not drop s3://${S3_BUCKET}/${PRE_KEY} (HTTP ${code}); a later restore would keep it as the pre-restore copy, so delete it by hand" >&2 ;;
+                esac
+              else
+                echo "unknown mode: ${MODE}" >&2
+                exit 1
+              fi
+          resources:
+            {{- toYaml .Values.backupStrategyController.kubernetesBackupResources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+  velero:
+    {{- /*
+    Secrets (control-plane and Talos PKI, by the Kamaji and Helm instance
+    labels) and the DataVolumes and PVCs backing the cluster's
+    PersistentVolumes (the CSI driver stamps the cluster-name label on them;
+    worker system disks do not carry it). The HelmReleases are recorded by the
+    driver on the Backup instead: selecting them by application label would
+    also select worker disks the lineage webhook labels the same way. The
+    driver sets the restore's resources and selectors per phase.
+    */}}
+    spec:
+      includedNamespaces:
+        - {{ printf "{{ .Application.metadata.namespace }}" | quote }}
+      orLabelSelectors:
+        - matchLabels:
+            kamaji.clastix.io/name: {{ printf "kubernetes-{{ .Application.metadata.name }}" | quote }}
+        - matchLabels:
+            app.kubernetes.io/instance: {{ printf "kubernetes-{{ .Application.metadata.name }}" | quote }}
+        - matchLabels:
+            cluster.x-k8s.io/cluster-name: {{ printf "kubernetes-{{ .Application.metadata.name }}" | quote }}
+      includedResources:
+        - secrets
+        - persistentvolumeclaims
+        - datavolumes.cdi.kubevirt.io
+      includeClusterResources: false
+      storageLocation: cozy-default
+      snapshotVolumes: true
+      snapshotMoveData: true
+      ttl: 720h0m0s
+      itemOperationTimeout: 24h0m0s
+    restoreSpec:
+      includeClusterResources: false
+{{- end -}}

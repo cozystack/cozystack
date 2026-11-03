@@ -62,7 +62,25 @@ rules:
 # through the dynamic client, so no list/watch)
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
-  verbs: ["get", "delete"]
+  verbs: ["get", "list", "delete"]
+# Kubernetes strategy: read where a tenant cluster keeps its etcd prefix, and
+# stop and resume its control plane, worker pools and cluster-autoscaler around
+# an in-place restore.
+- apiGroups: ["kamaji.clastix.io"]
+  resources: ["tenantcontrolplanes", "datastores"]
+  verbs: ["get"]
+- apiGroups: ["controlplane.cluster.x-k8s.io"]
+  resources: ["kamajicontrolplanes"]
+  verbs: ["get", "patch"]
+- apiGroups: ["cluster.x-k8s.io"]
+  resources: ["machinedeployments"]
+  verbs: ["get", "list", "patch"]
+- apiGroups: ["cluster.x-k8s.io"]
+  resources: ["machines"]
+  verbs: ["list", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
 # HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR
 # and deletes old. patch additionally lets the DefaultObjectsGate stamp
 # reconcile.fluxcd.io/forceAt + requestedAt on THIS chart's own release to
