@@ -108,3 +108,11 @@ func allowed(l *limiter, user string) bool {
 	_, ok := l.allowRate(user)
 	return ok
 }
+
+func TestLimiterRateWaitAtTinyRate(t *testing.T) {
+	l := newLimiter(LimiterConfig{RatePerUser: 1e-12, RateBurst: 1})
+	allowed(l, "alice")
+	if wait, ok := l.allowRate("alice"); ok || wait <= 0 {
+		t.Fatalf("empty bucket at a tiny rate: admitted %v, wait %s, want refused with a positive wait", ok, wait)
+	}
+}
