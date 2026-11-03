@@ -6,7 +6,8 @@ release:
   namespace: tenant-foo
 
 # Same rules as the cluster-wide vmagent in monitoring-agents, pinned there
-# by an identical suite; see it for why the placeholder and the drop exist.
+# by the same assertions; see that suite for why the placeholder and the
+# drop exist.
 tests:
   - it: every scrape gets the application identity class unless it names another
     asserts:

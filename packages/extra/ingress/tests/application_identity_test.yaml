@@ -14,6 +14,9 @@ release:
 tests:
   - it: drops the identity on every endpoint
     asserts:
+      - lengthEqual:
+          path: spec.podMetricsEndpoints
+          count: 1
       - equal:
           path: spec.podMetricsEndpoints[0].metricRelabelConfigs
           value:

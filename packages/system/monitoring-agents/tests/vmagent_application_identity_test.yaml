@@ -11,7 +11,7 @@ release:
 # all three (a placeholder when the pod has no lineage), so with
 # honorLabels false an exporter's own copy is renamed to exported_* and
 # dropped. The same rules live in the tenant vmagent of the monitoring
-# package and are pinned there by an identical suite.
+# package and are pinned there by the same assertions.
 tests:
   - it: every scrape gets the application identity class unless it names another
     asserts:
