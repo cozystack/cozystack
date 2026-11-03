@@ -227,6 +227,12 @@ func TestBuildLogsParamsStepAndLimit(t *testing.T) {
 	if got := build(t, "stats_query_range", with(day, "step", "1w")).Get("step"); got != "86400000ms" {
 		t.Errorf("1w step on a day window = %s, want capped at the window", got)
 	}
+	if got := build(t, "hits", with(day, "step", "3600")).Get("step"); got != "3600000ms" {
+		t.Errorf("bare-seconds step = %s, want 3600000ms", got)
+	}
+	if got := build(t, "hits", with(day, "step", "5400.5")).Get("step"); got != "5400500ms" {
+		t.Errorf("fractional bare-seconds step = %s, want 5400500ms", got)
+	}
 	if got := build(t, "hits", day).Get("step"); got != "86400ms" {
 		t.Errorf("omitted step = %s, want the bucket-bounded minimum", got)
 	}
@@ -271,6 +277,7 @@ func TestBuildLogsParamsTail(t *testing.T) {
 		{"since in the future", url.Values{"since": {"2026-11-04T13:00:00Z"}}, "0ms"},
 		{"start_offset within cap", url.Values{"start_offset": {"2m"}}, "120000ms"},
 		{"start_offset over cap", url.Values{"start_offset": {"30d"}}, "900000ms"},
+		{"start_offset in bare seconds", url.Values{"start_offset": {"120"}}, "120000ms"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,6 +332,23 @@ func TestBuildLogsParamsStepCannotWidenWindow(t *testing.T) {
 			if got := alignedWindow(t, out); got > lim.MaxRange {
 				t.Errorf("%s %v: vlselect would scan %s, more than %s", endpoint, in, got, lim.MaxRange)
 			}
+		}
+	}
+}
+
+func TestBuildLogsParamsStepKeepsBucketCap(t *testing.T) {
+	lim := testLimits()
+	// Spans that MaxBuckets does not divide into whole milliseconds.
+	for _, start := range []string{"2026-11-03T12:00:00.0007Z", "2026-11-04T11:59:58.3333Z", "6d23h59m59s"} {
+		out := build(t, "hits", url.Values{"start": {start}})
+		step, err := parseDuration(out.Get("step"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, _ := time.Parse(time.RFC3339Nano, out.Get("start"))
+		e, _ := time.Parse(time.RFC3339Nano, out.Get("end"))
+		if buckets := (e.Sub(s) + step - 1) / step; int(buckets) > lim.MaxBuckets {
+			t.Errorf("start %s: step %s gives %d buckets, more than %d", start, out.Get("step"), buckets, lim.MaxBuckets)
 		}
 	}
 }
