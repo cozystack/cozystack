@@ -37,7 +37,7 @@ nginx_size_kib() {
     cd "$REPO_ROOT"
 
     conf=$(awk '
-        /^COPY <<.EOF. \/etc\/nginx\/conf\.d\/default\.conf$/ { inblock = 1; next }
+        /^COPY <<.EOF. \/etc\/nginx\/templates\/default\.conf\.template$/ { inblock = 1; next }
         inblock && /^EOF$/ { inblock = 0; next }
         inblock { print }
     ' "$CONSOLE_CONTAINERFILE")
