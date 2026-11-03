@@ -191,6 +191,7 @@ spec:
   values:
     cluster: {{ $clusterRelease }}
     clusterReleaseName: {{ $clusterRelease }}
+    nodeGroupClassName: talos
     {{- /* Splice ONLY the pool's own shape, as an explicit allowlist (pick), not a
            denylist. This module runs untrusted tenant code and the NodeGroup schema
            has no additionalProperties:false, so a tenant can put ANY key in a
@@ -203,9 +204,10 @@ spec:
            So enumerate exactly the per-pool shape fields kubernetes-nodes accepts
            and pass through only those. Everything cluster-level or module-owned
            (cluster, clusterReleaseName, talos, version, images, osImage, _cluster,
-           nameOverride, ...) is dropped by construction: the module sets cluster/
-           clusterReleaseName itself above, and a tenant cannot pick the worker OS
-           image / Talos installer / kubelet version / cluster wiring. osImage is
+           nameOverride, ...) is dropped by construction: the module sets cluster,
+           clusterReleaseName and nodeGroupClassName itself above, and a tenant
+           cannot pick the worker OS, its image / Talos installer / kubelet
+           version / cluster wiring. osImage is
            named here on purpose rather than merely absent: a ComputePlane pool
            takes the module's worker OS image and cannot opt into the golden-image
            clone or repoint itself at another Image Factory, both of which are
