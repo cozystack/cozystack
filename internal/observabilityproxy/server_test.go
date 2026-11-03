@@ -152,6 +152,10 @@ func TestServerStatusCodes(t *testing.T) {
 		{"logs root itself", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/logs/", "good", http.StatusNotFound},
 		{"ignore_global_time_filter", http.MethodGet, logsRoot + "query?query=" + url.QueryEscape("options(ignore_global_time_filter=true) *"), "good", http.StatusBadRequest},
 		{"inverted range", http.MethodGet, logsRoot + "query?start=2026-11-04T11:00:00Z&end=2026-11-04T10:00:00Z", "good", http.StatusBadRequest},
+		{"dot dot reaching another namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/../tenant-a/logs/select/logsql/query", "good", http.StatusBadRequest},
+		{"encoded dot dot", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/%2e%2e/tenant-a/logs/select/logsql/query", "good", http.StatusBadRequest},
+		{"encoded slash", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a%2Flogs/logs/select/logsql/query", "good", http.StatusBadRequest},
+		{"double slash", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/logs//select/logsql/query", "good", http.StatusBadRequest},
 		{"delete", http.MethodDelete, logsRoot + "query", "good", http.StatusMethodNotAllowed},
 	}
 	for _, tt := range tests {
@@ -174,7 +178,7 @@ func TestServerRebuildsUpstreamRequest(t *testing.T) {
 		"extra_stream_filters": {`{kubernetes_namespace_name=~".*"}`},
 		"AccountID":            {"9"},
 	}
-	headers := map[string]string{"AccountID": "9", "ProjectID": "9", "X-Forwarded-For": "1.2.3.4", "Cookie": "s=1"}
+	headers := map[string]string{"AccountID": "9", "ProjectID": "9", "X-Forwarded-For": "1.2.3.4", "Cookie": "kc-access=secret; other=1"}
 
 	resp := h.do(http.MethodGet, logsRoot+"query?"+hostile.Encode(), "good", nil, headers)
 	_ = resp.Body.Close()
