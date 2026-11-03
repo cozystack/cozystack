@@ -1,0 +1,258 @@
+suite: worker pool GPU class entries
+templates:
+  - templates/nodegroup.yaml
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+    gpu-vm-enabled: "true"
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "4"
+    memory: 8Gi
+tests:
+  - it: renders class entries as the annotation and the reference label on the worker VMI
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - className: h100
+          count: 2
+    kubernetesProvider: &gpuClassProvider
+      scheme:
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+        "cozystack.io/v1alpha1/GPUClass":
+          gvr:
+            group: "cozystack.io"
+            version: "v1alpha1"
+            resource: "gpuclasses"
+          namespaced: false
+      objects:
+        # The pool lists these kinds; the fake client needs one of each to
+        # know them.
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: h100
+          spec:
+            vendor: nvidia
+            model: H100
+            mode: passthrough
+            source:
+              devicePlugin:
+                resourceName: example.com/accelerator
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["cozystack.io/gpus"]
+          value: '[{"className":"h100","count":2}]'
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["cozystack.io/gpu-reference"]
+          value: "true"
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.gpus
+
+  - it: renders name entries as gpus, as before
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.gpus
+          value:
+            - name: gpu1
+              deviceName: nvidia.com/GH200
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["cozystack.io/gpu-reference"]
+
+  - it: refuses class entries where GPUs do not serve VMs
+    kubernetesProvider: *gpuClassProvider
+    template: templates/nodegroup.yaml
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+        - className: h100
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus: className entries need GPUs for VMs"
+
+  - it: refuses a mixed list
+    kubernetesProvider: *gpuClassProvider
+    template: templates/nodegroup.yaml
+    set:
+      gpus:
+        - name: nvidia.com/GH200
+        - className: h100
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus: list either only name entries or only className entries"
+
+  - it: loads the NVIDIA modules for an NVIDIA class
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - className: h100
+    kubernetesProvider: *gpuClassProvider
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n'
+
+  - it: refuses an unresolved class before rendering worker modules
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - className: missing
+    asserts:
+      - failedTemplate:
+          errorPattern: "GPUClass missing does not exist"
+
+  - it: does not infer vendor from an NVIDIA-looking resource name
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - className: h100
+    kubernetesProvider:
+      scheme:
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+        "cozystack.io/v1alpha1/GPUClass":
+          gvr:
+            group: "cozystack.io"
+            version: "v1alpha1"
+            resource: "gpuclasses"
+          namespaced: false
+      objects:
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: h100
+          spec:
+            vendor: amd
+            model: H100
+            mode: passthrough
+            source:
+              devicePlugin:
+                resourceName: nvidia.com/custom
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n'
+
+  - it: keeps NVIDIA modules after the resource name changes
+    template: templates/talos-reconcile-job.yaml
+    set:
+      gpus:
+        - className: h100
+    kubernetesProvider:
+      scheme:
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr:
+            group: "cluster.x-k8s.io"
+            version: "v1beta1"
+            resource: "machinesets"
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr:
+            group: "infrastructure.cluster.x-k8s.io"
+            version: "v1alpha1"
+            resource: "kubevirtmachinetemplates"
+          namespaced: true
+        "cozystack.io/v1alpha1/GPUClass":
+          gvr:
+            group: "cozystack.io"
+            version: "v1alpha1"
+            resource: "gpuclasses"
+          namespaced: false
+      objects:
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata:
+            name: unrelated
+            namespace: tenant-other
+        - apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: h100
+          spec:
+            vendor: nvidia
+            model: H100
+            mode: passthrough
+            source:
+              devicePlugin:
+                resourceName: example.com/renamed
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n'
