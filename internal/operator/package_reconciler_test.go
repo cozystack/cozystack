@@ -923,7 +923,7 @@ func TestReconcileSystemDefaultsLimitRangeForcesOnlyAnOwnedObject(t *testing.T) 
 
 // The tenant boundary. It is one strings.HasPrefix, and everything downstream of it depends
 // on it holding: packages/apps/tenant ships tenant-range-limits, which defaults container
-// memory to 128Mi in every tenant namespace with resourceQuotas. A system LimitRange landing
+// memory to 128Mi in every tenant namespace with non-GPU resourceQuotas. A system LimitRange landing
 // beside it would leave two LimitRanges defaulting the same containers, and which one wins
 // is decided by the order LimitRanger happens to iterate them — neither chart controls that,
 // so a tenant container's default memory limit would move between 128Mi and 4Gi with nothing
