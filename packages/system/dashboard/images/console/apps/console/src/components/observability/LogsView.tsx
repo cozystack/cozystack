@@ -129,7 +129,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
         </p>
       )}
       {error ? <ProxyNotice what="Logs" error={error} /> : null}
-      {!follow && history.isLoading ? <Spinner /> : <LogLines entries={entries} />}
+      {!follow && history.isLoading ? <Spinner /> : <LogLines key={followRun ?? "history"} entries={entries} />}
     </div>
   )
 }

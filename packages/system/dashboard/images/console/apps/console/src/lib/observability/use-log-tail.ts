@@ -14,7 +14,8 @@ interface TailSnapshot {
 
 const FLUSH_MS = 100
 const MAX_RETRY_MS = 30_000
-// A 422 or 429 on tail is load (rate or concurrent-tail caps), which backoff outlasts.
+// Load refusals retry: the proxy caps rate and concurrent tails with 429 (422 in
+// its first builds), and a reconnect can race the previous tail's freed slot.
 const FATAL: ReadonlySet<string> = new Set(["bad-request", "unauthorized", "forbidden", "not-available"])
 
 const sleep = (ms: number, signal: AbortSignal) =>
