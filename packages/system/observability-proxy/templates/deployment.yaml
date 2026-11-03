@@ -38,6 +38,9 @@ spec:
         - --cluster-domain={{ $clusterDomain }}
         - --root-tenant={{ .Values.observabilityProxy.rootTenant }}
         - --auth-cache-ttl={{ .Values.observabilityProxy.authCacheTTL }}
+        - --metrics-shortterm-store={{ .Values.observabilityProxy.metrics.shorttermStore }}
+        - --metrics-longterm-store={{ .Values.observabilityProxy.metrics.longtermStore }}
+        - --metrics-shortterm-retention={{ .Values.observabilityProxy.metrics.shorttermRetention }}
         ports:
         - name: http
           containerPort: 8080
