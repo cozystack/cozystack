@@ -8,6 +8,7 @@ require (
 	github.com/cert-manager/cert-manager v1.19.6
 	github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1
 	github.com/emicklei/dot v1.11.0
+	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/fluxcd/helm-controller/api v1.5.1
 	github.com/fluxcd/pkg/apis/kustomize v1.15.0
 	github.com/fluxcd/pkg/apis/meta v1.26.0
@@ -57,7 +58,6 @@ require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
-	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fluxcd/pkg/apis/acl v0.11.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
