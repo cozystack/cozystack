@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,6 +153,45 @@ func TestServerMetricsStatusCodes(t *testing.T) {
 	h4.status(http.MethodGet, metricsRoot+"api/v1/query?query=up", "good")
 	if got := h4.status(http.MethodGet, metricsRoot+"api/v1/query?query=up", "good"); got != http.StatusUnprocessableEntity {
 		t.Errorf("rate-limited request answered %d, want 422", got)
+	}
+}
+
+func TestServerMetricsConcurrency(t *testing.T) {
+	entered, release := make(chan struct{}, 3), make(chan struct{})
+	h := newHarness(t, Config{Limiter: LimiterConfig{MaxConcurrentPerUser: 1}}, func(w http.ResponseWriter, _ *http.Request) {
+		entered <- struct{}{}
+		<-release
+		promUpstream(w, nil)
+	})
+	// Registered after the harness so it runs before the servers close.
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	held := make(chan int, 2)
+	hold := func(token string) {
+		go func() { held <- h.status(http.MethodGet, metricsRoot+"api/v1/query?query=up", token) }()
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("request of %s did not reach the upstream", token)
+		}
+	}
+	hold("good")
+	refused := make(chan int, 1)
+	go func() { refused <- h.status(http.MethodPost, metricsRoot+"api/v1/query?query=up", "good") }()
+	select {
+	case got := <-refused:
+		if got != http.StatusUnprocessableEntity {
+			t.Fatalf("concurrent request answered %d, want 422", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent request of the same user reached the upstream")
+	}
+	hold("bob-token")
+	once.Do(func() { close(release) })
+	for range 2 {
+		if got := <-held; got != http.StatusOK {
+			t.Fatalf("held request answered %d", got)
+		}
 	}
 }
 
