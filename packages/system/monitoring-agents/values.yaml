@@ -15,7 +15,7 @@ kube-state-metrics:
   # A memory limit is what sets memory.max on the pod cgroup, and the Talos
   # userspace OOM handler only ever selects cgroups that lack one, so running
   # this without a limit leaves it an eviction candidate on every node. See
-  # docs/operations/system-memory-limits.md.
+  # https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.
   #
   # No CPU limit: it is irrelevant to that OOM ranking, and a ceiling that binds
   # only buys CFS throttling, which for a metrics scraper turns into scrape

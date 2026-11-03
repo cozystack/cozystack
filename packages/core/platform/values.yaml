@@ -173,7 +173,7 @@ networking:
   #
   # On a running cluster this is set on the `platform` component of the
   # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
-  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # (see https://cozystack.io/docs/v1/operations/services/backup-classes/). Editing the multus HelmRelease or
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
@@ -712,7 +712,7 @@ monitoring:
 # documents every knob: provisionBucket, bucketName, endpoint, region,
 # forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
 # spec.components.platform.values.backupStorage on the
-# cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
+# cozystack.cozystack-platform Package — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
 
