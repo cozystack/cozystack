@@ -28,12 +28,14 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/gpu"
 	"github.com/cozystack/cozystack/internal/gpu/model"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -104,6 +106,7 @@ func gpuDemand(kind string, raw []byte) (map[string]int64, error) {
 		}
 	}
 	demand := map[string]int64{}
+	var perWorker int64
 	for _, e := range v.GPUs {
 		if e.ClassName == "" {
 			continue
@@ -114,6 +117,10 @@ func gpuDemand(kind string, raw []byte) (map[string]int64, error) {
 		}
 		if count < 1 {
 			return nil, fmt.Errorf("decode %s gpus: class %s has count %d, below 1", kind, e.ClassName, count)
+		}
+		perWorker += count
+		if perWorker > gpu.MaxVMIUnits {
+			return nil, fmt.Errorf("a VMI can expand at most %d GPU units from class entries", gpu.MaxVMIUnits)
 		}
 		if replicas > 0 && count > math.MaxInt64/replicas {
 			return nil, fmt.Errorf("decode %s gpus: class %s reserves more than %d units", kind, e.ClassName, int64(math.MaxInt64))
@@ -356,4 +363,41 @@ func specRaw(app *appsv1alpha1.Application) []byte {
 		return nil
 	}
 	return app.Spec.Raw
+}
+
+// validateGPUClassModes refuses a KubernetesNodes write whose class entries
+// name a vGPU class: every worker pool runs Talos, which carries no vGPU
+// guest driver, so the workers would start and never use their GPUs. A
+// class must exist so its mode is checked before the pool is stored.
+func (r *REST) validateGPUClassModes(ctx context.Context, app *appsv1alpha1.Application) field.ErrorList {
+	if r.kindName != kubernetesNodesKind {
+		return nil
+	}
+	var v gpuValues
+	if raw := specRaw(app); len(raw) > 0 {
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return field.ErrorList{field.Invalid(field.NewPath("spec", "gpus"), "", err.Error())}
+		}
+	}
+	var errs field.ErrorList
+	for i, e := range v.GPUs {
+		if e.ClassName == "" {
+			continue
+		}
+		c := &cozyv1alpha1.GPUClass{}
+		err := r.w.Get(ctx, client.ObjectKey{Name: e.ClassName}, c)
+		if apierrors.IsNotFound(err) {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "gpus").Index(i).Child("className"), e.ClassName,
+				fmt.Sprintf("GPUClass %s does not exist; its mode must be known before creating a worker pool", e.ClassName)))
+			continue
+		}
+		if err != nil {
+			return append(errs, field.InternalError(field.NewPath("spec", "gpus").Index(i), err))
+		}
+		if c.Spec.Mode == cozyv1alpha1.GPUModeVGPU {
+			errs = append(errs, field.Forbidden(field.NewPath("spec", "gpus").Index(i).Child("className"), fmt.Sprintf(
+				"GPUClass %s is vGPU, and Talos workers carry no vGPU guest driver; a worker pool takes passthrough classes only", e.ClassName)))
+		}
+	}
+	return errs
 }
