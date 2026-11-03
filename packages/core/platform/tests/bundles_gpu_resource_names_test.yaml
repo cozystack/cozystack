@@ -1,0 +1,66 @@
+suite: gpu.resourceNames reaches the GPU controller
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+set:
+  bundles:
+    system:
+      enabled: true
+      variant: isp-full
+    iaas:
+      enabled: true
+    enabledPackages:
+      - cozystack.gpu-operator
+tests:
+  - it: passes the hoster's GPU resource names
+    set:
+      gpu.resourceNames: [nvidia.com/gpu, amd.com/gpu]
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu
+          value:
+            enabled: true
+            resourceNames: [nvidia.com/gpu, amd.com/gpu]
+
+  - it: passes no list when it is empty
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components.cozystack-controller.values.cozystackController.gpu.resourceNames
+
+  # The controller takes the list as one comma-separated flag, so a comma
+  # inside a name would split it in two.
+  - it: refuses a name with a comma
+    set:
+      gpu.resourceNames: ["nvidia.com/a,b"]
+    asserts:
+      - failedTemplate:
+          errorPattern: gpu.resourceNames entry "nvidia.com/a,b" contains a comma
+
+  - it: refuses a name that is not an extended resource
+    set:
+      gpu.resourceNames: [memory]
+    asserts:
+      - failedTemplate:
+          errorPattern: gpu.resourceNames entry "memory" is not an extended resource name
+
+  - it: refuses a name in kubernetes.io
+    set:
+      gpu.resourceNames: [kubernetes.io/gpu]
+    asserts:
+      - failedTemplate:
+          errorPattern: gpu.resourceNames entry "kubernetes.io/gpu" is not an extended resource name
+
+  - it: refuses a list that is not one
+    set:
+      gpu.resourceNames: nvidia.com/gpu
+    asserts:
+      - failedTemplate:
+          errorPattern: gpu.resourceNames must be a list of resource names

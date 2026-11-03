@@ -106,6 +106,14 @@ assert_output_graph_error() {
     printf '%s\n' "$output" | tr ' ' '\n' | grep -Fxq cozystack.kubevirt-cdi
 }
 
+@test "gpuclass installs gpu-operator and its application APIs" {
+    output=$(hack/select-install.sh "gpuclass")
+    assert_contains_package "$output" cozystack.kubernetes-nodes-application
+    assert_contains_package "$output" cozystack.gpu-operator
+    assert_contains_package "$output" cozystack.vm-instance-application
+    assert_contains_package "$output" cozystack.vm-disk-application
+}
+
 @test "multiple suites union their closures" {
     output=$(hack/select-install.sh "postgres kafka")
     assert_contains_package "$output" cozystack.postgres-application

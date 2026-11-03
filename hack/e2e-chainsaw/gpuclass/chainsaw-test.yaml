@@ -1,0 +1,444 @@
+# CI has no GPU device plugin. Fake capacity proves admission, scheduling and
+# launcher-pod accounting, not VMI sync, a booted guest or device allocation.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gpuclass
+spec:
+  catch:
+  - events: {}
+  - events:
+      namespace: tenant-test-gpu
+  - describe:
+      apiVersion: cozystack.io/v1alpha1
+      kind: GPUClass
+      name: e2e-fake
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: tenant-test-gpu
+  - describe:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      namespace: tenant-test-gpu
+  - describe:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      namespace: tenant-test-gpu
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      namespace: tenant-test-gpu
+  - describe:
+      apiVersion: v1
+      kind: Pod
+      namespace: tenant-test-gpu
+  - podLogs:
+      namespace: cozy-system
+      selector: app=cozystack-controller
+      tail: 200
+  steps:
+  - name: gpu-paths-are-on
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cozystack-controller
+            namespace: cozy-system
+          spec:
+            template:
+              spec:
+                (containers[?name == 'cozystack-controller']):
+                - (contains(args, '--enable-gpu')): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: KubeVirt
+          metadata:
+            name: kubevirt
+            namespace: cozy-kubevirt
+          spec:
+            configuration:
+              (permittedHostDevices.pciHostDevices[?resourceName == 'nvidia.com/E2E_FAKE_GPU']):
+              - externalResourceProvider: true
+
+  - name: tenant-has-class-and-total-budgets
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gpu
+          spec:
+            resourceQuotas:
+              cpu: "4"
+              memory: 8Gi
+              storage: 10Gi
+              e2e-fake.gpuclass.cozystack.io/devices: "2"
+              gpuclass.cozystack.io/devices: "2"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: tenant-gpu
+    # Above tenant-rd's 15m install timeout, with room for Flux to start it.
+    - script:
+        timeout: 18m
+        content: |
+          set -eu
+          timeout 1020 bash ./wait-release.sh tenant-test tenant-gpu
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-gpu
+            labels:
+              namespace.cozystack.io/vgpu: "false"
+
+  - name: populate-disk-before-selecting-the-gpu-node
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMDisk
+          metadata:
+            name: gpu
+            namespace: tenant-test-gpu
+          spec:
+            source: {}
+            storage: 1Gi
+            storageClass: ($values.storageClass)
+            bindImmediately: true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-gpu
+            namespace: tenant-test-gpu
+    # vm-disk-rd uses the API server's 10m install timeout.
+    - script:
+        timeout: 12m
+        content: |
+          set -eu
+          timeout 660 bash ./wait-release.sh tenant-test-gpu vm-disk-gpu
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-gpu
+            namespace: tenant-test-gpu
+            annotations:
+              cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+          status:
+            phase: Succeeded
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-gpu
+            namespace: tenant-test-gpu
+          spec:
+            (volumeName != null): true
+          status:
+            phase: Bound
+
+  - name: advertise-capacity-only-where-the-disk-can-run
+    try:
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          pv=$(kubectl --context "$context" --namespace tenant-test-gpu get pvc vm-disk-gpu --output=jsonpath='{.spec.volumeName}')
+          [ -n "$pv" ]
+          volumes=$(kubectl --context "$context" get pv "$pv" --output=json | jq '[.]')
+          node=$(kubectl --context "$context" get nodes --output=json |
+            jq --exit-status --raw-output --argjson volumes "$volumes" --from-file ./disk-node.jq)
+          kubectl --context "$context" get node "$node" --output=json |
+            jq --exit-status '.status.capacity["nvidia.com/E2E_FAKE_GPU"] == null and .metadata.labels["e2e.cozystack.io/fake-gpu"] == null'
+          kubectl --context "$context" label node "$node" e2e.cozystack.io/fake-gpu=true
+          kubectl --context "$context" patch node "$node" --subresource=status --type=json \
+            --patch '[{"op":"add","path":"/status/capacity/nvidia.com~1E2E_FAKE_GPU","value":"2"}]'
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            labels:
+              e2e.cozystack.io/fake-gpu: "true"
+          status:
+            allocatable:
+              nvidia.com/E2E_FAKE_GPU: "2"
+    # Nodes are not owned by Chainsaw; the label survives a failed status patch.
+    cleanup:
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          nodes=$(kubectl --context "$context" get nodes --selector=e2e.cozystack.io/fake-gpu=true --output=jsonpath='{.items[*].metadata.name}')
+          for node in $nodes; do
+            if [ -n "$(kubectl --context "$context" get node "$node" --output=jsonpath='{.status.capacity.nvidia\.com/E2E_FAKE_GPU}')" ]; then
+              kubectl --context "$context" patch node "$node" --subresource=status --type=json \
+                --patch '[{"op":"remove","path":"/status/capacity/nvidia.com~1E2E_FAKE_GPU"}]'
+            fi
+            kubectl --context "$context" label node "$node" e2e.cozystack.io/fake-gpu-
+          done
+
+  - name: class-status-reflects-fake-capacity
+    try:
+    - apply:
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: e2e-fake
+          spec:
+            displayName: E2E fake GPU
+            vendor: nvidia
+            model: FAKE
+            mode: passthrough
+            maxCount: 2
+            tolerations:
+            - key: e2e.cozystack.io/gpu
+              operator: Equal
+              value: fake
+              effect: NoSchedule
+            source:
+              devicePlugin:
+                resourceName: nvidia.com/E2E_FAKE_GPU
+    - apply:
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: e2e-vgpu
+          spec:
+            vendor: nvidia
+            model: FAKE
+            mode: vgpu
+            profile: FAKE-1C
+            source:
+              devicePlugin:
+                resourceName: nvidia.com/E2E_FAKE_VGPU
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: GPUClass
+          metadata:
+            name: e2e-fake
+          status:
+            free: 2
+            maxFreePerNode: 2
+            (conditions[?type == 'ResourceNameNotPermitted']):
+            - status: "False"
+            (conditions[?type == 'ResourceNameConflict']):
+            - status: "False"
+
+  - name: stopped-vm-reserves-the-class-count
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          metadata:
+            name: gpu
+            namespace: tenant-test-gpu
+          spec:
+            runStrategy: Halted
+            instanceType: u1.medium
+            disks:
+            - name: gpu
+            gpus:
+            - className: e2e-fake
+              count: 2
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-instance-gpu
+            namespace: tenant-test-gpu
+          spec:
+            values:
+              runStrategy: Halted
+              gpus:
+              - className: e2e-fake
+                count: 2
+    - script:
+        timeout: 12m
+        content: |
+          set -eu
+          timeout 660 bash ./wait-release.sh tenant-test-gpu vm-instance-gpu
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          for scenario in class total workers; do
+            case "$scenario" in
+              class) kind=VMInstance; class=e2e-fake; extra='runStrategy: Halted'; need=1; key=e2e-fake.gpuclass.cozystack.io/devices ;;
+              total) kind=VMInstance; class=e2e-vgpu; extra='runStrategy: Halted'; need=1; key=gpuclass.cozystack.io/devices ;;
+              workers) kind=KubernetesNodes; class=e2e-fake; extra='cluster: unused
+            maxReplicas: 3'; need=3; key=e2e-fake.gpuclass.cozystack.io/devices ;;
+            esac
+            if out=$(kubectl --context "$context" --namespace tenant-test-gpu create --dry-run=server --filename - 2>&1 <<EOF
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: $kind
+          metadata:
+            name: unused-gpu
+          spec:
+            $extra
+            gpus:
+            - className: $class
+              count: 1
+          EOF
+            ); then
+              echo "FAIL: $scenario over-budget write was accepted: $out" >&2
+              false
+            fi
+            printf '%s\n' "$out"
+            printf '%s\n' "$out" | grep --fixed-strings "GPU budget \"$key\" of tenant pool tenant-test-gpu is 2 and 2 is already reserved; this application needs $need"
+          done
+
+  - name: unentitled-vgpu-is-refused-at-vmi-admission
+    try:
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          if out=$(kubectl --context "$context" --namespace tenant-test-gpu create --dry-run=server --filename - 2>&1 <<'EOF'
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstance
+          metadata:
+            name: unentitled
+            labels:
+              cozystack.io/gpu-reference: "true"
+            annotations:
+              cozystack.io/gpus: '[{"className":"e2e-vgpu","count":1}]'
+          spec:
+            domain:
+              resources:
+                requests:
+                  memory: 1Gi
+              devices: {}
+          EOF
+          ); then
+            echo "FAIL: unentitled vGPU VMI was accepted: $out" >&2
+            false
+          fi
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep --fixed-strings 'GPUClass e2e-vgpu is vGPU and the tenant is not entitled to vGPU'
+
+  - name: class-entry-expands-to-kubevirt-gpus
+    try:
+    - patch:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VMInstance
+          metadata:
+            name: gpu
+            namespace: tenant-test-gpu
+          spec:
+            runStrategy: Always
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstance
+          metadata:
+            name: vm-instance-gpu
+            namespace: tenant-test-gpu
+            labels:
+              cozystack.io/gpu-reference: "true"
+          spec:
+            domain:
+              devices:
+                gpus:
+                - name: gpu-0-0
+                  deviceName: nvidia.com/E2E_FAKE_GPU
+                - name: gpu-0-1
+                  deviceName: nvidia.com/E2E_FAKE_GPU
+                (length(gpus)): 2
+
+  - name: launcher-schedules-with-class-tolerations
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            namespace: tenant-test-gpu
+            labels:
+              kubevirt.io: virt-launcher
+              vm.kubevirt.io/name: vm-instance-gpu
+              cozystack.io/gpu-reference: "true"
+            (annotations."kubevirt.io/ephemeral-provisioning" == null): true
+          spec:
+            (nodeName != null): true
+            tolerations:
+            - key: e2e.cozystack.io/gpu
+              operator: Equal
+              value: fake
+              effect: NoSchedule
+            (containers[?name == 'compute']):
+            - resources:
+                requests:
+                  nvidia.com/E2E_FAKE_GPU: "2"
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          node=$(kubectl --context "$context" get nodes --selector=e2e.cozystack.io/fake-gpu=true --output=jsonpath='{.items[*].metadata.name}')
+          kubectl --context "$context" --namespace tenant-test-gpu get pods --selector=kubevirt.io=virt-launcher,vm.kubevirt.io/name=vm-instance-gpu --output=json |
+            jq --exit-status --arg node "$node" '
+              [.items[] | select(.metadata.annotations["kubevirt.io/ephemeral-provisioning"] == null)] |
+              length == 1 and .[0].spec.nodeName == $node'
+
+  - name: launcher-workload-reports-the-gpu-units
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Workload
+          metadata:
+            namespace: tenant-test-gpu
+            labels:
+              workloads.cozystack.io/monitor: vm-instance-gpu
+            (ownerReferences[?kind == 'Pod']):
+            - apiVersion: v1
+          status:
+            kind: virtual-machine
+            resources:
+              nvidia.com/E2E_FAKE_GPU: "2"
+    - script:
+        content: |
+          set -eu
+          context=$(kubectl --context="" config current-context)
+          pod=$(kubectl --context "$context" --namespace tenant-test-gpu get pods --selector=kubevirt.io=virt-launcher,vm.kubevirt.io/name=vm-instance-gpu --output=json |
+            jq --exit-status --raw-output '[.items[] | select(.metadata.annotations["kubevirt.io/ephemeral-provisioning"] == null)] | if length == 1 then .[0].metadata.uid else error("expected one launcher") end')
+          kubectl --context "$context" --namespace tenant-test-gpu get workloads --output=json |
+            jq --exit-status --arg uid "$pod" '
+              [.items[] | select(.status.resources["nvidia.com/E2E_FAKE_GPU"] != null)] |
+              length == 1 and .[0].status.resources["nvidia.com/E2E_FAKE_GPU"] == "2" and
+              any(.[0].metadata.ownerReferences[]?; .kind == "Pod" and .uid == $uid)'
+    - script:
+        timeout: 12m
+        content: |
+          set -eu
+          timeout 660 bash ./wait-release.sh tenant-test-gpu vm-instance-gpu

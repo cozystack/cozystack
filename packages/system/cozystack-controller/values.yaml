@@ -15,3 +15,10 @@ cozystackController:
   # Empty by default: no resources block is rendered, so requests and limits are
   # opt-in. Idle usage (measured) is ~69Mi — keep a limit above that.
   resources: {}
+  # GPUClass status and vGPU license copies in tenant namespaces. While it is
+  # off, the controller deletes every license copy.
+  gpu:
+    enabled: false
+    # Hoster's gpu.resourceNames: GPU resource names besides those of
+    # GPUClasses and the KubeVirt permittedHostDevices table.
+    resourceNames: []

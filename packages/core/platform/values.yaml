@@ -917,6 +917,15 @@ gpu:
   # missing entries).
   vgpuDeviceManager:
     enabled: false
+  # Entitle the root tenant to vGPU classes. Every other tenant is entitled
+  # only when its own Tenant sets gpu.vgpu and its parent is entitled, so
+  # vGPU reaches no tenant until this is on.
+  vgpu: false
+  # GPU resource names that only pods request, such as nvidia.com/gpu of the
+  # container variant, besides the names of GPUClass objects and the NVIDIA
+  # and mediated entries of the KubeVirt permittedHostDevices table. A VM
+  # with class entries may carry no GPU entry of its own under any of them.
+  resourceNames: []
 
 # VM import from external virtualization platforms (opt-in; see the iaas bundle).
 vmImport:

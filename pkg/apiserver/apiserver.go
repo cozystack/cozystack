@@ -224,9 +224,11 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["tenantmodules"] = cozyregistry.RESTInPeace(
 		tenantmodulestorage.NewREST(cli, watchCli),
 	)
+	optionProviders := optionstorage.DefaultProviders(dyn)
+	optionProviders["gpuclass"] = optionstorage.GPUClassProvider(dyn, applicationstorage.GPURemainingBudget(cli))
 	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
 		optionstorage.NewRESTWithParams(
-			optionstorage.DefaultProviders(dyn),
+			optionProviders,
 			optionstorage.DefaultParamProviders(dyn),
 		),
 	)

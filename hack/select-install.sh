@@ -127,6 +127,9 @@ suite_to_source() {
     vminstance)
       echo "cozystack.vm-instance-application cozystack.vm-disk-application"
       return ;;
+    gpuclass)
+      echo "cozystack.gpu-operator cozystack.vm-instance-application cozystack.vm-disk-application cozystack.kubernetes-nodes-application"
+      return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
     kafka-metadata) echo cozystack.kafka-application ; return ;;
   esac

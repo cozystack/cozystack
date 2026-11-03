@@ -245,14 +245,10 @@ escalate_to_full_suite() {
 # this list read as longer than the set of real exceptions.
 src_to_suites() {
   case "$1" in
-    vm-instance-application) echo vminstance ;;
-    # The vminstance suite creates a VMDisk and asserts the DataVolume behind it
-    # (hack/e2e-chainsaw/vminstance/vmdisk.yaml, vmdisk-vmi.yaml), so it is the
-    # suite that covers this source and everything reaching it, kubevirt-cdi
-    # included. Without the entry the source maps to a `vm-disk` suite that does
-    # not exist, is dropped by intersect_suites(), and a CDI change reaches
-    # nothing runnable through it.
-    vm-disk-application) echo vminstance ;;
+    vm-instance-application) echo "vminstance gpuclass" ;;
+    # Both VM suites populate VMDisk resources, so they cover CDI changes too.
+    vm-disk-application) echo "vminstance gpuclass" ;;
+    gpu-operator) echo gpuclass ;;
     # The VMInstance and VMDisk backup round-trips are the only Tests that run a
     # Velero backup and restore; without this the source maps to a `velero`
     # suite that does not exist and a Velero change runs neither.
@@ -266,8 +262,8 @@ src_to_suites() {
     # apps/kubernetes-nodes also belongs to computeplane-application, which has
     # a suite; without this entry an edit there selects computeplane alone,
     # whose pools go through the module allowlist, and drops the suites that
-    # create KubernetesNodes natively.
-    kubernetes-nodes-application) echo "kubernetes-latest kubernetes-previous computeplane" ;;
+    # create KubernetesNodes natively. gpuclass checks its GPU budget admission.
+    kubernetes-nodes-application) echo "kubernetes-latest kubernetes-previous computeplane gpuclass" ;;
     securitygroup-controller) echo securitygroup ;;
     # The kafka app source covers both the app suite and the metadata-backup
     # roundtrip, so an edit to packages/apps/kafka (or kafka-operator, which

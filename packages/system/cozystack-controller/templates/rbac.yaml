@@ -57,13 +57,15 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
-# Two reconcilers share this one Secret write grant on the platform controller's
-# own ServiceAccount; it widens no tenant's RBAC. WildcardSecretReconciler
-# replicates the operator wildcard TLS Secret into each tenant namespace;
-# CACertReconciler writes — and withdraws — the key-free "<release>.tenant-ca"
-# projection, deleting only a projection it owns by owner reference, never a
-# foreign Secret. Read was already covered by the catch-all rule below;
-# create/update/patch/delete are the new grants.
+# Several reconcilers share this one Secret write grant on the platform
+# controller's own ServiceAccount; it widens no tenant's RBAC.
+# WildcardSecretReconciler replicates the operator wildcard TLS Secret into each
+# tenant namespace; CACertReconciler writes — and withdraws — the key-free
+# "<release>.tenant-ca" projection, deleting only a projection it owns by owner
+# reference, never a foreign Secret; the GPU license copier writes and deletes
+# the gpuclass-<class>-license copies labelled cozystack.io/gpuclass in
+# namespaces entitled to vGPU. Read was already covered by the catch-all rule
+# below; create/update/patch/delete are the new grants.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

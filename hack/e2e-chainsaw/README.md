@@ -26,7 +26,7 @@ A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Cha
 
 A parked `chainsaw-test.yaml.disabled` is none of these: the directory is then not a suite, is selected by nothing and cannot be allowlisted.
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`, `gpuclass`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
 
 ## What Chainsaw buys over the BATS suite
 
@@ -82,3 +82,5 @@ chainsaw test postgres/
 ## CI integration
 
 The `e2e` job in `.github/workflows/pull-requests.yaml` runs `make -C packages/core/testing test-chainsaw` (which execs `hack/e2e-chainsaw-run.sh` inside the e2e sandbox) and uploads `chainsaw-report.xml`. The runner calls `chainsaw test` once per suite directory, fails a suite whose pods outlive its cleanup by more than the default `timeouts.cleanup` (`LEAKED-PODS suite=<dir>` in the log; see `docs/agents/e2e-testing.md` §8 and `_lib/leak-allowlist.txt` for known, filed leaks), and merges the per-suite reports into that one file. A local `chainsaw test` as shown above runs the same tests without the leak check. The sandbox image (`packages/core/testing/images/e2e-sandbox/Dockerfile`) ships the `chainsaw` binary alongside `kubectl`/`helm`/`mc`/`jq`/`nc`, built from source with a patch that keeps an assert polling through transient API errors such as an etcd leader change; a released `chainsaw` run locally fails the assert on the first such error instead.
+
+The `gpuclass` suite advertises a fake extended resource on a node compatible with its already populated disk. It checks class status, declared VM and worker-pool budgets, vGPU entitlement refusal, VMI GPU entries, launcher tolerations and scheduling, and GPU units in the launcher pod's existing `Workload`. CI has no GPU device plugin: the suite does not prove device allocation, VMI sync, guest boot or guest drivers.

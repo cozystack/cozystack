@@ -174,9 +174,20 @@
        platform-level key, so `telemetry.disabled: true` plus the installer
        flag silences both. Without this, an operator who followed the
        documented opt-out kept sending cozy_application_count. */ -}}
+{{- $controllerValues := dict -}}
 {{- if .Values.telemetry.disabled -}}
-{{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
-{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- $_ := set $controllerValues "disableTelemetry" true -}}
+{{- end -}}
+{{- $gpuResourceNames := include "cozystack.platform.gpu.resourceNames" $ | fromYamlArray -}}
+{{- if eq (include "cozystack.platform.gpu.vmEnabled" $) "true" -}}
+{{- $gpu := dict "enabled" true -}}
+{{- with $gpuResourceNames -}}
+{{- $_ := set $gpu "resourceNames" . -}}
+{{- end -}}
+{{- $_ := set $controllerValues "gpu" $gpu -}}
+{{- end -}}
+{{- if $controllerValues -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" (dict "cozystackController" $controllerValues)) -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}

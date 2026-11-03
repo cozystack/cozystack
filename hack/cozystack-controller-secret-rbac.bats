@@ -10,13 +10,15 @@
 # here for some other subject would fold into the union too, which errs toward
 # refusing a grant rather than missing one.
 #
-# Two reconcilers share one Secret write grant: WildcardSecretReconciler
-# replicates the operator wildcard TLS Secret into each tenant namespace, and
+# Several reconcilers share one Secret write grant: WildcardSecretReconciler
+# replicates the operator wildcard TLS Secret into each tenant namespace,
 # CACertReconciler writes -- and withdraws -- the key-free "<release>.tenant-ca"
-# projection. The controller is cluster-scoped, so any verb it holds on Secrets
-# it holds on every Secret in every tenant namespace. That is why the set is
-# pinned rather than merely bounded from above: a widening reaches all tenants,
-# and a narrowing breaks both reconcilers.
+# projection, and the GPU license copier writes and deletes license copies in
+# namespaces entitled to vGPU. The controller is cluster-scoped, so any verb
+# it holds on Secrets it holds on every Secret in every tenant namespace.
+# That is why the set is pinned rather than merely bounded from above: a
+# widening reaches all tenants, and a narrowing breaks the reconcilers that
+# write Secrets.
 #
 # The check reads effective permission off the rendered manifests, not manifest
 # text. A rule reaches core Secrets when its apiGroups admit "" and its
@@ -70,8 +72,8 @@ load test_helper
 # What "*" in a rule's verbs means for a namespaced resource such as Secret.
 VERB_UNIVERSE='["create","delete","deletecollection","get","list","patch","update","watch"]'
 
-# The grant the chart declares, as a sorted set: read for both reconcilers plus
-# the writes the two of them need. Sorted because the comparison below is on
+# The grant the chart declares, as a sorted set: read plus the writes the
+# Secret-writing reconcilers need. Sorted because the comparison below is on
 # `unique`d jq output, which is sorted.
 DECLARED_SECRET_VERBS="create,delete,get,list,patch,update,watch"
 

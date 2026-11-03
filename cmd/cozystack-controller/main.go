@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -49,6 +50,8 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
+	gpucontroller "github.com/cozystack/cozystack/internal/gpu/controller"
+	gpuwebhook "github.com/cozystack/cozystack/internal/gpu/webhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -91,6 +94,8 @@ func main() {
 	var telemetryInterval string
 	var quotaBufferPercent int64
 	var seaweedfsMetricsEndpoint string
+	var enableGPU bool
+	var gpuResourceNames string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -114,6 +119,10 @@ func main() {
 		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
 			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
 			"Basic auth may be embedded as userinfo (https://user:pass@host/...). Empty keeps label-based discovery.")
+	flag.BoolVar(&enableGPU, "enable-gpu", false,
+		"Compute GPUClass status, copy vGPU licenses into entitled namespaces and serve the GPU admission webhooks. Without it, existing license copies are deleted.")
+	flag.StringVar(&gpuResourceNames, "gpu-resource-names", "",
+		"Comma-separated GPU resource names besides those of GPUClasses and the KubeVirt permittedHostDevices table, such as nvidia.com/gpu.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -320,11 +329,11 @@ func main() {
 		o.Scheme = scheme
 	})
 	if err != nil {
-		setupLog.Error(err, "unable to build the CA source metadata cache")
+		setupLog.Error(err, "unable to build the Secret metadata cache")
 		os.Exit(1)
 	}
 	if err = mgr.Add(caSecretCluster); err != nil {
-		setupLog.Error(err, "unable to add the CA source metadata cache to the manager")
+		setupLog.Error(err, "unable to add the Secret metadata cache to the manager")
 		os.Exit(1)
 	}
 
@@ -337,6 +346,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The GPU license copier watches license Secrets on the same metadata-only
+	// cache, for the same reason.
+	if err = gpucontroller.Setup(mgr, enableGPU, caSecretCluster.GetCache()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GPU")
+		os.Exit(1)
+	}
+
+	if enableGPU {
+		gpuwebhook.Register(mgr, splitNames(gpuResourceNames))
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -346,6 +366,14 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+	// The GPU webhooks fail closed, so a replica takes traffic only once its
+	// webhook server serves.
+	if enableGPU {
+		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			setupLog.Error(err, "unable to set up webhook ready check")
+			os.Exit(1)
+		}
 	}
 
 	// Initialize telemetry collector
@@ -366,4 +394,14 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func splitNames(s string) []string {
+	var out []string
+	for _, n := range strings.Split(s, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }

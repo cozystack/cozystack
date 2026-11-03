@@ -138,6 +138,9 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 	if err != nil {
 		klog.Errorf("Failed to build spec schema: %v", err)
 	}
+	if specSchema != nil {
+		specSchemas.Store(config.Application.Kind, specSchema)
+	}
 
 	nameSchema, nameSchemaErr := resolveNameSchema(config)
 	if nameSchemaErr != nil {
@@ -230,6 +233,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
+
+	if gErrs := r.validateGPUClassModes(ctx, app); len(gErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
+	}
+	if gErrs := r.validateGPUBudget(ctx, app, nil); len(gErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
+	}
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -587,6 +597,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
+	}
+	if gErrs := r.validateGPUClassModes(ctx, app); len(gErrs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
+	}
+	if gErrs := r.validateGPUBudget(ctx, app, oldObj.(*appsv1alpha1.Application)); len(gErrs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
 	}
 
 	r.warnLegacyPresets(app)

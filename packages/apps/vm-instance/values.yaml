@@ -15,9 +15,12 @@
 ## @field {string} [name] - Network attachment name.
 ## @x-cozystack-options {source: network}
 
-## @typedef {struct} GPU - GPU device configuration.
-## @field {string} name - The name of the GPU resource to attach.
+## @typedef {struct} GPU - GPU configuration. Set exactly one of name and className; a list holds either only name entries or only className entries.
+## @field {string} [name] - Resource name of the GPU to request directly.
 ## @x-cozystack-options {source: gpu}
+## @field {string} [className] - GPUClass to take GPUs of.
+## @x-cozystack-options {source: gpuclass}
+## @field {int} [count] - GPUs of the class; 1 when unset.
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
 ## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
@@ -82,7 +85,8 @@ subnets: []
 gpus: []
 ## Example:
 ## gpus:
-## - name: nvidia.com/GA102GL_A10
+## - className: l40s-24c
+##   count: 1
 
 ## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
 cpuModel: ""

@@ -1,0 +1,22 @@
+suite: cozystack-controller GPU flag
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+tests:
+  - it: leaves GPU features off by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --enable-gpu
+
+  - it: passes --enable-gpu when gpu.enabled is set
+    set:
+      cozystackController.gpu.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --enable-gpu
