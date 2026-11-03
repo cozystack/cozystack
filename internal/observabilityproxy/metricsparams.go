@@ -241,13 +241,18 @@ func parseStep(v string, lim MetricsLimits) (time.Duration, *HTTPError) {
 	return step, nil
 }
 
+// maxMetricsDuration is vmselect's own bound on step and timeout
+// (maxDurationMsecs in lib/httputil); it also keeps the rounding below
+// from overflowing.
+const maxMetricsDuration = 100 * 365 * 24 * time.Hour
+
 // parseMetricsDuration takes Prometheus float seconds or a duration such as
 // 1m30s. vmselect works in whole milliseconds and refuses anything shorter;
 // the value is rounded up to the millisecond so the limits are checked
 // against what vmselect will use, not against a fraction it drops.
 func parseMetricsDuration(key, v string) (time.Duration, *HTTPError) {
 	d, err := parseDuration(v)
-	if err != nil || d < time.Millisecond {
+	if err != nil || d < time.Millisecond || d > maxMetricsDuration {
 		return 0, errorf(http.StatusBadRequest, "invalid %s %q", key, v)
 	}
 	return (d + time.Millisecond - 1).Truncate(time.Millisecond), nil
