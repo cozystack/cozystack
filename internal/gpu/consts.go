@@ -16,6 +16,10 @@ limitations under the License.
 
 package gpu
 
+// MaxVMIUnits bounds tenant-controlled per-unit admission expansion. It is
+// an implementation safety limit, not a class capacity or tenant budget.
+const MaxVMIUnits = 1024
+
 const (
 	// LabelGPUReference, valued LabelValueTrue, marks a VMI template with
 	// class entries; KubeVirt copies it to the VMI and its virt-launcher
