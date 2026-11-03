@@ -31,4 +31,20 @@ describe("LogLines", () => {
 
     expect(list.scrollTop).toBe(120)
   })
+
+  it("follows again once the list is cleared for a new run", () => {
+    const { rerender } = render(<LogLines entries={[entry(1)]} />)
+    const first = screen.getByRole("list")
+    sized(first, 500)
+    first.scrollTop = 120
+    fireEvent.scroll(first)
+
+    rerender(<LogLines entries={[]} />)
+    rerender(<LogLines entries={[entry(2)]} />)
+    const second = screen.getByRole("list")
+    sized(second, 300)
+    rerender(<LogLines entries={[entry(2), entry(3)]} />)
+
+    expect(second.scrollTop).toBe(300)
+  })
 })

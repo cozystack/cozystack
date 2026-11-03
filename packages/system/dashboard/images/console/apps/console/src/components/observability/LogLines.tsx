@@ -9,7 +9,8 @@ export function LogLines({ entries }: { entries: LogEntry[] }) {
   const pinned = useRef(true)
 
   useEffect(() => {
-    if (ref.current && pinned.current) ref.current.scrollTop = ref.current.scrollHeight
+    if (entries.length === 0) pinned.current = true
+    else if (ref.current && pinned.current) ref.current.scrollTop = ref.current.scrollHeight
   }, [entries])
 
   if (entries.length === 0) return <p className="text-sm text-slate-500">No log lines for this range and filter.</p>
