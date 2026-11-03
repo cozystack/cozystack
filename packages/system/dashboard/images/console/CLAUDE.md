@@ -32,6 +32,8 @@ Implications:
 - **RJSF** (`@rjsf/core` + `validator-ajv8`) for application config forms.
 - **Vitest + jsdom + @testing-library/react** for tests.
 - **Monaco** for YAML view, **noVNC** for the VM console tab.
+- **uPlot** for the Metrics tab charts, lazy-loaded with that tab.
+- Metrics and logs come from the observability proxy, not kube-apiserver: `lib/observability/proxy.ts` reads its native Prometheus JSON and VictoriaLogs NDJSON through `K8sClient.raw`, under the paths nginx routes to it ahead of `/apis`.
 
 ## Dev loop
 
