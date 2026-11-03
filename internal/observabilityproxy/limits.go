@@ -58,9 +58,11 @@ func newLimiter(cfg LimiterConfig) *limiter {
 	}
 }
 
-func (l *limiter) allowRate(user string) bool {
+// allowRate takes a token from the user's bucket; when it is empty, it
+// returns how long until the next token.
+func (l *limiter) allowRate(user string) (time.Duration, bool) {
 	if l.cfg.RatePerUser <= 0 {
-		return true
+		return 0, true
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -77,10 +79,10 @@ func (l *limiter) allowRate(user string) bool {
 	b.tokens = min(burst, b.tokens+now.Sub(b.last).Seconds()*l.cfg.RatePerUser)
 	b.last = now
 	if b.tokens < 1 {
-		return false
+		return time.Duration((1 - b.tokens) / l.cfg.RatePerUser * float64(time.Second)), false
 	}
 	b.tokens--
-	return true
+	return 0, true
 }
 
 // sweepBuckets drops buckets that have refilled completely; recreating one

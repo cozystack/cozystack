@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -150,8 +151,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		w.Header().Set("Allow", "GET, POST")
 		return errorf(http.StatusMethodNotAllowed, "method not allowed")
 	}
-	if !s.limits.allowRate(user) {
-		return errorf(http.StatusUnprocessableEntity, "request rate limit exceeded")
+	if wait, ok := s.limits.allowRate(user); !ok {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(wait.Seconds())), 10))
+		return errorf(http.StatusTooManyRequests, "request rate limit exceeded")
 	}
 	endpoint, ok := strings.CutPrefix(route.Endpoint, "select/logsql/")
 	if !ok {
@@ -173,7 +175,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	}
 	release, ok := acquire(user)
 	if !ok {
-		return errorf(http.StatusUnprocessableEntity, "too many concurrent requests")
+		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
 	}
 	defer release()
 
