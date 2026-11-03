@@ -300,3 +300,28 @@ serves GPUs to pods only, which no GPUClass describes.
 true
 {{- end -}}
 {{- end }}
+
+{{/*
+Validated gpu.resourceNames, as YAML. The controller takes the list as one
+comma-separated flag, so a name carrying a comma would arrive as two names.
+*/}}
+{{- define "cozystack.platform.gpu.resourceNames" -}}
+{{- $names := (.Values.gpu | default dict).resourceNames | default (list) -}}
+{{- if not (kindIs "slice" $names) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" $names) -}}
+{{- end -}}
+{{- range $names -}}
+{{- if not (kindIs "string" .) -}}
+{{- fail (printf "gpu.resourceNames must be a list of resource names, got %v" .) -}}
+{{- end -}}
+{{- if contains "," . -}}
+{{- fail (printf "gpu.resourceNames entry %q contains a comma; the list travels comma-joined and the name would be split" .) -}}
+{{- end -}}
+{{- /* Kubernetes treats a name without a domain, or one containing
+       kubernetes.io/, as a native resource such as memory. */ -}}
+{{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?/[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$" .)) (contains "kubernetes.io/" .) -}}
+{{- fail (printf "gpu.resourceNames entry %q is not an extended resource name, such as nvidia.com/gpu" .) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $names -}}
+{{- end }}

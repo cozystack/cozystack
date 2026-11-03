@@ -90,8 +90,12 @@ type Firmware struct {
 }
 
 type GPU struct {
-	// The name of the GPU resource to attach.
-	Name string `json:"name"`
+	// GPUClass to take GPUs of.
+	ClassName string `json:"className,omitempty"`
+	// GPUs of the class; 1 when unset.
+	Count int `json:"count,omitempty"`
+	// Resource name of the GPU to request directly.
+	Name string `json:"name,omitempty"`
 }
 
 type Network struct {

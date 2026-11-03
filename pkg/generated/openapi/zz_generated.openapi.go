@@ -343,7 +343,7 @@ func schema_pkg_apis_core_v1alpha1_OptionItem(ref common.ReferenceCallback) comm
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "OptionItem is a single selectable option.",
+				Description: "OptionItem is a single selectable option. For a GPU class, MaxFreePerNode, MaxCount and RemainingBudget bound one entry: the largest a form offers is the smallest of those present, and an absent field sets no limit.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"value": {
@@ -373,6 +373,34 @@ func schema_pkg_apis_core_v1alpha1_OptionItem(ref common.ReferenceCallback) comm
 							Description: "Default marks the preselected option (e.g. the default StorageClass); the UI auto-selects it when the field has no value yet.",
 							Type:        []string{"boolean"},
 							Format:      "",
+						},
+					},
+					"free": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Free is a GPU class's free units over all its nodes.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"maxFreePerNode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MaxFreePerNode is the most free units of a GPU class on one node.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"maxCount": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MaxCount is how many units of a GPU class one VM may take.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"remainingBudget": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RemainingBudget is how many more units of a GPU class the requesting tenant's pool may declare under its GPU budgets.",
+							Type:        []string{"integer"},
+							Format:      "int64",
 						},
 					},
 				},

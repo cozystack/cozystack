@@ -234,6 +234,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
 
+	if gErrs := r.validateGPUClassModes(ctx, app); len(gErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
+	}
 	if gErrs := r.validateGPUBudget(ctx, app, nil); len(gErrs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
 	}
@@ -594,6 +597,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
+	}
+	if gErrs := r.validateGPUClassModes(ctx, app); len(gErrs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
 	}
 	if gErrs := r.validateGPUBudget(ctx, app, oldObj.(*appsv1alpha1.Application)); len(gErrs) > 0 {
 		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)

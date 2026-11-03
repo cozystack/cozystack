@@ -17,6 +17,8 @@ limitations under the License.
 package model
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -45,6 +47,32 @@ func PermittedResourceNames(kv *unstructured.Unstructured) sets.Set[string] {
 				if name, ok := m["resourceName"].(string); ok {
 					out.Insert(name)
 				}
+			}
+		}
+	}
+	return out
+}
+
+// PermittedGPUNames returns the table's GPU names: its NVIDIA (vendor
+// 10DE) PCI entries and its mediated entries. A NIC in the table, such as
+// nvidia.com/hostdev of a ConnectX VF, is not a GPU.
+func PermittedGPUNames(kv *unstructured.Unstructured) []string {
+	table, ok, _ := unstructured.NestedMap(kv.Object, "spec", "configuration", "permittedHostDevices")
+	if !ok || table == nil {
+		return nil
+	}
+	var out []string
+	for _, list := range []string{"pciHostDevices", "mediatedDevices"} {
+		entries, _, _ := unstructured.NestedSlice(table, list)
+		for _, e := range entries {
+			m, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["resourceName"].(string)
+			selector, _ := m["pciVendorSelector"].(string)
+			if name != "" && (list == "mediatedDevices" || strings.HasPrefix(strings.ToUpper(selector), "10DE:")) {
+				out = append(out, name)
 			}
 		}
 	}

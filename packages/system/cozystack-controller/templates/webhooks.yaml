@@ -1,0 +1,62 @@
+{{- if .Values.cozystackController.gpu.enabled }}
+{{- $namespaceSelector := dict "matchExpressions" (list
+  (dict "key" "cozystack.io/system" "operator" "NotIn" "values" (list "true"))
+  (dict "key" "kubernetes.io/metadata.name" "operator" "NotIn" "values" (list "kube-system" "default"))) }}
+# Both webhooks select only objects carrying the reference label, so an
+# outage of the controller blocks only the start of VMs with class entries.
+# The name sorts before virt-api-mutator, so KubeVirt's own mutator sees the
+# gpus entries too.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: cozystack-gpu
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+webhooks:
+- name: gpu-vmi.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/mutate-vmi
+  rules:
+  - operations: [CREATE]
+    apiGroups: [kubevirt.io]
+    apiVersions: [v1]
+    resources: [virtualmachineinstances]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  objectSelector:
+    matchLabels:
+      cozystack.io/gpu-reference: "true"
+# Migration targets and the pod that binds WaitForFirstConsumer volumes are
+# launcher pods too, and need the tolerations as much as the first one.
+- name: gpu-launcher.cozystack.io
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+  # A later mutator may drop a toleration; the call adds it again.
+  reinvocationPolicy: IfNeeded
+  clientConfig:
+    service:
+      name: cozystack-controller-webhook
+      namespace: {{ .Release.Namespace }}
+      path: /gpu/mutate-virt-launcher
+  rules:
+  - operations: [CREATE]
+    apiGroups: [""]
+    apiVersions: [v1]
+    resources: [pods]
+  namespaceSelector:
+    {{- toYaml $namespaceSelector | nindent 4 }}
+  objectSelector:
+    matchLabels:
+      cozystack.io/gpu-reference: "true"
+      kubevirt.io: virt-launcher
+{{- end }}

@@ -68,6 +68,7 @@ const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-cla
 func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 	return map[string]providerFunc{
 		"gpu":             gpuProvider(dyn),
+		"gpuclass":        GPUClassProvider(dyn, nil),
 		"instancetype":    nameListProvider(dyn, gvrInstancetype),
 		"instanceprofile": nameListProvider(dyn, gvrPreference),
 		"network":         nameListNamespacedProvider(dyn, gvrNADs),

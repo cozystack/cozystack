@@ -178,8 +178,13 @@
 {{- if .Values.telemetry.disabled -}}
 {{- $_ := set $controllerValues "disableTelemetry" true -}}
 {{- end -}}
+{{- $gpuResourceNames := include "cozystack.platform.gpu.resourceNames" $ | fromYamlArray -}}
 {{- if eq (include "cozystack.platform.gpu.vmEnabled" $) "true" -}}
-{{- $_ := set $controllerValues "gpu" (dict "enabled" true) -}}
+{{- $gpu := dict "enabled" true -}}
+{{- with $gpuResourceNames -}}
+{{- $_ := set $gpu "resourceNames" . -}}
+{{- end -}}
+{{- $_ := set $controllerValues "gpu" $gpu -}}
 {{- end -}}
 {{- if $controllerValues -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" (dict "cozystackController" $controllerValues)) -}}

@@ -20,6 +20,7 @@
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
 {{- $networks := .Values.networks | default .Values.subnets }}
+{{- $gpus := include "cozy-lib.gpu.entries" (list .Values.gpus .Values._cluster) | fromJson }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -55,8 +56,14 @@ spec:
         ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
         {{- end }}
         {{- end }}
+        {{- with $gpus.classes }}
+        cozystack.io/gpus: {{ toJson . | quote }}
+        {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
+        {{- if $gpus.classes }}
+        cozystack.io/gpu-reference: "true"
+        {{- end }}
     spec:
       domain:
         {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
@@ -84,11 +91,11 @@ spec:
             enabled: true
         {{- end }}
         devices:
-          {{- if .Values.gpus }}
+          {{- with $gpus.names }}
           gpus:
-          {{- range $i, $gpu := .Values.gpus }}
+          {{- range $i, $name := . }}
           - name: gpu{{ add $i 1 }}
-            deviceName: {{ $gpu.name }}
+            deviceName: {{ $name }}
           {{- end }}
           {{- end }}
           disks:
