@@ -20,6 +20,31 @@ spec:
 
   scrapeInterval: 30s
   selectAllByDefault: true
+  # The target always carries all three identity labels, "-" when the pod
+  # has no lineage ("-" is not a valid Kubernetes label value, so it never
+  # collides with a real one). That makes every exporter-supplied copy
+  # collide and be renamed to exported_* (honorLabels false), where it is
+  # dropped; the placeholder itself is removed before storage.
+  scrapeClasses:
+  - name: application-identity
+    default: true
+    relabelConfigs:
+    {{- range list "group" "kind" "name" }}
+    - targetLabel: apps_cozystack_io_application_{{ . }}
+      replacement: "-"
+    - sourceLabels: [__meta_kubernetes_pod_label_apps_cozystack_io_application_{{ . }}]
+      regex: (.+)
+      targetLabel: apps_cozystack_io_application_{{ . }}
+    {{- end }}
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: (exported_)+apps_cozystack_io_application_(group|kind|name)
+    {{- range list "group" "kind" "name" }}
+    - sourceLabels: [apps_cozystack_io_application_{{ . }}]
+      regex: "-"
+      targetLabel: apps_cozystack_io_application_{{ . }}
+      replacement: ""
+    {{- end }}
   additionalScrapeConfigs:
     name: additional-scrape-configs
     key: prometheus-additional.yaml
