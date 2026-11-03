@@ -252,8 +252,8 @@ func TestServerLimits(t *testing.T) {
 	})
 	first := h.do(http.MethodGet, logsRoot+"query", "good", nil, nil)
 	defer func() { _ = first.Body.Close() }()
-	if got := h.status(http.MethodGet, logsRoot+"query", "good"); got != http.StatusUnprocessableEntity {
-		t.Fatalf("concurrent request answered %d, want 422", got)
+	if got := h.status(http.MethodGet, logsRoot+"query", "good"); got != http.StatusTooManyRequests {
+		t.Fatalf("concurrent request answered %d, want 429", got)
 	}
 	once.Do(func() { close(release) })
 
@@ -261,8 +261,11 @@ func TestServerLimits(t *testing.T) {
 	if got := h2.status(http.MethodGet, logsRoot+"query", "good"); got != http.StatusOK {
 		t.Fatalf("first request answered %d", got)
 	}
-	if got := h2.status(http.MethodGet, logsRoot+"query", "good"); got != http.StatusUnprocessableEntity {
-		t.Fatalf("rate-limited request answered %d, want 422", got)
+	limited := h2.do(http.MethodGet, logsRoot+"query", "good", nil, nil)
+	_ = limited.Body.Close()
+	if limited.StatusCode != http.StatusTooManyRequests || limited.Header.Get("Retry-After") != "1000" {
+		t.Fatalf("rate-limited request answered %d with Retry-After %q, want 429 with 1000",
+			limited.StatusCode, limited.Header.Get("Retry-After"))
 	}
 }
 
@@ -336,8 +339,8 @@ func TestServerTailCapsAndIdle(t *testing.T) {
 	if a.StatusCode != http.StatusOK {
 		t.Fatalf("first tail answered %d", a.StatusCode)
 	}
-	if got := h.status(http.MethodGet, logsRoot+"tail", "good"); got != http.StatusUnprocessableEntity {
-		t.Fatalf("second tail of one user answered %d, want 422", got)
+	if got := h.status(http.MethodGet, logsRoot+"tail", "good"); got != http.StatusTooManyRequests {
+		t.Fatalf("second tail of one user answered %d, want 429", got)
 	}
 	b := h.do(http.MethodGet, logsRoot+"tail", "bob-token", nil, nil)
 	defer func() { _ = b.Body.Close() }()

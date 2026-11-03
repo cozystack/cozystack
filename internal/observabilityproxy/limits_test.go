@@ -76,29 +76,35 @@ func TestLimiterRate(t *testing.T) {
 	now := time.Unix(1000, 0)
 	l := newLimiter(LimiterConfig{RatePerUser: 2, RateBurst: 2})
 	l.now = func() time.Time { return now }
-	if !l.allowRate("alice") || !l.allowRate("alice") {
+	if !allowed(l, "alice") || !allowed(l, "alice") {
 		t.Fatal("burst refused")
 	}
-	if l.allowRate("alice") {
-		t.Fatal("request over the burst admitted")
+	if wait, ok := l.allowRate("alice"); ok || wait != 500*time.Millisecond {
+		t.Fatalf("request over the burst: admitted %v, wait %s, want refused with 500ms", ok, wait)
 	}
-	if !l.allowRate("bob") {
+	if !allowed(l, "bob") {
 		t.Fatal("bob limited by alice's rate")
 	}
 	now = now.Add(500 * time.Millisecond)
-	if !l.allowRate("alice") {
+	if !allowed(l, "alice") {
 		t.Fatal("token not refilled after 1/rate")
 	}
-	if l.allowRate("alice") {
-		t.Fatal("refilled more than elapsed*rate")
+	now = now.Add(100 * time.Millisecond)
+	if wait, ok := l.allowRate("alice"); ok || wait != 400*time.Millisecond {
+		t.Fatalf("partly refilled bucket: admitted %v, wait %s, want refused with 400ms", ok, wait)
 	}
 }
 
 func TestLimiterRateDisabled(t *testing.T) {
 	l := newLimiter(LimiterConfig{})
 	for range 100 {
-		if !l.allowRate("alice") {
+		if !allowed(l, "alice") {
 			t.Fatal("rate limit applied while disabled")
 		}
 	}
+}
+
+func allowed(l *limiter, user string) bool {
+	_, ok := l.allowRate(user)
+	return ok
 }
