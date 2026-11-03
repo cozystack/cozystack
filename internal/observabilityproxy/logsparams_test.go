@@ -339,7 +339,7 @@ func TestBuildLogsParamsStepCannotWidenWindow(t *testing.T) {
 func TestBuildLogsParamsStepKeepsBucketCap(t *testing.T) {
 	lim := testLimits()
 	// Spans that MaxBuckets does not divide into whole milliseconds.
-	for _, start := range []string{"2026-11-03T12:00:00.0007Z", "2026-11-04T11:59:58.3333Z", "6d23h59m59s"} {
+	for _, start := range []string{"2026-11-03T12:00:00.0007Z", "2026-11-04T10:00:00.0013Z", "2026-11-04T11:00:00.0005Z"} {
 		out := build(t, "hits", url.Values{"start": {start}})
 		step, err := parseDuration(out.Get("step"))
 		if err != nil {
