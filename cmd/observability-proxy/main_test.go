@@ -41,6 +41,9 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if m.Limits.MaxRange != 30*24*time.Hour || m.Limits.MaxPoints != 11000 || m.Limits.MaxTimeout != 30*time.Second {
 		t.Errorf("metrics limit defaults changed: %+v", m.Limits)
 	}
+	if m.App.Lookback != 24*time.Hour || m.App.MaxPods != 500 || m.App.MaxPVCs != 500 {
+		t.Errorf("application scope defaults changed: %+v", m.App)
+	}
 	if m.RootTenant != o.rootTenant {
 		t.Errorf("metrics root tenant = %q, want --root-tenant", m.RootTenant)
 	}
@@ -64,13 +67,15 @@ func TestParseFlagsMetricsOverrides(t *testing.T) {
 	o, err := parseFlags([]string{
 		"--root-tenant=tenant-x", "--metrics-shortterm-store=fast", "--metrics-longterm-store=slow",
 		"--metrics-shortterm-retention=24h", "--metrics-max-range=168h", "--metrics-max-points=500", "--metrics-max-timeout=10s",
+		"--metrics-app-lookback=0s", "--metrics-app-max-pods=7", "--metrics-app-max-pvcs=3",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := o.metrics
 	if m.RootTenant != "tenant-x" || m.ShortTermStore != "fast" || m.LongTermStore != "slow" || m.ShortTermRetention != 24*time.Hour ||
-		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second {
+		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second ||
+		m.App.Lookback != 0 || m.App.MaxPods != 7 || m.App.MaxPVCs != 3 {
 		t.Errorf("overrides not applied: %+v", m)
 	}
 }
@@ -102,6 +107,9 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--metrics-max-range=0s"},
 		{"--metrics-max-points=1"},
 		{"--metrics-max-timeout=0s"},
+		{"--metrics-app-lookback=-1h"},
+		{"--metrics-app-max-pods=0"},
+		{"--metrics-app-max-pvcs=0"},
 		{"--unknown"},
 		// The proxy would cut the request while vmselect is still within
 		// the timeout it was given.
