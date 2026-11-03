@@ -30,6 +30,7 @@ permissions:
 
 jobs:
   update-releasenotes:
+    if: github.repository == 'cozystack/cozystack'
     name: Update Release Notes
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest

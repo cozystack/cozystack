@@ -38,6 +38,7 @@ permissions:
 
 jobs:
   warm-cache:
+    if: github.repository == 'cozystack/cozystack'
     name: Warm build cache
     # Runs on the ephemeral pool, not the dedicated self-hosted runner, so the
     # build path no longer depends on that host (#2937 decommission). Serial

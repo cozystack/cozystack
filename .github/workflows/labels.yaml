@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   validate:
+    if: (github.event_name == 'pull_request' || github.repository == 'cozystack/cozystack')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -73,7 +74,7 @@ jobs:
 
   sync:
     needs: validate
-    if: github.event_name != 'pull_request'
+    if: ${{ (github.event_name == 'pull_request' || github.repository == 'cozystack/cozystack') && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
