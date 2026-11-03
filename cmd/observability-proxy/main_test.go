@@ -60,6 +60,21 @@ func TestParseFlagsOverrides(t *testing.T) {
 	}
 }
 
+func TestParseFlagsMetricsOverrides(t *testing.T) {
+	o, err := parseFlags([]string{
+		"--root-tenant=tenant-x", "--metrics-shortterm-store=fast", "--metrics-longterm-store=slow",
+		"--metrics-shortterm-retention=24h", "--metrics-max-range=168h", "--metrics-max-points=500", "--metrics-max-timeout=10s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := o.metrics
+	if m.RootTenant != "tenant-x" || m.ShortTermStore != "fast" || m.LongTermStore != "slow" || m.ShortTermRetention != 24*time.Hour ||
+		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second {
+		t.Errorf("overrides not applied: %+v", m)
+	}
+}
+
 func TestParseFlagsInvalid(t *testing.T) {
 	for _, args := range [][]string{
 		{"--root-tenant="},
