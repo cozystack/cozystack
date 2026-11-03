@@ -76,13 +76,15 @@ func errorf(code int, format string, args ...any) *HTTPError {
 	return &HTTPError{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-// ParseRoute takes the escaped request path. Percent-encoding is refused
-// outright: a decoded "%2F" would shift the segments the authorization is
-// derived from.
+// ParseRoute takes the escaped request path. The console nginx matches its
+// location on the normalized path but forwards the original one, so a path
+// that a normalizer would rewrite (dot segments, empty segments, any
+// percent-encoding such as %2F or %2e) is refused instead of interpreted:
+// the namespace the SubjectAccessReview names must be the one queried.
 func ParseRoute(escapedPath string) (Route, *HTTPError) {
 	notFound := errorf(http.StatusNotFound, "not found")
 	if strings.Contains(escapedPath, "%") {
-		return Route{}, notFound
+		return Route{}, errorf(http.StatusBadRequest, "percent-encoded paths are not accepted")
 	}
 	segs := strings.Split(strings.TrimPrefix(escapedPath, "/"), "/")
 	if len(segs) > 0 && segs[len(segs)-1] == "" {
@@ -90,7 +92,7 @@ func ParseRoute(escapedPath string) (Route, *HTTPError) {
 	}
 	for _, s := range segs {
 		if s == "" || s == "." || s == ".." {
-			return Route{}, notFound
+			return Route{}, errorf(http.StatusBadRequest, "non-canonical path")
 		}
 	}
 	if len(segs) < 6 || segs[0] != "apis" || segs[2] != "v1alpha1" || segs[3] != "namespaces" {
