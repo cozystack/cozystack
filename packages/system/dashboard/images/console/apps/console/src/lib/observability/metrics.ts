@@ -23,10 +23,10 @@ export function rangeWindow(range: RangeKey, nowSeconds: number): RangeWindow {
   return { start: nowSeconds - span, end: nowSeconds, step: Math.max(MIN_STEP, Math.round(span / POINTS)) }
 }
 
-// A rate needs several scrapes inside its window, and on long ranges the window
-// must also cover the step or samples between points are skipped.
+// The longterm store keeps one sample per 5m, so a narrower window can be empty;
+// 4 x step also keeps samples between points from being skipped.
 function rateWindow(step: number): string {
-  return `${Math.max(300, step * 2)}s`
+  return `${Math.max(300, step * 4)}s`
 }
 
 const CONTAINERS = 'container!="",container!="POD"'

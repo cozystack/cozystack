@@ -32,10 +32,19 @@ describe("METRIC_PANELS", () => {
     )
   })
 
-  it("widens the rate window with the step on long ranges", () => {
-    const [query] = METRIC_PANELS.find((p) => p.id === "cpu")!.queries({ start: 0, end: 1, step: 2520 })
-
-    expect(query.expr).toContain("[5040s]")
+  // Long ranges are served by the longterm store, deduplicated at 5m, where a
+  // narrower window can hold no samples and the rate comes back empty.
+  it.each([
+    [15, "300s"],
+    [75, "300s"],
+    [90, "360s"],
+    [2520, "10080s"],
+  ])("rates over max(5m, 4 x step) for step %is", (step, window) => {
+    for (const panel of METRIC_PANELS) {
+      for (const q of panel.queries({ start: 0, end: 1, step })) {
+        if (q.expr.includes("rate(")) expect(q.expr).toContain(`[${window}]`)
+      }
+    }
   })
 
   it("reads memory as working set per pod", () => {
