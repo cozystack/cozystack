@@ -179,6 +179,10 @@ func setStep(out, in url.Values, start, end time.Time, lim LogsLimits) *HTTPErro
 		}
 		step = max(min(d, span, lim.MaxRange/3), minStep)
 	}
+	// vlselect gets whole milliseconds; rounding down would add a bucket.
+	if r := step % time.Millisecond; r != 0 {
+		step += time.Millisecond - r
+	}
 	if span+2*step > lim.MaxRange {
 		start = end.Add(-max(lim.MaxRange-2*step, 0))
 	}
