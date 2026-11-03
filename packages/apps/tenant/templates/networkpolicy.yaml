@@ -188,6 +188,23 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  name: allow-to-observability-proxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-observability-proxy
+          app.kubernetes.io/name: observability-proxy
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
   # Allow the tenant's ingress-nginx to reach both the linstor-gui
   # gatekeeper pods (for /oauth2/* and app traffic) AND the transient
   # ACME http-01 solver pods that cert-manager spins up in the same
