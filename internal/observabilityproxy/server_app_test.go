@@ -215,6 +215,8 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 			want: []string{wantIdentityBranch, `{namespace="tenant-a",persistentvolumeclaim=~"^(v)$"}`}},
 		{name: "pods over the cap", pods: []string{"p", "q"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
+		{name: "over the cap with an empty name", pods: []string{"", "p"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
+			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "pvcs over the cap", pods: []string{"p"}, pvcs: []string{"v", "w"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "labels get the branches as match[]", pods: []string{"p"}, path: "api/v1/labels", wantCode: http.StatusOK, want: []string{wantIdentityBranch, podBranch}},

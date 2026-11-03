@@ -148,6 +148,11 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 	if body.Status != "success" {
 		return nil, errorf(http.StatusBadGateway, "metrics store answered status %q", body.Status)
 	}
+	if len(body.Data) > limit {
+		// Over the cap before dropping empty values: the store cut the
+		// list at limit+1, so a shorter filtered list could hide names.
+		return body.Data, nil
+	}
 	names := body.Data[:0]
 	for _, n := range body.Data {
 		if n != "" {
