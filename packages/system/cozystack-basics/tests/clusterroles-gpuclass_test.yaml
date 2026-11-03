@@ -1,0 +1,47 @@
+suite: cozystack-basics GPUClass catalog read
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# GPUClass is the hoster's catalog: every authenticated user reads it, from
+# a portal or from kubectl, and nobody but the hoster writes it. It is
+# cluster-scoped, so tenant roles, which are bound per namespace, could not
+# grant it even if they named it.
+tests:
+  - it: renders a read-only GPUClass role
+    documentSelector:
+      path: metadata.name
+      value: cozy:gpuclasses:view
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+          - apiGroups: ["cozystack.io"]
+            resources: ["gpuclasses"]
+            verbs: ["get", "list", "watch"]
+
+  - it: binds the GPUClass role to every authenticated user
+    documentSelector:
+      path: metadata.name
+      value: cozy:gpuclasses:view:authenticated
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cozy:gpuclasses:view
+      - equal:
+          path: subjects
+          value:
+          - apiGroup: rbac.authorization.k8s.io
+            kind: Group
+            name: system:authenticated

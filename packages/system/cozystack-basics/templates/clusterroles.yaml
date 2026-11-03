@@ -320,3 +320,27 @@ rules:
   - '*'
   verbs:
   - '*'
+---
+# GPUClass is the hoster's catalog and is cluster-scoped, so tenant roles,
+# bound per namespace, cannot grant its read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:gpuclasses:view
+rules:
+- apiGroups: ["cozystack.io"]
+  resources: ["gpuclasses"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozy:gpuclasses:view:authenticated
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozy:gpuclasses:view
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated

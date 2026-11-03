@@ -917,6 +917,10 @@ gpu:
   # missing entries).
   vgpuDeviceManager:
     enabled: false
+  # Entitle the root tenant to vGPU classes. Every other tenant is entitled
+  # only when its own Tenant sets gpu.vgpu and its parent is entitled, so
+  # vGPU reaches no tenant until this is on.
+  vgpu: false
 
 # VM import from external virtualization platforms (opt-in; see the iaas bundle).
 vmImport:
