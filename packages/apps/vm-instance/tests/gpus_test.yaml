@@ -1,0 +1,155 @@
+suite: vm-instance gpus
+
+templates:
+  - templates/vm.yaml
+release:
+  name: test-vm
+  namespace: tenant-test
+set:
+  fullnameOverride: test-vm
+  _cluster:
+    gpu-vm-enabled: "true"
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 2
+    sockets: 1
+    memory: 8Gi
+tests:
+  - it: renders name entries as gpus
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+        - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus
+          value:
+            - name: gpu1
+              deviceName: nvidia.com/GA102GL_A10
+            - name: gpu2
+              deviceName: nvidia.com/GA102GL_A10
+      - notExists:
+          path: spec.template.metadata.labels["cozystack.io/gpu-reference"]
+      - notExists:
+          path: spec.template.metadata.annotations["cozystack.io/gpus"]
+
+  - it: renders class entries as the annotation and the reference label only
+    set:
+      gpus:
+        - className: h100
+          count: 2
+        - className: a100
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["cozystack.io/gpus"]
+          value: '[{"className":"h100","count":2},{"className":"a100","count":1}]'
+      - equal:
+          path: spec.template.metadata.labels["cozystack.io/gpu-reference"]
+          value: "true"
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+
+  # A typed client sends the zero value of every field.
+  - it: reads a zero count and an empty name as unset
+    set:
+      gpus:
+        - className: h100
+          name: ""
+          count: 0
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["cozystack.io/gpus"]
+          value: '[{"className":"h100","count":1}]'
+
+  - it: renders no gpus without entries
+    asserts:
+      - notExists:
+          path: spec.template.spec.domain.devices.gpus
+      - notExists:
+          path: spec.template.metadata.labels["cozystack.io/gpu-reference"]
+
+  - it: refuses an entry with both name and className
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+          className: a10
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: set exactly one of name and className"
+
+  - it: refuses an entry with neither
+    set:
+      gpus:
+        - count: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: set exactly one of name and className"
+
+  - it: refuses count on a name entry
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+          count: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\]: count applies to className entries only"
+
+  - it: refuses a count below one
+    set:
+      gpus:
+        - className: h100
+          count: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus\\[0\\].count must be a whole number of at least 1"
+
+  - it: refuses a mixed list
+    set:
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+        - className: h100
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus: list either only name entries or only className entries"
+
+  - it: refuses class entries where GPUs do not serve VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+        - className: h100
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpus: className entries need GPUs for VMs"
+
+  - it: keeps name entries where GPUs do not serve VMs
+    set:
+      _cluster:
+        gpu-vm-enabled: "false"
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.gpus[0].deviceName
+          value: nvidia.com/GA102GL_A10
+
+  - it: refuses more GPU entries than the admission expansion limit
+    set:
+      gpus:
+        - className: h100
+          count: 1025
+    asserts:
+      - failedTemplate:
+          errorPattern: "at most 1024 GPU units"
+
+  - it: applies the admission expansion limit across class entries
+    set:
+      gpus:
+        - className: h100
+          count: 600
+        - className: a100
+          count: 600
+    asserts:
+      - failedTemplate:
+          errorPattern: "at most 1024 GPU units"
