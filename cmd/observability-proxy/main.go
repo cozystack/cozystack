@@ -39,6 +39,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -178,13 +180,24 @@ func run(o options) error {
 		return fmt.Errorf("building client: %w", err)
 	}
 
+	dynClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("building dynamic client: %w", err)
+	}
+
 	factory := informers.NewSharedInformerFactory(client, 0)
 	namespaces := factory.Core().V1().Namespaces()
 	lister := namespaces.Lister()
+	appDefs := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0).
+		ForResource(observabilityproxy.ApplicationDefinitionsResource).Informer()
+	if err := appDefs.AddIndexers(observabilityproxy.ApplicationPluralIndexers()); err != nil {
+		return fmt.Errorf("indexing application definitions: %w", err)
+	}
 	factory.Start(ctx.Done())
+	go appDefs.Run(ctx.Done())
 	var ready atomic.Bool
 	go func() {
-		if cache.WaitForCacheSync(ctx.Done(), namespaces.Informer().HasSynced) {
+		if cache.WaitForCacheSync(ctx.Done(), namespaces.Informer().HasSynced, appDefs.HasSynced) {
 			ready.Store(true)
 		}
 	}()
@@ -198,13 +211,14 @@ func run(o options) error {
 		Limiter:         o.limiter,
 		RequestTimeout:  o.requestTimeout,
 		TailIdleTimeout: o.tailIdleTimeout,
-	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, namespaces.Informer().HasSynced, o.rootTenant), reg)
+	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, namespaces.Informer().HasSynced, o.rootTenant),
+		observabilityproxy.NewApplicationKinds(appDefs.GetIndexer(), appDefs.HasSynced), reg)
 
 	probes := http.NewServeMux()
 	probes.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	probes.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
-			http.Error(w, "namespace cache not synced", http.StatusServiceUnavailable)
+			http.Error(w, "namespace or application definition cache not synced", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = io.WriteString(w, "ok")
