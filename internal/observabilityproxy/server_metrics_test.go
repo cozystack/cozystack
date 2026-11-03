@@ -151,8 +151,11 @@ func TestServerMetricsStatusCodes(t *testing.T) {
 
 	h4 := newHarness(t, Config{Limiter: LimiterConfig{RatePerUser: 0.001, RateBurst: 1}}, promUpstream)
 	h4.status(http.MethodGet, metricsRoot+"api/v1/query?query=up", "good")
-	if got := h4.status(http.MethodGet, metricsRoot+"api/v1/query?query=up", "good"); got != http.StatusUnprocessableEntity {
-		t.Errorf("rate-limited request answered %d, want 422", got)
+	limited := h4.do(http.MethodGet, metricsRoot+"api/v1/query?query=up", "good", nil, nil)
+	_ = limited.Body.Close()
+	if limited.StatusCode != http.StatusTooManyRequests || limited.Header.Get("Retry-After") != "1000" {
+		t.Errorf("rate-limited request answered %d with Retry-After %q, want 429 with 1000",
+			limited.StatusCode, limited.Header.Get("Retry-After"))
 	}
 }
 
@@ -180,8 +183,8 @@ func TestServerMetricsConcurrency(t *testing.T) {
 	go func() { refused <- h.status(http.MethodPost, metricsRoot+"api/v1/query?query=up", "good") }()
 	select {
 	case got := <-refused:
-		if got != http.StatusUnprocessableEntity {
-			t.Fatalf("concurrent request answered %d, want 422", got)
+		if got != http.StatusTooManyRequests {
+			t.Fatalf("concurrent request answered %d, want 429", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent request of the same user reached the upstream")

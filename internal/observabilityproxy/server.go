@@ -291,7 +291,7 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Rout
 	}
 	release, ok := s.limits.acquire(user)
 	if !ok {
-		return errorf(http.StatusUnprocessableEntity, "too many concurrent requests")
+		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
 	}
 	defer release()
 
