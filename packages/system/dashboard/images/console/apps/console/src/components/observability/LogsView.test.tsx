@@ -81,6 +81,18 @@ describe("LogsView", () => {
     expect(screen.getByRole("button", { name: "Follow" })).toHaveAttribute("aria-pressed", "true")
   })
 
+  it("says the tail stopped when the proxy refuses the query", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("tail") ? new Response("pipe not allowed in tail", { status: 400 }) : defaultHandler(endpoint, params),
+    )
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.click(screen.getByRole("button", { name: "Follow" }))
+
+    expect(await screen.findByText(/Stopped/)).toBeInTheDocument()
+    expect(screen.getByText("pipe not allowed in tail")).toBeInTheDocument()
+  })
+
   it("renders a cluster without the proxy as not available", async () => {
     const { client } = clientWith(() => new Response("404 page not found", { status: 404 }))
 

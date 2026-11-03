@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useK8sClient } from "@cozystack/k8s-client"
 import { Button, Spinner } from "@cozystack/ui"
@@ -14,15 +14,16 @@ import {
   isScopeWide,
   logsRoot,
   queryLogs,
-  type LogEntry,
   type ObservabilityScope,
 } from "../../lib/observability/proxy.ts"
 import { useLogTail } from "../../lib/observability/use-log-tail.ts"
 import { ProxyNotice } from "./ProxyNotice.tsx"
 import { RangePicker } from "./RangePicker.tsx"
+import { LogLines } from "./LogLines.tsx"
 
 const HISTORY_LIMIT = 500
 const FOLLOW_CAP = 1000
+const TAIL_STATE_LABEL = { connecting: "Connecting…", live: "Live", reconnecting: "Reconnecting…", stopped: "Stopped" }
 
 function windowFor(range: LogRangeKey) {
   const end = Date.now()
@@ -50,25 +51,6 @@ function Picker({ label, value, options, onChange }: { label: string; value: str
   )
 }
 
-function LogLines({ entries }: { entries: LogEntry[] }) {
-  const ref = useRef<HTMLOListElement>(null)
-  useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
-  }, [entries])
-  if (entries.length === 0) return <p className="text-sm text-slate-500">No log lines for this range and filter.</p>
-  return (
-    <ol ref={ref} className="max-h-[60vh] overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
-      {entries.map((e, i) => (
-        <li key={`${e._stream_id}-${e._time}-${i}`} className="whitespace-pre-wrap break-all">
-          <span className="text-slate-400">{new Date(e._time).toLocaleTimeString()}</span>{" "}
-          <span className="text-sky-300">{`${e[POD_FIELD] ?? ""}/${e[CONTAINER_FIELD] ?? ""}`}</span>{" "}
-          {e._msg}
-        </li>
-      ))}
-    </ol>
-  )
-}
-
 export function LogsView({ scope }: { scope: ObservabilityScope }) {
   const client = useK8sClient()
   const root = logsRoot(scope)
@@ -77,7 +59,8 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
   const [filter, setFilter] = useState("")
   const [pod, setPod] = useState("")
   const [container, setContainer] = useState("")
-  const [follow, setFollow] = useState(false)
+  const [followRun, setFollowRun] = useState<number | null>(null)
+  const follow = followRun !== null
   const query = buildLogsQuery({ filter, pod, container })
 
   const pickerQuery = (field: string, narrowTo?: string) => ({
@@ -100,7 +83,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
     enabled: !follow,
     retry: false,
   })
-  const tail = useLogTail(root, query, follow, { cap: FOLLOW_CAP })
+  const tail = useLogTail(root, query, followRun, { cap: FOLLOW_CAP })
 
   const wide = [pods.error, history.error, tail.error].find(isScopeWide)
   if (wide) {
@@ -135,13 +118,13 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
         <Picker label="Pod" value={pod} options={pods.data ?? []} onChange={(v) => { setPod(v); setContainer("") }} />
         <Picker label="Container" value={container} options={containers.data ?? []} onChange={setContainer} />
         {!follow && <RangePicker options={Object.keys(LOG_RANGES) as LogRangeKey[]} value={range} onChange={setRange} />}
-        <Button variant={follow ? "default" : "outline"} size="sm" aria-pressed={follow} onClick={() => setFollow(!follow)}>
+        <Button variant={follow ? "default" : "outline"} size="sm" aria-pressed={follow} onClick={() => setFollowRun(follow ? null : Date.now())}>
           Follow
         </Button>
       </div>
       {follow && (
         <p className="text-xs text-slate-500">
-          {tail.state === "live" ? "Live" : tail.state === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+          {TAIL_STATE_LABEL[tail.state]}
           {` · newest ${FOLLOW_CAP} lines kept`}
         </p>
       )}
