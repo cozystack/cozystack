@@ -241,6 +241,24 @@ export class K8sClient {
     })
   }
 
+  /**
+   * Fetch a same-origin path with the client's credentials and 401 handling,
+   * leaving status and body to the caller. For endpoints that do not speak
+   * Kubernetes JSON, such as the observability proxy's streamed NDJSON.
+   */
+  async raw(path: string, init?: RequestInit): Promise<Response> {
+    const headers: Record<string, string> = {
+      ...(init?.headers as Record<string, string>),
+    }
+    if (this.getToken) {
+      headers["Authorization"] = `Bearer ${await this.getToken()}`
+    }
+    const res = await fetch(`${this.baseUrl}${path}`, { ...init, headers })
+    if (res.status === 401) this.handleUnauthorized()
+    else if (res.ok) this.unauthorizedHandled = false
+    return res
+  }
+
   getApiGroups(): Promise<APIGroupList> {
     return this.request<APIGroupList>("/apis")
   }
