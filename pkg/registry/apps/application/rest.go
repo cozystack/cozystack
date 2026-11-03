@@ -227,6 +227,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
 	}
 
+	if errs, err := r.validateNodeGroupClass(ctx, app, nil); err != nil {
+		return nil, apierrors.NewInternalError(err)
+	} else if len(errs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
@@ -587,6 +593,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
+	}
+
+	if errs, err := r.validateNodeGroupClass(ctx, app, oldObj.(*appsv1alpha1.Application)); err != nil {
+		return nil, false, apierrors.NewInternalError(err)
+	} else if len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 	}
 
 	r.warnLegacyPresets(app)
