@@ -285,3 +285,18 @@ sliced into /24s ever allowed.
 {{- define "cozystack.platform.ciliumPoolRange" -}}
 {{- join ".." (splitList " " (include "cozystack.platform.ciliumPoolBounds" .)) -}}
 {{- end }}
+
+{{/*
+Prints "true" when gpu-operator serves GPUs to VirtualMachines: the iaas
+bundle emits it and its variant is default or vgpu. The container variant
+serves GPUs to pods only, which no GPUClass describes.
+*/}}
+{{- define "cozystack.platform.gpu.vmEnabled" -}}
+{{- $name := "cozystack.gpu-operator" -}}
+{{- $bundles := .Values.bundles -}}
+{{- $iaas := and $bundles.system.enabled $bundles.iaas.enabled (has $bundles.system.variant (list "isp-full" "isp-full-generic")) -}}
+{{- $enabled := and $iaas (has $name (default (list) $bundles.enabledPackages)) (not (has $name (default (list) $bundles.disabledPackages))) -}}
+{{- if and $enabled (has ($bundles.iaas.gpuOperatorVariant | default "default") (list "default" "vgpu")) -}}
+true
+{{- end -}}
+{{- end }}

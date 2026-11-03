@@ -6,9 +6,10 @@ release:
   name: cozystack-controller
   namespace: cozy-system
 
-# One Secret write grant serves two reconcilers (WildcardSecret replication and
-# CACert projection, including "delete"); it scopes the platform controller's own
-# ServiceAccount and widens no tenant's RBAC. This rule gates both features, so pin it.
+# One Secret write grant serves every reconciler that writes Secrets (WildcardSecret
+# replication, CACert projection and GPU license copies, each including "delete");
+# it scopes the platform controller's own ServiceAccount and widens no tenant's
+# RBAC. This rule gates all of them, so pin it.
 #
 # This suite pins the rule as written and nothing more. helm-unittest compares
 # every field it is handed by value equality -- `any: true` changes which fields
@@ -22,7 +23,7 @@ release:
 # may do to a Secret.
 
 tests:
-  - it: grants the ClusterRole every verb both reconcilers need, including delete
+  - it: grants the ClusterRole every verb the Secret writers need, including delete
     documentSelector:
       path: kind
       value: ClusterRole
