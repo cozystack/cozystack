@@ -156,6 +156,8 @@ func TestBuildMetricsParamsLimits(t *testing.T) {
 		{"points at the limit", "api/v1/query_range", rng(ago(10999*time.Minute), ago(0), "1m"), http.StatusOK},
 		{"points above the limit", "api/v1/query_range", rng(ago(11000*time.Minute), ago(0), "1m"), http.StatusUnprocessableEntity},
 		{"points above the limit after rounding the step up", "api/v1/query_range", rng(ago(22*time.Second), ago(0), "0.0019"), http.StatusUnprocessableEntity},
+		{"overflowing step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "2562047h47m16.854775807s"), http.StatusBadRequest},
+		{"overflowing timeout", "api/v1/query", url.Values{"query": {"up"}, "timeout": {"2562047h47m16.854775807s"}}, http.StatusBadRequest},
 		{"step above the range limit", "api/v1/query_range", rng(ago(time.Hour), ago(0), "31d"), http.StatusUnprocessableEntity},
 		{"zero step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0"), http.StatusBadRequest},
 		{"sub-millisecond step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0.0001"), http.StatusBadRequest},
