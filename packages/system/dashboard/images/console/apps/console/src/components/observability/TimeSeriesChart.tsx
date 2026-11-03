@@ -33,7 +33,7 @@ export function TimeSeriesChart({ data, format }: TimeSeriesChartProps) {
             value: (_: uPlot, v: number | null) => fmt(v),
           })),
         ],
-        axes: [{}, { size: 70, values: (_: uPlot, splits: number[]) => splits.map(format) }],
+        axes: [{}, { size: 84, values: (_: uPlot, splits: number[]) => splits.map(format) }],
       },
       [data.timestamps, ...data.series.map((s) => s.values)],
       el,

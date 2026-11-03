@@ -50,11 +50,11 @@ function Picker({ label, value, options, onChange }: { label: string; value: str
   )
 }
 
-function LogLines({ entries, follow }: { entries: LogEntry[]; follow: boolean }) {
+function LogLines({ entries }: { entries: LogEntry[] }) {
   const ref = useRef<HTMLOListElement>(null)
   useEffect(() => {
-    if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight
-  }, [entries, follow])
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [entries])
   if (entries.length === 0) return <p className="text-sm text-slate-500">No log lines for this range and filter.</p>
   return (
     <ol ref={ref} className="max-h-[60vh] overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
@@ -146,7 +146,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
         </p>
       )}
       {error ? <ProxyNotice what="Logs" error={error} /> : null}
-      {!follow && history.isLoading ? <Spinner /> : <LogLines entries={entries} follow={follow} />}
+      {!follow && history.isLoading ? <Spinner /> : <LogLines entries={entries} />}
     </div>
   )
 }
