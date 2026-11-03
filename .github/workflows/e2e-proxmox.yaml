@@ -37,7 +37,7 @@ jobs:
     # repository without one a scheduled run would sit in the queue until GitHub
     # cancels it, so the schedule fires only where the stand is declared;
     # manual dispatch always runs.
-    if: github.event_name == 'workflow_dispatch' || vars.PROXMOX_NIGHTLY == 'true'
+    if: ${{ github.repository == 'cozystack/cozystack' && (github.event_name == 'workflow_dispatch' || vars.PROXMOX_NIGHTLY == 'true') }}
     runs-on: [self-hosted, proxmox]
     timeout-minutes: 90
     env:

@@ -28,7 +28,7 @@ jobs:
   # e2e sandbox is amd64 only, so none of them has an arm64 half here.
   build-arm64:
     name: Build arm64 images
-    if: contains(github.ref_name, '-')
+    if: ${{ github.repository == 'cozystack/cozystack' && (contains(github.ref_name, '-')) }}
     runs-on: oracle-vm-24cpu-96gb-arm64
     # Starts from build-amd64's budget; re-measure after the first runs.
     timeout-minutes: 120
@@ -140,6 +140,7 @@ jobs:
   # It runs for every tag, since the release-exists no-op and the rejection of
   # a hand-pushed stable tag live here.
   build-amd64:
+    if: github.repository == 'cozystack/cozystack'
     name: Build amd64 images and assets
     # Ephemeral pool, not the dedicated self-hosted runner (#2937 decommission).
     # Serial `make build` + `make assets` is CPU-bound, so use the large shape —
@@ -388,7 +389,7 @@ jobs:
     # build-arm64 is skipped only for a stable tag, which never builds. On a
     # pre-release, either half failing or being cancelled leaves this job
     # skipped and the run red: an rc ships multi-arch or not at all.
-    if: ${{ !cancelled() && needs.build-amd64.result == 'success' && (needs.build-arm64.result == 'success' || needs.build-arm64.result == 'skipped') }}
+    if: ${{ github.repository == 'cozystack/cozystack' && (!cancelled() && needs.build-amd64.result == 'success' && (needs.build-arm64.result == 'success' || needs.build-arm64.result == 'skipped')) }}
     runs-on: oracle-vm-24cpu-96gb-x86-64
     # The stitch reads and writes every first-party image once, then the
     # packages artifact, the chart and the assets are pushed; start there and
@@ -643,7 +644,7 @@ jobs:
     # !cancelled(): every job below build-arm64 carries a status function,
     # since a stable tag skips build-arm64. This one only runs for an rc,
     # where build-arm64 always runs, so here it just follows that rule.
-    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.') }}
+    if: ${{ github.repository == 'cozystack/cozystack' && (!cancelled() && needs.prepare-release.result == 'success' && contains(github.ref_name, '-rc.')) }}
     # A caller's permissions are the ceiling for every job in the called
     # workflow, and GitHub validates that ceiling STATICALLY, when it creates the
     # run — before this job's `if:` is evaluated, let alone before a step runs.
@@ -700,7 +701,7 @@ jobs:
     # finalized at the stable release, so the changelog is generated then.
     # !cancelled(): this job runs on stable tags only, which skip build-arm64,
     # and a skipped ancestor makes the implicit success() false.
-    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
+    if: ${{ github.repository == 'cozystack/cozystack' && (!cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')) }}
     # Non-blocking: this is a best-effort backfill of an already-published
     # release, never a gate on one.
     continue-on-error: true
@@ -959,7 +960,7 @@ jobs:
     # promoted stable.
     # Stable tags only — a prerelease (ref_name contains '-') would otherwise open
     # an "update managed apps for vX.Y.Z-rc.N" website PR on every rc.
-    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
+    if: ${{ github.repository == 'cozystack/cozystack' && (!cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')) }}
     permissions:
       contents: read
     steps:

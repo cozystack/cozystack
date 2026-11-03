@@ -38,6 +38,7 @@ permissions:
 
 jobs:
   e2e:
+    if: github.repository == 'cozystack/cozystack'
     name: E2E (isp-hosted on kind)
     # The whole platform lands on one kind node with nothing pre-pulled. The
     # smaller 4-vCPU class was not tried; sizing down is left to a measured run.

@@ -57,6 +57,7 @@ concurrency:
 
 jobs:
   prune:
+    if: github.repository == 'cozystack/cozystack'
     name: Prune old GHCR temporary artifacts
     runs-on: ubuntu-latest
     permissions:
