@@ -63,15 +63,11 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 	if query == "" {
 		query = "*"
 	}
-	// The option lifts the time window this function enforces, and on tail
-	// it rescans the whole retention every tick.
-	if strings.Contains(strings.ToLower(query), "ignore_global_time_filter") {
-		return nil, errorf(http.StatusBadRequest, "ignore_global_time_filter is not allowed")
-	}
-	// The substring check alone is bypassable: VictoriaLogs unquotes a
-	// quoted option name and joins words split by a comment. No option is
-	// needed by a tenant (the others tune concurrency or the time filter),
-	// so any options(...) block is refused.
+	// ignore_global_time_filter lifts the time window this function
+	// enforces, and on tail rescans the whole retention every tick. A
+	// substring match for it is bypassable (VictoriaLogs unquotes a quoted
+	// option name and joins words split by a comment), and no option is
+	// needed by a tenant, so any options(...) block is refused.
 	if hasOptionsBlock(query) {
 		return nil, errorf(http.StatusBadRequest, "query options are not allowed")
 	}
@@ -94,7 +90,7 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 	case "query":
 		herr = setLimit(out, in, "limit", lim.DefaultLimit, lim.MaxLimit)
 	case "hits":
-		if herr = setStep(out, in, end.Sub(start), lim); herr != nil {
+		if herr = setStep(out, in, start, end, lim); herr != nil {
 			return nil, herr
 		}
 		fields := in["field"]
@@ -110,7 +106,7 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 			herr = setLimit(out, in, "fields_limit", 0, lim.MaxLimit)
 		}
 	case "stats_query_range":
-		herr = setStep(out, in, end.Sub(start), lim)
+		herr = setStep(out, in, start, end, lim)
 	case "field_values", "stream_field_values":
 		if in.Get("field") == "" {
 			return nil, errorf(http.StatusBadRequest, "field is required")
@@ -167,8 +163,13 @@ func window(in url.Values, now time.Time, lim LogsLimits) (time.Time, time.Time,
 }
 
 // setStep raises step so that hits and stats_query_range, which return one
-// bucket per step, return at most MaxBuckets buckets over the window.
-func setStep(out, in url.Values, span time.Duration, lim LogsLimits) *HTTPError {
+// bucket per step, return at most MaxBuckets buckets, and caps it so the
+// window cannot grow through it: vlselect widens [start, end] outward to
+// step boundaries (alignStartEndToStep), by up to one step on each side,
+// so a 100y step would otherwise scan the whole retention. The window is
+// shrunk from the start until the widened span fits MaxRange.
+func setStep(out, in url.Values, start, end time.Time, lim LogsLimits) *HTTPError {
+	span := end.Sub(start)
 	minStep := max((span+time.Duration(lim.MaxBuckets)-1)/time.Duration(lim.MaxBuckets), time.Second)
 	step := minStep
 	if v := in.Get("step"); v != "" {
@@ -176,9 +177,13 @@ func setStep(out, in url.Values, span time.Duration, lim LogsLimits) *HTTPError 
 		if err != nil || d <= 0 {
 			return errorf(http.StatusBadRequest, "invalid step %q", v)
 		}
-		step = max(d, minStep)
+		step = max(min(d, span, lim.MaxRange/3), minStep)
+	}
+	if span+2*step > lim.MaxRange {
+		start = end.Add(-max(lim.MaxRange-2*step, 0))
 	}
 	out.Set("step", formatDuration(step))
+	out.Set("start", start.Format(time.RFC3339Nano))
 	return nil
 }
 
@@ -290,6 +295,11 @@ func parseTime(s string, now time.Time) (time.Time, error) {
 		return now, nil
 	}
 	if sec, frac, ok := strings.Cut(s, "."); isDigits(sec) && (!ok || isDigits(frac)) {
+		// vlselect reads the unit from the digit count (four digits are a
+		// year, 13 are milliseconds); only unambiguous seconds are taken.
+		if len(sec) < 5 || len(sec) > 10 {
+			return time.Time{}, fmt.Errorf("numeric time %q is not unix seconds", s)
+		}
 		secs, err := strconv.ParseInt(sec, 10, 64)
 		if err != nil {
 			return time.Time{}, err

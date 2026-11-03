@@ -126,6 +126,8 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		{"inverted range", "query", url.Values{"start": {"2026-11-04T11:00:00Z"}, "end": {"2026-11-04T10:00:00Z"}}, http.StatusBadRequest},
 		{"inverted range on tail", "tail", url.Values{"start": {"2026-11-04T11:00:00Z"}, "end": {"2026-11-04T10:00:00Z"}}, http.StatusBadRequest},
 		{"bad start", "query", url.Values{"start": {"yesterday"}}, http.StatusBadRequest},
+		{"millisecond timestamp", "query", url.Values{"start": {"1793786400000"}}, http.StatusBadRequest},
+		{"year-like number", "query", url.Values{"start": {"2026"}}, http.StatusBadRequest},
 		{"bad limit", "query", url.Values{"limit": {"-1"}}, http.StatusBadRequest},
 		{"zero limit", "query", url.Values{"limit": {"0"}}, http.StatusBadRequest},
 		{"bad step", "hits", url.Values{"step": {"0s"}}, http.StatusBadRequest},
@@ -175,6 +177,7 @@ func TestBuildLogsParamsWindow(t *testing.T) {
 		{"start only", url.Values{"start": {"2026-11-04T09:00:00Z"}}, ts("2026-11-04T09:00:00Z"), ts("2026-11-04T12:00:00Z")},
 		{"end only", url.Values{"end": {"2026-11-03T00:00:00Z"}}, ts("2026-11-02T23:00:00Z"), ts("2026-11-03T00:00:00Z")},
 		{"unix seconds", url.Values{"start": {"1793786400"}, "end": {"1793788200.5"}}, "2026-11-04T10:00:00Z", "2026-11-04T10:30:00.5Z"},
+		{"rfc3339 with offset", url.Values{"start": {"2026-11-04T13:00:00+03:00"}}, ts("2026-11-04T10:00:00Z"), ts("2026-11-04T12:00:00Z")},
 		{"relative", url.Values{"start": {"3h"}, "end": {"now"}}, ts("2026-11-04T09:00:00Z"), ts("2026-11-04T12:00:00Z")},
 		{"relative days", url.Values{"start": {"1d"}}, ts("2026-11-03T12:00:00Z"), ts("2026-11-04T12:00:00Z")},
 		{"over-wide clamped", url.Values{"start": {"2026-01-01T00:00:00Z"}}, ts("2026-10-28T12:00:00Z"), ts("2026-11-04T12:00:00Z")},
@@ -182,8 +185,12 @@ func TestBuildLogsParamsWindow(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, endpoint := range []string{"query", "hits", "stats_query_range", "facets"} {
-				out := build(t, endpoint, tt.in)
+			for _, endpoint := range []string{"query", "field_values", "facets"} {
+				in := url.Values{"field": {"f"}}
+				for k, v := range tt.in {
+					in[k] = v
+				}
+				out := build(t, endpoint, in)
 				if out.Get("start") != tt.wantStart || out.Get("end") != tt.wantEnd {
 					t.Errorf("%s: window = [%s, %s], want [%s, %s]", endpoint, out.Get("start"), out.Get("end"), tt.wantStart, tt.wantEnd)
 				}
@@ -209,8 +216,8 @@ func TestBuildLogsParamsStepAndLimit(t *testing.T) {
 	if got := build(t, "stats_query_range", with(day, "step", "1h")).Get("step"); got != "3600000ms" {
 		t.Errorf("1h step = %s", got)
 	}
-	if got := build(t, "stats_query_range", with(day, "step", "1w")).Get("step"); got != "604800000ms" {
-		t.Errorf("1w step = %s", got)
+	if got := build(t, "stats_query_range", with(day, "step", "1w")).Get("step"); got != "86400000ms" {
+		t.Errorf("1w step on a day window = %s, want capped at the window", got)
 	}
 	if got := build(t, "hits", day).Get("step"); got != "86400ms" {
 		t.Errorf("omitted step = %s, want the bucket-bounded minimum", got)
@@ -271,5 +278,45 @@ func TestBuildLogsParamsTail(t *testing.T) {
 	out := build(t, "tail", url.Values{"start": {"2026-11-04T11:00:00Z"}})
 	if out.Get("start") != "2026-11-04T11:00:00Z" {
 		t.Errorf("tail start = %q, want the client value ANDed into each tick", out.Get("start"))
+	}
+}
+
+// alignedWindow repeats vlselect's alignStartEndToStep (offset 0): with a
+// step it widens [start, end] to step boundaries, end always by at least
+// one more step.
+func alignedWindow(t *testing.T, out url.Values) time.Duration {
+	t.Helper()
+	parse := func(k string) int64 {
+		v, err := time.Parse(time.RFC3339Nano, out.Get(k))
+		if err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		return v.UnixNano()
+	}
+	step, err := parseDuration(out.Get("step"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end, st := parse("start"), parse("end"), int64(step)
+	start -= start % st
+	end += st - end%st
+	return time.Duration(end - start)
+}
+
+func TestBuildLogsParamsStepCannotWidenWindow(t *testing.T) {
+	lim := testLimits()
+	for _, endpoint := range []string{"hits", "stats_query_range"} {
+		for _, in := range []url.Values{
+			{"step": {"100y"}},
+			{"step": {"100y"}, "start": {"2026-01-01T00:00:00Z"}},
+			{"step": {"3d"}, "start": {"7d"}},
+			{"start": {"7d"}},
+			{"step": {"1s"}, "start": {"7d"}},
+		} {
+			out := build(t, endpoint, in)
+			if got := alignedWindow(t, out); got > lim.MaxRange {
+				t.Errorf("%s %v: vlselect would scan %s, more than %s", endpoint, in, got, lim.MaxRange)
+			}
+		}
 	}
 }
