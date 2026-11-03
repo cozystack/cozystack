@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -275,7 +276,11 @@ func parseDuration(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}
-		return time.Duration(f * float64(time.Second)), nil
+		d, ok := scaleDuration(f, time.Second)
+		if !ok {
+			return 0, fmt.Errorf("duration %q out of range", s)
+		}
+		return d, nil
 	}
 	if s == "" {
 		return 0, fmt.Errorf("empty duration")
@@ -287,10 +292,25 @@ func parseDuration(s string) (time.Duration, error) {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}
 		f, _ := strconv.ParseFloat(m[1], 64)
-		total += time.Duration(f * float64(durationUnits[m[2]]))
+		d, ok := scaleDuration(f, durationUnits[m[2]])
+		if !ok || total > math.MaxInt64-d {
+			return 0, fmt.Errorf("duration %q out of range", s)
+		}
+		total += d
 		rest = rest[len(m[0]):]
 	}
 	return total, nil
+}
+
+// scaleDuration refuses what does not fit a Duration: Go leaves an
+// out-of-range float to int conversion implementation-defined.
+func scaleDuration(f float64, unit time.Duration) (time.Duration, bool) {
+	v := f * float64(unit)
+	// float64(math.MaxInt64) rounds up to 2^63, which is already too large.
+	if v >= float64(math.MaxInt64) {
+		return 0, false
+	}
+	return time.Duration(v), true
 }
 
 // parseTime accepts "now", unix seconds with an optional fraction, RFC3339,

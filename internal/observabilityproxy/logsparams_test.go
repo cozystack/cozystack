@@ -143,6 +143,11 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		{"too many hits fields", "hits", url.Values{"field": strings.Fields("a b c d e f g h i j k")}, http.StatusBadRequest},
 		{"since and start_offset", "tail", url.Values{"since": {"2026-11-04T11:59:00Z"}, "start_offset": {"1m"}}, http.StatusBadRequest},
 		{"bad since", "tail", url.Values{"since": {"soon"}}, http.StatusBadRequest},
+		{"start_offset summing past int64", "tail", url.Values{"start_offset": {"99999999999h99999999999h1s"}}, http.StatusBadRequest},
+		{"step summing past int64", "hits", url.Values{"step": {"2562047h2562047h"}}, http.StatusBadRequest},
+		{"step token past int64", "hits", url.Values{"step": {"99999999999h"}}, http.StatusBadRequest},
+		{"bare-seconds step past int64", "hits", url.Values{"step": {"99999999999999999999"}}, http.StatusBadRequest},
+		{"relative start summing past int64", "query", url.Values{"start": {"106751d1d"}}, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -349,6 +354,19 @@ func TestBuildLogsParamsStepKeepsBucketCap(t *testing.T) {
 		e, _ := time.Parse(time.RFC3339Nano, out.Get("end"))
 		if buckets := (e.Sub(s) + step - 1) / step; int(buckets) > lim.MaxBuckets {
 			t.Errorf("start %s: step %s gives %d buckets, more than %d", start, out.Get("step"), buckets, lim.MaxBuckets)
+		}
+	}
+}
+
+func TestParseDurationBounds(t *testing.T) {
+	for _, in := range []string{"2562047h", "106751d", "9223372036s", "292y"} {
+		if d, err := parseDuration(in); err != nil || d <= 0 {
+			t.Errorf("parseDuration(%q) = %s, %v; want a positive duration", in, d, err)
+		}
+	}
+	for _, in := range []string{"2562048h", "106751d1d", "9223372037s", "9223372037", "293y", "1y292y"} {
+		if d, err := parseDuration(in); err == nil {
+			t.Errorf("parseDuration(%q) = %s; want an error past the int64 range", in, d)
 		}
 	}
 }
