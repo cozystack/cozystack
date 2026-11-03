@@ -224,7 +224,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	if req.params.Get("end") != "1793793600.000" || req.params.Get("start") != "1793793300.000" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
-	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute)) {
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-30*time.Second)) {
 		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
 	}
 }
@@ -338,6 +338,7 @@ func TestMetricsStoreByLookback(t *testing.T) {
 		{"instant at start", "api/v1/query", url.Values{"query": {"x @ start()"}}, "longterm"},
 		{"instant step window", "api/v1/query", url.Values{"query": {"rate(x[5i])"}}, "longterm"},
 		{"instant step past retention", "api/v1/query", url.Values{"query": {"up"}, "step": {"259200"}}, "longterm"},
+		{"instant latency offset at the edge", "api/v1/query", url.Values{"query": {"default_rollup(x[71h54m59s])"}, "step": {"0.001"}}, "longterm"},
 		{"instant subquery past retention", "api/v1/query", url.Values{"query": {"max_over_time(rate(x[5m])[4d:1h])"}}, "longterm"},
 		{"quoted at sign", "api/v1/query", url.Values{"query": {`x{a="a@b"}`}}, "longterm"},
 		{"quoted open bracket hides window", "api/v1/query", url.Values{"query": {`rate(x{a="[5m"}[7d])`}}, "longterm"},

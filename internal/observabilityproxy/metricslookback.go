@@ -33,6 +33,12 @@ const instantDefaultStep = 5 * time.Minute
 // -search.minStalenessInterval, 5m when unset; cozystack does not set it).
 const silenceInterval = 5 * time.Minute
 
+// latencyOffset is how far vmselect moves an instant query evaluated within
+// it of the current time back (-search.latencyOffset, 30s by default and
+// not set by cozystack); the proxy forwards neither nocache nor
+// latency_offset.
+const latencyOffset = 30 * time.Second
+
 // queryDurationPart is the subset of the MetricsQL duration grammar
 // (scanSingleDuration in metricsql) the scan understands. Step multiples
 // (5i, $__interval), negative parts and upper-case units are left out on
