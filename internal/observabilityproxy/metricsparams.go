@@ -121,7 +121,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			}
 			out.Set("step", formatSeconds(step))
 		}
-		req.start = queryStart(out.Get("query"), at, step)
+		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
 		return req, nil
 
 	case "api/v1/query_range":
