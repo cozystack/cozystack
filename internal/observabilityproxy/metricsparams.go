@@ -46,6 +46,7 @@ type MetricsConfig struct {
 	LongTermStore      string
 	ShortTermRetention time.Duration
 	Limits             MetricsLimits
+	App                AppScopeLimits
 	// UpstreamURL maps a store name to its Prometheus API base URL, without
 	// a trailing slash; nil means the in-cluster vmselect Service.
 	UpstreamURL func(store string) string
@@ -77,6 +78,20 @@ type metricsRequest struct {
 	// start is the earliest instant the request reads, for the store choice;
 	// zero when that is unknown, which picks the long-term store.
 	start time.Time
+	// from and to are the window the query is evaluated over, without the
+	// lookback of its expression.
+	from, to time.Time
+	// scopedMatch is set when match[] holds the scope, not client matchers.
+	scopedMatch bool
+}
+
+// setScope replaces the namespace scope with the given selectors, which
+// vmselect ORs.
+func (req *metricsRequest) setScope(selectors []string) {
+	req.params["extra_filters[]"] = selectors
+	if req.scopedMatch {
+		req.params["match[]"] = selectors
+	}
 }
 
 // namespaceSelector quotes ns the way MetricsQL unquotes a label value
@@ -127,6 +142,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			out.Set("step", formatSeconds(step))
 		}
 		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
+		req.from, req.to = at, at
 		return req, nil
 
 	case "api/v1/query_range":
@@ -150,6 +166,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			return req, errorf(http.StatusUnprocessableEntity, "%d points per series exceed the limit of %d; raise step", points, lim.MaxPoints)
 		}
 		req.start = queryStart(out.Get("query"), start, step)
+		req.from, req.to = start, end
 		out.Set("start", formatTime(start))
 		out.Set("end", formatTime(end))
 		out.Set("step", formatSeconds(step))
@@ -172,7 +189,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 	if herr != nil {
 		return req, herr
 	}
-	req.start = start
+	req.start, req.from, req.to = start, start, end
 	out.Set("start", formatTime(start))
 	out.Set("end", formatTime(end))
 
@@ -194,6 +211,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		// extra_filters[] on the label APIs unless a match[] is present
 		// (getCommonParamsInternal), so the scope is repeated here.
 		out.Set("match[]", namespaceSelector(namespace))
+		req.scopedMatch = true
 	}
 	return req, nil
 }

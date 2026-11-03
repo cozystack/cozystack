@@ -193,11 +193,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 			return herr
 		}
 	}
-	switch route.Kind {
-	case NamespaceMetrics:
-		return s.serveMetrics(w, r, route, user)
-	case ApplicationMetrics:
-		return errorf(http.StatusNotFound, "not found")
+	if route.Kind == NamespaceMetrics || route.Kind == ApplicationMetrics {
+		return s.serveMetrics(w, r, route, user, kind)
 	}
 	endpoint, ok := strings.CutPrefix(route.Endpoint, "select/logsql/")
 	if !ok {
@@ -288,7 +285,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	return nil
 }
 
-func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Route, user string) *HTTPError {
+// serveMetrics scopes to the namespace, or with kind set to the application
+// route.Name of that kind within it.
+func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Route, user, kind string) *HTTPError {
 	release, ok := s.limits.acquire(user)
 	if !ok {
 		return tooManyConcurrent(w)
@@ -310,6 +309,13 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Rout
 		defer cancel()
 	}
 	store := s.cfg.Metrics.store(req.start, now)
+	if kind != "" {
+		selectors, herr := s.applicationScope(ctx, r, store, req, route.Namespace, kind, route.Name)
+		if herr != nil {
+			return herr
+		}
+		req.setScope(selectors)
+	}
 	resp, herr := s.post(ctx, r, s.cfg.Metrics.UpstreamURL(store)+"/"+req.path, req.params, "metrics store", nil)
 	if herr != nil {
 		return herr

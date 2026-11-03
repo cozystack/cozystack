@@ -96,6 +96,9 @@ func newPolicyHarness(t *testing.T, cfg Config, handler http.HandlerFunc, allow 
 	if cfg.Metrics.Limits == (MetricsLimits{}) {
 		cfg.Metrics.Limits = testMetricsLimits()
 	}
+	if cfg.Metrics.App == (AppScopeLimits{}) {
+		cfg.Metrics.App = AppScopeLimits{Lookback: 24 * time.Hour, MaxPods: 100, MaxPVCs: 100}
+	}
 	if cfg.Logs == (LogsLimits{}) {
 		cfg.Logs = testLimits()
 	}
