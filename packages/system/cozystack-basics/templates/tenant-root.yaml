@@ -6,6 +6,7 @@ metadata:
   labels:
     platform.cozystack.io/no-delete: "true"
     namespace.cozystack.io/host: {{ index .Values._cluster "root-host" | quote }}
+    namespace.cozystack.io/vgpu: {{ eq (toString (index .Values._cluster "gpu-vgpu" | default "false")) "true" | quote }}
     {{- /* Gateway attach label: when platform-level Gateway is on,
             tenant-root owns the publishing Gateway, and its own
             namespace must carry the label so the Gateway's
