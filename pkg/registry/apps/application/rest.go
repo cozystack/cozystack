@@ -138,6 +138,9 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 	if err != nil {
 		klog.Errorf("Failed to build spec schema: %v", err)
 	}
+	if specSchema != nil {
+		specSchemas.Store(config.Application.Kind, specSchema)
+	}
 
 	nameSchema, nameSchemaErr := resolveNameSchema(config)
 	if nameSchemaErr != nil {
@@ -230,6 +233,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
+
+	if gErrs := r.validateGPUBudget(ctx, app, nil); len(gErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
+	}
 
 	// Run the genericapiserver-supplied validating admission chain
 	// (validating webhooks + ValidatingAdmissionPolicies) before
@@ -587,6 +594,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
+	}
+	if gErrs := r.validateGPUBudget(ctx, app, oldObj.(*appsv1alpha1.Application)); len(gErrs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, gErrs)
 	}
 
 	r.warnLegacyPresets(app)
@@ -1080,7 +1090,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					// Filter out WM events whose child namespace does not
 					// correspond to the Tenant in our watched namespace, since
 					// the cluster-wide WM watch delivers events for all tenants.
-					if r.computeTenantNamespace(namespace, wmAppName) != wm.Namespace {
+					if computeTenantNamespace(namespace, wmAppName) != wm.Namespace {
 						continue
 					}
 					if !fieldFilter.MatchesNamespace(hrNS) {
@@ -1538,7 +1548,7 @@ func (r *REST) validateTenantNamespaceLength(currentNamespace, tenantName string
 	fldPath := field.NewPath("metadata").Child("name")
 	allErrs := field.ErrorList{}
 
-	computed := r.computeTenantNamespace(currentNamespace, tenantName)
+	computed := computeTenantNamespace(currentNamespace, tenantName)
 	if len(computed) > maxNamespaceName {
 		allErrs = append(allErrs, field.Invalid(fldPath, tenantName,
 			fmt.Sprintf("computed tenant namespace %q would be %d characters, which exceeds the %d-character Kubernetes namespace limit; shorten the tenant name or reduce ancestor nesting depth",
@@ -1594,7 +1604,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 	// not in the same namespace as the owning HelmRelease — look there instead.
 	workloadsNS := hr.Namespace
 	if r.kindName == "Tenant" {
-		workloadsNS = r.computeTenantNamespace(hr.Namespace, app.Name)
+		workloadsNS = computeTenantNamespace(hr.Namespace, app.Name)
 	}
 	ws, wsErr := r.getWorkloadsOperational(ctx, workloadsNS, app.Name, freshMonitor)
 	// Derive a stable LastTransitionTime: use the owning HelmRelease's own
@@ -1670,7 +1680,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 
 	// Add namespace field for Tenant applications
 	if r.kindName == validation.TenantKind {
-		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
+		app.Status.Namespace = computeTenantNamespace(hr.Namespace, app.Name)
 		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
 		if err != nil {
 			klog.Warningf("Failed to count external IPs for tenant %s/%s: %v", hr.Namespace, app.Name, err)
@@ -2037,23 +2047,11 @@ func conditionStatus(conditions []metav1.Condition, conditionType, absent string
 	return absent
 }
 
-// computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
-func (r *REST) computeTenantNamespace(currentNamespace, tenantName string) string {
-	hrName := r.releaseConfig.Prefix + tenantName
-
-	switch {
-	case currentNamespace == "tenant-root" && hrName == "tenant-root":
-		// 1) root tenant inside root namespace
-		return "tenant-root"
-
-	case currentNamespace == "tenant-root":
-		// 2) any other tenant in root namespace
-		return fmt.Sprintf("tenant-%s", tenantName)
-
-	default:
-		// 3) tenant in a dedicated namespace
-		return fmt.Sprintf("%s-%s", currentNamespace, tenantName)
+func computeTenantNamespace(currentNamespace, tenantName string) string {
+	if currentNamespace == rootTenantNamespace {
+		return tenantReleasePrefix + tenantName
 	}
+	return currentNamespace + "-" + tenantName
 }
 
 func (r *REST) countTenantExternalIPs(ctx context.Context, namespace string) (int32, error) {

@@ -350,6 +350,92 @@ func TestValidateTenantResourceQuotas_PoolUsage(t *testing.T) {
 	})
 }
 
+func TestGPUOnlyTenantSharesOrdinaryResourcePool(t *testing.T) {
+	for _, tc := range []struct {
+		key, usedKey, budget, used, remaining string
+	}{
+		{"cpu", "limits.cpu", "10", "8", "2"},
+		{"memory", "limits.memory", "10Gi", "8Gi", "2Gi"},
+		{"ephemeral-storage", "limits.ephemeral-storage", "10Gi", "8Gi", "2Gi"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			for _, gpuQuotas := range []map[string]string{nil, {totalKey: "2"}, {h100Key: "2"}} {
+				parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{tc.key: tc.budget})
+				child := tenantHelmRelease(t, "c", "tenant-foo", gpuQuotas)
+				used := usageQuota(t, "tenant-foo-c", "tenant-quota-allocated", map[string]string{tc.usedKey: tc.used})
+				r := newTenantREST(t, parent, child, used)
+				for _, request := range []struct {
+					amount string
+					denied bool
+				}{{tc.budget, true}, {tc.remaining, false}} {
+					app := childApplication(t, "sibling", "tenant-foo", map[string]string{tc.key: request.amount})
+					errs := r.validateTenantResourceQuotas(context.Background(), app)
+					if (len(errs) > 0) != request.denied {
+						t.Errorf("GPU quotas %v, sibling %s=%s: errors %v, want denied=%v", gpuQuotas, tc.key, request.amount, errs, request.denied)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGPUOnlyTenantPoolUsage(t *testing.T) {
+	for _, usedKey := range []string{"limits.cpu", "limits.memory", "limits.ephemeral-storage", "requests.example.com/device", "requests.hugepages-2Mi", "requests.storage", "pods"} {
+		t.Run(usedKey, func(t *testing.T) {
+			parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+			child := tenantHelmRelease(t, "c", "tenant-foo", map[string]string{totalKey: "2"})
+			grandchild := tenantHelmRelease(t, "d", "tenant-foo-c", nil)
+			childUsed := usageQuota(t, "tenant-foo-c", "tenant-quota-allocated", map[string]string{usedKey: "5"})
+			grandchildUsed := usageQuota(t, "tenant-foo-c-d", "tenant-quota-allocated", map[string]string{usedKey: "3"})
+			r := newTenantREST(t, parent, child, grandchild, childUsed, grandchildUsed)
+			used, err := r.parentPoolUsage(context.Background(), "tenant-foo", "tenant-foo-sibling")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := used[usedKey]
+			if got.Cmp(resource.MustParse("8")) != 0 {
+				t.Errorf("parent pool %s usage = %s, want 8", usedKey, got.String())
+			}
+		})
+	}
+}
+
+func TestOrdinaryResourceDeclarationKeepsSeparatePool(t *testing.T) {
+	for name, quotas := range map[string]map[string]string{
+		"ordinary": {"cpu": "4"},
+		"mixed":    {"cpu": "4", totalKey: "2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+			child := tenantHelmRelease(t, "c", "tenant-foo", quotas)
+			used := usageQuota(t, "tenant-foo-c", "tenant-quota", map[string]string{"limits.cpu": "4"})
+			r := newTenantREST(t, parent, child, used)
+			app := childApplication(t, "sibling", "tenant-foo", map[string]string{"cpu": "6"})
+			if errs := r.validateTenantResourceQuotas(context.Background(), app); len(errs) > 0 {
+				t.Errorf("child usage counted in addition to its declared reservation: %v", errs)
+			}
+		})
+	}
+}
+
+func TestComputeTenantNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		parent, name, want string
+	}{
+		{"tenant-root", "root", "tenant-root"},
+		{"tenant-root", "foo", "tenant-foo"},
+		{"tenant-foo", "root", "tenant-foo-root"},
+		{"tenant-foo", "bar", "tenant-foo-bar"},
+		{"tenant-foo-bar", "baz", "tenant-foo-bar-baz"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			if got := computeTenantNamespace(tc.parent, tc.name); got != tc.want {
+				t.Errorf("computeTenantNamespace(%q, %q) = %q, want %q", tc.parent, tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParentTenantHelmReleaseRef(t *testing.T) {
 	tests := []struct {
 		owned    string

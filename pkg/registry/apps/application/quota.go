@@ -32,6 +32,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/cozystack/cozystack/internal/gpu/model"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 )
@@ -82,7 +83,7 @@ func declaredQuotasFromHelmRelease(hr *helmv2.HelmRelease) (map[string]resource.
 
 // parentTenantHelmReleaseRef maps the namespace owned by a tenant to the
 // name/namespace of that tenant's own HelmRelease. It is the inverse of
-// REST.computeTenantNamespace: a tenant created as Application "<name>" in
+// computeTenantNamespace: a tenant created as Application "<name>" in
 // namespace C owns the workload namespace computeTenantNamespace(C, name), so
 // given the owned namespace we recover (release name, release namespace).
 //
@@ -193,6 +194,15 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 	if err != nil {
 		return append(allErrs, field.Invalid(fldPath, "", err.Error()))
 	}
+	for _, res := range sortedQuotaKeys(childQuota) {
+		if _, ok := model.ParseQuotaKey(corev1.ResourceName(res)); model.IsGPUQuotaKey(corev1.ResourceName(res)) && !ok {
+			allErrs = append(allErrs, field.Invalid(fldPath.Key(res), res,
+				"is in the GPU budget domain but is not a GPU budget key; use <class>.gpuclass.cozystack.io/devices or gpuclass.cozystack.io/devices"))
+		}
+	}
+	if len(allErrs) > 0 {
+		return allErrs
+	}
 	if len(childQuota) == 0 {
 		// Unbounded child: shares the parent pool, allowed at declaration time.
 		return allErrs
@@ -220,8 +230,14 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 	// best-effort (a snapshot; concurrent writes can briefly overshoot and
 	// already-running pods are never evicted) — the tenant-quota controller is
 	// the runtime backstop.
-	childNamespace := r.computeTenantNamespace(app.Namespace, app.Name)
+	childNamespace := computeTenantNamespace(app.Namespace, app.Name)
 	poolUsed, err := r.parentPoolUsage(ctx, app.Namespace, childNamespace)
+	if err != nil {
+		return append(allErrs, field.InternalError(fldPath, err))
+	}
+	// GPU budget keys never reach a ResourceQuota, so their pool usage is
+	// what the pool's class entries reserve.
+	gpuUsed, err := r.parentPoolGPUUsage(ctx, app.Namespace, childNamespace)
 	if err != nil {
 		return append(allErrs, field.InternalError(fldPath, err))
 	}
@@ -234,6 +250,9 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		parentLimit := parentQuota[res]
 		allocated := siblings[res] // zero value when no sibling bounds this resource
 		used := poolUsed[renderedLimitKey(res)]
+		if model.IsGPUQuotaKey(corev1.ResourceName(res)) {
+			used = *resource.NewQuantity(gpuUsed[res], resource.DecimalSI)
+		}
 		remaining := parentLimit.DeepCopy()
 		remaining.Sub(allocated)
 		remaining.Sub(used)
@@ -312,7 +331,7 @@ func renderedLimitKey(raw string) string {
 // hierarchy is encoded in the namespace name, so the parent is recovered by
 // stripping the trailing "-<name>" segment.
 func (r *REST) parentNamespaceOf(ns string) string {
-	if ns == rootTenantNamespace || !strings.HasPrefix(ns, r.releaseConfig.Prefix) {
+	if ns == rootTenantNamespace || !strings.HasPrefix(ns, tenantReleasePrefix) {
 		return ""
 	}
 	segments := strings.Split(ns, "-")
@@ -341,9 +360,9 @@ func (r *REST) poolRootOf(ns string, bounded map[string]bool) string {
 // created/updated). Usage is read from each member's ResourceQuota.status.used,
 // taking a per-resource max within a namespace to avoid double-counting the
 // chart-rendered and controller-allocated quotas, and is keyed in the rendered
-// quota key space (see renderedLimitKey). Boundedness is decided by declared
-// resourceQuotas so the result does not depend on whether Flux has rendered a
-// freshly-created tenant's quota yet.
+// quota key space (see renderedLimitKey). Only non-GPU declarations form these
+// pools: the tenant chart omits GPU budgets from ResourceQuota. Using declared
+// values avoids depending on whether Flux has rendered a new tenant yet.
 func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) (map[string]resource.Quantity, error) {
 	releases := &helmv2.HelmReleaseList{}
 	selector := labels.SelectorFromSet(labels.Set{
@@ -359,15 +378,18 @@ func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) 
 	for i := range releases.Items {
 		hr := &releases.Items[i]
 		name := strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix)
-		ns := r.computeTenantNamespace(hr.Namespace, name)
+		ns := computeTenantNamespace(hr.Namespace, name)
 		owned = append(owned, ns)
 		quotas, err := declaredQuotasFromHelmRelease(hr)
 		if err != nil {
 			klog.Warningf("skipping tenant %s/%s with unparseable quotas while summing pool usage: %v", hr.Namespace, hr.Name, err)
 			continue
 		}
-		if len(quotas) > 0 {
-			bounded[ns] = true
+		for key := range quotas {
+			if !model.IsGPUQuotaKey(corev1.ResourceName(key)) {
+				bounded[ns] = true
+				break
+			}
 		}
 	}
 

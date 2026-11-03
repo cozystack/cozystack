@@ -116,6 +116,14 @@ The `resourceQuotas` parameter allows you to limit resources available to the te
 - `secrets` - Maximum number of Secrets
 - `persistentvolumeclaims` - Maximum number of PVCs
 
+**GPU budgets** (checked when a VM or a worker pool is written, never rendered into the namespace ResourceQuota):
+- `<class>.gpuclass.cozystack.io/devices` - GPUs of one GPUClass, each vGPU counting as one
+- `gpuclass.cozystack.io/devices` - GPUs of every class together
+
+A `VMInstance` reserves the `count` of each class entry and a `KubernetesNodes` pool reserves `count` times `maxReplicas`, stopped VMs included. A tenant with only GPU budgets gets no ResourceQuota and no default LimitRange.
+
+GPU budgets are checked against the application's tenant pool, not recursively against every ancestor's GPU budget.
+
 **Example:**
 ```yaml
 resourceQuotas:
