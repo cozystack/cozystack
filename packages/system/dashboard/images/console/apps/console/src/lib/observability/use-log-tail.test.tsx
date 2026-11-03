@@ -67,6 +67,14 @@ describe("useLogTail", () => {
     expect(new URL(raw.mock.calls[1][0], "http://x").searchParams.get("since")).toBe(T3)
   })
 
+  it("retries a tail refused for load instead of stopping", async () => {
+    const { wrapper } = setup(new Response("too many concurrent requests", { status: 422 }), ndjson(line(T1, "a")))
+
+    const { result } = renderHook(() => useLogTail("/root/", "*", 1, { retryDelayMs: 1 }), { wrapper })
+
+    await waitFor(() => expect(result.current.entries.map((e) => e._msg)).toEqual(["a"]))
+  })
+
   it("does not connect while disabled", () => {
     const { raw, wrapper } = setup()
 
