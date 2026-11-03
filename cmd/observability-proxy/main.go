@@ -102,6 +102,8 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--logs-default-limit must be positive and not above --logs-max-limit")
 	case o.logs.MaxTailResume < 0:
 		return o, errors.New("--logs-max-tail-resume must not be negative")
+	case o.requestTimeout < 0 || o.tailIdleTimeout < 0 || o.authCacheTTL < 0 || o.shutdownTimeout < 0:
+		return o, errors.New("timeouts and the auth cache TTL must not be negative")
 	}
 	return o, nil
 }
