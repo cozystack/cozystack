@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useK8sClient } from "@cozystack/k8s-client"
-import { mergeTail } from "./logs.ts"
+import { compareTime, mergeTail } from "./logs.ts"
 import { ProxyError, tailLogs, type LogEntry } from "./proxy.ts"
 
 export type TailState = "connecting" | "live" | "reconnecting" | "stopped"
@@ -18,25 +18,30 @@ const FATAL: ReadonlySet<string> = new Set(["bad-request", "unauthorized", "forb
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
-    const t = setTimeout(resolve, ms)
-    signal.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(t)
       resolve()
-    })
+    }
+    const t = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener("abort", onAbort, { once: true })
   })
 
+// Each non-null session is one follow run with its own buffer; null stops following.
 export function useLogTail(
   root: string,
   query: string,
-  enabled: boolean,
+  session: number | null,
   { cap = 1000, retryDelayMs = 2000 }: { cap?: number; retryDelayMs?: number } = {},
 ): Omit<TailSnapshot, "key"> {
   const client = useK8sClient()
-  const key = `${root}\n${query}\n${enabled}`
+  const key = `${root}\n${query}\n${session}`
   const [snap, setSnap] = useState<TailSnapshot>({ key, entries: [], state: "connecting", error: null })
 
   useEffect(() => {
-    if (!enabled) return
+    if (session === null) return
     const controller = new AbortController()
     const { signal } = controller
     let pending: LogEntry[] = []
@@ -64,7 +69,7 @@ export function useLogTail(
         try {
           await tailLogs(client, root, { query, since: lastTime }, (entry) => {
             attempt = 0
-            lastTime = entry._time
+            if (!lastTime || compareTime(entry._time, lastTime) > 0) lastTime = entry._time
             pending.push(entry)
             timer ??= setTimeout(flush, FLUSH_MS)
           }, signal)
@@ -88,7 +93,7 @@ export function useLogTail(
       controller.abort()
       clearTimeout(timer)
     }
-  }, [client, root, query, enabled, key, cap, retryDelayMs])
+  }, [client, root, query, session, key, cap, retryDelayMs])
 
   const current = snap.key === key ? snap : { key, entries: [], state: "connecting" as const, error: null }
   return { entries: current.entries, state: current.state, error: current.error }
