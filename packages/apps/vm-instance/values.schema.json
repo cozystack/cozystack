@@ -123,12 +123,20 @@
       "default": [],
       "items": {
         "type": "object",
-        "required": [
-          "name"
-        ],
         "properties": {
+          "className": {
+            "description": "GPUClass to take GPUs of.",
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "gpuclass"
+            }
+          },
+          "count": {
+            "description": "GPUs of the class; 1 when unset.",
+            "type": "integer"
+          },
           "name": {
-            "description": "The name of the GPU resource to attach.",
+            "description": "Resource name of the GPU to request directly.",
             "type": "string",
             "x-cozystack-options": {
               "source": "gpu"
