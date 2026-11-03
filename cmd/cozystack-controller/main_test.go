@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,5 +40,14 @@ func TestSchemeRegistersReconciledKinds(t *testing.T) {
 		if _, err := apiutil.GVKForObject(obj, scheme); err != nil {
 			t.Errorf("manager scheme does not register %s, so the CA-extraction controller cannot start: %v", name, err)
 		}
+	}
+}
+
+func TestSplitNames(t *testing.T) {
+	if got := splitNames(" nvidia.com/gpu, ,amd.com/gpu,"); !slices.Equal(got, []string{"nvidia.com/gpu", "amd.com/gpu"}) {
+		t.Errorf("splitNames = %v", got)
+	}
+	if got := splitNames(""); got != nil {
+		t.Errorf("splitNames of an empty flag = %v", got)
 	}
 }
