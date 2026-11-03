@@ -22,7 +22,9 @@ type OptionSpec struct {
 	Items []OptionItem `json:"items,omitempty"`
 }
 
-// OptionItem is a single selectable option.
+// OptionItem is a single selectable option. For a GPU class, MaxFreePerNode,
+// MaxCount and RemainingBudget bound one entry: the largest a form offers is
+// the smallest of those present, and an absent field sets no limit.
 type OptionItem struct {
 	// Value is the string written into the target field.
 	Value string `json:"value"`
@@ -33,6 +35,15 @@ type OptionItem struct {
 	// Default marks the preselected option (e.g. the default StorageClass); the
 	// UI auto-selects it when the field has no value yet.
 	Default bool `json:"default,omitempty"`
+	// Free is a GPU class's free units over all its nodes.
+	Free *int64 `json:"free,omitempty"`
+	// MaxFreePerNode is the most free units of a GPU class on one node.
+	MaxFreePerNode *int64 `json:"maxFreePerNode,omitempty"`
+	// MaxCount is how many units of a GPU class one VM may take.
+	MaxCount *int64 `json:"maxCount,omitempty"`
+	// RemainingBudget is how many more units of a GPU class the requesting
+	// tenant's pool may declare under its GPU budgets.
+	RemainingBudget *int64 `json:"remainingBudget,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

@@ -422,3 +422,87 @@ func TestCreateAndUpdateCheckTheGPUBudget(t *testing.T) {
 		t.Fatalf("Update = %v, want a GPU budget refusal", err)
 	}
 }
+
+func TestGPURemainingBudget(t *testing.T) {
+	registerTestSchemas(t)
+	tests := []struct {
+		name        string
+		objects     []client.Object
+		namespace   string
+		class       string
+		want        int64
+		wantLimited bool
+	}{
+		{
+			name:        "class budget minus what the pool reserves",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4"}), vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"h100","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name: "the smaller of the class and the all-class budget",
+			objects: []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4", totalKey: "5"}),
+				vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"l40s-24c","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        2,
+			wantLimited: true,
+		},
+		{
+			name: "carve-outs of bounded child tenants count",
+			objects: []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "4"}),
+				tenantHelmRelease(t, "acme", "tenant-root", map[string]string{h100Key: "3"})},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name:        "never below zero",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "1"}), vmRelease(t, "a", "tenant-root", `{"gpus":[{"className":"h100","count":3}]}`)},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        0,
+			wantLimited: true,
+		},
+		{
+			name:        "a fractional budget offers whole units only",
+			objects:     []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "1500m"})},
+			namespace:   "tenant-root",
+			class:       "h100",
+			want:        1,
+			wantLimited: true,
+		},
+		{
+			name:      "a large budget does not overflow milliunits",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{h100Key: "9223372036854775807"})},
+			namespace: "tenant-root", class: "h100", want: 9223372036854775807, wantLimited: true,
+		},
+		{
+			name:      "no GPU budget in the pool",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", map[string]string{"cpu": "4"})},
+			namespace: "tenant-root",
+			class:     "h100",
+		},
+		{
+			name:      "no pool",
+			objects:   []client.Object{tenantHelmRelease(t, "root", "tenant-root", nil)},
+			namespace: "tenant-root",
+			class:     "h100",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTenantREST(t, tc.objects...)
+			got, limited, err := GPURemainingBudget(r.c)(context.Background(), tc.namespace, tc.class)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want || limited != tc.wantLimited {
+				t.Errorf("GPURemainingBudget = (%d, %v), want (%d, %v)", got, limited, tc.want, tc.wantLimited)
+			}
+		})
+	}
+}

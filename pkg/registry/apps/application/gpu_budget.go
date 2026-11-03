@@ -231,45 +231,114 @@ func (r *REST) validateGPUBudget(ctx context.Context, app, old *appsv1alpha1.App
 	}
 	sort.Strings(grown)
 
-	quotas, err := r.tenantQuotas(ctx)
+	pool, err := r.gpuPool(ctx, app.Namespace, client.ObjectKey{Namespace: app.Namespace, Name: r.releaseConfig.Prefix + app.Name})
 	if err != nil {
 		return field.ErrorList{field.InternalError(fldPath, err)}
 	}
-	bounded := boundedTenants(quotas)
-	root := r.poolRootOf(app.Namespace, bounded)
-	if root == "" {
+	if pool == nil {
 		return nil
-	}
-	budget := quotas[root]
-
-	carved := map[string]resource.Quantity{}
-	for ns, q := range quotas {
-		if r.poolRootOf(r.parentNamespaceOf(ns), bounded) == root {
-			addQuotas(carved, q)
-		}
-	}
-	used, err := r.gpuPoolUsage(ctx, root, "", bounded, client.ObjectKey{Namespace: app.Namespace, Name: r.releaseConfig.Prefix + app.Name})
-	if err != nil {
-		return field.ErrorList{field.InternalError(fldPath, err)}
 	}
 
 	var errs field.ErrorList
 	for _, k := range grown {
-		limit, ok := budget[k]
+		limit, ok := pool.budget[k]
 		if !ok {
 			continue
 		}
-		reserved := carved[k].DeepCopy()
-		reserved.Add(*resource.NewQuantity(used[k], resource.DecimalSI))
+		reserved := pool.reserved(k)
 		total := reserved.DeepCopy()
 		total.Add(*resource.NewQuantity(demand[k], resource.DecimalSI))
 		if total.Cmp(limit) > 0 {
 			errs = append(errs, field.Forbidden(fldPath, fmt.Sprintf(
 				"GPU budget %q of tenant pool %s is %s and %s is already reserved; this application needs %d",
-				k, root, limit.String(), reserved.String(), demand[k])))
+				k, pool.root, limit.String(), reserved.String(), demand[k])))
 		}
 	}
 	return errs
+}
+
+type gpuPoolFigures struct {
+	root   string
+	budget map[string]resource.Quantity
+	carved map[string]resource.Quantity
+	used   map[string]int64
+}
+
+func (p *gpuPoolFigures) reserved(key string) resource.Quantity {
+	q := p.carved[key].DeepCopy()
+	q.Add(*resource.NewQuantity(p.used[key], resource.DecimalSI))
+	return q
+}
+
+// gpuPool returns the figures of the pool ns draws from, nil when no pool
+// governs ns. The release named by skip reserves nothing.
+func (r *REST) gpuPool(ctx context.Context, ns string, skip client.ObjectKey) (*gpuPoolFigures, error) {
+	quotas, err := r.tenantQuotas(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bounded := boundedTenants(quotas)
+	root := r.poolRootOf(ns, bounded)
+	if root == "" {
+		return nil, nil
+	}
+	p := &gpuPoolFigures{root: root, budget: quotas[root], carved: map[string]resource.Quantity{}}
+	for n, q := range quotas {
+		if r.poolRootOf(r.parentNamespaceOf(n), bounded) == root {
+			addQuotas(p.carved, q)
+		}
+	}
+	if p.used, err = r.gpuPoolUsage(ctx, root, "", bounded, skip); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// GPURemainingBudget returns how many more units of a class the pool of a
+// namespace may declare under its GPU budgets, the smaller of what its
+// class key and its all-class key leave, and false when neither is
+// declared. It is the figure the budget check on VMInstance and
+// KubernetesNodes writes compares against.
+func GPURemainingBudget(c client.Client) func(ctx context.Context, namespace, class string) (int64, bool, error) {
+	r := &REST{c: c}
+	return func(ctx context.Context, namespace, class string) (int64, bool, error) {
+		pool, err := r.gpuPool(ctx, namespace, client.ObjectKey{})
+		if err != nil || pool == nil {
+			return 0, false, err
+		}
+		var left int64
+		limited := false
+		for _, k := range []string{string(model.ClassQuotaKey(class)), gpu.QuotaKeyTotal} {
+			limit, ok := pool.budget[k]
+			if !ok {
+				continue
+			}
+			q := limit.DeepCopy()
+			q.Sub(pool.reserved(k))
+			whole := wholeGPUUnits(q)
+			if !limited || whole < left {
+				left = whole
+			}
+			limited = true
+		}
+		return left, limited, nil
+	}
+}
+
+// wholeGPUUnits floors a remaining budget without converting it to
+// milliunits, which can overflow even when the unit count fits int64.
+func wholeGPUUnits(q resource.Quantity) int64 {
+	if q.Sign() <= 0 {
+		return 0
+	}
+	if q.Cmp(*resource.NewQuantity(math.MaxInt64, resource.DecimalSI)) >= 0 {
+		return math.MaxInt64
+	}
+	n := q.Value()
+	if q.Cmp(*resource.NewQuantity(n, resource.DecimalSI)) < 0 {
+		n--
+	}
+	return n
 }
 
 // parentPoolGPUUsage is the GPU counterpart of parentPoolUsage for the
