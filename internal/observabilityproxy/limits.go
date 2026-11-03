@@ -17,6 +17,7 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -79,7 +80,11 @@ func (l *limiter) allowRate(user string) (time.Duration, bool) {
 	b.tokens = min(burst, b.tokens+now.Sub(b.last).Seconds()*l.cfg.RatePerUser)
 	b.last = now
 	if b.tokens < 1 {
-		return time.Duration((1 - b.tokens) / l.cfg.RatePerUser * float64(time.Second)), false
+		wait, ok := scaleDuration((1-b.tokens)/l.cfg.RatePerUser, time.Second)
+		if !ok {
+			wait = math.MaxInt64
+		}
+		return wait, false
 	}
 	b.tokens--
 	return 0, true
