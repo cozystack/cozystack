@@ -45,6 +45,7 @@ import (
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/cacert"
+	"github.com/cozystack/cozystack/internal/controller/nodegroupclass"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
@@ -285,6 +286,13 @@ func main() {
 		BufferPercent: quotaBufferPercent,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
+		os.Exit(1)
+	}
+
+	if err = (&nodegroupclass.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NodeGroupClass")
 		os.Exit(1)
 	}
 
