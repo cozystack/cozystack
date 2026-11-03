@@ -56,6 +56,11 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--request-timeout=-1s"},
 		{"--tail-idle-timeout=-1s"},
 		{"--auth-cache-ttl=-1s"},
+		{"--rate-limit-per-user=-1"},
+		{"--rate-limit-burst=-1"},
+		{"--max-concurrent-per-user=-1"},
+		{"--max-tails-per-user=-1"},
+		{"--max-tails=-1"},
 		{"--unknown"},
 	} {
 		if _, err := parseFlags(args); err == nil {
