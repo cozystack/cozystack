@@ -549,10 +549,14 @@ spec:
             {{- with $cloneWorkerSC | default (.group.storageClass | default $.Values.storageClass) }}
             storageClassName: {{ . | quote }}
             {{- end }}
+      {{- $gpus := include "cozy-lib.gpu.entries" (list .group.gpus .Values._cluster) | fromJson }}
       template:
         metadata:
           annotations:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+            {{- with $gpus.classes }}
+            cozystack.io/gpus: {{ toJson . | quote }}
+            {{- end }}
           labels:
             {{- /* The VM pod is intentionally attributed to the parent Kubernetes
                    application (kind Kubernetes, name <cluster>), not to this
@@ -566,6 +570,9 @@ spec:
             node-role.kubernetes.io/{{ . }}: ""
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ .clusterName }}-{{ .groupName }}
+            {{- if $gpus.classes }}
+            cozystack.io/gpu-reference: "true"
+            {{- end }}
         spec:
           {{- if .Values._cluster.scheduling }}
           {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
@@ -590,11 +597,11 @@ spec:
               sockets: 1
             {{- end }}
             devices:
-              {{- if .group.gpus }}
+              {{- with $gpus.names }}
               gpus:
-              {{- range $i, $gpu := .group.gpus }}
+              {{- range $i, $name := . }}
               - name: gpu{{ add $i 1 }}
-                deviceName: {{ $gpu.name }}
+                deviceName: {{ $name }}
               {{- end }}
               {{- end }}
               disks:
