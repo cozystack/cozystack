@@ -264,9 +264,12 @@ var durationUnits = map[string]time.Duration{
 // parseDuration accepts the LogsQL duration forms (1h30m, 1d, 2w) and bare
 // seconds; Go's parser knows neither d nor w.
 func parseDuration(s string) (time.Duration, error) {
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		if f < 0 {
-			return 0, fmt.Errorf("negative duration %q", s)
+	// Bare seconds only as digits with an optional fraction: ParseFloat
+	// would also take signs, exponents, Inf and NaN.
+	if whole, frac, ok := strings.Cut(s, "."); isDigits(whole) && (!ok || isDigits(frac)) {
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
 		}
 		return time.Duration(f * float64(time.Second)), nil
 	}
