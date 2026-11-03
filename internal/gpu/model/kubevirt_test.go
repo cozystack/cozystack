@@ -17,6 +17,7 @@ limitations under the License.
 package model
 
 import (
+	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -46,5 +47,27 @@ func TestPermittedResourceNames(t *testing.T) {
 	want := sets.New("nvidia.com/L40S", "nvidia.com/hostdev", "nvidia.com/GRID_A100-40C")
 	if got := PermittedResourceNames(kv); !got.Equal(want) {
 		t.Fatalf("permitted = %v, want %v", sets.List(got), sets.List(want))
+	}
+}
+
+func TestPermittedGPUNames(t *testing.T) {
+	kv := &unstructured.Unstructured{Object: map[string]any{}}
+	if got := PermittedGPUNames(kv); got != nil {
+		t.Fatalf("an unset table names no GPU, got %v", got)
+	}
+	_ = unstructured.SetNestedField(kv.Object, map[string]any{
+		"pciHostDevices": []any{
+			map[string]any{"pciVendorSelector": "10de:26B9", "resourceName": "nvidia.com/L40S"},
+			map[string]any{"pciVendorSelector": "10DE:2335", "resourceName": "nvidia.com/H200"},
+			map[string]any{"pciVendorSelector": "15B3:101E", "resourceName": "nvidia.com/hostdev"},
+		},
+		"mediatedDevices": []any{
+			map[string]any{"mdevNameSelector": "GRID A100-40C", "resourceName": "nvidia.com/GRID_A100-40C"},
+		},
+	}, "spec", "configuration", "permittedHostDevices")
+	got := PermittedGPUNames(kv)
+	slices.Sort(got)
+	if want := []string{"nvidia.com/GRID_A100-40C", "nvidia.com/H200", "nvidia.com/L40S"}; !slices.Equal(got, want) {
+		t.Fatalf("GPU names = %v, want %v: the 10DE PCI and mdev entries, not the NIC", got, want)
 	}
 }
