@@ -1,0 +1,125 @@
+suite: tenant vGPU entitlement
+# A tenant is entitled to vGPU only when its own gpu.vgpu is set and its
+# parent is entitled. The label is always written so that only "true"
+# entitles; the cozystack-values key is written only when entitled, because
+# every app in the tenant reads that Secret and a new key re-upgrades them all.
+templates:
+  - templates/namespace.yaml
+release:
+  name: tenant-acme
+  namespace: tenant-root
+set:
+  _cluster:
+    root-host: example.com
+tests:
+  - it: entitles a tenant that sets the flag under an entitled parent
+    set:
+      _namespace:
+        vgpu: true
+      gpu:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "true"
+      - documentSelector:
+          path: kind
+          value: Secret
+        matchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^_namespace:\\n(  .*\\n)*  vgpu: true$"
+
+  - it: does not entitle a tenant whose parent is not entitled
+    set:
+      gpu:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "false"
+      - documentSelector:
+          path: kind
+          value: Secret
+        notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^  vgpu:"
+
+  - it: does not entitle a tenant that leaves the flag unset under an entitled parent
+    set:
+      _namespace:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "false"
+      - documentSelector:
+          path: kind
+          value: Secret
+        notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "(?m)^  vgpu:"
+
+  - it: writes the label as false by default
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "false"
+
+  # The parent value arrives through a Secret any chart can write; only the
+  # text "true" entitles, so a quoted "false" must not.
+  - it: treats a parent value of the string "false" as not entitled
+    set:
+      _namespace:
+        vgpu: "false"
+      gpu:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "false"
+
+  - it: accepts a parent value of the string "true"
+    set:
+      _namespace:
+        vgpu: "true"
+      gpu:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "true"
+
+  - it: passes the entitlement down to a grandchild that sets the flag
+    release:
+      name: tenant-team
+      namespace: tenant-acme
+    set:
+      _namespace:
+        vgpu: true
+      gpu:
+        vgpu: true
+    asserts:
+      - documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/vgpu"]
+          value: "true"
