@@ -42,6 +42,10 @@ func TestParseFlagsOverrides(t *testing.T) {
 	if o.clusterDomain != "example.org" || o.logs.MaxRange != 24*time.Hour || o.limiter.MaxTails != 3 {
 		t.Errorf("overrides not applied: %+v", o)
 	}
+	// The smallest bucket count and range the step cap can satisfy.
+	if _, err := parseFlags([]string{"--logs-max-buckets=3", "--logs-max-range=3s", "--logs-default-range=1s"}); err != nil {
+		t.Errorf("smallest satisfiable step cap refused: %v", err)
+	}
 }
 
 func TestParseFlagsInvalid(t *testing.T) {
