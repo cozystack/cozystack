@@ -74,7 +74,7 @@ limitations under the License.
 // license goes. While the hoster's Secret is missing or lacks
 // LicenseTokenKey, it keeps the copies it has, writes no new ones and sets
 // LicenseSecretMissing on the class. It touches no Secret without
-// LabelGPUClass.
+// LabelGPUClass. With GPU features off, it deletes every copy.
 //
 // The VMI webhook adds a secret volume for the copy of the VMI's licensed
 // vGPU class, with LicenseVolumeLabel, and a disk for it after the VMI's

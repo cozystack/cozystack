@@ -185,7 +185,7 @@ $(SETUP_ENVTEST):
 test-controllers-envtest: $(SETUP_ENVTEST)
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --installed-only --bin-dir $(ENVTEST_DIR) --print path 2>/dev/null || $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) --print path)" \
 		HELMRELEASE_CRD_DIR=$(CURDIR)/internal/fluxinstall/manifests \
-		go test -tags envtest -run '^TestEnvtest' ./internal/controller/fluxplunger/... -count=1
+		go test -tags envtest -run '^TestEnvtest' ./internal/controller/fluxplunger/... ./internal/gpu/controller/... -count=1
 
 # Black-box golden test for cmd/check-readiness. Builds the binary and runs it
 # against a mock kubectl (fixtures under test/check-readiness/testdata),
