@@ -242,13 +242,15 @@ func parseStep(v string, lim MetricsLimits) (time.Duration, *HTTPError) {
 }
 
 // parseMetricsDuration takes Prometheus float seconds or a duration such as
-// 1m30s. vmselect works in milliseconds and refuses anything shorter.
+// 1m30s. vmselect works in whole milliseconds and refuses anything shorter;
+// the value is rounded up to the millisecond so the limits are checked
+// against what vmselect will use, not against a fraction it drops.
 func parseMetricsDuration(key, v string) (time.Duration, *HTTPError) {
 	d, err := parseDuration(v)
 	if err != nil || d < time.Millisecond {
 		return 0, errorf(http.StatusBadRequest, "invalid %s %q", key, v)
 	}
-	return d, nil
+	return (d + time.Millisecond - 1).Truncate(time.Millisecond), nil
 }
 
 // parseMetricsTime takes the two forms the Prometheus API defines: float
