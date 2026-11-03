@@ -78,11 +78,31 @@ spec:
             - cozystack.external-dns-application
 EOF
 
+# Optional packages need explicit enabling even when the install closure keeps them.
+gpu_operator=true
+case " $disabled " in
+  *" cozystack.gpu-operator "*) gpu_operator=false ;;
+esac
+if [ "$gpu_operator" = true ]; then
+  echo "            - cozystack.gpu-operator"
+fi
+
 if [ -n "$disabled" ]; then
   echo "          disabledPackages:"
   for pkg in $disabled; do
     echo "            - $pkg"
   done
+fi
+
+if [ "$gpu_operator" = true ]; then
+  cat <<'EOF'
+        gpu:
+          permittedHostDevices:
+            pciHostDevices:
+              - pciVendorSelector: "10DE:FFFF"
+                resourceName: nvidia.com/E2E_FAKE_GPU
+                externalResourceProvider: true
+EOF
 fi
 
 if [ "$linstor_drbd_enabled" = false ]; then
