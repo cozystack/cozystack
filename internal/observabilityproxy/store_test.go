@@ -46,7 +46,11 @@ func TestStoreResolver(t *testing.T) {
 	} {
 		add(ns, map[string]string{monitoringLabel: target})
 	}
+	add("tenant-forged", map[string]string{monitoringLabel: "pod.tenant-b"})
 	lister := corev1listers.NewNamespaceLister(indexer)
+	if got, err := NewStoreResolver(lister, "tenant-root").Resolve("tenant-forged"); err == nil {
+		t.Fatalf("label naming a host outside a namespace resolved to %q", got)
+	}
 
 	tests := []struct {
 		root, ns, want string

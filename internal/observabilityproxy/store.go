@@ -17,7 +17,11 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"fmt"
+	"strings"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
@@ -37,9 +41,10 @@ func NewStoreResolver(namespaces corev1listers.NamespaceLister, rootTenant strin
 	return &StoreResolver{namespaces: namespaces, root: rootTenant}
 }
 
-// Resolve answers the root tenant for a namespace that no longer exists:
-// its label is gone with it, and the collector's default output is the
-// root store, so that is where any lines written without a route are.
+// Resolve answers the root tenant for a namespace that no longer exists,
+// because its label went with it. Lines it wrote while routed to another
+// tenant's store are not found there; reading them needs routing history
+// (an open question of the design).
 func (r *StoreResolver) Resolve(namespace string) (string, error) {
 	ns, err := r.namespaces.Get(namespace)
 	if apierrors.IsNotFound(err) {
@@ -48,8 +53,14 @@ func (r *StoreResolver) Resolve(namespace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if target := ns.Labels[monitoringLabel]; target != "" {
-		return target, nil
+	target := ns.Labels[monitoringLabel]
+	if target == "" {
+		return r.root, nil
 	}
-	return r.root, nil
+	// The value becomes a DNS name; a dot in it would address a host in
+	// some other namespace.
+	if errs := validation.IsDNS1123Label(target); len(errs) > 0 {
+		return "", fmt.Errorf("namespace %s: invalid %s label %q: %s", namespace, monitoringLabel, target, strings.Join(errs, "; "))
+	}
+	return target, nil
 }
