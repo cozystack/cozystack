@@ -60,6 +60,14 @@ export class ProxyError extends Error {
   }
 }
 
+// These answers hold for every query in the scope, so one notice replaces the whole view.
+export function isScopeWide(error: unknown): boolean {
+  return (
+    error instanceof ProxyError &&
+    (error.kind === "not-available" || error.kind === "forbidden" || error.kind === "unauthorized")
+  )
+}
+
 // Prometheus answers {"error": "..."}, VictoriaLogs and nginx answer plain text.
 function errorMessage(text: string, status: number): string {
   try {

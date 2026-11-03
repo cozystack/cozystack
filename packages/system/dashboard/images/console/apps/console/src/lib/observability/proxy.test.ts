@@ -4,6 +4,7 @@ import {
   ProxyError,
   errorKindForStatus,
   fieldValues,
+  isScopeWide,
   logsRoot,
   metricsRoot,
   queryLogs,
@@ -175,5 +176,14 @@ describe("tailLogs", () => {
     const err = await tailLogs(client, logsRoot(ns), { query: "*" }, () => {}).catch((e) => e)
 
     expect(err).toMatchObject({ kind: "forbidden" })
+  })
+})
+
+describe("isScopeWide", () => {
+  it("is true for answers that do not depend on the query", () => {
+    expect(isScopeWide(new ProxyError("not-available", 404, ""))).toBe(true)
+    expect(isScopeWide(new ProxyError("forbidden", 403, ""))).toBe(true)
+    expect(isScopeWide(new ProxyError("limit", 422, ""))).toBe(false)
+    expect(isScopeWide(new Error("x"))).toBe(false)
   })
 })
