@@ -32,6 +32,18 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if o.authCacheTTL != 10*time.Second || o.logs.MaxTailResume != 15*time.Minute || o.logs.MaxRange != 7*24*time.Hour {
 		t.Errorf("limit defaults changed: %+v", o)
 	}
+	// Retention and store names of packages/system/monitoring/values.yaml;
+	// cost limits of the metrics proposal (Design 7).
+	m := o.metrics
+	if m.ShortTermStore != "shortterm" || m.LongTermStore != "longterm" || m.ShortTermRetention != 72*time.Hour {
+		t.Errorf("metrics store defaults changed: %+v", m)
+	}
+	if m.Limits.MaxRange != 30*24*time.Hour || m.Limits.MaxPoints != 11000 || m.Limits.MaxTimeout != 30*time.Second {
+		t.Errorf("metrics limit defaults changed: %+v", m.Limits)
+	}
+	if m.RootTenant != o.rootTenant {
+		t.Errorf("metrics root tenant = %q, want --root-tenant", m.RootTenant)
+	}
 }
 
 func TestParseFlagsOverrides(t *testing.T) {
@@ -69,6 +81,12 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--max-concurrent-per-user=-1"},
 		{"--max-tails-per-user=-1"},
 		{"--max-tails=-1"},
+		{"--metrics-shortterm-store="},
+		{"--metrics-longterm-store=Long.Term"},
+		{"--metrics-shortterm-retention=0s"},
+		{"--metrics-max-range=0s"},
+		{"--metrics-max-points=1"},
+		{"--metrics-max-timeout=0s"},
 		{"--unknown"},
 		{"unexpected", "--root-tenant=tenant-x"},
 	} {
