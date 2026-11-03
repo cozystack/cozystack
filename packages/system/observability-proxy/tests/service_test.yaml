@@ -1,0 +1,30 @@
+suite: observability-proxy Service
+# The console nginx proxies to observability-proxy.<ns>.svc on port 80 and the
+# tenant egress policy allows the pods' 8080, so the name, the port and the
+# selector are pinned here.
+templates:
+  - templates/service.yaml
+
+release:
+  name: observability-proxy
+  namespace: cozy-observability-proxy
+
+tests:
+  - it: serves port 80 named http on the pods' http port
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: observability-proxy
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              port: 80
+              targetPort: http
+              protocol: TCP
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: observability-proxy
