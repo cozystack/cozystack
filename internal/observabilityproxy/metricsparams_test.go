@@ -155,6 +155,7 @@ func TestBuildMetricsParamsLimits(t *testing.T) {
 		{"range above the limit", "api/v1/query_range", rng(ago(31*day), ago(0), "1h"), http.StatusUnprocessableEntity},
 		{"points at the limit", "api/v1/query_range", rng(ago(10999*time.Minute), ago(0), "1m"), http.StatusOK},
 		{"points above the limit", "api/v1/query_range", rng(ago(11000*time.Minute), ago(0), "1m"), http.StatusUnprocessableEntity},
+		{"points above the limit after rounding the step up", "api/v1/query_range", rng(ago(22*time.Second), ago(0), "0.0019"), http.StatusUnprocessableEntity},
 		{"step above the range limit", "api/v1/query_range", rng(ago(time.Hour), ago(0), "31d"), http.StatusUnprocessableEntity},
 		{"zero step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0"), http.StatusBadRequest},
 		{"sub-millisecond step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0.0001"), http.StatusBadRequest},
@@ -196,6 +197,15 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	}
 	if req.params.Encode() != want.Encode() {
 		t.Errorf("params = %v\nwant     %v", req.params, want)
+	}
+
+	// vmselect drops a sub-millisecond remainder; the points check has to
+	// see the step it will use.
+	for in, want := range map[string]string{"60.0001": "60.001", "0.0019": "0.002"} {
+		req = buildMetrics(t, "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-20 * time.Second))}, "end": {unix(testNow)}, "step": {in}})
+		if got := req.params.Get("step"); got != want {
+			t.Errorf("step %s forwarded as %q, want %s", in, got, want)
+		}
 	}
 
 	for in, want := range map[string]string{"": "30", "10s": "10", "5m": "30", "1.5": "1.5"} {
