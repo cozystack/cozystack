@@ -69,7 +69,8 @@ var labelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 type metricsRequest struct {
 	path   string
 	params url.Values
-	// start is the earliest instant the request reads, for the store choice.
+	// start is the earliest instant the request reads, for the store choice;
+	// zero when that is unknown, which picks the long-term store.
 	start time.Time
 }
 
@@ -103,22 +104,24 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		if herr := copyQuery(out, in); herr != nil {
 			return req, herr
 		}
-		req.start = now
+		at := now
 		if v := in.Get("time"); v != "" {
 			t, herr := parseMetricsTime("time", v)
 			if herr != nil {
 				return req, herr
 			}
-			req.start = t
+			at = t
 			out.Set("time", formatTime(t))
 		}
+		step := instantDefaultStep
 		if v := in.Get("step"); v != "" {
-			step, herr := parseStep(v, lim)
-			if herr != nil {
+			var herr *HTTPError
+			if step, herr = parseStep(v, lim); herr != nil {
 				return req, herr
 			}
 			out.Set("step", formatSeconds(step))
 		}
+		req.start = queryStart(out.Get("query"), at, step)
 		return req, nil
 
 	case "api/v1/query_range":
@@ -141,7 +144,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		if points := end.Sub(start)/step + 1; points > time.Duration(lim.MaxPoints) {
 			return req, errorf(http.StatusUnprocessableEntity, "%d points per series exceed the limit of %d; raise step", points, lim.MaxPoints)
 		}
-		req.start = start
+		req.start = queryStart(out.Get("query"), start, step)
 		out.Set("start", formatTime(start))
 		out.Set("end", formatTime(end))
 		out.Set("step", formatSeconds(step))

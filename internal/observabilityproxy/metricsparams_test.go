@@ -224,7 +224,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	if req.params.Get("end") != "1793793600.000" || req.params.Get("start") != "1793793300.000" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
-	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow) {
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute)) {
 		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
 	}
 }
@@ -241,7 +241,8 @@ func TestMetricsStoreByRange(t *testing.T) {
 		{"instant within retention", "api/v1/query", url.Values{"query": {"up"}, "time": {unix(testNow.Add(-71 * time.Hour))}}, "shortterm"},
 		{"instant past retention", "api/v1/query", url.Values{"query": {"up"}, "time": {unix(testNow.Add(-73 * time.Hour))}}, "longterm"},
 		{"live graph", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-6 * time.Hour))}, "end": {unix(testNow)}, "step": {"60"}}, "shortterm"},
-		{"range fits exactly", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-72 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "shortterm"},
+		{"range fits with lookback", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-71 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "shortterm"},
+		{"range lookback past retention", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-72 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "longterm"},
 		{"range past retention", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-7 * 24 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "longterm"},
 		{"old window ending long ago", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-5 * 24 * time.Hour))}, "end": {unix(testNow.Add(-4 * 24 * time.Hour))}, "step": {"600"}}, "longterm"},
 		{"labels default window", "api/v1/labels", url.Values{}, "shortterm"},
@@ -252,6 +253,110 @@ func TestMetricsStoreByRange(t *testing.T) {
 			req := buildMetrics(t, tt.endpoint, tt.in)
 			if got := cfg.store(req.start, testNow); got != tt.want {
 				t.Fatalf("store = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryLookback(t *testing.T) {
+	tests := []struct {
+		query string
+		step  time.Duration
+		want  time.Duration
+	}{
+		{`up`, 5 * time.Minute, 15 * time.Minute},
+		{`increase(x[7d])`, 5 * time.Minute, 7*24*time.Hour + 15*time.Minute},
+		{`rate(x[300])`, time.Minute, 12 * time.Minute},
+		{`rate(x[ 1h30m ])`, time.Minute, 97 * time.Minute},
+		{`max_over_time(x[1h:5m])`, time.Minute, 95 * time.Minute},
+		{`max_over_time(x[1h:])`, time.Minute, 75 * time.Minute},
+		{`max_over_time(max_over_time(rate(x[5m])[1h:1m])[1d:1h])`, time.Minute, 33*time.Hour + 20*time.Minute},
+		{`x offset 10d`, 5 * time.Minute, 10*24*time.Hour + 15*time.Minute},
+		{`sum(x OFFSET 2h)`, 5 * time.Minute, 135 * time.Minute},
+		{`rate(x[5m] offset 1h)`, time.Minute, 72 * time.Minute},
+		{`x offset -1h`, 5 * time.Minute, 15 * time.Minute},
+		{`x offset - 1h`, 5 * time.Minute, 15 * time.Minute},
+		{`node_offset_seconds + offset_total`, 5 * time.Minute, 15 * time.Minute},
+		{`x{a="[1h]"}`, 5 * time.Minute, 75 * time.Minute},
+		{`x{a="]"}[7d]`, 5 * time.Minute, 7*24*time.Hour + 15*time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, ok := queryLookback(tt.query, tt.step)
+			if !ok || got != tt.want {
+				t.Fatalf("queryLookback = %s, %t; want %s, true", got, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryLookbackUnknown(t *testing.T) {
+	for _, q := range []string{
+		`x @ 123`,
+		`x @ start()`,
+		`x{a="a@b"}`,
+		`rate(x[5i])`,
+		`rate(x[$__interval])`,
+		`x[1h-5m]`,
+		`x[7D]`,
+		`x[1.d]`,
+		`x[]`,
+		`rate(x[7d)`,
+		`x offset`,
+		`x offset w`,
+		`WITH (w = 7d) rate(x[w])`,
+		`x{a="["}`,
+		`x{a="[5m"}[7d]`,
+		`x{path="/offset/1"}`,
+		`x[99999999999y]`,
+		`x offset 99999999999y`,
+	} {
+		t.Run(q, func(t *testing.T) {
+			if got, ok := queryLookback(q, 5*time.Minute); ok {
+				t.Fatalf("queryLookback = %s, true; want unknown", got)
+			}
+		})
+	}
+}
+
+func TestMetricsStoreByLookback(t *testing.T) {
+	cfg := MetricsConfig{ShortTermStore: "shortterm", LongTermStore: "longterm", ShortTermRetention: 72 * time.Hour}
+	rangeFrom := func(q string, ago time.Duration, step string) url.Values {
+		return url.Values{"query": {q}, "start": {unix(testNow.Add(-ago))}, "end": {unix(testNow)}, "step": {step}}
+	}
+	tests := []struct {
+		name     string
+		endpoint string
+		in       url.Values
+		want     string
+	}{
+		{"instant short window", "api/v1/query", url.Values{"query": {"rate(x[5m])"}}, "shortterm"},
+		{"instant 7d window", "api/v1/query", url.Values{"query": {"increase(x[7d])"}}, "longterm"},
+		{"instant offset 10d", "api/v1/query", url.Values{"query": {"x offset 10d"}}, "longterm"},
+		{"instant negative offset", "api/v1/query", url.Values{"query": {"x offset -1h"}}, "shortterm"},
+		{"instant at timestamp", "api/v1/query", url.Values{"query": {"x @ 123"}}, "longterm"},
+		{"instant at start", "api/v1/query", url.Values{"query": {"x @ start()"}}, "longterm"},
+		{"instant step window", "api/v1/query", url.Values{"query": {"rate(x[5i])"}}, "longterm"},
+		{"instant step past retention", "api/v1/query", url.Values{"query": {"up"}, "step": {"259200"}}, "longterm"},
+		{"instant subquery past retention", "api/v1/query", url.Values{"query": {"max_over_time(rate(x[5m])[4d:1h])"}}, "longterm"},
+		{"quoted at sign", "api/v1/query", url.Values{"query": {`x{a="a@b"}`}}, "longterm"},
+		{"quoted open bracket hides window", "api/v1/query", url.Values{"query": {`rate(x{a="[5m"}[7d])`}}, "longterm"},
+		{"quoted close bracket before window", "api/v1/query", url.Values{"query": {`rate(x{a="]"}[7d])`}}, "longterm"},
+		{"quoted offset before offset", "api/v1/query", url.Values{"query": {`x{a="offset 1m"} offset 10d`}}, "longterm"},
+		{"range short window", "api/v1/query_range", rangeFrom("rate(x[1h])", 6*time.Hour, "60"), "shortterm"},
+		{"range 7d window", "api/v1/query_range", rangeFrom("increase(x[7d])", 6*time.Hour, "60"), "longterm"},
+		{"range offset past retention", "api/v1/query_range", rangeFrom("x offset 3d", time.Hour, "60"), "longterm"},
+		{"range lookback fits", "api/v1/query_range", rangeFrom("rate(x[5m])", 70*time.Hour, "600"), "shortterm"},
+		{"range lookback crosses retention", "api/v1/query_range", rangeFrom("rate(x[5m])", 71*time.Hour+50*time.Minute, "600"), "longterm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := buildMetrics(t, tt.endpoint, tt.in)
+			if got := cfg.store(req.start, testNow); got != tt.want {
+				t.Fatalf("store = %s, want %s", got, tt.want)
+			}
+			if q := req.params.Get("query"); q != tt.in.Get("query") {
+				t.Fatalf("query forwarded as %q, want it unchanged", q)
 			}
 		})
 	}
