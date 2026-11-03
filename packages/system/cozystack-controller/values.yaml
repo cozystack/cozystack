@@ -19,3 +19,6 @@ cozystackController:
   # off, the controller deletes every license copy.
   gpu:
     enabled: false
+    # Hoster's gpu.resourceNames: GPU resource names besides those of
+    # GPUClasses and the KubeVirt permittedHostDevices table.
+    resourceNames: []
