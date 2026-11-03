@@ -1,4 +1,5 @@
 import type { K8sClient } from "@cozystack/k8s-client"
+import { compareTime } from "./logs.ts"
 
 export type ObservabilityScope =
   | { namespace: string }
@@ -160,7 +161,7 @@ export async function queryLogs(
 ): Promise<LogEntry[]> {
   const res = await proxyGet(client, `${root}select/logsql/query`, { ...params }, signal)
   const entries = (await res.text()).split("\n").map(parseLine).filter((e) => e !== null)
-  return entries.sort((a, b) => (a._time < b._time ? -1 : a._time > b._time ? 1 : 0))
+  return entries.sort((a, b) => compareTime(a._time, b._time))
 }
 
 export interface FieldValuesParams {

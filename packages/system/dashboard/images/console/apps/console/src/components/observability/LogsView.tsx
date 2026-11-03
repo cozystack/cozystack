@@ -1,0 +1,152 @@
+import { useEffect, useRef, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { useK8sClient } from "@cozystack/k8s-client"
+import { Button, Spinner } from "@cozystack/ui"
+import {
+  CONTAINER_FIELD,
+  LOG_RANGES,
+  POD_FIELD,
+  buildLogsQuery,
+  type LogRangeKey,
+} from "../../lib/observability/logs.ts"
+import {
+  fieldValues,
+  isScopeWide,
+  logsRoot,
+  queryLogs,
+  type LogEntry,
+  type ObservabilityScope,
+} from "../../lib/observability/proxy.ts"
+import { useLogTail } from "../../lib/observability/use-log-tail.ts"
+import { ProxyNotice } from "./ProxyNotice.tsx"
+import { RangePicker } from "./RangePicker.tsx"
+
+const HISTORY_LIMIT = 500
+const FOLLOW_CAP = 1000
+
+function windowFor(range: LogRangeKey) {
+  const end = Date.now()
+  return { start: new Date(end - LOG_RANGES[range] * 1000).toISOString(), end: new Date(end).toISOString() }
+}
+
+function Picker({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-slate-600">
+      {label}
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
+      >
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function LogLines({ entries, follow }: { entries: LogEntry[]; follow: boolean }) {
+  const ref = useRef<HTMLOListElement>(null)
+  useEffect(() => {
+    if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [entries, follow])
+  if (entries.length === 0) return <p className="text-sm text-slate-500">No log lines for this range and filter.</p>
+  return (
+    <ol ref={ref} className="max-h-[60vh] overflow-auto rounded-md bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
+      {entries.map((e, i) => (
+        <li key={`${e._stream_id}-${e._time}-${i}`} className="whitespace-pre-wrap break-all">
+          <span className="text-slate-400">{new Date(e._time).toLocaleTimeString()}</span>{" "}
+          <span className="text-sky-300">{`${e[POD_FIELD] ?? ""}/${e[CONTAINER_FIELD] ?? ""}`}</span>{" "}
+          {e._msg}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+export function LogsView({ scope }: { scope: ObservabilityScope }) {
+  const client = useK8sClient()
+  const root = logsRoot(scope)
+  const [range, setRange] = useState<LogRangeKey>("1h")
+  const [draft, setDraft] = useState("")
+  const [filter, setFilter] = useState("")
+  const [pod, setPod] = useState("")
+  const [container, setContainer] = useState("")
+  const [follow, setFollow] = useState(false)
+  const query = buildLogsQuery({ filter, pod, container })
+
+  const pickerQuery = (field: string, narrowTo?: string) => ({
+    queryKey: ["observability", "logs-fields", root, field, range, narrowTo ?? ""],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      fieldValues(client, root, {
+        field,
+        stream: true,
+        query: buildLogsQuery({ filter: "", pod: narrowTo }),
+        ...windowFor(range),
+      }, signal),
+    retry: false,
+  })
+  const pods = useQuery(pickerQuery(POD_FIELD))
+  const containers = useQuery(pickerQuery(CONTAINER_FIELD, pod || undefined))
+
+  const history = useQuery({
+    queryKey: ["observability", "logs", root, query, range],
+    queryFn: ({ signal }) => queryLogs(client, root, { query, limit: HISTORY_LIMIT, ...windowFor(range) }, signal),
+    enabled: !follow,
+    retry: false,
+  })
+  const tail = useLogTail(root, query, follow, { cap: FOLLOW_CAP })
+
+  const wide = [pods.error, history.error, tail.error].find(isScopeWide)
+  if (wide) {
+    return (
+      <div className="p-6">
+        <ProxyNotice what="Logs" error={wide} />
+      </div>
+    )
+  }
+
+  const error = follow ? tail.error : history.error
+  const entries = follow ? tail.entries : (history.data ?? [])
+
+  return (
+    <div className="space-y-3 p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <form
+          className="flex min-w-64 flex-1"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setFilter(draft)
+          }}
+        >
+          <input
+            aria-label="LogsQL filter"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder='LogsQL filter, e.g. error or "connection refused"'
+            className="w-full rounded-md border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
+          />
+        </form>
+        <Picker label="Pod" value={pod} options={pods.data ?? []} onChange={(v) => { setPod(v); setContainer("") }} />
+        <Picker label="Container" value={container} options={containers.data ?? []} onChange={setContainer} />
+        {!follow && <RangePicker options={Object.keys(LOG_RANGES) as LogRangeKey[]} value={range} onChange={setRange} />}
+        <Button variant={follow ? "default" : "outline"} size="sm" aria-pressed={follow} onClick={() => setFollow(!follow)}>
+          Follow
+        </Button>
+      </div>
+      {follow && (
+        <p className="text-xs text-slate-500">
+          {tail.state === "live" ? "Live" : tail.state === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+          {` · newest ${FOLLOW_CAP} lines kept`}
+        </p>
+      )}
+      {error ? <ProxyNotice what="Logs" error={error} /> : null}
+      {!follow && history.isLoading ? <Spinner /> : <LogLines entries={entries} follow={follow} />}
+    </div>
+  )
+}
