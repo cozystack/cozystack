@@ -66,12 +66,15 @@ func queryStart(query string, start time.Time, step time.Duration) time.Time {
 
 // queryLookback is an upper bound on how far before its evaluation window
 // a query reads, from a lexical scan that never parses the query. Every
-// [...] and offset counts, including ones inside quoted label values: an
-// extra hit only makes the bound larger or unknown, never smaller. Windows
-// and offsets are summed rather than maxed, which also covers nesting.
+// [...], offset and "(" counts, including ones inside quoted label values:
+// an extra hit only makes the bound larger or unknown, never smaller.
+// Windows and offsets are summed rather than maxed, which covers nesting;
+// WITH is refused because a template applies one window several times.
 // vmselect starts a rollup max(window, step) plus the silence interval
 // before the first point, a subquery window+step+silence before it and
-// aligns both down to a step; each step term uses the largest step seen.
+// aligns both down to a step. A rollup function or offset over anything
+// but a selector is an implicit subquery (getRollupExprArg), so every "("
+// is counted as one. Each step term uses the largest step seen.
 func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 	if strings.Contains(query, "@") {
 		return 0, false
@@ -117,7 +120,7 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		}
 		k += i
 		i = k + len("offset")
-		if k > 0 && continuesIdent(lower[k-1], false) || i < len(lower) && continuesIdent(lower[i], true) {
+		if !isKeyword(lower, k, i) {
 			continue
 		}
 		arg := strings.TrimLeft(lower[i:], " \t\n\r")
@@ -126,7 +129,7 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 			arg = strings.TrimLeft(arg[1:], " \t\n\r")
 		}
 		end := strings.IndexFunc(arg, func(r rune) bool {
-			return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r == '.')
+			return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r == '.' || r == '_')
 		})
 		if end < 0 {
 			end = len(arg)
@@ -139,12 +142,35 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 			sum += d
 		}
 	}
-	n := float64(subqueries)
+	if hasKeyword(lower, "with") {
+		return 0, false
+	}
+	n := float64(subqueries + strings.Count(query, "("))
 	sum += (2+3*n)*maxStep + (1+n)*float64(silenceInterval)
 	if sum > float64(maxMetricsDuration) {
 		return 0, false
 	}
 	return time.Duration(sum), true
+}
+
+// isKeyword reports whether lower[start:end] stands on its own rather than
+// inside an identifier.
+func isKeyword(lower string, start, end int) bool {
+	return !(start > 0 && continuesIdent(lower[start-1], false) || end < len(lower) && continuesIdent(lower[end], true))
+}
+
+func hasKeyword(lower, word string) bool {
+	for i := 0; ; {
+		k := strings.Index(lower[i:], word)
+		if k < 0 {
+			return false
+		}
+		k += i
+		i = k + len(word)
+		if isKeyword(lower, k, i) {
+			return true
+		}
+	}
 }
 
 // continuesIdent reports whether c, next to "offset", makes it part of an
