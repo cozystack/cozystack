@@ -199,6 +199,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("AccountID", "0")
 	req.Header.Set("ProjectID", "0")
+	if tail {
+		// vlselect holds even the headers of a gzip-encoded tail until the
+		// first line; an explicit value stops the transport from asking for gzip.
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	resp, err := s.client.Do(req)
 	switch {
 	case err == nil:
