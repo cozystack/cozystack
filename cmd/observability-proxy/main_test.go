@@ -106,10 +106,24 @@ func TestParseFlagsInvalid(t *testing.T) {
 		// The proxy would cut the request while vmselect is still within
 		// the timeout it was given.
 		{"--request-timeout=10s", "--metrics-max-timeout=30s"},
+		{"--request-timeout=30s", "--metrics-max-timeout=30s"},
 		{"unexpected", "--root-tenant=tenant-x"},
 	} {
 		if _, err := parseFlags(args); err == nil {
 			t.Errorf("parseFlags(%v) accepted", args)
+		}
+	}
+}
+
+// The vmselect timeout must stay strictly below a request timeout, and is
+// free when the request has none.
+func TestParseFlagsTimeoutPairs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--request-timeout=31s", "--metrics-max-timeout=30s"},
+		{"--request-timeout=0", "--metrics-max-timeout=10m"},
+	} {
+		if _, err := parseFlags(args); err != nil {
+			t.Errorf("parseFlags(%v) refused: %v", args, err)
 		}
 	}
 }
