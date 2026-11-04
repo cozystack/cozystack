@@ -96,8 +96,8 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped; must be below --request-timeout when that is set")
 	// Only the refusal threshold: the lookup itself spans the window the
 	// query reads, and that estimate is a loose upper bound (every "("
-	// counts as an implicit subquery), so the default matches
-	// --metrics-max-range to serve month-long panels at a dashboard step.
+	// counts as an implicit subquery), so the default is long enough to
+	// serve month-long panels at a dashboard step.
 	fs.DurationVar(&o.metrics.App.Lookback, "metrics-app-lookback", 30*24*time.Hour, "how far before the window an application metrics query may read; one reading further back, or by an unknown amount, answers 422")
 	fs.IntVar(&o.metrics.App.MaxPods, "metrics-app-max-pods", 500, "most pods of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.metrics.App.MaxPVCs, "metrics-app-max-pvcs", 500, "most PVCs of one application in the lookup window; more answer 422")
