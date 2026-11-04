@@ -17,6 +17,7 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -370,5 +371,70 @@ func TestMetricsStoreByLookback(t *testing.T) {
 				t.Fatalf("query forwarded as %q, want it unchanged", q)
 			}
 		})
+	}
+}
+
+// vmselectMillis repeats how vmselect reads a duration argument
+// (httputil.GetDuration in lib/httputil/duration.go, v1.136.22 and
+// v1.139.0): float seconds, multiplied by 1e3 and truncated.
+func vmselectMillis(t *testing.T, v string) int64 {
+	t.Helper()
+	secs, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		t.Fatalf("vmselect cannot parse %q: %v", v, err)
+	}
+	return int64(secs * 1e3)
+}
+
+// TestFormatSecondsVmselectExact sweeps every step up to 2000s and the
+// large end of the range: vmselect must read back the milliseconds the
+// limits were checked with.
+func TestFormatSecondsVmselectExact(t *testing.T) {
+	check := func(ms int64) {
+		if got := vmselectMillis(t, formatSeconds(time.Duration(ms)*time.Millisecond)); got != ms {
+			t.Fatalf("%dms formatted as %q reaches vmselect as %dms", ms, formatSeconds(time.Duration(ms)*time.Millisecond), got)
+		}
+	}
+	for ms := int64(1); ms <= 2_000_000; ms++ {
+		check(ms)
+	}
+	for ms := maxMetricsDuration.Milliseconds() - 100_000; ms <= maxMetricsDuration.Milliseconds(); ms++ {
+		check(ms)
+	}
+	// A spread of the range in between, on a stride no power of ten divides.
+	for ms := int64(2_000_001); ms < maxMetricsDuration.Milliseconds(); ms += 3_153_599_999 {
+		check(ms)
+	}
+	// Whole seconds keep their plain form.
+	if got := formatSeconds(90 * time.Second); got != "90" {
+		t.Errorf("90s formatted as %q", got)
+	}
+}
+
+// TestBuildMetricsParamsPointsAsVmselectCounts: a 1.001s step is 1001ms
+// to the proxy; vmselect must count the same 11000 points at the limit.
+func TestBuildMetricsParamsPointsAsVmselectCounts(t *testing.T) {
+	end := testNow
+	step := 1001 * time.Millisecond
+	rng := func(points int64) url.Values {
+		start := end.Add(-time.Duration(points-1) * step)
+		return url.Values{"query": {"up"}, "start": {start.Format(time.RFC3339Nano)}, "end": {end.Format(time.RFC3339Nano)}, "step": {"1.001"}}
+	}
+	req := buildMetrics(t, "api/v1/query_range", rng(11000))
+	stepMs := vmselectMillis(t, req.params.Get("step"))
+	// Times, unlike durations, are rounded (timeutil.ParseTimeMsec).
+	timeMs := func(v string) int64 {
+		secs, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int64(math.Round(secs * 1e3))
+	}
+	startMs, endMs := timeMs(req.params.Get("start")), timeMs(req.params.Get("end"))
+	if points := (endMs-startMs)/stepMs + 1; stepMs != 1001 || points != 11000 {
+		t.Fatalf("vmselect reads step %dms and %d points, want 1001ms and 11000", stepMs, points)
+	}
+	if got := metricsStatus("api/v1/query_range", rng(11001)); got != http.StatusUnprocessableEntity {
+		t.Fatalf("11001 points answered %d, want 422", got)
 	}
 }
