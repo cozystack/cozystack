@@ -102,7 +102,7 @@ func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 // application's series.
 func (s *Server) applicationScope(ctx context.Context, r *http.Request, store string, req metricsRequest, ns, kind, name string) ([]string, *HTTPError) {
 	if req.last.IsZero() {
-		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ anywhere in the query, WITH with a negative offset, or an offset that is not a plain duration); use the namespace root")
+		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ anywhere in the query, rollup_candlestick, WITH with a negative offset, or an offset that is not a plain duration); use the namespace root")
 	}
 	lim := s.cfg.Metrics.App
 	if req.start.IsZero() || req.start.Before(req.from.Add(-lim.Lookback)) {

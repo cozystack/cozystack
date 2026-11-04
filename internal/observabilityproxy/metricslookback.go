@@ -133,12 +133,18 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 // a query reads, from the same lexical scan. Only a negative offset reads
 // forward; the negative offsets are summed, which covers nesting. Any @
 // makes the bound unknown, as it does for queryLookback, and so does WITH,
-// which can apply one offset several times.
+// which can apply one offset several times. vmselect also evaluates
+// rollup_candlestick one step ahead of the evaluation time
+// (evalRollupFuncWithoutAt), with the step of whatever subquery it sits
+// in, so it makes the bound unknown too.
 func queryLookahead(query string) (time.Duration, bool) {
 	if strings.Contains(query, "@") {
 		return 0, false
 	}
 	lower := strings.ToLower(query)
+	if hasKeyword(lower, "rollup_candlestick") {
+		return 0, false
+	}
 	_, ahead, ok := scanOffsets(lower)
 	if !ok || ahead > 0 && hasKeyword(lower, "with") || ahead > float64(maxMetricsDuration) {
 		return 0, false

@@ -522,6 +522,7 @@ func TestServerApplicationRefusesForwardReads(t *testing.T) {
 	for _, query := range []string{
 		"container_cpu_usage_seconds_total offset -1h-30m",
 		"container_cpu_usage_seconds_total offset 1h-2h",
+		"rollup_candlestick(container_cpu_usage_seconds_total)",
 	} {
 		q := url.Values{"query": {query}, "time": {unix(testNow.Add(-2 * time.Hour))}}
 		resp := h.do(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good", nil, nil)

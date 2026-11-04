@@ -473,6 +473,11 @@ func TestQueryLookahead(t *testing.T) {
 		`x offset 1h-2h`,
 		`x offset 1h-30m`,
 		`rate(x[5m] offset 1h-30m)`,
+		// vmselect evaluates rollup_candlestick one step ahead
+		// (evalRollupFuncWithoutAt), whatever the offset.
+		`rollup_candlestick(x)`,
+		`ROLLUP_CANDLESTICK(x[5m])`,
+		`sum(rollup_candlestick(x[1h:5m]))`,
 		`x offset -$__interval`,
 		`with (f(a) = a offset -1h) f(f(x))`,
 	} {
