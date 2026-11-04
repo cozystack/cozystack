@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -42,6 +44,12 @@ const (
 	// re-render the strategy template with the same parameter values that
 	// were in effect at backup time.
 	altinityParamPrefix = "altinity.strategy.backups.cozystack.io/parameter/"
+
+	// Driver-metadata keys naming the remote archive a Backup owns and the
+	// bucket flow it was written to. The archive name is minted here rather
+	// than in the strategy Pod so the Backup can identify its own archive.
+	altinityArchiveNameKey     = "altinity.strategy.backups.cozystack.io/archive-name"
+	altinityUseSystemBucketKey = "altinity.strategy.backups.cozystack.io/use-system-bucket"
 
 	// Polling cadence for the Altinity Job lifecycle. Mirrors the CNPG /
 	// Velero strategy cadence so behaviour is uniform across drivers.
@@ -83,6 +91,24 @@ func jobNameForRestoreJob(rj *backupsv1alpha1.RestoreJob) string {
 	return rj.Name + "-restore"
 }
 
+// altinityArchiveName is the remote archive name for a BackupJob. The
+// "clickhouse-<app>-" prefix is what the restore branch of the shipped
+// strategy filters list/remote on; the BackupJob name makes it unique.
+func altinityArchiveName(appName, backupJobName string) string {
+	return "clickhouse-" + appName + "-" + backupJobName
+}
+
+// altinityTemplateUsesArchiveName reports whether a strategy template reads
+// .ArchiveName. A template that does not names its archive itself, and
+// recording the driver's name for it would point cleanup at nothing.
+func altinityTemplateUsesArchiveName(tmpl corev1.PodTemplateSpec) (bool, error) {
+	b, err := json.Marshal(tmpl)
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(string(b), ".ArchiveName"), nil
+}
+
 // backupParameters extracts BackupClassStrategy parameters from a Backup's
 // DriverMetadata. Round-trips the values written by reconcileAltinity at
 // backup time so a later RestoreJob can render the strategy template with
@@ -112,6 +138,7 @@ func renderAltinityTemplate(
 	releaseName, releaseNamespace, mode string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
+	archiveName string,
 ) (*corev1.PodTemplateSpec, error) {
 	ctxMap := map[string]any{
 		"Application": app,
@@ -119,8 +146,9 @@ func renderAltinityTemplate(
 			"Name":      releaseName,
 			"Namespace": releaseNamespace,
 		},
-		"Mode":       mode,
-		"Parameters": parameters,
+		"Mode":        mode,
+		"Parameters":  parameters,
+		"ArchiveName": archiveName,
 	}
 	if backup != nil {
 		// Expose ApplicationRef so restore strategies can reference the
@@ -217,6 +245,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		altinityModeBackup,
 		resolved.Parameters,
 		nil,
+		altinityArchiveName(j.Spec.ApplicationRef.Name, j.Name),
 	)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Altinity strategy: %v", err))
@@ -239,7 +268,11 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved)
+		archiveMD, err := altinityArchiveMetadata(strategy.Spec.Template, app, j)
+		if err != nil {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to record the archive: %v", err))
+		}
+		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archiveMD)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -419,11 +452,13 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
+	archiveMD map[string]string,
 ) (*backupsv1alpha1.Backup, error) {
 	driverMD := map[string]string{}
 	for k, v := range resolved.Parameters {
 		driverMD[altinityParamPrefix+k] = v
 	}
+	maps.Copy(driverMD, archiveMD)
 
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -462,6 +497,26 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 		return existing, nil
 	}
 	return backup, nil
+}
+
+// altinityArchiveMetadata records the archive a BackupJob produced and the
+// bucket flow the application wrote it to, read from the application spec at
+// backup time. Cleanup deletes the archive only on the system bucket flow; an
+// application on its own bucket keeps the archive's lifecycle.
+func altinityArchiveMetadata(tmpl corev1.PodTemplateSpec, app map[string]any, j *backupsv1alpha1.BackupJob) (map[string]string, error) {
+	useSystemBucket, _, err := unstructured.NestedBool(app, "spec", "backup", "useSystemBucket")
+	if err != nil {
+		return nil, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
+	}
+	md := map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)}
+	uses, err := altinityTemplateUsesArchiveName(tmpl)
+	if err != nil {
+		return nil, err
+	}
+	if uses {
+		md[altinityArchiveNameKey] = altinityArchiveName(j.Spec.ApplicationRef.Name, j.Name)
+	}
+	return md, nil
 }
 
 // getApplicationUnstructured fetches the application object via the dynamic
@@ -618,6 +673,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		altinityModeRestore,
 		backupParameters(backup),
 		backup,
+		"",
 	)
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to template Altinity strategy: %v", err))

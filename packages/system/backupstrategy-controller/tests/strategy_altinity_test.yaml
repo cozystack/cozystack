@@ -1,0 +1,23 @@
+suite: Altinity strategy — archive name contract with the driver
+
+# The driver records the archive name it passes as .ArchiveName on the Backup
+# only when the strategy template references it, and deletes the archive by
+# that name when the Backup goes. Dropping .ArchiveName from the shipped script
+# silently turns archive cleanup off, so the reference is pinned here.
+
+templates:
+  - templates/strategy-altinity-default.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+set:
+  backupStorage.bucketNameOverride: test-bucket
+
+tests:
+  - it: "backup branch names the archive from .ArchiveName"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'target="\{\{ \.ArchiveName \| default "" \}\}"'

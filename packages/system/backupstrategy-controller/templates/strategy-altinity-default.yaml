@@ -56,8 +56,13 @@ spec:
                 sleep 5
               done
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
-                prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
-                target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
+                # The driver mints the archive name and records it on the
+                # Backup, which deletes the archive by that name. It is empty
+                # only while a controller older than this template still runs.
+                target="{{ printf "{{ .ArchiveName | default \"\" }}" }}"
+                if [ -z "${target}" ]; then
+                  target="clickhouse-{{ printf "{{ .Release.Name }}" }}-$(date -u +%Y%m%dT%H%M%SZ)"
+                fi
                 echo "create_remote ${target}"
                 curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}" >/dev/null
               else
