@@ -674,10 +674,10 @@ This is the immutable-tag + rc-promotion model from [#2677](https://github.com/c
 
 ### Repo-side enforcement (tag-protection rulesets)
 
-The guarantees above are enforced in the workflows. Repo admins back them with two GitHub **tag rulesets** targeting `v*`:
+The guarantees above are enforced in the workflows. Repo admins back them with two GitHub **tag rulesets** targeting `v*`; the settings as they stand are listed in [github-settings.md](github-settings.md) and exported under `.github/rulesets/`:
 
 - **Immutability** — *Restrict updates* + *Restrict deletions*, **no bypass**. No actor (not even the CI app) can move or delete a shipped `v*` tag. Safe to enable at any time: nothing in the release flow ever moves or deletes a `v*` tag, it only creates new ones.
-- **Creation control** — *Restrict creations* with the **CI app as the sole bypass actor**, plus *Limit branches/tags updated in a single push* = 1. This turns "don't hand-push tags" from convention into hard enforcement: every `v*` tag — pre-release **and** stable — can then be created only by CI. Enable this **only after** [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) is in use, since that workflow is what makes CI the sole creator of pre-release tags; enabling it earlier would lock maintainers out of cutting rc/alpha/beta. (The Go-module tag `api/apps/v1alpha1/*` gets an equivalent pair of rulesets.)
+- **Creation control** — *Restrict creations* with the **CI app as the sole bypass actor**. This turns "don't hand-push tags" from convention into hard enforcement: every `v*` tag — pre-release **and** stable — can then be created only by CI. Enable this **only after** [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) is in use, since that workflow is what makes CI the sole creator of pre-release tags; enabling it earlier would lock maintainers out of cutting rc/alpha/beta. (The Go-module tag `api/apps/v1alpha1/*` gets an equivalent pair of rulesets.)
 
 ## Splitting a release-blocking bundle PR
 
