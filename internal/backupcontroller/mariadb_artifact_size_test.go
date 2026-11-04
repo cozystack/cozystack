@@ -29,6 +29,19 @@ func dumpKey(prefix string, ts time.Time, compression string) string {
 	return fmt.Sprintf("%sbackup.%s.%s.sql", prefix, ts.UTC().Format(time.RFC3339), compression)
 }
 
+// mariadbBackupSucceeded is the Complete condition mariadb-operator sets on a
+// Backup whose Job succeeded. A failed Job also gets Status=True, with
+// Reason=JobFailed, so a fixture without the reason is not a success.
+func mariadbBackupSucceeded(at metav1.Time) metav1.Condition {
+	return metav1.Condition{
+		Type:               mariadbtypes.ConditionTypeComplete,
+		Status:             metav1.ConditionTrue,
+		Reason:             mariadbtypes.ConditionReasonJobComplete,
+		Message:            "Success",
+		LastTransitionTime: at,
+	}
+}
+
 func TestParseMariaDBLogicalBackupFile(t *testing.T) {
 	cases := map[string]bool{
 		"backup.2026-10-21T10:00:00Z.sql":        true,
@@ -258,9 +271,7 @@ func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 			Namespace: "tenant", Name: "src-op-bk",
 			CreationTimestamp: metav1.NewTime(completed.Add(-3 * time.Minute)),
 		},
-		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{{
-			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, LastTransitionTime: completed,
-		}}},
+		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{mariadbBackupSucceeded(completed)}},
 	}
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "mariadb-strategy-default"},
@@ -399,9 +410,7 @@ func TestReconcileMariaDB_UnreadableBackupIsRetried(t *testing.T) {
 				backupsv1alpha1.OwningJobNamespaceLabel: bj.Namespace,
 			},
 		},
-		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{{
-			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, LastTransitionTime: now,
-		}}},
+		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{mariadbBackupSucceeded(now)}},
 	}
 	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: bj.Name}}
 	store := newMariaDBStrategyTestClient(t, bj, strategy, newMariaDBApp("mariadb-src", "tenant"), operatorMariaDB, operatorBackup, backup)
@@ -450,9 +459,7 @@ func TestReconcileMariaDB_RejectedCreateFailsTheJob(t *testing.T) {
 				backupsv1alpha1.OwningJobNamespaceLabel: bj.Namespace,
 			},
 		},
-		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{{
-			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, LastTransitionTime: now,
-		}}},
+		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{mariadbBackupSucceeded(now)}},
 	}
 	store := newMariaDBStrategyTestClient(t, bj, strategy, newMariaDBApp("mariadb-src", "tenant"), operatorMariaDB, operatorBackup)
 	r := &BackupJobReconciler{
