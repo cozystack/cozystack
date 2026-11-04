@@ -370,6 +370,16 @@ spec:
               secretName: {{ .Release.Name }}-s3-ingress-tls
               {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | nindent 10 }}
+      admin:
+        enabled: {{ .Values.lifecycle.enabled }}
+        secret:
+          existingSecret: {{ .Release.Name }}-admin-credentials
+        {{- with .Values.volume.storageClass }}
+        data:
+          storageClass: {{ . }}
+        {{- end }}
+      worker:
+        enabled: {{ .Values.lifecycle.enabled }}
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
@@ -502,4 +512,22 @@ spec:
     app.kubernetes.io/component: s3
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- if .Values.lifecycle.enabled }}
+{{- range $component := list "admin" "worker" }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: seaweedfs
+  type: {{ $component }}
+  selector:
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- end }}
 {{- end }}

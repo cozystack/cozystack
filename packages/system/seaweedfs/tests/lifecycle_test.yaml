@@ -1,0 +1,138 @@
+suite: seaweedfs runs the S3 lifecycle worker
+
+# SeaweedFS stores a bucket lifecycle configuration on PUT and acts on it only
+# from the s3_lifecycle job of the plugin worker, which the admin server
+# schedules (weed/worker/tasks/s3_lifecycle/handler.go). Without an admin and a
+# worker in the release, a rule is accepted and nothing ever expires.
+
+templates:
+  - charts/seaweedfs/templates/admin/admin-statefulset.yaml
+  - charts/seaweedfs/templates/worker/worker-deployment.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: runs the admin server that schedules lifecycle jobs
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: &enabled
+      seaweedfs:
+        admin:
+          enabled: true
+          secret:
+            existingSecret: seaweedfs-admin-credentials
+        worker:
+          enabled: true
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: metadata.name
+          value: seaweedfs-admin
+
+  # The admin keeps its job state and any change an operator makes in its UI
+  # in -dataDir; on an emptyDir a restart would silently undo them.
+  - it: keeps the admin data directory on a persistent volume
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: *enabled
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-dataDir=/data'
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.name
+          value: admin-data
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 1Gi
+
+  - it: runs the worker against the admin of the same release
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set: *enabled
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-admin=seaweedfs-admin\.tenant-root:23646\.33646 '
+
+  # The worker executes every job type it registers for. Lifecycle is the only
+  # one this release asks for: vacuum, balance and erasure coding move data and
+  # are not something enabling lifecycle should start doing as a side effect.
+  - it: registers the worker for the s3_lifecycle job only
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set: *enabled
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-jobType=s3_lifecycle '
+
+  - it: runs no Lance worker container, since the Lance catalog is off
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set: *enabled
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+
+  - it: gives the admin and the worker explicit resources
+    set: *enabled
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].resources.requests.memory
+        template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+      - exists:
+          path: spec.template.spec.containers[0].resources.limits.memory
+        template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+        template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+
+  # The admin serves an unauthenticated UI unless a password is set, and a
+  # tenant namespace admits ingress from the whole cluster. The credentials come
+  # from a Secret the parent release keeps; the values here only wire them in.
+  - it: reads the admin credentials from the named Secret
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: *enabled
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEED_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: seaweedfs-admin-credentials
+                key: adminPassword
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WEED_ADMIN_USER
+            valueFrom:
+              secretKeyRef:
+                name: seaweedfs-admin-credentials
+                key: adminUser
+
+  - it: renders neither the admin nor the worker unless the parent turns them on
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+
+  # Every other component here logs to stderr; the upstream default for these
+  # two writes to a file in an emptyDir that kubectl logs never shows.
+  - it: logs the admin and the worker to stderr
+    set: *enabled
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-logtostderr=true'
+        template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-logtostderr=true'
+        template: charts/seaweedfs/templates/worker/worker-deployment.yaml

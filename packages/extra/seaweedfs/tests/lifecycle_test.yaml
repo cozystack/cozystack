@@ -1,0 +1,196 @@
+suite: seaweedfs lifecycle switch reaches the data plane
+
+# lifecycle.enabled decides whether the data-plane release runs the admin
+# server and the worker that enforce bucket lifecycle rules. Both flags are
+# sent either way, so the data-plane chart's own default never decides.
+
+templates:
+  - templates/seaweedfs.yaml
+  - templates/admin-credentials.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: runs the lifecycle admin and worker by default
+    template: templates/seaweedfs.yaml
+    set: &platform
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: true
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: true
+      - equal:
+          path: spec.values.seaweedfs.admin.secret.existingSecret
+          value: seaweedfs-admin-credentials
+
+  - it: turns both off when lifecycle is disabled
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: false
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: false
+
+  # The admin's volume follows volume.storageClass when the instance sets one.
+  # Zone storage classes are not followed: the admin is not pinned to a zone.
+  - it: puts the admin volume on the instance's storage class
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *platform
+      volume:
+        storageClass: replicated
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.data.storageClass
+          value: replicated
+
+  - it: leaves the admin volume on the cluster default when the instance names none
+    template: templates/seaweedfs.yaml
+    set: *platform
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.admin.data
+
+  - it: monitors the admin and the worker while lifecycle is on
+    template: templates/seaweedfs.yaml
+    set: *platform
+    asserts:
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-admin
+          any: true
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-worker
+          any: true
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/component: worker
+            app.kubernetes.io/name: seaweedfs
+        documentSelector:
+          path: metadata.name
+          value: seaweedfs-worker
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/component: admin
+            app.kubernetes.io/name: seaweedfs
+        documentSelector:
+          path: metadata.name
+          value: seaweedfs-admin
+
+  - it: does not monitor them when lifecycle is off
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    asserts:
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-admin
+          any: true
+        not: true
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-worker
+          any: true
+        not: true
+
+  - it: generates admin credentials for a new instance
+    template: templates/admin-credentials.yaml
+    set: *platform
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: seaweedfs-admin-credentials
+      - equal:
+          path: data.adminUser
+          value: YWRtaW4=
+      - matchRegex:
+          path: data.adminPassword
+          pattern: '^.{40,}$'
+
+  # A new password on every render would leave the running admin on the old
+  # one, since it reads the Secret into its environment once at start.
+  - it: keeps the password of an existing Secret
+    template: templates/admin-credentials.yaml
+    set: *platform
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: v1
+            resource: secrets
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: seaweedfs-admin-credentials
+            namespace: tenant-root
+          data:
+            adminUser: YWRtaW4=
+            adminPassword: a2VwdA==
+    asserts:
+      - equal:
+          path: data.adminPassword
+          value: a2VwdA==
+
+  - it: renders no credentials when lifecycle is off
+    template: templates/admin-credentials.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # A Client instance runs no data plane of its own; its rules are enforced
+  # where the master it points at runs.
+  - it: renders no credentials for a Client instance
+    template: templates/admin-credentials.yaml
+    set:
+      <<: *platform
+      topology: Client
+      filer:
+        grpcHost: seaweedfs-filer.tenant-other.svc
+    asserts:
+      - hasDocuments:
+          count: 0

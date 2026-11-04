@@ -319,6 +319,47 @@ seaweedfs:
     region: ""
     sidecar:
       image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
+  # A bucket lifecycle rule is stored on PUT and acted on only by the
+  # s3_lifecycle job of the plugin worker, scheduled by the admin server once a
+  # day (weed/worker/tasks/s3_lifecycle/handler.go at 4.45). The parent chart
+  # sends both enabled flags from its lifecycle.enabled, together with the
+  # admin password below; off here, so a render without the parent never
+  # starts an admin without one.
+  admin:
+    enabled: false
+    # Without a password weed admin serves its UI unauthenticated, and a tenant
+    # namespace admits ingress from the whole cluster. The parent chart names
+    # the Secret it keeps; these are the keys it writes.
+    secret:
+      userKey: adminUser
+      pwKey: adminPassword
+    # Job state and anything changed in the admin UI live in -dataDir.
+    data:
+      type: "persistentVolumeClaim"
+      size: "1Gi"
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+  worker:
+    enabled: false
+    # Vacuum, balance and erasure coding move data; enabling lifecycle must
+    # not start them.
+    jobType: "s3_lifecycle"
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "1"
+        memory: "512Mi"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
