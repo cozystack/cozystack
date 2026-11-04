@@ -111,11 +111,11 @@ log_step "Checking that ${S3_HOST} serves the Test certificate from inside ${NAM
 kubectl -n "$NAMESPACE" get secret "$CERT_SECRET" -o jsonpath='{.data.ca\.crt}' | base64 -d >"$workdir/ca.crt"
 want=$(kubectl -n "$NAMESPACE" get secret "$CERT_SECRET" -o jsonpath='{.data.tls\.crt}' | base64 -d \
     | openssl x509 -noout -fingerprint -sha256)
-elapsed=0
+deadline=$((SECONDS + PROBE_TIMEOUT))
 while true; do
     # --cacert makes curl verify both the chain and the host name; %{certs}
     # prints the chain it was served, leaf first.
-    if served=$(kubectl -n "$NAMESPACE" exec -i "$PROBE_POD" -- sh -c \
+    if served=$(timeout 30 kubectl -n "$NAMESPACE" exec -i "$PROBE_POD" -- sh -c \
             "cat >/tmp/ca.crt && curl -sS -o /dev/null --max-time 10 --cacert /tmp/ca.crt -w '%{certs}' https://${S3_HOST}/" \
             <"$workdir/ca.crt" 2>"$workdir/probe.err"); then
         got=$(printf '%s\n' "$served" | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p;/END CERTIFICATE/q' \
@@ -126,15 +126,25 @@ while true; do
         fi
         echo "served ${got}, want ${want}" >"$workdir/probe.err"
     fi
-    if [ "$elapsed" -ge "$PROBE_TIMEOUT" ]; then
+    if [ "$SECONDS" -ge "$deadline" ]; then
         log_error "${S3_HOST} did not serve the Test certificate within ${PROBE_TIMEOUT}s: $(cat "$workdir/probe.err")"
         kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' >&2 || true
         kubectl -n "$NAMESPACE" describe ingress ingress-seaweedfs-s3 >&2 || true
         exit 1
     fi
     sleep 10
-    elapsed=$((elapsed + 10))
 done
+
+# A restarted Pod reads its credentials afresh at start, which is what the
+# old environment-based sidecar needed; the round-trip proves the fix only if
+# the sidecar that started without them is the one that serves both jobs.
+sidecar_identity() {
+    kubectl -n "$NAMESPACE" get pod "chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0-0" \
+        -o jsonpath='{.metadata.uid} {.status.containerStatuses[?(@.name=="clickhouse-backup")].restartCount}'
+}
+sidecar_before=$(sidecar_identity)
+[[ "$sidecar_before" =~ ^[0-9a-f-]+\ [0-9]+$ ]] \
+    || { log_error "could not read the ClickHouse Pod uid and clickhouse-backup restart count (got '${sidecar_before}')"; exit 1; }
 
 log_step "Writing the sentinel row"
 clickhouse_query "$CLICKHOUSE_NAME" "CREATE TABLE IF NOT EXISTS default.sentinel (id UInt32, name String) ENGINE = MergeTree ORDER BY id"
@@ -182,4 +192,7 @@ wait_for_field restorejob "$RESTOREJOB_NAME" '{.status.phase}' Succeeded "$NAMES
 count=$(clickhouse_query "$CLICKHOUSE_NAME" "SELECT count() FROM default.sentinel" | tr -d '[:space:]')
 [[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric sentinel count: '${count}'"; exit 1; }
 (( count >= 1 )) || { log_error "sentinel row count after restore is ${count}; expected >= 1"; exit 1; }
+sidecar_after=$(sidecar_identity)
+[ "$sidecar_after" = "$sidecar_before" ] \
+    || { log_error "the ClickHouse Pod or its clickhouse-backup container restarted during the round-trip (uid restarts: '${sidecar_before}' then '${sidecar_after}')"; exit 1; }
 log_success "System-bucket round-trip verified: ${count} sentinel row(s) restored"

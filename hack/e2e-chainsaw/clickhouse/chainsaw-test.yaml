@@ -521,13 +521,14 @@ spec:
   - name: run
     try:
     # Inner budgets of system-bucket-roundtrip.sh:
-    #    240s  probe: CoreDNS picking up the rewrite and the Ingress serving
-    #          the Test certificate
+    #    280s  probe: a 240s deadline for CoreDNS picking up the rewrite and
+    #          the Ingress serving the Test certificate, plus one last 30s
+    #          attempt and its 10s pause
     #    480s  BackupJob to Succeeded, including the driver's 2m hold
     #    480s  RestoreJob to Succeeded, same hold
     #     90s  the EXIT trap: Corefile replace plus a 60s Secret delete
-    #   1290s  (21m30s)
-    # 25m leaves 3m30s for the SQL and kubectl calls between those waits, so
+    #   1330s  (22m10s)
+    # 25m leaves 2m50s for the SQL and kubectl calls between those waits, so
     # an inner wait is what fires and names what stalled.
     - script:
         timeout: 25m
