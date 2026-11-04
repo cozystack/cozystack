@@ -17,6 +17,7 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -406,5 +407,28 @@ func TestBuildLogsParamsOldTimesClamped(t *testing.T) {
 	out = build(t, "tail", url.Values{"since": {"1969-12-31T23:59:59Z"}})
 	if got := out.Get("start_offset"); got != formatDuration(lim.MaxTailResume) {
 		t.Errorf("start_offset = %s, want the %s cap", got, lim.MaxTailResume)
+	}
+}
+
+// TestBuildLogsParamsSendableBoundary pins the inclusive int64-nanosecond
+// bound and that the refusal names the instant exactly.
+func TestBuildLogsParamsSendableBoundary(t *testing.T) {
+	last := time.Unix(0, math.MaxInt64).UTC()
+	in := url.Values{"start": {last.Add(-time.Hour).Format(time.RFC3339Nano)}, "end": {last.Format(time.RFC3339Nano)}}
+	if _, herr := BuildLogsParams("query", in, "tenant-a", testNow, testLimits()); herr != nil {
+		t.Fatalf("the last int64 nanosecond refused: %v", herr)
+	}
+	past := last.Add(time.Nanosecond).Format(time.RFC3339Nano)
+	in = url.Values{"start": {last.Add(-time.Hour).Format(time.RFC3339Nano)}, "end": {past}}
+	_, herr := BuildLogsParams("query", in, "tenant-a", testNow, testLimits())
+	if herr == nil || !strings.Contains(herr.Message, "invalid end") || !strings.Contains(herr.Message, past) {
+		t.Fatalf("one nanosecond past answered %v, want end refused naming %s", herr, past)
+	}
+	// Both out of range: the answer names end, deterministically.
+	for range 20 {
+		_, herr := BuildLogsParams("query", url.Values{"start": {"0001-01-01T00:00:00Z"}, "end": {"0001-01-02T00:00:00Z"}}, "tenant-a", testNow, testLimits())
+		if herr == nil || !strings.Contains(herr.Message, "invalid end") {
+			t.Fatalf("answer = %v, want end named", herr)
+		}
 	}
 }
