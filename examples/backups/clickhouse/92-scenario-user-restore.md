@@ -51,9 +51,5 @@ The script:
 
 - Both flows assume the strategy template uses `.Mode` to switch between
   `create_remote` and `restore_remote`. See `01-create-strategy.sh`.
-- The actual archive in object storage is owned by `clickhouse-backup`'s
-  retention policy on the sidecar, not by the Cozystack `Backup` lifecycle.
-  Deleting the Cozystack `Backup` removes the CR but leaves the S3 archive
-  untouched; tenants who need to purge an archive should call
-  `DELETE /backup/<name>/remote` on the sidecar (or use the upstream tool's
-  retention configuration).
+- On `backup.useSystemBucket: true`, deleting the Cozystack `Backup` deletes its archive through the sidecar and the `Backup` stays until that delete finished. When the ClickHouse application is already gone, the `Backup` is released with an `ArtifactNotDeleted` Warning Event naming the archive left in the bucket; the `backups.cozystack.io/skip-artifact-cleanup: "true"` annotation releases it without deleting anything. A `Backup` taken before the archive name was recorded, or by a strategy that does not use `.ArchiveName`, does not name its archive and leaves it behind.
+- On the tenant's own bucket the archive's lifecycle stays the tenant's: deleting the `Backup` leaves it, and `POST /backup/delete/remote/<name>` on the sidecar (port 7171, basic auth from the `<release>-backup-api-auth` Secret) deletes one by hand.

@@ -258,7 +258,7 @@ spec:
                   is reachable to any Pod with network access to the
                   ClickHouseInstallation Pod IP and accepts
                   restore_remote (overwrites tables from S3) and
-                  DELETE /backup/<name>/remote (wipes archives) calls
+                  POST /backup/delete/remote/<name> (wipes archives) calls
                   with no credentials. Sidecar reads from the
                   chart-emitted backup-api-auth Secret; strategy Pod
                   reads the same Secret and curls with -u user:pass.
