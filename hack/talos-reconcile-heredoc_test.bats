@@ -26,9 +26,11 @@
 #   escaped     the value reaches the heredoc and is escaped for backslash,
 #               dollar and backtick. Assert it survives a real shell as a
 #               LITERAL. This covers talos.installerRepository and
-#               talos.registryMirrors, both genuinely free-form.
+#               talos.registryMirrors and the endpoint names of
+#               talos.registryConfig, all genuinely free-form.
 #   validated   the value is refused at render before it can reach the heredoc.
-#               Assert the refusal. This covers talos.schematicID and
+#               Assert the refusal. This covers talos.registryConfig tls.ca,
+#               talos.schematicID and
 #               talos.version, which also land in the worker DataVolume name and
 #               the image URL, where an unquoted YAML scalar makes escaping the
 #               wrong tool. templates/nodegroup.yaml pattern-checks them. It also
@@ -144,6 +146,68 @@ VALS
     [ -n "$out" ] || { echo "kubernetes-nodes heredoc emitted no output" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -q 'kind: TalosConfigTemplate' || { echo "kubernetes-nodes heredoc output is not the TalosConfigTemplate" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF 'http://m$(id)`x`y' || { echo "kubernetes-nodes hostile endpoint not preserved literally" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps a hostile registryConfig endpoint name literal" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --set 'talos.registryConfig.m$(id)`x`y\.example\.org.tls.insecureSkipVerify=true' \
+        --show-only templates/talos-reconcile-job.yaml \
+        | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
+        > "$work/cmd.sh"
+    [ -s "$work/cmd.sh" ] || { echo "kubernetes-nodes render produced no Job command" >&2; rm -rf "$work"; exit 1; }
+    awk '
+      /(^|=\"?\$\()cat <<EOF/ { print "cat <<EOF"; inblock=1; next }
+      inblock && /^EOF$/            { print "EOF"; inblock=0; next }
+      inblock                       { print }
+    ' "$work/cmd.sh" > "$work/heredoc.sh"
+    grep -q '^cat <<EOF$' "$work/heredoc.sh" || { echo "could not extract the kubernetes-nodes heredoc" >&2; rm -rf "$work"; exit 1; }
+    out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "kubernetes-nodes heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    [ -n "$out" ] || { echo "kubernetes-nodes heredoc emitted no output" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -q 'kind: TalosConfigTemplate' || { echo "kubernetes-nodes heredoc output is not the TalosConfigTemplate" >&2; rm -rf "$work"; exit 1; }
+    printf '%s' "$out" | grep -qF 'name: m$(id)`x`y.example.org' || { echo "kubernetes-nodes hostile registryConfig endpoint name not preserved literally" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes refuses a registryConfig CA that is not a plain certificate at render" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    # tls.ca is validated by cozy-lib.tls.validateCACert, so a shell metacharacter
+    # cannot reach the heredoc through it. The check is that the render refuses it.
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes \
+        -n tenant-test -f "$work/vals.yaml" \
+        --set 'talos.registryConfig.mirror\.example\.org.tls.ca=MIIB$(id)`x`y' >/dev/null 2>"$work/err"; then
+        echo "render accepted a hostile registryConfig ca, so the value reaches the heredoc" >&2
+        rm -rf "$work"; exit 1
+    fi
+    grep -q 'must contain a complete PEM certificate block' "$work/err" \
+        || { echo "render failed on the registryConfig ca for some other reason:" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
 
