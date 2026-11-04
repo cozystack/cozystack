@@ -184,7 +184,8 @@ func TestServerApplicationMetricsScope(t *testing.T) {
 		if want := formatTime(buildMetrics(t, "api/v1/query_range", hostile).start); r.form.Get("start") != want {
 			t.Errorf("%s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 		}
-		if r.form.Get("end") != formatTime(testNow) || r.form.Get("limit") != "101" {
+		// One step past end, which vmselect rounds up to a whole step.
+		if r.form.Get("end") != formatTime(testNow.Add(time.Minute)) || r.form.Get("limit") != "101" {
 			t.Errorf("%s end/limit = %s/%s", r.path, r.form.Get("end"), r.form.Get("limit"))
 		}
 	}
@@ -362,5 +363,20 @@ func TestServerApplicationRefusesUnboundedSampleTime(t *testing.T) {
 	// The namespace root has no lookup to size and still serves it.
 	if got := h.status(http.MethodGet, metricsRoot+"api/v1/query?"+url.Values{"query": {"up @ 1700000000"}}.Encode(), "good"); got != http.StatusOK {
 		t.Fatalf("namespace root answered %d", got)
+	}
+}
+
+// TestServerApplicationLookupCoversAlignedEnd: vmselect rounds a range
+// query's end up to a whole step, so the lookup reaches one step past it.
+func TestServerApplicationLookupCoversAlignedEnd(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	end := testNow.Add(-90 * time.Minute)
+	q := url.Values{"query": {"up"}, "start": {unix(end.Add(-6 * time.Hour))}, "end": {unix(end)}, "step": {"3600"}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query_range?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	r := h.requests()[0]
+	if want := formatTime(end.Add(time.Hour)); r.path != "/api/v1/label/pod/values" || r.form.Get("end") != want {
+		t.Fatalf("lookup %s end = %s, want %s", r.path, r.form.Get("end"), want)
 	}
 }
