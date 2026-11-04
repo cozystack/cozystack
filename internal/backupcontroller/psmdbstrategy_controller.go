@@ -1376,9 +1376,10 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 // annotation (honoured before any apiserver read, so it still frees a Backup
 // whose operator CR has become unreadable) and a going-away namespace (the psmdb
 // delete-backup exec cannot run there) each make the driver strip its own
-// finalizer and release, leaving the object for a bucket lifecycle policy. This
-// bounds only what the driver contributes: a Get that fails with something other
-// than NotFound/NoMatchError still requeues (below), and the psmdb operator's own
+// finalizer and release, leaving the object to a lifecycle rule on the bucket,
+// if one is set, or to manual cleanup. This bounds only what the driver
+// contributes: a Get that fails with something other than
+// NotFound/NoMatchError still requeues (below), and the psmdb operator's own
 // release-lock finalizer keeps the CR Terminating while the operator is down,
 // whatever the driver strips. A down operator in a live namespace is likewise
 // not auto-released: the Backup stays Terminating as a visible signal until an
