@@ -501,6 +501,11 @@ func TestQueryLookahead(t *testing.T) {
 		`rollup_candle\stick(x)`,
 		`rollup\x5fcandlestick(x)`,
 		`x offs\et -1h`,
+		// A comment runs to the end of the line, so quotes in it would
+		// confuse the string tracking and brackets in it the scans.
+		"x # '\n+ rollup\\_candlestick(y) # '",
+		"x # \"\n+ rollup\\_candlestick(y) # \"",
+		"rate(x[5m]) # comment",
 		// vmselect evaluates rollup_candlestick one step ahead
 		// (evalRollupFuncWithoutAt), whatever the offset.
 		`rollup_candlestick(x)`,

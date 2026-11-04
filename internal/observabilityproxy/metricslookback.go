@@ -145,12 +145,12 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 // lookback, every "(" counts as a possible implicit subquery and each
 // term uses the largest step seen. Any @ makes the bound unknown, as it
 // does for queryLookback, and so does WITH, which can apply one offset
-// several times, and a backslash outside a string, which can spell an
-// identifier the scan looks for differently. vmselect also evaluates
+// several times, and a backslash or a comment outside a string, which can
+// hide what the scan looks for. vmselect also evaluates
 // rollup_candlestick one step ahead of the evaluation time
 // (evalRollupFuncWithoutAt), so it makes the bound unknown too.
 func queryLookahead(query string, step time.Duration) (time.Duration, bool) {
-	if strings.Contains(query, "@") || escapeOutsideString(query) {
+	if strings.Contains(query, "@") || unscannableOutsideString(query) {
 		return 0, false
 	}
 	lower := strings.ToLower(query)
@@ -240,17 +240,20 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 	}
 }
 
-// escapeOutsideString reports a backslash outside a string literal.
-// metricsql unescapes identifiers (unescapeIdent), so rollup\_candlestick
-// or offs\et name what the lexical scan looks for without its spelling.
-// Inside double or single quotes a backslash escapes the next character;
-// inside backquotes it is literal.
-func escapeOutsideString(query string) bool {
+// unscannableOutsideString reports a backslash or a "#" outside a string
+// literal. metricsql unescapes identifiers (unescapeIdent), so
+// rollup\_candlestick or offs\et name what the lexical scan looks for
+// without its spelling; "#" starts a comment to the end of the line, and
+// quotes or brackets inside one would mislead the string tracking here and
+// the bracket and offset scans. Inside double or single quotes a backslash
+// escapes the next character; inside backquotes it is literal, and a
+// backquote escaped there makes metricsql refuse the string anyway.
+func unscannableOutsideString(query string) bool {
 	var quote byte
 	for i := 0; i < len(query); i++ {
 		c := query[i]
 		switch {
-		case quote == 0 && c == '\\':
+		case quote == 0 && (c == '\\' || c == '#'):
 			return true
 		case quote == 0 && (c == '"' || c == '\'' || c == '`'):
 			quote = c
