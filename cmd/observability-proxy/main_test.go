@@ -70,6 +70,7 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--max-tails-per-user=-1"},
 		{"--max-tails=-1"},
 		{"--unknown"},
+		{"unexpected", "--root-tenant=tenant-x"},
 	} {
 		if _, err := parseFlags(args); err == nil {
 			t.Errorf("parseFlags(%v) accepted", args)

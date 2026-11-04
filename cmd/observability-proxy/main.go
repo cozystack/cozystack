@@ -90,6 +90,11 @@ func parseFlags(args []string) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
+	// Parsing stops at the first non-flag, so every flag after it would
+	// be dropped silently.
+	if fs.NArg() > 0 {
+		return o, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
 	switch {
 	case o.rootTenant == "":
 		return o, errors.New("--root-tenant must not be empty")
