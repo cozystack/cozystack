@@ -444,6 +444,9 @@ func TestQueryLookahead(t *testing.T) {
 		{`rate(x[5m] offset -30m) offset -1h`, 92 * time.Minute},
 		{`x offset -1h + y offset 2h`, time.Hour},
 		{`node_offset_seconds - 1`, 0},
+		// An escape inside a string literal is only part of a label value.
+		{`x{a=~"a\\.b"}`, 0},
+		{`x{a="\"rollup\\_candlestick\""}`, 0},
 		// metricsql lexes a duration as one token, so a sign with spaces,
 		// or a plus, is an operator after the offset, not part of it.
 		{`x offset 1h+30m`, 0},
@@ -491,6 +494,13 @@ func TestQueryLookahead(t *testing.T) {
 		`rate(x[1h`,
 		`max_over_time(x[1h:100y])`,
 		`rate(x[5m] offset 1h-30m)`,
+		// metricsql unescapes identifiers (unescapeIdent), so an escaped
+		// rollup_candlestick, or any escape outside a string, could hide
+		// what the scan looks for.
+		`rollup\_candlestick(x + y)`,
+		`rollup_candle\stick(x)`,
+		`rollup\x5fcandlestick(x)`,
+		`x offs\et -1h`,
 		// vmselect evaluates rollup_candlestick one step ahead
 		// (evalRollupFuncWithoutAt), whatever the offset.
 		`rollup_candlestick(x)`,

@@ -145,11 +145,12 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 // lookback, every "(" counts as a possible implicit subquery and each
 // term uses the largest step seen. Any @ makes the bound unknown, as it
 // does for queryLookback, and so does WITH, which can apply one offset
-// several times. vmselect also evaluates rollup_candlestick one step ahead
-// of the evaluation time (evalRollupFuncWithoutAt), so it makes the bound
-// unknown too.
+// several times, and a backslash outside a string, which can spell an
+// identifier the scan looks for differently. vmselect also evaluates
+// rollup_candlestick one step ahead of the evaluation time
+// (evalRollupFuncWithoutAt), so it makes the bound unknown too.
 func queryLookahead(query string, step time.Duration) (time.Duration, bool) {
-	if strings.Contains(query, "@") {
+	if strings.Contains(query, "@") || escapeOutsideString(query) {
 		return 0, false
 	}
 	lower := strings.ToLower(query)
@@ -235,6 +236,29 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 			back += d
 		}
 	}
+}
+
+// escapeOutsideString reports a backslash outside a string literal.
+// metricsql unescapes identifiers (unescapeIdent), so rollup\_candlestick
+// or offs\et name what the lexical scan looks for without its spelling.
+// Inside double or single quotes a backslash escapes the next character;
+// inside backquotes it is literal.
+func escapeOutsideString(query string) bool {
+	var quote byte
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		switch {
+		case quote == 0 && c == '\\':
+			return true
+		case quote == 0 && (c == '"' || c == '\'' || c == '`'):
+			quote = c
+		case quote != 0 && quote != '`' && c == '\\':
+			i++
+		case quote != 0 && c == quote:
+			quote = 0
+		}
+	}
+	return false
 }
 
 // isKeyword reports whether lower[start:end] stands on its own rather than
