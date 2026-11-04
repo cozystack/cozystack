@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Shared by the script steps of this suite, whose cwd is this directory.
 # Every call carries its own cap so a hang fails at a known budget rather
 # than at the op ceiling (docs/agents/e2e-testing.md, section 8).
