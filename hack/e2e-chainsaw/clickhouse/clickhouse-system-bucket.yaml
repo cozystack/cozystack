@@ -1,0 +1,28 @@
+# ClickHouse on the platform system bucket for the
+# clickhouse-3-system-bucket-roundtrip Test. No S3 coordinates are given: the
+# sidecar reads them from the clickhouse-backup.yml key the platform projects
+# into cozy-backups-creds at the first BackupJob, after this Pod has started.
+# backup.endpointCA trusts the SeaweedFS CA that signs the certificate the Test
+# serves for s3.example.org.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: ClickHouse
+metadata:
+  name: sysbucket
+spec:
+  size: 5Gi
+  logStorageSize: 1Gi
+  shards: 1
+  replicas: 1
+  resourcesPreset: nano
+  resources: {}
+  backup:
+    enabled: true
+    useSystemBucket: true
+    endpointCA:
+      name: e2e-system-bucket-s3-tls
+      key: ca.crt
+  clickhouseKeeper:
+    enabled: true
+    replicas: 1
+    size: 1Gi
+    resourcesPreset: micro
