@@ -294,6 +294,16 @@ func formatTime(t time.Time) string {
 	return fmt.Sprintf("%d.%03d", ms/1000, ms%1000)
 }
 
+// formatSeconds writes a whole-millisecond duration so that vmselect reads
+// back exactly those milliseconds. vmselect multiplies the float seconds
+// by 1e3 and truncates (httputil.GetDuration), so "1.001" arrives as
+// 1000ms; where the shortest form truncates low, half a millisecond more
+// lands the truncation on the intended value without reaching the next.
 func formatSeconds(d time.Duration) string {
-	return strconv.FormatFloat(float64(d.Milliseconds())/1000, 'f', -1, 64)
+	ms := d.Milliseconds()
+	s := strconv.FormatFloat(float64(ms)/1000, 'f', -1, 64)
+	if secs, _ := strconv.ParseFloat(s, 64); int64(secs*1e3) != ms {
+		s = fmt.Sprintf("%d.%03d5", ms/1000, ms%1000)
+	}
+	return s
 }
