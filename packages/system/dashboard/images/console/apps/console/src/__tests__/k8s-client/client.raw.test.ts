@@ -24,7 +24,25 @@ describe("K8sClient.raw", () => {
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe("/base/apis/x")
-    expect(init.headers).toEqual({ Accept: "application/json", Authorization: "Bearer t0k" })
+    const headers = new Headers(init.headers)
+    expect(headers.get("Accept")).toBe("application/json")
+    expect(headers.get("Authorization")).toBe("Bearer t0k")
+  })
+
+  it.each([
+    ["a Headers instance", new Headers({ Accept: "application/x-ndjson" })],
+    ["a tuple list", [["Accept", "application/x-ndjson"]] as [string, string][]],
+  ])("keeps caller headers passed as %s", async (_, given) => {
+    const fetchMock = vi.fn(async () => new Response("{}"))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = new K8sClient({ getToken: async () => "t0k" })
+
+    await client.raw("/x", { headers: given })
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const headers = new Headers(init.headers)
+    expect(headers.get("Accept")).toBe("application/x-ndjson")
+    expect(headers.get("Authorization")).toBe("Bearer t0k")
   })
 
   it("routes a 401 through the client's unauthorized handler", async () => {

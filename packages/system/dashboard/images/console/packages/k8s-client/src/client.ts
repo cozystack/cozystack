@@ -50,14 +50,12 @@ export class K8sClient {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(init?.headers as Record<string, string>),
-    }
+    const headers = new Headers(init?.headers)
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json")
 
     if (this.getToken) {
       const token = await this.getToken()
-      headers["Authorization"] = `Bearer ${token}`
+      headers.set("Authorization", `Bearer ${token}`)
     }
 
     let res: Response
@@ -247,11 +245,9 @@ export class K8sClient {
    * Kubernetes JSON, such as the observability proxy's streamed NDJSON.
    */
   async raw(path: string, init?: RequestInit): Promise<Response> {
-    const headers: Record<string, string> = {
-      ...(init?.headers as Record<string, string>),
-    }
+    const headers = new Headers(init?.headers)
     if (this.getToken) {
-      headers["Authorization"] = `Bearer ${await this.getToken()}`
+      headers.set("Authorization", `Bearer ${await this.getToken()}`)
     }
     const res = await fetch(`${this.baseUrl}${path}`, { ...init, headers })
     if (res.status === 401) this.handleUnauthorized()
