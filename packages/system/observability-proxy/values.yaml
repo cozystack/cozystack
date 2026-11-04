@@ -14,6 +14,9 @@ observabilityProxy:
     shorttermStore: shortterm
     longtermStore: longterm
     shorttermRetention: 72h
+    # How far before its window an application metrics query may read;
+    # one reading further back answers 422 on the application root.
+    appLookback: 720h
   resources:
     requests:
       cpu: 10m

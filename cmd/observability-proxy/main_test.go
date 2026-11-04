@@ -41,7 +41,7 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if m.Limits.MaxRange != 30*24*time.Hour || m.Limits.MaxPoints != 11000 || m.Limits.MaxTimeout != 30*time.Second {
 		t.Errorf("metrics limit defaults changed: %+v", m.Limits)
 	}
-	if m.App.Lookback != 24*time.Hour || m.App.MaxPods != 500 || m.App.MaxPVCs != 500 {
+	if m.App.Lookback != 30*24*time.Hour || m.App.MaxPods != 500 || m.App.MaxPVCs != 500 {
 		t.Errorf("application scope defaults changed: %+v", m.App)
 	}
 	if m.RootTenant != o.rootTenant {

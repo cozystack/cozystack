@@ -424,3 +424,28 @@ func TestServerApplicationLookupDeadline(t *testing.T) {
 		}
 	}
 }
+
+// TestServerApplicationDefaultLookbackServesLongPanels: the lookback is
+// only the refusal threshold, and the lookback estimate is a loose upper
+// bound, so the default must serve a day's increase and a month-long
+// panel at the step a dashboard picks for it.
+func TestServerApplicationDefaultLookbackServesLongPanels(t *testing.T) {
+	cfg := Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: 30 * 24 * time.Hour, MaxPods: 100, MaxPVCs: 100}}}
+	h := newPolicyHarness(t, cfg, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	month := url.Values{"start": {unix(testNow.Add(-29 * 24 * time.Hour))}, "end": {unix(testNow)}}
+	for _, tc := range []struct{ path, query, step string }{
+		{"api/v1/query", "increase(x[24h])", ""},
+		{"api/v1/query_range", "rate(x[5m])", "21600"},
+		{"api/v1/query_range", "histogram_quantile(0.99, sum by (le) (rate(x[5m])))", "7200"},
+	} {
+		q := url.Values{"query": {tc.query}}
+		if tc.step != "" {
+			q.Set("step", tc.step)
+			q.Set("start", month.Get("start"))
+			q.Set("end", month.Get("end"))
+		}
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/"+tc.path+"?"+q.Encode(), "good"); got != http.StatusOK {
+			t.Errorf("%s step %s answered %d, want 200", tc.query, tc.step, got)
+		}
+	}
+}
