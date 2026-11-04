@@ -225,15 +225,17 @@ spec:
                 - name: REMOTE_STORAGE
                   value: s3
                 {{- /*
-                  On the useSystemBucket flow every S3 setting, the
-                  platform's backupStorage.forcePathStyle included, comes
+                  On the useSystemBucket flow every S3 setting but the
+                  release's own S3_PATH below, the platform's
+                  backupStorage.forcePathStyle included, comes
                   from the clickhouse-backup.yml key the platform projects
                   into cozy-backups-creds, mounted below as the config file.
                   clickhouse-backup reloads that file on every API call and
                   kubelet rewrites a mounted Secret in place, so credentials
                   projected after the Pod started, or rotated since, reach
                   the running sidecar; environment would be read only at
-                  start and would override the file, so none is set here.
+                  start and would override the file, so none of those is
+                  set here.
 
                   S3_FORCE_PATH_STYLE selects path-style vs vhost-style S3
                   addressing. On the legacy paths (own Secret via
