@@ -41,9 +41,6 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
-	// Talos worker image configuration.
-	// +kubebuilder:default:={}
-	Talos Talos `json:"talos"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
@@ -347,24 +344,6 @@ type Scheduler struct {
 	// Preset if `resources` omitted.
 	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-}
-
-type Talos struct {
-	// Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
-	// +kubebuilder:default:="https://factory.talos.dev"
-	ImageFactoryURL string `json:"imageFactoryURL"`
-	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
-	// +kubebuilder:default:="factory.talos.dev/installer"
-	InstallerRepository string `json:"installerRepository"`
-	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
-	// +kubebuilder:default:={}
-	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
-	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
-	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-	SchematicID string `json:"schematicID"`
-	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
-	// +kubebuilder:default:="v1.13.6"
-	Version string `json:"version"`
 }
 
 type VeleroAddon struct {

@@ -1,29 +1,3 @@
-{{- /*
-  Talos -> Kubernetes support matrix. Each Talos minor release supports a
-  bounded window of Kubernetes minor versions; running a kubelet outside
-  that window produces a silently broken Talos+kubelet combination that
-  HelmRelease cannot detect. Fail the chart render instead, so the operator
-  sees the mismatch in Flux/dashboards before workers roll over.
-
-  Upstream declares the window per Talos *minor* release, and patch releases
-  never move it, so the lookup key is the minor derived from talos.version.
-  Keying on the full patch version would silently disable this guard on every
-  patch bump — exactly the mismatch it exists to catch.
-
-  The matrix only fires for Talos minors it knows about; operators who
-  override talos.version to something outside this list take responsibility
-  for compatibility themselves (extend the dict or upstream a PR).
-  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
-*/}}
-{{- $talosK8sSupportMatrix := dict
-      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
-}}
-{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" .Values.talos.version }}
-{{- with index $talosK8sSupportMatrix $talosMinor }}
-{{-   if not (has $.Values.version .) }}
-{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
-{{-   end }}
-{{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /* Substrate selects the infrastructure half of the cluster. The control
        plane is Kamaji either way, so this changes exactly one object — the

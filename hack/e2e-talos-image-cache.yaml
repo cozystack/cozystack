@@ -14,7 +14,7 @@
 # This Deployment fetches the image ONCE at e2e-install time with an aggressive
 # curl retry loop (decoupling the one flaky external fetch from the many
 # per-worker imports), then serves it locally over plain HTTP with range support.
-# Tenant `Kubernetes` CRs point `spec.talos.imageFactoryURL` at this Service
+# Tenant `KubernetesNodes` CRs point `spec.talos.imageFactoryURL` at this Service
 # (see hack/e2e-chainsaw/_lib/run-kubernetes.sh) so every worker imports from the
 # warm local copy instead of the public internet. Tenant namespaces run under a
 # default-deny Cilium egress installed by the tenant chart, whose allow rules cover
@@ -28,7 +28,7 @@
 # mirror can only help, never make CI worse.
 #
 # The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
-# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes/values.yaml.
+# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes-nodes/values.yaml.
 #
 # CI band-aid, not a product artifact. The durable fix is the overridable
 # `talos.imageFactoryURL` chart value this manifest exercises; a self-hosted
