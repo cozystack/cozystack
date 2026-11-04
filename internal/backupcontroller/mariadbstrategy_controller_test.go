@@ -860,6 +860,187 @@ func TestReconcileMariaDBRestore_KindCheckedBeforeSrcBackupGet(t *testing.T) {
 	}
 }
 
+// The operator reports a failed backing Job as Complete=True with reason
+// JobFailed (SetCompleteWithJob in mariadb-operator 25.10.2), so the
+// Complete status alone does not tell success from failure.
+var mariadbCompleteOutcomeCases = []struct {
+	name       string
+	status     metav1.ConditionStatus
+	reason     string
+	wantFailed bool
+	wantDone   bool
+}{
+	{name: "Complete=True/JobComplete succeeds", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobComplete, wantDone: true},
+	{name: "Complete=True/JobFailed fails", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobFailed, wantFailed: true},
+	{name: "Complete=False/JobFailed fails", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobFailed, wantFailed: true},
+	{name: "Complete=True with an unknown reason keeps waiting", status: metav1.ConditionTrue, reason: "SomethingElse"},
+	{name: "Complete=False/JobComplete keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobComplete},
+	{name: "Complete=False/JobRunning keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobRunning},
+}
+
+func mariadbCompleteCondition(status metav1.ConditionStatus, reason string) []metav1.Condition {
+	return []metav1.Condition{{
+		Type:               mariadbtypes.ConditionTypeComplete,
+		Status:             status,
+		Reason:             reason,
+		Message:            "Failed",
+		LastTransitionTime: metav1.Now(),
+	}}
+}
+
+func TestReconcileMariaDBBackup_CompleteConditionOutcome(t *testing.T) {
+	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: &strategyAPIGroup,
+			Kind:     strategyv1alpha1.MariaDBStrategyKind,
+			Name:     "mdb-strategy",
+		},
+	}
+
+	for _, tc := range mariadbCompleteOutcomeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := metav1.Now()
+			seed := newMariaDBBackupJob("bj", "tenant")
+			seed.Status.StartedAt = &now
+			strategy := &strategyv1alpha1.MariaDB{
+				ObjectMeta: metav1.ObjectMeta{Name: "mdb-strategy"},
+				Spec:       strategyv1alpha1.MariaDBSpec{Template: *newRenderedMariaDBTemplate()},
+			}
+			operatorMariaDB := &mariadbtypes.MariaDB{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp(seed.Spec.ApplicationRef.Name)},
+			}
+			operatorBackup := &mariadbtypes.Backup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant",
+					Name:      "bj-op",
+					Labels: map[string]string{
+						backupsv1alpha1.OwningJobNameLabel:      seed.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: seed.Namespace,
+					},
+				},
+				Status: mariadbtypes.BackupStatus{Conditions: mariadbCompleteCondition(tc.status, tc.reason)},
+			}
+			c := newMariaDBStrategyTestClient(t, seed, newMariaDBApp(seed.Spec.ApplicationRef.Name, "tenant"),
+				strategy, operatorMariaDB, operatorBackup)
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			bj := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(seed), bj); err != nil {
+				t.Fatalf("seed Get: %v", err)
+			}
+			res, err := r.reconcileMariaDB(context.Background(), bj, resolved)
+			if err != nil {
+				t.Fatalf("reconcileMariaDB: %v", err)
+			}
+
+			artifacts := &backupsv1alpha1.BackupList{}
+			if err := c.List(context.Background(), artifacts, client.InNamespace("tenant")); err != nil {
+				t.Fatalf("list Backups: %v", err)
+			}
+			switch {
+			case tc.wantFailed:
+				if bj.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+					t.Errorf("expected Phase=Failed, got %q", bj.Status.Phase)
+				}
+				if !strings.Contains(bj.Status.Message, "bj-op") {
+					t.Errorf("failure message must name the operator Backup, got %q", bj.Status.Message)
+				}
+				if bj.Status.BackupRef != nil || len(artifacts.Items) != 0 {
+					t.Errorf("a failed run must not produce a Backup: ref=%v artifacts=%d", bj.Status.BackupRef, len(artifacts.Items))
+				}
+			case tc.wantDone:
+				if bj.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+					t.Errorf("expected Phase=Succeeded, got %q (message %q)", bj.Status.Phase, bj.Status.Message)
+				}
+				if bj.Status.BackupRef == nil || len(artifacts.Items) != 1 {
+					t.Errorf("a successful run must produce exactly one Backup: ref=%v artifacts=%d", bj.Status.BackupRef, len(artifacts.Items))
+				}
+			default:
+				if bj.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+					t.Errorf("expected Phase=Running, got %q", bj.Status.Phase)
+				}
+				if res.RequeueAfter == 0 {
+					t.Errorf("expected a requeue while the run is in progress, got %+v", res)
+				}
+				if len(artifacts.Items) != 0 {
+					t.Errorf("an unfinished run must not produce a Backup, got %d", len(artifacts.Items))
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileMariaDBRestore_CompleteConditionOutcome(t *testing.T) {
+	apps := mariadbapp.GroupName
+
+	for _, tc := range mariadbCompleteOutcomeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := metav1.Now()
+			cozyBackup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-cozy-bk"},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+					DriverMetadata: map[string]string{mariadbBackupNameKey: "src-op-bk"},
+				},
+			}
+			seed := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef:            corev1.LocalObjectReference{Name: cozyBackup.Name},
+					TargetApplicationRef: &corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "target", APIGroup: &apps},
+				},
+				Status: backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+			}
+			operatorRestore := &mariadbtypes.Restore{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant",
+					Name:      "rj-op",
+					Labels: map[string]string{
+						backupsv1alpha1.OwningJobNameLabel:      seed.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: seed.Namespace,
+					},
+				},
+				Status: mariadbtypes.RestoreStatus{Conditions: mariadbCompleteCondition(tc.status, tc.reason)},
+			}
+			c := newMariaDBStrategyTestClient(t, cozyBackup, seed, operatorRestore,
+				&mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-op-bk"}},
+				&mariadbtypes.MariaDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp("target")}})
+			r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+			rj := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(seed), rj); err != nil {
+				t.Fatalf("seed Get: %v", err)
+			}
+			res, err := r.reconcileMariaDBRestore(context.Background(), rj, cozyBackup)
+			if err != nil {
+				t.Fatalf("reconcileMariaDBRestore: %v", err)
+			}
+
+			switch {
+			case tc.wantFailed:
+				if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+					t.Errorf("expected Phase=Failed, got %q", rj.Status.Phase)
+				}
+				if !strings.Contains(rj.Status.Message, "rj-op") {
+					t.Errorf("failure message must name the operator Restore, got %q", rj.Status.Message)
+				}
+			case tc.wantDone:
+				if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+					t.Errorf("expected Phase=Succeeded, got %q (message %q)", rj.Status.Phase, rj.Status.Message)
+				}
+			default:
+				if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseRunning {
+					t.Errorf("expected Phase=Running, got %q", rj.Status.Phase)
+				}
+				if res.RequeueAfter == 0 {
+					t.Errorf("expected a requeue while the run is in progress, got %+v", res)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
