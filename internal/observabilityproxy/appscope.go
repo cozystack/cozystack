@@ -120,6 +120,9 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 			slog.Warn("application lookup failed", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
 			// The deadline can also expire while the answer is read, after
 			// post has handed it over.
+			if herr, ok := err.(*HTTPError); ok && herr.Code == http.StatusUnprocessableEntity {
+				return nil, herr
+			}
 			if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
 				return nil, errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", l.label)
 			}
@@ -147,6 +150,12 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 		return nil, herr
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		// vmselect's refusal of a lookup over its own limits; the client
+		// can act on it by narrowing the window.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		return nil, errorf(http.StatusUnprocessableEntity, "the application's %s lookup: %s", label, strings.TrimSpace(string(msg)))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, errorf(resp.StatusCode, "metrics store answered %s", resp.Status)
 	}
