@@ -452,3 +452,21 @@ func TestServerTailLongLine(t *testing.T) {
 		t.Fatalf("long line not streamed intact: got %d bytes", len(body))
 	}
 }
+
+// The auth scheme is case-insensitive (RFC 9110, section 11.1), as
+// kube-apiserver reads it.
+func TestServerBearerSchemeCase(t *testing.T) {
+	h := newHarness(t, Config{}, nil)
+	for _, auth := range []string{"Bearer good", "bearer good", "BEARER good"} {
+		resp := h.do(http.MethodGet, logsRoot+"query", "", nil, map[string]string{"Authorization": auth})
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Authorization %q answered %d, want 200", auth, resp.StatusCode)
+		}
+	}
+	resp := h.do(http.MethodGet, logsRoot+"query", "", nil, map[string]string{"Authorization": "Basic good"})
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Basic scheme answered %d, want 401", resp.StatusCode)
+	}
+}
