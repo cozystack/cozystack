@@ -38,6 +38,10 @@ type fakeKube struct {
 	sars     atomic.Int32
 	lastSAR  atomic.Pointer[authorizationv1.SubjectAccessReviewSpec]
 	reviewFn func() error
+	// reviewError and evaluationError, when set, are what the
+	// authenticator or the authorizer report as failing to decide.
+	reviewError     atomic.Pointer[string]
+	evaluationError atomic.Pointer[string]
 }
 
 func newFakeKube(users map[string]string, allow func(user string, attrs *authorizationv1.ResourceAttributes) bool) *fakeKube {
@@ -50,7 +54,9 @@ func newFakeKube(users map[string]string, allow func(user string, attrs *authori
 			}
 		}
 		tr := action.(k8stesting.CreateAction).GetObject().(*authenticationv1.TokenReview).DeepCopy()
-		if name, ok := users[tr.Spec.Token]; ok {
+		if e := f.reviewError.Load(); e != nil {
+			tr.Status = authenticationv1.TokenReviewStatus{Error: *e}
+		} else if name, ok := users[tr.Spec.Token]; ok {
 			tr.Status = authenticationv1.TokenReviewStatus{Authenticated: true, User: authenticationv1.UserInfo{Username: name, Groups: []string{"tenant-a-view"}}}
 		}
 		return true, tr, nil
@@ -60,6 +66,10 @@ func newFakeKube(users map[string]string, allow func(user string, attrs *authori
 		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview).DeepCopy()
 		spec := sar.Spec
 		f.lastSAR.Store(&spec)
+		if e := f.evaluationError.Load(); e != nil {
+			sar.Status.EvaluationError = *e
+			return true, sar, nil
+		}
 		sar.Status.Allowed = allow(sar.Spec.User, sar.Spec.ResourceAttributes)
 		return true, sar, nil
 	})
@@ -169,5 +179,42 @@ func TestAuthorize(t *testing.T) {
 	}
 	if n := kube.sars.Load(); n != 3 {
 		t.Fatalf("a different group set must not hit another identity's cache entry, SARs = %d", n)
+	}
+}
+
+// TestAuthenticateFailedReviewNotCached: a TokenReview the authenticator
+// could not decide carries status.error; caching it would refuse a valid
+// token for the TTL after the authenticator recovers.
+func TestAuthenticateFailedReviewNotCached(t *testing.T) {
+	kube := newFakeKube(map[string]string{"good": "alice"}, allowNamespace("tenant-a"))
+	outage := "webhook authenticator unreachable"
+	kube.reviewError.Store(&outage)
+	a := NewAuthorizer(kube.client, 10*time.Second)
+	ctx := context.Background()
+	if _, err := a.Authenticate(ctx, "good"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("err = %v, want ErrUnauthenticated", err)
+	}
+	kube.reviewError.Store(nil)
+	if u, err := a.Authenticate(ctx, "good"); err != nil || u.Username != "alice" {
+		t.Fatalf("after recovery: %+v, %v", u, err)
+	}
+}
+
+// TestAuthorizeEvaluationErrorNotCached: a SubjectAccessReview with an
+// evaluation error and no decision is a denial for this request only.
+func TestAuthorizeEvaluationErrorNotCached(t *testing.T) {
+	kube := newFakeKube(map[string]string{"good": "alice"}, allowNamespace("tenant-a"))
+	failure := "webhook authorizer unreachable"
+	kube.evaluationError.Store(&failure)
+	a := NewAuthorizer(kube.client, 10*time.Second)
+	ctx := context.Background()
+	user := &authenticationv1.UserInfo{Username: "alice"}
+	attrs := Route{Kind: NamespaceLogs, Namespace: "tenant-a"}.ResourceAttributes()
+	if ok, err := a.Authorize(ctx, user, attrs); err != nil || ok {
+		t.Fatalf("undecided review = %v, %v; want a denial", ok, err)
+	}
+	kube.evaluationError.Store(nil)
+	if ok, err := a.Authorize(ctx, user, attrs); err != nil || !ok {
+		t.Fatalf("after recovery: %v, %v", ok, err)
 	}
 }
