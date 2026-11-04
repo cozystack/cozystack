@@ -786,6 +786,9 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		err := r.Get(ctx, jobKey, existing)
 		switch {
 		case err == nil:
+			if !isAltinityCleanupJob(existing) {
+				break
+			}
 			if derr := r.deleteAltinityCleanupJob(ctx, existing); derr != nil {
 				return ctrl.Result{}, derr
 			}
@@ -862,6 +865,10 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		return ctrl.Result{}, err
 	}
 
+	if !isAltinityCleanupJob(job) {
+		return r.releaseAltinityCleanup(ctx, backup, archive,
+			fmt.Sprintf("Job %s, which this controller did not create, holds the cleanup Job name", job.Name)), nil
+	}
 	if !job.DeletionTimestamp.IsZero() {
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
@@ -922,6 +929,13 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return v, true, nil
+}
+
+// isAltinityCleanupJob tells a cleanup Job this controller created from
+// another Job of the same name, such as the ClickHouse chart's own
+// <release>-cleanup hook.
+func isAltinityCleanupJob(job *batchv1.Job) bool {
+	return job.Labels[altinityLabelMode] == altinityModeCleanup
 }
 
 func altinityCleanupJobArchive(job *batchv1.Job) string {

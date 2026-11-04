@@ -583,14 +583,46 @@ func TestCleanupAltinityBackup_ApplicationKindNotServedReleases(t *testing.T) {
 func TestCleanupAltinityBackup_SkipAnnotationReapsInflightJob(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	backup.Annotations = map[string]string{"backups.cozystack.io/skip-artifact-cleanup": "true"}
-	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ch-bk-cleanup", Namespace: "tenant-test"}}
-	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), running)...)
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), ownCleanupJob(backup))...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete: %v", err)
 	}
 	if left := listJobs(t, c); len(left) != 0 {
 		t.Errorf("expected the in-flight Job reaped, %d left", len(left))
+	}
+}
+
+// A Job of the same name this controller did not create (the ClickHouse
+// chart's own cleanup hook is <release>-cleanup) is never deleted or read as
+// the outcome of the archive delete.
+func TestCleanupAltinityBackup_LeavesForeignJobOfTheSameName(t *testing.T) {
+	for name, skip := range map[string]bool{"cleanup": false, "skip annotation": true} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			if skip {
+				backup.Annotations = map[string]string{"backups.cozystack.io/skip-artifact-cleanup": "true"}
+			}
+			foreign := ownCleanupJob(backup)
+			foreign.Labels = map[string]string{"app.kubernetes.io/name": "clickhouse"}
+			foreign.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+			c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), foreign)...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if left := listJobs(t, c); len(left) != 1 {
+				t.Fatalf("the foreign Job must be left alone, %d jobs", len(left))
+			}
+			if res.RequeueAfter != 0 || res.Requeue {
+				t.Errorf("expected the Backup released, got %+v", res)
+			}
+			if !skip && len(rec.Events) == 0 {
+				t.Error("a release because of a foreign Job must surface as a Warning Event")
+			}
+		})
 	}
 }
 
