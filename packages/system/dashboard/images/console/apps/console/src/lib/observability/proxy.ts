@@ -202,8 +202,10 @@ export async function tailLogs(
   params: { query: string; since?: string },
   onEntry: (entry: LogEntry) => void,
   signal?: AbortSignal,
+  onOpen?: () => void,
 ): Promise<void> {
   const res = await proxyGet(client, `${root}select/logsql/tail`, params, signal)
+  onOpen?.()
   if (!res.body) return
   const reader = res.body.getReader()
   const decoder = new TextDecoder()

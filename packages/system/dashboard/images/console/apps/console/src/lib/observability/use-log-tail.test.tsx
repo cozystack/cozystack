@@ -10,6 +10,10 @@ function ndjson(...lines: string[]): Response {
   return new Response(lines.map((l) => `${l}\n`).join(""))
 }
 
+function openStream(): Response {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }))
+}
+
 function setup(...responses: Response[]) {
   const client = new K8sClient()
   const raw = vi.spyOn(client, "raw")
@@ -73,6 +77,39 @@ describe("useLogTail", () => {
     const { result } = renderHook(() => useLogTail("/root/", "*", 1, { retryDelayMs: 1 }), { wrapper })
 
     await waitFor(() => expect(result.current.entries.map((e) => e._msg)).toEqual(["a"]))
+  })
+
+  it("goes live and clears a load warning once the stream opens, before any line", async () => {
+    const { wrapper } = setup(new Response("too many concurrent requests", { status: 429 }), openStream())
+
+    const { result } = renderHook(() => useLogTail("/root/", "*", 1, { retryDelayMs: 1 }), { wrapper })
+
+    await waitFor(() => expect(result.current.state).toBe("live"))
+    expect(result.current.error).toBeNull()
+  })
+
+  it("reconnects after an idle close at the base delay, from when the quiet stream opened", async () => {
+    const delays: number[] = []
+    const realSetTimeout = globalThis.setTimeout
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      if (ms !== undefined && ms % 7 === 0 && ms > 0) delays.push(ms)
+      return realSetTimeout(fn, ms)
+    }) as typeof setTimeout)
+    const refused = () => new Response("", { status: 429 })
+    const { raw, wrapper } = setup(refused(), refused(), ndjson())
+
+    try {
+      renderHook(() => useLogTail("/root/", "*", 1, { retryDelayMs: 7 }), { wrapper })
+      await waitFor(() => expect(raw).toHaveBeenCalledTimes(4))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(delays).toEqual([7, 14, 7])
+    expect(new URL(raw.mock.calls[2][0], "http://x").searchParams.has("since")).toBe(false)
+    const since = new URL(raw.mock.calls[3][0], "http://x").searchParams.get("since")
+    expect(since).not.toBeNull()
+    expect(new Date(since!).toISOString()).toBe(since)
   })
 
   it("does not connect while disabled", () => {

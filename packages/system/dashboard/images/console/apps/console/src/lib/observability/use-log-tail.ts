@@ -66,15 +66,22 @@ export function useLogTail(
     }
 
     const run = async () => {
-      for (let attempt = 0; !signal.aborted; attempt++) {
+      let failures = 0
+      let openedAt: string | undefined
+      while (!signal.aborted) {
         resumedFrom = lastTime
+        let delay = retryDelayMs
         try {
-          await tailLogs(client, root, { query, since: lastTime }, (entry) => {
-            attempt = 0
+          await tailLogs(client, root, { query, since: lastTime ?? openedAt }, (entry) => {
             if (!lastTime || compareTime(entry._time, lastTime) > 0) lastTime = entry._time
             pending.push(entry)
             timer ??= setTimeout(flush, FLUSH_MS)
-          }, signal)
+          }, signal, () => {
+            failures = 0
+            // With no line yet, the next reconnect resumes from here so the gap is not lost.
+            openedAt = new Date().toISOString()
+            update({ state: "live", error: null })
+          })
           flush()
         } catch (err) {
           flush()
@@ -84,10 +91,12 @@ export function useLogTail(
             return
           }
           update({ error: err })
+          delay = Math.min(retryDelayMs * 2 ** failures, MAX_RETRY_MS)
+          failures++
         }
         if (signal.aborted) return
         update({ state: "reconnecting" })
-        await sleep(Math.min(retryDelayMs * 2 ** attempt, MAX_RETRY_MS), signal)
+        await sleep(delay, signal)
       }
     }
     void run()

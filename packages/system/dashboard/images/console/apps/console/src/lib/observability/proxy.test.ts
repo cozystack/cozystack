@@ -194,6 +194,24 @@ describe("tailLogs", () => {
 
     expect(err).toMatchObject({ kind: "forbidden" })
   })
+
+  it("says the stream opened before any line arrives", async () => {
+    const { client } = clientReturning(new Response(""))
+    const onOpen = vi.fn()
+
+    await tailLogs(client, logsRoot(ns), { query: "*" }, () => {}, undefined, onOpen)
+
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not say the stream opened when the tail is refused", async () => {
+    const { client } = clientReturning(new Response("", { status: 429 }))
+    const onOpen = vi.fn()
+
+    await tailLogs(client, logsRoot(ns), { query: "*" }, () => {}, undefined, onOpen).catch(() => {})
+
+    expect(onOpen).not.toHaveBeenCalled()
+  })
 })
 
 describe("isScopeWide", () => {
