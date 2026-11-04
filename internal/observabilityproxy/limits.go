@@ -72,7 +72,12 @@ func (l *limiter) allowRate(user string) (time.Duration, bool) {
 	b, ok := l.buckets[user]
 	if !ok {
 		if len(l.buckets) >= ttlCacheMaxEntries {
-			l.sweepBuckets(now, burst)
+			// Every bucket still refilling means that many users within one
+			// refill period; a newcomer waits for the first to drop out
+			// rather than grow the map past its bound.
+			if soonest := l.sweepBuckets(now, burst); len(l.buckets) >= ttlCacheMaxEntries {
+				return soonest, false
+			}
 		}
 		b = &bucket{tokens: burst, last: now}
 		l.buckets[user] = b
@@ -91,13 +96,21 @@ func (l *limiter) allowRate(user string) (time.Duration, bool) {
 }
 
 // sweepBuckets drops buckets that have refilled completely; recreating one
-// later starts it full, which is the same state.
-func (l *limiter) sweepBuckets(now time.Time, burst float64) {
+// later starts it full, which is the same state. It returns how long until
+// the first remaining bucket is full.
+func (l *limiter) sweepBuckets(now time.Time, burst float64) time.Duration {
+	soonest := time.Duration(math.MaxInt64)
 	for user, b := range l.buckets {
-		if b.tokens+now.Sub(b.last).Seconds()*l.cfg.RatePerUser >= burst {
+		missing := burst - (b.tokens + now.Sub(b.last).Seconds()*l.cfg.RatePerUser)
+		if missing <= 0 {
 			delete(l.buckets, user)
+			continue
+		}
+		if wait, ok := scaleDuration(missing/l.cfg.RatePerUser, time.Second); ok {
+			soonest = min(soonest, max(wait, time.Nanosecond))
 		}
 	}
+	return soonest
 }
 
 func (l *limiter) acquire(user string) (func(), bool) {

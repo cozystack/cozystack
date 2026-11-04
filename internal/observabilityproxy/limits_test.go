@@ -17,6 +17,7 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -114,5 +115,31 @@ func TestLimiterRateWaitAtTinyRate(t *testing.T) {
 	allowed(l, "alice")
 	if wait, ok := l.allowRate("alice"); ok || wait <= 0 {
 		t.Fatalf("empty bucket at a tiny rate: admitted %v, wait %s, want refused with a positive wait", ok, wait)
+	}
+}
+
+// TestLimiterRateBucketsBounded fills the bucket map with users that are
+// all still refilling: a new user must be refused rather than grow it, and
+// admitted once a bucket can be dropped.
+func TestLimiterRateBucketsBounded(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newLimiter(LimiterConfig{RatePerUser: 2, RateBurst: 2})
+	l.now = func() time.Time { return now }
+	for i := range ttlCacheMaxEntries {
+		if !allowed(l, fmt.Sprintf("user-%d", i)) {
+			t.Fatalf("user-%d refused", i)
+		}
+		now = now.Add(time.Microsecond)
+	}
+	wait, ok := l.allowRate("newcomer")
+	if ok || wait <= 0 {
+		t.Fatalf("newcomer on a full map: admitted %v, wait %s; want refused with a positive wait", ok, wait)
+	}
+	if n := len(l.buckets); n > ttlCacheMaxEntries {
+		t.Fatalf("bucket map grew to %d, above %d", n, ttlCacheMaxEntries)
+	}
+	now = now.Add(wait)
+	if !allowed(l, "newcomer") {
+		t.Fatalf("newcomer still refused after the advertised wait %s", wait)
 	}
 }
