@@ -179,7 +179,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	}
 	release, ok := acquire(user)
 	if !ok {
-		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
+		return tooManyConcurrent(w)
 	}
 	defer release()
 	if herr := s.readForm(w, r); herr != nil {
@@ -264,6 +264,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		return errAborted
 	}
 	return nil
+}
+
+// concurrencyRetryAfter is a hint only: a slot frees when another request
+// of the user ends, which the proxy cannot predict, and one second keeps
+// a polling client from retrying in a tight loop.
+const concurrencyRetryAfter = "1"
+
+func tooManyConcurrent(w http.ResponseWriter) *HTTPError {
+	w.Header().Set("Retry-After", concurrencyRetryAfter)
+	return errorf(http.StatusTooManyRequests, "too many concurrent requests")
 }
 
 // readForm reads the whole body under the request timeout, so a client

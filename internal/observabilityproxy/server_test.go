@@ -470,3 +470,25 @@ func TestServerBearerSchemeCase(t *testing.T) {
 		t.Errorf("Basic scheme answered %d, want 401", resp.StatusCode)
 	}
 }
+
+// A 429 for concurrency tells the client when to retry, as the rate 429
+// does, so console polls back off instead of retrying at once.
+func TestServerConcurrencyRetryAfter(t *testing.T) {
+	release := make(chan struct{})
+	h := newHarness(t, Config{Limiter: LimiterConfig{MaxConcurrentPerUser: 1, MaxTails: 1}}, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	for _, endpoint := range []string{"query", "tail"} {
+		first := h.do(http.MethodGet, logsRoot+endpoint, "good", nil, nil)
+		defer func() { _ = first.Body.Close() }()
+		second := h.do(http.MethodGet, logsRoot+endpoint, "good", nil, nil)
+		_ = second.Body.Close()
+		if second.StatusCode != http.StatusTooManyRequests || second.Header.Get("Retry-After") == "" {
+			t.Errorf("%s over the limit answered %d with Retry-After %q, want 429 with a value",
+				endpoint, second.StatusCode, second.Header.Get("Retry-After"))
+		}
+	}
+}
