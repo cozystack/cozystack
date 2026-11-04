@@ -222,9 +222,10 @@ func TestBuildLogsParamsStepAndLimit(t *testing.T) {
 		c.Set(k, v)
 		return c
 	}
-	// 24h over at most 1000 buckets is 86.4s.
-	if got := build(t, "hits", with(day, "step", "1s")).Get("step"); got != "86400ms" {
-		t.Errorf("tiny step = %s, want clamped to 86400ms", got)
+	// 24h over 999 steps, 1000 buckets once aligned, is 86486.5ms, rounded
+	// up to whole milliseconds.
+	if got := build(t, "hits", with(day, "step", "1s")).Get("step"); got != "86487ms" {
+		t.Errorf("tiny step = %s, want clamped to 86487ms", got)
 	}
 	if got := build(t, "stats_query_range", with(day, "step", "1h")).Get("step"); got != "3600000ms" {
 		t.Errorf("1h step = %s", got)
@@ -238,7 +239,7 @@ func TestBuildLogsParamsStepAndLimit(t *testing.T) {
 	if got := build(t, "hits", with(day, "step", "5400.5")).Get("step"); got != "5400500ms" {
 		t.Errorf("fractional bare-seconds step = %s, want 5400500ms", got)
 	}
-	if got := build(t, "hits", day).Get("step"); got != "86400ms" {
+	if got := build(t, "hits", day).Get("step"); got != "86487ms" {
 		t.Errorf("omitted step = %s, want the bucket-bounded minimum", got)
 	}
 	if got := build(t, "hits", url.Values{"start": {"2026-11-04T11:59:59Z"}}).Get("step"); got != "1000ms" {
@@ -341,18 +342,24 @@ func TestBuildLogsParamsStepCannotWidenWindow(t *testing.T) {
 	}
 }
 
+// TestBuildLogsParamsStepKeepsBucketCap counts buckets the way vlselect
+// returns them: one per step boundary from the aligned start through the
+// aligned end, zero-filled, which is one more than the unaligned span
+// holds whenever start is not on a boundary.
 func TestBuildLogsParamsStepKeepsBucketCap(t *testing.T) {
 	lim := testLimits()
-	// Spans that MaxBuckets does not divide into whole milliseconds.
-	for _, start := range []string{"2026-11-03T12:00:00.0007Z", "2026-11-04T10:00:00.0013Z", "2026-11-04T11:00:00.0005Z"} {
+	// Spans that MaxBuckets does not divide into whole milliseconds, and
+	// unaligned starts of spans it does divide.
+	for _, start := range []string{
+		"2026-11-03T12:00:00.0007Z", "2026-11-04T10:00:00.0013Z", "2026-11-04T11:00:00.0005Z",
+		"2026-11-01T12:00:00.5Z", "2026-11-04T11:00:00.25Z",
+	} {
 		out := build(t, "hits", url.Values{"start": {start}})
 		step, err := parseDuration(out.Get("step"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, _ := time.Parse(time.RFC3339Nano, out.Get("start"))
-		e, _ := time.Parse(time.RFC3339Nano, out.Get("end"))
-		if buckets := (e.Sub(s) + step - 1) / step; int(buckets) > lim.MaxBuckets {
+		if buckets := alignedWindow(t, out) / step; int(buckets) > lim.MaxBuckets {
 			t.Errorf("start %s: step %s gives %d buckets, more than %d", start, out.Get("step"), buckets, lim.MaxBuckets)
 		}
 	}

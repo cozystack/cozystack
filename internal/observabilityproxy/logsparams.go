@@ -171,7 +171,11 @@ func window(in url.Values, now time.Time, lim LogsLimits) (time.Time, time.Time,
 // shrunk from the start until the widened span fits MaxRange.
 func setStep(out, in url.Values, start, end time.Time, lim LogsLimits) *HTTPError {
 	span := end.Sub(start)
-	minStep := max((span+time.Duration(lim.MaxBuckets)-1)/time.Duration(lim.MaxBuckets), time.Second)
+	// vlselect returns a zero-filled bucket for every step boundary from
+	// the aligned start through the aligned end, one more than span/step
+	// whenever start is off a boundary, so one bucket is held back.
+	spans := time.Duration(lim.MaxBuckets - 1)
+	minStep := max((span+spans-1)/spans, time.Second)
 	step := minStep
 	if v := in.Get("step"); v != "" {
 		d, err := parseDuration(v)
