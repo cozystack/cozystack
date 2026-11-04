@@ -19,6 +19,7 @@ package observabilityproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -116,8 +117,10 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 		names, err := s.lookupNames(ctx, r, store, l.label, match, ns, start, req.last, l.max)
 		if err != nil {
 			slog.Warn("application lookup failed", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
-			if herr, ok := err.(*HTTPError); ok && herr.Code == http.StatusGatewayTimeout {
-				return nil, herr
+			// The deadline can also expire while the answer is read, after
+			// post has handed it over.
+			if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+				return nil, errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", l.label)
 			}
 			return nil, errorf(http.StatusBadGateway, "the application's %s lookup failed", l.label)
 		}

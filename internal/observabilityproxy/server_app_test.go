@@ -380,3 +380,31 @@ func TestServerApplicationLookupCoversAlignedEnd(t *testing.T) {
 		t.Fatalf("lookup %s end = %s, want %s", r.path, r.form.Get("end"), want)
 	}
 }
+
+// TestServerApplicationLookupDeadline: a lookup that misses the request
+// deadline answers 504, whether the store sent nothing or stalled after
+// its headers, and the query itself is not sent.
+func TestServerApplicationLookupDeadline(t *testing.T) {
+	for _, headers := range []bool{false, true} {
+		h := newPolicyHarness(t, Config{RequestTimeout: 50 * time.Millisecond}, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/label/pod/values" {
+				appMetricsUpstream(nil, nil, http.StatusOK)(w, r)
+				return
+			}
+			if headers {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"status":"success","data":[`)
+				w.(http.Flusher).Flush()
+			}
+			<-r.Context().Done()
+		}, appPolicy, nil)
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?query=up", "good"); got != http.StatusGatewayTimeout {
+			t.Fatalf("headers sent %v: status = %d, want 504", headers, got)
+		}
+		for _, r := range h.requests() {
+			if !strings.HasPrefix(r.path, "/api/v1/label/") {
+				t.Fatalf("headers sent %v: the query reached the store after a failed lookup", headers)
+			}
+		}
+	}
+}
