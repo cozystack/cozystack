@@ -41,13 +41,19 @@ const latencyOffset = 30 * time.Second
 
 // queryDurationPart is the subset of the MetricsQL duration grammar
 // (scanSingleDuration in metricsql) the scan understands. Step multiples
-// (5i, $__interval), negative parts and upper-case units are left out on
-// purpose: anything else makes the bound unknown.
+// (5i, $__interval) and negative parts are left out on purpose: anything
+// else makes the bound unknown. Offsets are scanned lower-cased, as
+// metricsql reads units in any case; windows and steps in brackets are
+// not, so an upper-case unit there is unknown.
 var (
 	queryDurationPart = regexp.MustCompile(`(\d+(?:\.\d+)?)(ms|s|m|h|d|w|y)`)
 	queryDuration     = regexp.MustCompile(`^(?:\d+(?:\.\d+)?(?:ms|s|m|h|d|w|y))+$`)
 	querySeconds      = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 )
+
+// offsetTerminators may follow an offset's duration: whitespace, a
+// closing bracket or separator, or a binary operator other than minus.
+const offsetTerminators = " \t\n\r)]},+*/^%<>=!"
 
 var queryDurationUnits = map[string]time.Duration{
 	"ms": time.Millisecond, "s": time.Second, "m": time.Minute, "h": time.Hour,
@@ -212,10 +218,11 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 		// metricsql lexes 1h-30m as one duration whose parts after the
 		// first negative one all subtract (DurationValue), so -1h-30m is
 		// -90m and 1h-2h is -1h; the scan does not read such compounds.
-		// metricsql continues a duration after a minus in more forms than
-		// the scan can tell from a subtraction (-1.h and -.5h among them),
-		// so any minus right after the duration is refused.
-		if end < len(arg) && arg[end] == '-' {
+		// metricsql continues a duration token in more forms than the scan
+		// reads: after a minus (-30m, -1.h, -.5h) and with a trailing
+		// $__interval, all summed by DurationValue. Only what certainly
+		// ends the token is accepted after the duration.
+		if end < len(arg) && !strings.ContainsRune(offsetTerminators, rune(arg[end])) {
 			return 0, 0, false
 		}
 		d, ok := parseQueryDuration(arg[:end])

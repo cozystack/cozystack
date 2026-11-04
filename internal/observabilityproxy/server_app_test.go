@@ -523,6 +523,7 @@ func TestServerApplicationRefusesForwardReads(t *testing.T) {
 	for _, query := range []string{
 		"container_cpu_usage_seconds_total offset -1h-30m",
 		"container_cpu_usage_seconds_total offset 1h-2h",
+		"container_cpu_usage_seconds_total offset -1h$__interval",
 		"rollup_candlestick(container_cpu_usage_seconds_total)",
 	} {
 		q := url.Values{"query": {query}, "time": {unix(testNow.Add(-2 * time.Hour))}}

@@ -480,6 +480,10 @@ func TestQueryLookahead(t *testing.T) {
 		`x offset 5m-.5h`,
 		`x offset 1h-1`,
 		`x offset 5m-y`,
+		// metricsql also reads a trailing $__interval as part of the
+		// duration: -1h$__interval is -(1h + step).
+		`x offset -1h$__interval`,
+		`rate(x[5m]) offset -1h$__interval`,
 		// A subquery step the scan cannot read, an unclosed bracket, and a
 		// sum past the duration range.
 		`rate(x[1h:5i])`,
