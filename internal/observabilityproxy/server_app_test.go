@@ -327,3 +327,39 @@ func TestServerApplicationLookupUnknownLookback(t *testing.T) {
 		t.Fatalf("lookup %s start = %s, want %s", r.path, r.form.Get("start"), want)
 	}
 }
+
+// TestServerApplicationLookupCoversNegativeOffset evaluates two hours ago
+// a selector shifted an hour forward: the pod lookup must reach the time
+// of the samples, or a pod created in between is left out.
+func TestServerApplicationLookupCoversNegativeOffset(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	at := testNow.Add(-2 * time.Hour)
+	q := url.Values{"query": {"container_cpu_usage_seconds_total offset -1h"}, "time": {unix(at)}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	r := h.requests()[0]
+	if want := formatTime(at.Add(time.Hour)); r.path != "/api/v1/label/pod/values" || r.form.Get("end") != want {
+		t.Fatalf("lookup %s end = %s, want %s", r.path, r.form.Get("end"), want)
+	}
+}
+
+// TestServerApplicationRefusesUnboundedSampleTime refuses a query whose
+// samples may lie at a time the lookup cannot be sized for, rather than
+// answer with series silently left out.
+func TestServerApplicationRefusesUnboundedSampleTime(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	for _, query := range []string{"up @ 1700000000", "up offset -5i"} {
+		q := url.Values{"query": {query}}
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", query, got)
+		}
+	}
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("upstream saw %d requests for a refused query", n)
+	}
+	// The namespace root has no lookup to size and still serves it.
+	if got := h.status(http.MethodGet, metricsRoot+"api/v1/query?"+url.Values{"query": {"up @ 1700000000"}}.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("namespace root answered %d", got)
+	}
+}

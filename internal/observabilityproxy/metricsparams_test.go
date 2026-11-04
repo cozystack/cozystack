@@ -429,3 +429,40 @@ func TestBuildMetricsParamsPointsAsVmselectCounts(t *testing.T) {
 		t.Fatalf("11001 points answered %d, want 422", got)
 	}
 }
+
+func TestQueryLookahead(t *testing.T) {
+	tests := []struct {
+		query string
+		want  time.Duration
+	}{
+		{`up`, 0},
+		{`x offset 1h`, 0},
+		{`x offset -1h`, time.Hour},
+		{`x OFFSET - 90m`, 90 * time.Minute},
+		{`rate(x[5m] offset -30m) offset -1h`, 90 * time.Minute},
+		{`x offset -1h + y offset 2h`, time.Hour},
+		{`x @ end()`, 0},
+		{`x @ start() offset -1h`, time.Hour},
+		{`node_offset_seconds - 1`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, ok := queryLookahead(tt.query)
+			if !ok || got != tt.want {
+				t.Fatalf("queryLookahead = %s, %v; want %s", got, ok, tt.want)
+			}
+		})
+	}
+	for _, q := range []string{
+		`x @ 1700000000`,
+		`x @ (end() - 1h)`,
+		`x{a="a@b"}`,
+		`x offset -5i`,
+		`x offset -$__interval`,
+		`with (f(a) = a offset -1h) f(f(x))`,
+	} {
+		if got, ok := queryLookahead(q); ok {
+			t.Errorf("queryLookahead(%q) = %s, want unknown", q, got)
+		}
+	}
+}

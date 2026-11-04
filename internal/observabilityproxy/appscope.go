@@ -94,10 +94,14 @@ func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 
 // applicationScope looks the application's pods and PVCs up in store over
 // the request window, reaching back by the query's own lookback up to the
-// configured limit. A failed lookup drops its branch, which only narrows
-// the answer; a list over its cap is refused, because truncating it would
-// silently drop series.
+// configured limit and forward to the latest sample a negative offset
+// reads. A failed lookup drops its branch, which only narrows the answer;
+// a list over its cap, or a query whose latest sample is unknown, is
+// refused, because the answer would silently miss series.
 func (s *Server) applicationScope(ctx context.Context, r *http.Request, store string, req metricsRequest, ns, kind, name string) ([]string, *HTTPError) {
+	if req.last.IsZero() {
+		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ other than start() or end(), or an offset that is not a plain duration); use the namespace root")
+	}
 	lim := s.cfg.Metrics.App
 	start := req.from.Add(-lim.Lookback)
 	if req.start.After(start) {
@@ -109,7 +113,7 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 		max           int
 	}{{"pod", "kube_pod_labels", lim.MaxPods}, {"persistentvolumeclaim", "kube_persistentvolumeclaim_labels", lim.MaxPVCs}} {
 		match := l.metric + identitySelector(ns, ksmKindLabel, ksmNameLabel, kind, name)
-		names, err := s.lookupNames(ctx, r, store, l.label, match, ns, start, req.to, l.max)
+		names, err := s.lookupNames(ctx, r, store, l.label, match, ns, start, req.last, l.max)
 		if err != nil {
 			slog.Warn("application lookup failed; its branch is left out", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
 			continue
