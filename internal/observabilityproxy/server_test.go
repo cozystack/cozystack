@@ -464,10 +464,12 @@ func TestServerBearerSchemeCase(t *testing.T) {
 			t.Errorf("Authorization %q answered %d, want 200", auth, resp.StatusCode)
 		}
 	}
-	resp := h.do(http.MethodGet, logsRoot+"query", "", nil, map[string]string{"Authorization": "Basic good"})
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("Basic scheme answered %d, want 401", resp.StatusCode)
+	for _, auth := range []string{"Basic good", "Bearer", "Bearer ", "Bearergood"} {
+		resp := h.do(http.MethodGet, logsRoot+"query", "", nil, map[string]string{"Authorization": auth})
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("Authorization %q answered %d, want 401", auth, resp.StatusCode)
+		}
 	}
 }
 
