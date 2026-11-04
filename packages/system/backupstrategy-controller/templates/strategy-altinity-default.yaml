@@ -51,10 +51,21 @@ spec:
               host="chi-clickhouse-{{ printf "{{ .Release.Name }}" }}-clickhouse-0-0.{{ printf "{{ .Release.Namespace }}" }}.svc"
               api="http://${host}:7171"
               auth="-u ${API_USERNAME}:${API_PASSWORD}"
+              # The sidecar answers 423 to a new operation while any other is
+              # in progress, so starting before it is idle burns the attempt.
+              idle=
               for _ in $(seq 1 60); do
-                if curl -fsS ${auth} --max-time 2 "${api}/backup/status" >/dev/null 2>&1; then break; fi
+                if actions=$(curl -fsS ${auth} --max-time 5 "${api}/backup/actions") \
+                  && [ "$(printf '%s\n' "${actions}" | jq -rs '[.[] | select(.status == "in progress")] | length')" = 0 ]; then
+                  idle=1
+                  break
+                fi
                 sleep 5
               done
+              if [ -z "${idle}" ]; then
+                echo "clickhouse-backup sidecar at ${api} did not become idle" >&2
+                exit 1
+              fi
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
                 prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
                 target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
