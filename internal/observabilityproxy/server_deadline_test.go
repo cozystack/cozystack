@@ -361,12 +361,12 @@ func TestServerMetricsRequestLifetime(t *testing.T) {
 		pipe := servePipe(t, h.server)
 		conn := pipe.send(t, "POST "+metricsRoot+"api/v1/query HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n"+
 			"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nquery=")
-		eventually(t, time.Second, func() bool {
-			return h.status(http.MethodGet, query, "good") == http.StatusTooManyRequests
-		}, "a metrics request with an unfinished body does not hold a concurrency slot")
+		eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 },
+			"a metrics request with an unfinished body does not hold a concurrency slot")
 		if resp := readResponse(t, conn); resp.StatusCode != http.StatusRequestTimeout {
 			t.Fatalf("unfinished body answered %d, want 408", resp.StatusCode)
 		}
+		eventually(t, time.Second, func() bool { return slotsHeld(h) == 0 }, "the slot of an unfinished body was not released")
 	})
 	t.Run("stalled client", func(t *testing.T) {
 		// Larger than the server's write buffer, so the handler itself
@@ -378,12 +378,9 @@ func TestServerMetricsRequestLifetime(t *testing.T) {
 		}, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, big) })
 		pipe := servePipe(t, h.server)
 		pipe.send(t, "GET "+query+" HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
-		eventually(t, time.Second, func() bool {
-			return h.status(http.MethodGet, query, "good") == http.StatusTooManyRequests
-		}, "the stalled metrics request never held its slot")
-		eventually(t, 2*time.Second, func() bool {
-			return h.status(http.MethodGet, query, "good") == http.StatusOK
-		}, "a metrics client that stopped reading keeps its concurrency slot")
+		eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 }, "the stalled metrics request never held its slot")
+		eventually(t, 2*time.Second, func() bool { return slotsHeld(h) == 0 },
+			"a metrics client that stopped reading keeps its concurrency slot")
 	})
 	t.Run("truncated answer", func(t *testing.T) {
 		h := newHarness(t, Config{}, func(w http.ResponseWriter, _ *http.Request) {
