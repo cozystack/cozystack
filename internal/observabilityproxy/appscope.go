@@ -200,6 +200,8 @@ func lookupRefusal(label string, body io.Reader) *HTTPError {
 	case strings.Contains(answer.Error, "timeout exceeded"):
 		return errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", label)
 	default:
-		return errorf(http.StatusBadGateway, "the application's %s lookup failed: %s", label, answer.Error)
+		// The text may name vmstorage nodes, so it stays in the log.
+		slog.Warn("application lookup refused by the store", "label", label, "error", answer.Error)
+		return errorf(http.StatusBadGateway, "the application's %s lookup failed", label)
 	}
 }
