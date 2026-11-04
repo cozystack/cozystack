@@ -63,6 +63,24 @@ describe("mergeTail", () => {
     expect(out).toHaveLength(2)
   })
 
+  it("never deduplicates lines a pipe stripped of _stream_id, even on a resume", () => {
+    const t = "2026-01-01T00:00:02Z"
+    const buffer = [{ _time: t, _msg: "from stream 1" }]
+
+    const out = mergeTail(buffer, [{ _time: t, _msg: "from stream 2" }], 10, t)
+
+    expect(out.map((x) => x._msg)).toEqual(["from stream 1", "from stream 2"])
+  })
+
+  it("deduplicates only the complete rows of a mixed resume", () => {
+    const t = "2026-01-01T00:00:02Z"
+    const buffer = [e(t, "seen"), { _time: t, _msg: "no stream" }, { _stream_id: "s1", _msg: "no time" }]
+
+    const out = mergeTail(buffer, [e(t, "seen"), { _time: t, _msg: "no stream" }, { _stream_id: "s1", _msg: "no time" }], 10, t)
+
+    expect(out.map((x) => x._msg)).toEqual(["seen", "no stream", "no time", "no stream", "no time"])
+  })
+
   it("does not deduplicate outside a resume", () => {
     const out = mergeTail([e("t1", "a")], [e("t1", "a")], 10)
 

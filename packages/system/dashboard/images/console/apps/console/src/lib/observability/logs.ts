@@ -58,16 +58,21 @@ export function compareTime(a: string, b: string): number {
   return x < y ? -1 : x > y ? 1 : 0
 }
 
-const entryKey = (e: LogEntry) => `${e._stream_id ?? ""}\u0000${e._time}`
+// Null when a pipe removed either identity field: such a row cannot be told from another stream's.
+const entryKey = (e: LogEntry) =>
+  e._stream_id !== undefined && e._time !== undefined ? `${e._stream_id}\u0000${e._time}` : null
 
 // (_stream_id, _time) is not unique in VictoriaLogs, so dedup applies only to
-// lines a resumed tail replays at or before the resume point, and never to
-// lines a pipe stripped of _time.
+// lines a resumed tail replays at or before the resume point, and only to
+// lines that still carry both fields.
 export function mergeTail(buffer: LogEntry[], incoming: LogEntry[], cap: number, resumedFrom?: string): LogEntry[] {
   let fresh = incoming
   if (resumedFrom) {
-    const seen = new Set(buffer.map(entryKey))
-    fresh = incoming.filter((e) => e._time === undefined || compareTime(e._time, resumedFrom) > 0 || !seen.has(entryKey(e)))
+    const seen = new Set(buffer.map(entryKey).filter((k) => k !== null))
+    fresh = incoming.filter((e) => {
+      const key = entryKey(e)
+      return key === null || compareTime(e._time ?? "", resumedFrom) > 0 || !seen.has(key)
+    })
   }
   const merged = buffer.concat(fresh)
   return merged.length > cap ? merged.slice(merged.length - cap) : merged
