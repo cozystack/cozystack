@@ -1,0 +1,13 @@
+apiVersion: cozystack.io/v1alpha1
+kind: WorkerClass
+metadata:
+  name: talos
+spec:
+  bootstrap: talos
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkerClass
+metadata:
+  name: kairos
+spec:
+  bootstrap: kairos

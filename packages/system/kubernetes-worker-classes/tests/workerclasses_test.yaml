@@ -1,0 +1,19 @@
+suite: informational built-in classes
+templates:
+  - templates/workerclasses.yaml
+tests:
+  - it: ships only canonical family baselines
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: kind
+          value: WorkerClass
+      - equal:
+          path: spec.bootstrap
+          value: talos
+        documentIndex: 0
+      - equal:
+          path: spec.bootstrap
+          value: kairos
+        documentIndex: 1

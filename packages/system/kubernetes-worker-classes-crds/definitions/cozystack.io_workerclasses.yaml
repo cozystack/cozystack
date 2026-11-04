@@ -1,0 +1,211 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    helm.sh/resource-policy: keep
+  name: workerclasses.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: WorkerClass
+    listKind: WorkerClassList
+    plural: workerclasses
+    singular: workerclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bootstrap
+      name: Bootstrap
+      type: string
+    - jsonPath: .spec.image.kubernetesVersion
+      name: Kubernetes
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          WorkerClass supplies a worker bootstrap and image baseline. Only the
+          managed-Kubernetes package installs this kind and its controller.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: 'WorkerClassSpec is immutable: publish another class to change
+              its baseline.'
+            properties:
+              bootstrap:
+                description: Bootstrap is the family that joins the worker to its
+                  tenant control plane.
+                enum:
+                - talos
+                - kairos
+                type: string
+              image:
+                description: |-
+                  WorkerImage identifies a public Kairos container disk and the exact release
+                  its kubelet and kubeadm carry.
+                properties:
+                  kubernetesVersion:
+                    pattern: ^v[0-9]+\.[0-9]+\.[0-9]+$
+                    type: string
+                  reference:
+                    description: Reference carries no scheme or pull credential.
+                    maxLength: 512
+                    pattern: ^[^\s:/]+(:[0-9]+)?(/[^\s/]+)+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: reference must be pinned by sha256 digest
+                      rule: self.matches('@sha256:[0-9a-f]{64}$')
+                required:
+                - kubernetesVersion
+                - reference
+                type: object
+              kernelModules:
+                description: Nil inherits the automatic NVIDIA module rule; an empty
+                  list disables it.
+                items:
+                  properties:
+                    name:
+                      pattern: ^[a-z0-9_-]+$
+                      type: string
+                    parameters:
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - name
+                  type: object
+                type: array
+              substrates:
+                properties:
+                  kubevirt:
+                    properties:
+                      osImage:
+                        description: TalosImageSource selects one substrate image
+                          source.
+                        properties:
+                          builtin:
+                            description: |-
+                              BuiltinSource identifies a fixed golden image, so its compatibility is
+                              explicit rather than following a later chart default.
+                            properties:
+                              schematicID:
+                                pattern: ^[a-z0-9]+$
+                                type: string
+                              version:
+                                pattern: ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$
+                                type: string
+                            required:
+                            - schematicID
+                            - version
+                            type: object
+                          factory:
+                            description: |-
+                              FactorySource resolves its image from the effective Talos settings. It is
+                              not a declaration of fixed image bytes.
+                            properties:
+                              imageFactoryURL:
+                                type: string
+                              schematicID:
+                                type: string
+                              version:
+                                type: string
+                            type: object
+                        type: object
+                        x-kubernetes-validations:
+                        - message: select only one of factory or builtin
+                          rule: '!(has(self.factory) && has(self.builtin))'
+                    type: object
+                  proxmox:
+                    properties:
+                      templateTags:
+                        description: |-
+                          TemplateTags name the existing template, not an image import. Its Talos
+                          version and schematic are declared by the class's talos fields.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                    required:
+                    - templateTags
+                    type: object
+                type: object
+              talos:
+                description: |-
+                  TalosSettings are a baseline, not schema defaults on a pool. Pointers keep
+                  an omitted setting distinct from an explicitly empty one.
+                properties:
+                  imageFactoryCA:
+                    type: string
+                  imageFactoryURL:
+                    type: string
+                  installerRepository:
+                    type: string
+                  registryMirrors:
+                    additionalProperties:
+                      properties:
+                        endpoints:
+                          items:
+                            type: string
+                          maxItems: 32
+                          type: array
+                        overridePath:
+                          type: boolean
+                        skipFallback:
+                          type: boolean
+                      type: object
+                    description: RegistryMirrors is replaced as a unit by a pool's
+                      map; {} clears it.
+                    maxProperties: 64
+                    type: object
+                  schematicID:
+                    type: string
+                  version:
+                    type: string
+                type: object
+            required:
+            - bootstrap
+            type: object
+            x-kubernetes-validations:
+            - message: spec is immutable; create a new WorkerClass
+              rule: self == oldSelf
+            - message: image is allowed only with bootstrap kairos
+              rule: self.bootstrap == 'kairos' || !has(self.image)
+            - message: talos, kernelModules and substrates require bootstrap talos
+              rule: self.bootstrap == 'talos' || (!has(self.talos) && !has(self.kernelModules)
+                && !has(self.substrates))
+            - message: a fixed Proxmox template requires declared talos.version and
+                talos.schematicID
+              rule: '!has(self.substrates) || !has(self.substrates.proxmox) || (has(self.talos)
+                && has(self.talos.version) && has(self.talos.schematicID))'
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: built-in classes carry only bootstrap equal to their name
+          rule: '!(self.metadata.name in [''talos'', ''kairos'']) || (self.spec.bootstrap
+            == self.metadata.name && !has(self.spec.image) && !has(self.spec.talos)
+            && !has(self.spec.kernelModules) && !has(self.spec.substrates))'
+    served: true
+    storage: true
+    subresources: {}
