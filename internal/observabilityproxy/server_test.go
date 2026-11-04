@@ -488,8 +488,8 @@ func TestServerConcurrencyRetryAfter(t *testing.T) {
 		defer func() { _ = first.Body.Close() }()
 		second := h.do(http.MethodGet, logsRoot+endpoint, "good", nil, nil)
 		_ = second.Body.Close()
-		if second.StatusCode != http.StatusTooManyRequests || second.Header.Get("Retry-After") == "" {
-			t.Errorf("%s over the limit answered %d with Retry-After %q, want 429 with a value",
+		if second.StatusCode != http.StatusTooManyRequests || second.Header.Get("Retry-After") != "1" {
+			t.Errorf("%s over the limit answered %d with Retry-After %q, want 429 with 1",
 				endpoint, second.StatusCode, second.Header.Get("Retry-After"))
 		}
 	}

@@ -116,7 +116,7 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		code     int
 	}{
 		{"unknown endpoint", "tenant_ids", url.Values{}, http.StatusNotFound},
-		// vlselect reads fields_limit=0 as no limit on the groups.
+		// Malformed rather than a request for the default.
 		{"empty fields_limit", "hits", url.Values{"field": {"level"}, "fields_limit": {""}}, http.StatusBadRequest},
 		{"stats_query is not proxied", "stats_query", url.Values{}, http.StatusNotFound},
 		{"ignore_global_time_filter", "query", url.Values{"query": {`* options(ignore_global_time_filter=true)`}}, http.StatusBadRequest},
