@@ -300,8 +300,8 @@ func (s *Server) readForm(w http.ResponseWriter, r *http.Request) *HTTPError {
 }
 
 func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
+	scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
 		return "", errorf(http.StatusUnauthorized, "missing bearer token")
 	}
 	user, err := s.auth.Authenticate(r.Context(), strings.TrimSpace(token))
