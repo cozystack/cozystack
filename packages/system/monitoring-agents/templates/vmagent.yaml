@@ -26,7 +26,8 @@ spec:
   # copy then collides, is renamed to exported_* and dropped. Under
   # honorLabels true the exporter's copy wins, so such a scrape must drop
   # these labels itself. A scrape object's own relabel rules run after these
-  # and must leave the labels alone. The placeholder is removed before storage.
+  # and must leave the labels alone. The placeholder is removed by the
+  # remote-write relabeling below.
   scrapeClasses:
   - name: application-identity
     default: true
@@ -41,12 +42,15 @@ spec:
     metricRelabelConfigs:
     - action: labeldrop
       regex: (exported_)+apps_cozystack_io_application_(group|kind|name)
-    {{- range list "group" "kind" "name" }}
-    - sourceLabels: [apps_cozystack_io_application_{{ . }}]
-      regex: "-"
-      targetLabel: apps_cozystack_io_application_{{ . }}
-      replacement: ""
-    {{- end }}
+  # Not in metricRelabelConfigs: vmagent adds up and scrape_* after metric
+  # relabeling, so the placeholder would stay on those series.
+  inlineRelabelConfig:
+  {{- range list "group" "kind" "name" }}
+  - sourceLabels: [apps_cozystack_io_application_{{ . }}]
+    regex: "-"
+    targetLabel: apps_cozystack_io_application_{{ . }}
+    replacement: ""
+  {{- end }}
   additionalScrapeConfigs:
     name: additional-scrape-configs
     key: prometheus-additional.yaml

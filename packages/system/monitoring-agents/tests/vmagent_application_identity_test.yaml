@@ -46,13 +46,23 @@ tests:
               regex: (.+)
               targetLabel: apps_cozystack_io_application_name
 
-  - it: an exporter-supplied identity is dropped and the placeholder never reaches storage
+  - it: an exporter-supplied identity is dropped
     asserts:
       - equal:
           path: spec.scrapeClasses[0].metricRelabelConfigs
           value:
             - action: labeldrop
               regex: (exported_)+apps_cozystack_io_application_(group|kind|name)
+
+  # vmagent adds up and scrape_* after metric relabeling (VictoriaMetrics
+  # lib/promscrape addAutoMetrics calls addRows with needRelabel false), so a
+  # placeholder removed there would stay on those series of every target
+  # without lineage. The remote-write relabeling sees every series.
+  - it: the placeholder is removed from every series, including up and scrape_*
+    asserts:
+      - equal:
+          path: spec.inlineRelabelConfig
+          value:
             - sourceLabels: [apps_cozystack_io_application_group]
               regex: "-"
               targetLabel: apps_cozystack_io_application_group
