@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -108,6 +109,10 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--logs-max-tail-resume must not be negative")
 	case o.requestTimeout < 0 || o.tailIdleTimeout < 0 || o.authCacheTTL < 0 || o.shutdownTimeout < 0:
 		return o, errors.New("timeouts and the auth cache TTL must not be negative")
+	// NaN passes every comparison and +Inf never empties a bucket; either
+	// would switch the rate limit off without saying so.
+	case math.IsNaN(o.limiter.RatePerUser) || math.IsInf(o.limiter.RatePerUser, 0):
+		return o, errors.New("--rate-limit-per-user must be a finite number")
 	case o.limiter.RatePerUser < 0 || o.limiter.RateBurst < 0 || o.limiter.MaxConcurrentPerUser < 0 ||
 		o.limiter.MaxTailsPerUser < 0 || o.limiter.MaxTails < 0:
 		return o, errors.New("limits must not be negative; 0 disables a limit")
