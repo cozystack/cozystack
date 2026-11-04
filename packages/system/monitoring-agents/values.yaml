@@ -6,9 +6,10 @@ kube-state-metrics:
   # 322 pods and roughly 25.6k series, which is the smallest cluster we run. The
   # request sits above the 176Mi mean rather than at the peak, and the limit
   # carries wide headroom on purpose: this component's memory scales with the
-  # number of objects in the cluster, and --metric-labels-allowlist below widens
-  # every pod and deployment series further, so a cluster larger than the one
-  # measured will land well above the peak seen here.
+  # number of objects in the cluster, and --metric-labels-allowlist below copies
+  # every label of each pod, deployment and PVC onto its kube_*_labels series,
+  # so a cluster larger than the one measured will land well above the peak
+  # seen here.
   # 2Gi is 6.7x that peak, so scaling linearly with object count it stays a
   # ceiling rather than a bound up to roughly 2100 pods and 170k series.
   #
@@ -27,7 +28,12 @@ kube-state-metrics:
     limits:
       memory: 2Gi
   extraArgs:
-    - --metric-labels-allowlist=pods=[*],deployments=[*]
+    # PVCs are listed so the tenant metrics API can find an application's PVCs
+    # in kube_persistentvolumeclaim_labels by their apps.cozystack.io/application.*
+    # lineage labels. kube-state-metrics emits that metric only for resources on
+    # this list, one series per PVC; naming only the lineage keys would emit the
+    # same number of series.
+    - --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]
   rbac:
     extraRules:
       - apiGroups:
