@@ -64,15 +64,16 @@ func normalize(t *testing.T, s *structuralschema.Structural, spec string) ([]str
 func TestNormalizeSpecNulls_RequiredFields(t *testing.T) {
 	s := kubernetesSpecSchema(t)
 
-	paths, got := normalize(t, s, `{"host":"k8s","talos":{"registryMirrors":null,"version":null,"imageFactoryURL":"https://factory.example.invalid"}}`)
+	paths, got := normalize(t, s, `{"host":"k8s","addons":{"cilium":{"valuesOverride":null}},"talos":{"version":null}}`)
 
-	want := []string{"talos.registryMirrors", "talos.version"}
+	want := []string{"addons.cilium.valuesOverride", "talos.version"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Errorf("stripped paths = %v, want %v", paths, want)
 	}
 	wantSpec := map[string]any{
-		"host":  "k8s",
-		"talos": map[string]any{"imageFactoryURL": "https://factory.example.invalid"},
+		"host":   "k8s",
+		"addons": map[string]any{"cilium": map[string]any{}},
+		"talos":  map[string]any{},
 	}
 	if !reflect.DeepEqual(got, wantSpec) {
 		t.Errorf("normalized spec = %v, want %v", got, wantSpec)
@@ -96,20 +97,20 @@ func TestNormalizeSpecNulls_OptionalFieldsUntouched(t *testing.T) {
 }
 
 // TestNormalizeSpecNulls_FreeFormSubtreeUntouched pins the boundary: inside
-// registryMirrors the keys are registry hostnames the user invents, and the
+// addons.cilium.valuesOverride the keys are Helm values the user invents, and the
 // schema declares nothing there. A null in that position may be the payload, so
 // it is left exactly as written rather than guessed at.
 func TestNormalizeSpecNulls_FreeFormSubtreeUntouched(t *testing.T) {
 	s := kubernetesSpecSchema(t)
 
-	paths, got := normalize(t, s, `{"talos":{"registryMirrors":{"ghcr.io":null}}}`)
+	paths, got := normalize(t, s, `{"addons":{"cilium":{"valuesOverride":{"ghcr.io":null}}}}`)
 
 	if len(paths) != 0 {
 		t.Errorf("stripped paths = %v, want none", paths)
 	}
-	mirrors := got["talos"].(map[string]any)["registryMirrors"].(map[string]any)
-	if _, ok := mirrors["ghcr.io"]; !ok {
-		t.Errorf("free-form key ghcr.io was dropped: %v", mirrors)
+	overrides := got["addons"].(map[string]any)["cilium"].(map[string]any)["valuesOverride"].(map[string]any)
+	if _, ok := overrides["ghcr.io"]; !ok {
+		t.Errorf("free-form key ghcr.io was dropped: %v", overrides)
 	}
 }
 
@@ -143,12 +144,12 @@ func TestNormalizeSpecNulls_NoDefaultOrUserCollection(t *testing.T) {
 }
 
 func TestNormalizeSpecNulls_PreservesOtherValuesExactly(t *testing.T) {
-	app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(`{"talos":{"registryMirrors":null},"large":9007199254740993,"negative":-9007199254740993,"text":"null","bool":false,"empty":[],"object":{}}`)}}
+	app := &appsv1alpha1.Application{Spec: &apiextv1.JSON{Raw: []byte(`{"addons":{"cilium":{"valuesOverride":null}},"large":9007199254740993,"negative":-9007199254740993,"text":"null","bool":false,"empty":[],"object":{}}`)}}
 	r := &REST{specSchema: kubernetesSpecSchema(t)}
 	if _, err := r.normalizeSpecNulls(app); err != nil {
 		t.Fatal(err)
 	}
-	if string(app.Spec.Raw) != `{"bool":false,"empty":[],"large":9007199254740993,"negative":-9007199254740993,"object":{},"talos":{},"text":"null"}` {
+	if string(app.Spec.Raw) != `{"addons":{"cilium":{}},"bool":false,"empty":[],"large":9007199254740993,"negative":-9007199254740993,"object":{},"text":"null"}` {
 		t.Fatalf("unrelated values changed: %s", app.Spec.Raw)
 	}
 }
@@ -182,8 +183,8 @@ func TestNormalizeSpecNulls_NoSchemaOrNoNulls(t *testing.T) {
 }
 
 func TestEmptyFieldsWarning(t *testing.T) {
-	short := emptyFieldsWarning([]string{"talos.version", "talos.registryMirrors"})
-	if !strings.Contains(short, "talos.version, talos.registryMirrors") ||
+	short := emptyFieldsWarning([]string{"talos.version", "addons.cilium.valuesOverride"})
+	if !strings.Contains(short, "talos.version, addons.cilium.valuesOverride") ||
 		!strings.Contains(short, "the chart default applies") {
 		t.Errorf("unexpected warning: %q", short)
 	}
