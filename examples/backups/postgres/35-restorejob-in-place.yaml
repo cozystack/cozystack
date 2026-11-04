@@ -6,7 +6,7 @@
 # recovery, same as the to-copy variant in 45-restorejob-pitr.yaml (which the
 # e2e drives with a real, in-window timestamp). Uncomment and set a timestamp
 # inside your recoverable window - see 45-restorejob-pitr.yaml and
-# docs/operations/backup-classes.md ("Point-in-time recovery") for how to find
+# https://cozystack.io/docs/v1/operations/services/backup-classes/ ("Point-in-time recovery") for how to find
 # the earliest/latest restorable time.
 ---
 apiVersion: backups.cozystack.io/v1alpha1

@@ -133,11 +133,17 @@ truststores: []
 # Project: https://github.com/cozystack/keycloak-kms-proxy
 #
 # OPERATIONAL CAVEATS — read before enabling:
-#   * Availability downgrade. The proxy runs as a single replica (HA needs a
-#     shared wrapped DEK set, tracked as a follow-up). Keycloak itself runs HA
-#     (2 replicas); with encryption on, both replicas funnel their DB traffic
-#     through this one pod, so any proxy restart — node drain, rollout, image
-#     pull, OOM — briefly drops the database connection for the entire IdP.
+#   * Availability downgrade. The proxy runs as a single replica by default.
+#     Keycloak itself runs HA (2 replicas); with encryption on, both replicas
+#     funnel their DB traffic through this one pod, so any proxy restart — node
+#     drain, rollout, image pull, OOM — briefly drops the database connection
+#     for the entire IdP. Set encryption.replicas to run more than one.
+#   * A persistent DEK set is required. Unless fields is "disabled", the chart
+#     refuses to render without deksetSecretName: without it the proxy would
+#     mint a new DEK on every start and lose access to everything it encrypted
+#     before a restart. With kms.backend=static, deploy once with
+#     fields: disabled (passthrough) so the KEK Secret exists, mint the DEK set
+#     with that KEK, then set deksetSecretName and switch fields on.
 #   * Existing data is NOT migrated automatically. Flipping enabled:true on a
 #     populated database leaves the pre-existing PII as plaintext; logins that
 #     match on the deterministic columns (username/email) then fail until the
@@ -151,7 +157,11 @@ truststores: []
 #     (in etcd, next to the DB credentials — "static" trades some at-rest
 #     protection for zero external dependencies). If that Secret is ever lost,
 #     every previously-encrypted value becomes permanently undecryptable, so it
-#     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
+#     MUST be part of the backup set. Helm keeps the Secret when encryption is
+#     disabled or the package is removed, and the next install reuses it; delete
+#     it by hand only once nothing encrypted under it is left. A stored value
+#     the proxy cannot use fails the render instead of being replaced. For
+#     production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
   image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.3@sha256:6ad52ca209b31afe0fb118ca5c2ada418ec22c16a20c5153003c954d9bb54e8e
@@ -170,10 +180,10 @@ encryption:
   affinity: {}
   topologySpreadConstraints: []
   # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
-  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
-  # an existing populated database — the proxy must reuse the DEK the backfill
-  # encrypted rows with — and to run more than one replica. When empty the proxy
-  # mints an ephemeral DEK at startup, which is only safe on a fresh, empty DB.
+  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED unless
+  # fields is "disabled": the proxy must load the same DEKs on every start to
+  # read what it encrypted before, and the backfill and every replica must
+  # share them. Back it up together with the KEK.
   deksetSecretName: ""
   deksetSecretKey: dekset.json
   kms:

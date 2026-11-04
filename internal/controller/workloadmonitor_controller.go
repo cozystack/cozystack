@@ -587,6 +587,59 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	return result, nil
 }
 
+// bucketWorkloadName names the Workload of a BucketClaim. A Bucket application
+// names its claim after its release, which already starts with "bucket-", so
+// the prefix is added only when the claim name does not carry it.
+func bucketWorkloadName(claimName string) string {
+	if strings.HasPrefix(claimName, "bucket-") {
+		return claimName
+	}
+	return "bucket-" + claimName
+}
+
+func ownedBy(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	for _, ref := range w.OwnerReferences {
+		if ref.UID == bc.UID {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedBySomeoneElse reports whether w has owners and bc is not one of them.
+func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	return len(w.OwnerReferences) > 0 && !ownedBy(w, bc)
+}
+
+// heldBySomeoneElse reports whether the Workload called name exists and has
+// owners other than bc.
+func (r *WorkloadMonitorReconciler) heldBySomeoneElse(ctx context.Context, bc *cosiv1alpha1.BucketClaim, name string) (bool, error) {
+	w := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, w); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return ownedBySomeoneElse(w, bc), nil
+}
+
+// legacyBucketWorkload returns the Workload a previous version created for bc
+// under the unconditionally prefixed name, if it is still there and either bc
+// is among its owners or it has lost every owner (a claim deleted with
+// --cascade=orphan and recreated) while still carrying monitor's label.
+func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
+	name := "bucket-" + bc.Name
+	if name == bucketWorkloadName(bc.Name) {
+		return nil, nil
+	}
+	legacy := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, legacy); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if ownedBy(legacy, bc) || (len(legacy.OwnerReferences) == 0 && legacy.Labels[workloadMonitorLabel] == monitor.Name) {
+		return legacy, nil
+	}
+	return nil, nil
+}
+
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
 func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
@@ -595,16 +648,68 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	allMetrics map[string]*bucketMetrics,
 ) error {
 	logger := log.FromContext(ctx)
+
+	// The name may be held by another owner's Workload: Bucket applications
+	// "x" and "bucket-x" make the legacy name of the first the new name of the
+	// second, and a claim "x" outside the Bucket application maps to the same
+	// name as the application "x". Adopting it would meter this bucket with
+	// the other one's size. Keep metering the bucket under its legacy name
+	// until the new one is free, and skip the bucket only when that name is
+	// held as well.
+	name := bucketWorkloadName(bc.Name)
+	migrate := true
+	held, err := r.heldBySomeoneElse(ctx, &bc, name)
+	if err != nil {
+		return err
+	}
+	if held {
+		legacyName := "bucket-" + bc.Name
+		legacyHeld := legacyName == name
+		if !legacyHeld {
+			if legacyHeld, err = r.heldBySomeoneElse(ctx, &bc, legacyName); err != nil {
+				return err
+			}
+		}
+		if legacyHeld {
+			logger.Info("Workload name is held by another owner; not adopting it", "workload", name, "bucketClaim", bc.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+					"Workload %s for BucketClaim %s is owned by another object; the bucket is not metered", name, bc.Name)
+			}
+			return nil
+		}
+		logger.Info("Workload name is held by another owner; keeping the legacy name", "workload", name, "legacy", legacyName, "bucketClaim", bc.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+				"Workload %s for BucketClaim %s is owned by another object; metering the bucket as %s until it is free", name, bc.Name, legacyName)
+		}
+		name, migrate = legacyName, false
+	}
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("bucket-%s", bc.Name),
+			Name:      name,
 			Namespace: bc.Namespace,
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
 
+	var legacy *cozyv1alpha1.Workload
+	if migrate {
+		if legacy, err = r.legacyBucketWorkload(ctx, monitor, &bc); err != nil {
+			return err
+		}
+	}
+	// A legacy Workload with other owners is another bucket's renamed one that
+	// a rolled-back controller also attached bc to: neither its sizes nor the
+	// object are bc's to take. An ownerless one is removed, but its sizes may
+	// be older than the claim it is recognised for.
+	soleLegacy := legacy != nil && len(legacy.OwnerReferences) == 1
+	orphanLegacy := legacy != nil && len(legacy.OwnerReferences) == 0
+
 	monitorLabels := r.getMonitorLabels(monitor)
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+		// sizes on a Workload bc did not own yet were not written for it
+		ownedBefore := ownedBy(workload, &bc)
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
@@ -628,11 +733,17 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
 		// the last known good values must survive rather than collapse to
-		// "no size", which billing would read as an empty bucket.
+		// "no size", which billing would read as an empty bucket. A Workload
+		// renamed from its legacy name starts from the legacy sizes, so the
+		// rename leaves no gap in the bucket's metered size.
 		resources := make(map[string]resource.Quantity)
 		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
-			if q, ok := workload.Status.Resources[key]; ok {
+			if q, ok := workload.Status.Resources[key]; ok && (ownedBefore || !soleLegacy) {
 				resources[key] = q
+			} else if soleLegacy {
+				if q, ok := legacy.Status.Resources[key]; ok {
+					resources[key] = q
+				}
 			}
 		}
 
@@ -657,6 +768,29 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	})
 	if err != nil {
 		logger.Error(err, "Failed to CreateOrUpdate Workload", "workload", workload.Name)
+		return err
+	}
+
+	// Billing reads every Workload as a consumer, so the legacy one must go
+	// once its replacement exists, or the bucket is metered twice. The
+	// preconditions delete only the object that was checked, not one that
+	// took over the name since the lookup; a conflict is retried next pass.
+	switch {
+	case soleLegacy || orphanLegacy:
+		err = r.Delete(ctx, legacy, client.Preconditions{UID: &legacy.UID, ResourceVersion: &legacy.ResourceVersion})
+	case legacy != nil:
+		orig := legacy.DeepCopy()
+		owners := legacy.OwnerReferences[:0]
+		for _, ref := range legacy.OwnerReferences {
+			if ref.UID != bc.UID {
+				owners = append(owners, ref)
+			}
+		}
+		legacy.OwnerReferences = owners
+		err = r.Patch(ctx, legacy, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+	}
+	if client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+		logger.Error(err, "Failed to release legacy bucket Workload", "workload", legacy.Name)
 		return err
 	}
 

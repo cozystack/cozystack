@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -533,5 +534,222 @@ func TestReconcileBlocksNameCollision(t *testing.T) {
 	}
 	if ps.GetLabels()[tapconst.Label] == "true" {
 		t.Error("the collision check must not overwrite the foreign PackageSource")
+	}
+}
+
+// A tag-following tap source must be pinned to the digest Flux resolved, so it
+// stops following a moved tag. The manifest digest is the part of the artifact
+// revision after '@' (source-controller formats an OCI tag revision as
+// '<tag>@<digest>').
+func TestReconcilePinsDigestFromTagRevision(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Digest != manifest {
+		t.Fatalf("expected ref.digest pinned to %q, got %+v", manifest, got.Spec.Reference)
+	}
+	if got.Spec.Reference.Tag != "v1" {
+		t.Errorf("tag must stay informational, got %q", got.Spec.Reference.Tag)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != manifest {
+		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
+	}
+}
+
+// A user-supplied explicit digest (ref.digest set with no operator pin
+// annotation) must never be rewritten by the operator: the operator pins only
+// tag-following sources.
+func TestReconcileDoesNotRepinUserDigest(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	userDigest := "sha256:" + strings.Repeat("c", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Digest: userDigest}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	// A digest-pinned source reports its revision as the bare digest.
+	setArtifact(t, cl, digest, userDigest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != userDigest {
+		t.Errorf("a user-supplied digest must be left as is, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("the operator must not claim a user-supplied digest as its own pin, got %v", got.Annotations)
+	}
+}
+
+// Once pinned, the source reports its revision as the bare digest; a further
+// reconcile must keep the same pin rather than thrash it.
+func TestReconcilePinIsIdempotent(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	// Flux re-resolves by digest now and reports the bare-digest revision.
+	setArtifact(t, cl, digest, manifest)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != manifest {
+		t.Errorf("pin must be stable, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != manifest {
+		t.Errorf("expected materialized revision stamped to the bare digest, got %q", got.Annotations[tapconst.MaterializedRevisionAnnotation])
+	}
+}
+
+// On a re-connect to a new tag, status.artifact still describes the previous
+// tag's content until source-controller re-resolves. The reconciler must not
+// materialize and pin that stale revision (issue #4979): spec.ref.Tag is v2 but
+// the revision is still v1@<digest>, so nothing is pinned until the revision
+// belongs to the tag now followed.
+func TestReconcileDoesNotPinStaleArtifactOnReconnect(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	oldManifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v2"} // re-connect cleared the pin, requested v2
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+oldManifest) // still the old tag's revision
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != "" {
+		t.Errorf("must not pin the previous tag's digest while the artifact is stale, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("must not record a pin from a stale artifact, got %v", got.Annotations)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != "" {
+		t.Errorf("must not stamp a revision from a stale artifact, got %v", got.Annotations)
+	}
+}
+
+// A tap materialized before digest pinning existed already has its
+// materialized-revision equal to the artifact revision, so Reconcile would
+// short-circuit. It must still pin the current digest before that early return,
+// so moving the tag upstream does not pull new content on the next revision
+// (issue #4979).
+func TestReconcilePinsPreUpgradeTapBeforeEarlyReturn(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("b", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"} // tag-only, never pinned
+	repo.Annotations = map[string]string{tapconst.MaterializedRevisionAnnotation: "v1@" + manifest}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Digest != manifest {
+		t.Fatalf("a pre-upgrade tap must be pinned to the current digest, got %+v", got.Spec.Reference)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != manifest {
+		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
+	}
+}
+
+// artifactReady must also wait when status.observedGeneration lags
+// metadata.generation: the artifact may still describe the spec from before the
+// current re-connect, so pinning from it would pin stale content even when the
+// revision happens to match the tag. This isolates the generation conjunct of the
+// gate (the revision here matches the tag, so only the generation check can block).
+func TestReconcileWaitsWhenObservedGenerationLags(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("d", 64)
+	repo := tapRepo(true)
+	repo.Generation = 2 // spec advanced by a re-connect
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: "v1@" + manifest}
+	live.Status.ObservedGeneration = 1 // source-controller has not caught up to generation 2
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != "" {
+		t.Errorf("must not pin while observedGeneration lags generation, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("must not record a pin while observedGeneration lags, got %v", got.Annotations)
 	}
 }

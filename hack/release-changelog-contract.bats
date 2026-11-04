@@ -26,6 +26,8 @@
 #   1. open-pr survives a failed changelog job (the non-blocking guarantee).
 #   2. The AI step is the ONLY thing allowed to fail silently.
 #   3. finalize reads the changelog file as the release body.
+#   3b. finalize and update-releasenotes share the 100000-byte body limit, and
+#      the sync fires on the release notes too.
 #   4. finalize refuses whitespace-only content rather than blanking the notes.
 #   5. The generator is pointed at a checkout state docs/agents/changelog.md
 #      actually permits.
@@ -85,6 +87,7 @@ GENERATE="$REPO_ROOT/.github/workflows/changelog-generate.yaml"
 RC_WRAPPER="$REPO_ROOT/.github/workflows/changelog-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 TAGS="$REPO_ROOT/.github/workflows/tags.yaml"
+SYNC="$REPO_ROOT/.github/workflows/update-releasenotes.yaml"
 CHANGELOG_DOC="$REPO_ROOT/docs/agents/changelog.md"
 
 # Body of a single top-level job block in a workflow file, from `  <name>:` up to
@@ -205,6 +208,31 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "finalize's updateRelease call no longer conditionally spreads { body }." >&2
     exit 1
   }
+}
+
+# 3b. finalize publishes a link in place of a body over the limit, because the
+#     tags exist by then; the sync leaves such a body alone. Both read the same
+#     constant, and what each does with it is executed in
+#     hack/release-changelog-behaviour.bats. The sync must also fire when only
+#     the release notes change, or editing them on main reaches no release.
+@test "finalize and update-releasenotes share the 100000-byte body limit, and the sync fires on the release notes" {
+  for f in "$FINALIZE" "$SYNC"; do
+    grep -qE '^[[:space:]]*const MAX_BODY_BYTES = 100000;' "$f" || {
+      echo "$(basename "$f") no longer declares const MAX_BODY_BYTES = 100000 on a code line." >&2
+      exit 1
+    }
+    if grep -q 'release-body\.sh' "$f"; then
+      echo "$(basename "$f") mentions hack/release-body.sh, which no longer exists." >&2
+      false
+    fi
+  done
+  paths="$(yq '.on.push.paths[]' "$SYNC")"
+  for p in 'docs/changelogs/v*.md' 'docs/releasenotes/v*.md'; do
+    printf '%s\n' "$paths" | grep -qxF "$p" || {
+      echo "update-releasenotes no longer fires on pushes touching $p." >&2
+      exit 1
+    }
+  done
 }
 
 # 4. A whitespace-only file is worse than no file: it would blank the release
