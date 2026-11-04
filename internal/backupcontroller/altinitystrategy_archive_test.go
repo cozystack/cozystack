@@ -70,22 +70,28 @@ func runningAltinityBackupJob() *backupsv1alpha1.BackupJob {
 	}
 }
 
-func completedAltinityK8sJob(j *backupsv1alpha1.BackupJob) *batchv1.Job {
-	return &batchv1.Job{
+// completedAltinityK8sJob is a finished backup Job whose Pod was given
+// archive as its archive name, or no name at all when archive is empty.
+func completedAltinityK8sJob(j *backupsv1alpha1.BackupJob, archive string) *batchv1.Job {
+	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobNameForBackupJob(j), Namespace: j.Namespace},
 		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
 			{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
 		}},
 	}
+	if archive != "" {
+		job.Spec.Template.Spec.Containers = []corev1.Container{{Name: "c", Args: []string{"--archive=" + archive}}}
+	}
+	return job
 }
 
 // completeAltinityBackup drives a BackupJob whose batch Job already completed
 // through reconcileAltinity and returns the Backup it produced.
-func completeAltinityBackup(t *testing.T, app *unstructured.Unstructured, strategy *strategyv1alpha1.Altinity) *backupsv1alpha1.Backup {
+func completeAltinityBackup(t *testing.T, app *unstructured.Unstructured, strategy *strategyv1alpha1.Altinity, jobArchive string) *backupsv1alpha1.Backup {
 	t.Helper()
 	bj := runningAltinityBackupJob()
 	r, _, _ := newAltinityTestEnv(t, app,
-		clientfake.NewClientBuilder().WithObjects(bj, strategy, completedAltinityK8sJob(bj)))
+		clientfake.NewClientBuilder().WithObjects(bj, strategy, completedAltinityK8sJob(bj, jobArchive)))
 	ctx := context.Background()
 	if _, err := r.reconcileAltinity(ctx, bj, altinityResolved(strategy.Name)); err != nil {
 		t.Fatalf("reconcileAltinity: %v", err)
@@ -121,7 +127,7 @@ func TestReconcileAltinity_RendersDriverMintedArchiveName(t *testing.T) {
 
 func TestReconcileAltinity_RecordsArchiveNameAndSystemBucketFlow(t *testing.T) {
 	app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
-	got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"))
+	got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"), "clickhouse-ch-test-test-bj-0f1e2d3c")
 	if v := got.Spec.DriverMetadata[altinityArchiveNameKey]; v != "clickhouse-ch-test-test-bj-0f1e2d3c" {
 		t.Errorf("driverMetadata[%s] = %q, want clickhouse-ch-test-test-bj-0f1e2d3c", altinityArchiveNameKey, v)
 	}
@@ -136,7 +142,7 @@ func TestReconcileAltinity_RecordsLegacyBucketFlow(t *testing.T) {
 		"unset":          newAltinityClickHouseApp("ch-test", "tenant-test"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"))
+			got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"), "clickhouse-ch-test-test-bj-0f1e2d3c")
 			if v := got.Spec.DriverMetadata[altinityUseSystemBucketKey]; v != "false" {
 				t.Errorf("driverMetadata[%s] = %q, want false", altinityUseSystemBucketKey, v)
 			}
@@ -149,9 +155,20 @@ func TestReconcileAltinity_RecordsLegacyBucketFlow(t *testing.T) {
 // not exist.
 func TestReconcileAltinity_DoesNotRecordArchiveNameTheTemplateIgnores(t *testing.T) {
 	app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
-	got := completeAltinityBackup(t, app, newAltinityStrategy("clickhouse-strategy"))
+	got := completeAltinityBackup(t, app, newAltinityStrategy("clickhouse-strategy"), "")
 	if v, ok := got.Spec.DriverMetadata[altinityArchiveNameKey]; ok {
 		t.Errorf("driverMetadata[%s] = %q recorded for a template that does not use it", altinityArchiveNameKey, v)
+	}
+}
+
+// What the Pod ran decides, not the strategy as it reads at completion: a Job
+// rendered from a template predating .ArchiveName (a backup in flight across
+// the upgrade) named its archive from the clock.
+func TestReconcileAltinity_DoesNotRecordArchiveNameTheJobDidNotRun(t *testing.T) {
+	app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
+	got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"), "")
+	if v, ok := got.Spec.DriverMetadata[altinityArchiveNameKey]; ok {
+		t.Errorf("driverMetadata[%s] = %q recorded for a Job that never received it", altinityArchiveNameKey, v)
 	}
 }
 
@@ -189,7 +206,7 @@ func TestReconcileAltinity_FailsOnMalformedUseSystemBucket(t *testing.T) {
 	bj := runningAltinityBackupJob()
 	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
 	r, _, _ := newAltinityTestEnv(t, app,
-		clientfake.NewClientBuilder().WithObjects(bj, strategy, completedAltinityK8sJob(bj)))
+		clientfake.NewClientBuilder().WithObjects(bj, strategy, completedAltinityK8sJob(bj, "")))
 	ctx := context.Background()
 	if _, err := r.reconcileAltinity(ctx, bj, altinityResolved(strategy.Name)); err != nil {
 		t.Fatalf("reconcileAltinity: %v", err)
@@ -384,14 +401,16 @@ func TestBackupReconcile_HoldsFinalizerWhileAltinityCleanupRuns(t *testing.T) {
 	}
 }
 
+// ownCleanupJob is the cleanup Job this Backup's own cleanup would create.
+func ownCleanupJob(b *backupsv1alpha1.Backup) *batchv1.Job {
+	return buildAltinityCleanupJob(b.Namespace, b.Name+"-cleanup", "img", "host", "secret",
+		b.Spec.DriverMetadata[altinityArchiveNameKey])
+}
+
 func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
-	failed := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "ch-bk-cleanup", Namespace: "tenant-test"},
-		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
-			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
-		}},
-	}
+	failed := ownCleanupJob(backup)
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
 	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
 	rec := record.NewFakeRecorder(10)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
@@ -414,8 +433,7 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 
 func TestCleanupAltinityBackup_RunningJobRequeues(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
-	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ch-bk-cleanup", Namespace: "tenant-test"}}
-	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), running)...)
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), ownCleanupJob(backup))...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 	res, err := r.cleanupOnDelete(context.Background(), backup)
 	if err != nil {

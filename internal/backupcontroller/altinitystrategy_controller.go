@@ -109,15 +109,17 @@ func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
 	return "clickhouse-" + j.Spec.ApplicationRef.Name + "-" + j.Name + "-" + uid
 }
 
-// altinityTemplateUsesArchiveName reports whether a strategy template reads
-// .ArchiveName. A template that does not names its archive itself, and
-// recording the driver's name for it would point cleanup at nothing.
-func altinityTemplateUsesArchiveName(tmpl corev1.PodTemplateSpec) (bool, error) {
-	b, err := json.Marshal(tmpl)
+// altinityPodCarriesArchiveName reports whether the Pod a backup Job ran was
+// given the archive name. A Pod rendered from a template that does not read
+// .ArchiveName (a custom strategy, or a Job created before an upgrade) named
+// its archive itself, and recording the driver's name for it would point
+// cleanup at nothing.
+func altinityPodCarriesArchiveName(pod corev1.PodTemplateSpec, archive string) (bool, error) {
+	b, err := json.Marshal(pod)
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(string(b), ".ArchiveName"), nil
+	return strings.Contains(string(b), archive), nil
 }
 
 // backupParameters extracts BackupClassStrategy parameters from a Backup's
@@ -279,7 +281,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		archiveMD, err := altinityArchiveMetadata(strategy.Spec.Template, app, j)
+		archiveMD, err := altinityArchiveMetadata(batchJob.Spec.Template, app, j)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to record the archive: %v", err))
 		}
@@ -514,18 +516,19 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 // bucket flow the application wrote it to, read from the application spec at
 // backup time. Cleanup deletes the archive only on the system bucket flow; an
 // application on its own bucket keeps the archive's lifecycle.
-func altinityArchiveMetadata(tmpl corev1.PodTemplateSpec, app map[string]any, j *backupsv1alpha1.BackupJob) (map[string]string, error) {
+func altinityArchiveMetadata(pod corev1.PodTemplateSpec, app map[string]any, j *backupsv1alpha1.BackupJob) (map[string]string, error) {
 	useSystemBucket, _, err := unstructured.NestedBool(app, "spec", "backup", "useSystemBucket")
 	if err != nil {
 		return nil, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	md := map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)}
-	uses, err := altinityTemplateUsesArchiveName(tmpl)
+	archive := altinityArchiveName(j)
+	carries, err := altinityPodCarriesArchiveName(pod, archive)
 	if err != nil {
 		return nil, err
 	}
-	if uses {
-		md[altinityArchiveNameKey] = altinityArchiveName(j)
+	if carries {
+		md[altinityArchiveNameKey] = archive
 	}
 	return md, nil
 }
