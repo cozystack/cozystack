@@ -28,8 +28,9 @@ import (
 
 // MetricsLimits bound the window, resolution and timeout a metrics request
 // asks vmselect for. Windows and offsets inside the expression are not
-// limited here: they cannot read past the store's retention, and vmselect
-// caps the series and samples one query may touch.
+// limited here: they cannot read past the store's retention, vmselect caps
+// the series and samples one query may touch, and MaxTimeout bounds the
+// work of rollups over long overlapping windows.
 type MetricsLimits struct {
 	MaxRange   time.Duration
 	MaxPoints  int
