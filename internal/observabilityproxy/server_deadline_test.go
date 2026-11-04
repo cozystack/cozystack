@@ -82,6 +82,19 @@ func (l *pipeListener) send(t *testing.T, raw string) net.Conn {
 	return client
 }
 
+// slotsHeld counts the concurrency and tail slots in use. Tests watch it
+// instead of probing with requests of their own, which would compete for
+// the slot under test.
+func slotsHeld(h *harness) int {
+	h.server.limits.mu.Lock()
+	defer h.server.limits.mu.Unlock()
+	n := h.server.limits.total
+	for _, c := range h.server.limits.active {
+		n += c
+	}
+	return n
+}
+
 func eventually(t *testing.T, within time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -128,15 +141,13 @@ func TestServerSlowBodyHoldsSlotUntilDeadline(t *testing.T) {
 	conn := pipe.send(t, "POST "+logsRoot+"query HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n"+
 		"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nquery=")
 
-	eventually(t, time.Second, func() bool {
-		return h.status("GET", logsRoot+"query", "good") == http.StatusTooManyRequests
-	}, "a request with an unfinished body does not hold a concurrency slot")
+	eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 },
+		"a request with an unfinished body does not hold a concurrency slot")
 	if resp := readResponse(t, conn); resp.StatusCode != http.StatusRequestTimeout {
 		t.Fatalf("unfinished body answered %d, want 408", resp.StatusCode)
 	}
-	eventually(t, 2*time.Second, func() bool {
-		return h.status("GET", logsRoot+"query", "good") == http.StatusOK
-	}, "the slot of an unfinished body was not released")
+	eventually(t, 2*time.Second, func() bool { return slotsHeld(h) == 0 },
+		"the slot of an unfinished body was not released")
 }
 
 // TestServerStalledClientReleasesTail holds a tail whose client stops
@@ -174,12 +185,9 @@ func TestServerStalledClientReleasesQuery(t *testing.T) {
 	}, nil)
 	pipe := servePipe(t, h.server)
 	pipe.send(t, "GET "+logsRoot+"query?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
-	eventually(t, time.Second, func() bool {
-		return h.status("GET", logsRoot+"query", "good") == http.StatusTooManyRequests
-	}, "the stalled request never held its slot")
-	eventually(t, 2*time.Second, func() bool {
-		return h.status("GET", logsRoot+"query", "good") == http.StatusOK
-	}, "a client that stopped reading keeps its concurrency slot")
+	eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 }, "the stalled request never held its slot")
+	eventually(t, 2*time.Second, func() bool { return slotsHeld(h) == 0 },
+		"a client that stopped reading keeps its concurrency slot")
 }
 
 // TestServerActiveTailOutlivesWriteDeadline keeps a tail busy for several
@@ -268,11 +276,7 @@ func TestServerUndeliveredBodyReleasesSlot(t *testing.T) {
 			t.Cleanup(func() { close(done) })
 			pipe := servePipe(t, h.server)
 			conn := pipe.send(t, raw)
-			held := func() bool {
-				h.server.limits.mu.Lock()
-				defer h.server.limits.mu.Unlock()
-				return h.server.limits.active["alice"]+h.server.limits.total > 0
-			}
+			held := func() bool { return slotsHeld(h) > 0 }
 			eventually(t, time.Second, held, "the request never took a slot")
 			if resp := readResponse(t, conn); resp.StatusCode != http.StatusRequestTimeout {
 				t.Fatalf("undelivered body answered %d, want 408", resp.StatusCode)
@@ -332,11 +336,7 @@ func TestServerEarlyRefusalWithUnreadBody(t *testing.T) {
 				pipe := servePipe(t, h.server)
 				if tc.hold != "" {
 					pipe.send(t, "GET "+logsRoot+tc.hold+"?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
-					eventually(t, time.Second, func() bool {
-						h.server.limits.mu.Lock()
-						defer h.server.limits.mu.Unlock()
-						return h.server.limits.active["alice"]+h.server.limits.total == 1
-					}, "the first request never took its slot")
+					eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 }, "the first request never took its slot")
 				}
 				start := time.Now()
 				conn := pipe.send(t, tc.raw)
