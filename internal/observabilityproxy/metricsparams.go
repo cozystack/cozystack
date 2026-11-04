@@ -146,7 +146,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		}
 		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
 		req.from, req.to = at, at
-		if ahead, ok := queryLookahead(out.Get("query")); ok {
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
 			req.last = at.Add(ahead)
 		}
 		return req, nil
@@ -174,7 +174,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		req.start = queryStart(out.Get("query"), start, step)
 		req.from, req.to = start, end
 		// vmselect rounds end up to a whole step (AdjustStartEnd).
-		if ahead, ok := queryLookahead(out.Get("query")); ok {
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
 			req.last = end.Add(step + ahead)
 		}
 		out.Set("start", formatTime(start))

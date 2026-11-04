@@ -439,7 +439,9 @@ func TestQueryLookahead(t *testing.T) {
 		{`x offset 1h`, 0},
 		{`x offset -1h`, time.Hour},
 		{`x OFFSET - 90m`, 90 * time.Minute},
-		{`rate(x[5m] offset -30m) offset -1h`, 90 * time.Minute},
+		// Each "(" may be an implicit subquery, which vmselect evaluates
+		// up to two steps past its end; here the step is 1m.
+		{`rate(x[5m] offset -30m) offset -1h`, 92 * time.Minute},
 		{`x offset -1h + y offset 2h`, time.Hour},
 		{`node_offset_seconds - 1`, 0},
 		// metricsql lexes a duration as one token, so a sign with spaces,
@@ -451,7 +453,7 @@ func TestQueryLookahead(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
-			got, ok := queryLookahead(tt.query)
+			got, ok := queryLookahead(tt.query, time.Minute)
 			if !ok || got != tt.want {
 				t.Fatalf("queryLookahead = %s, %v; want %s", got, ok, tt.want)
 			}
@@ -481,8 +483,22 @@ func TestQueryLookahead(t *testing.T) {
 		`x offset -$__interval`,
 		`with (f(a) = a offset -1h) f(f(x))`,
 	} {
-		if got, ok := queryLookahead(q); ok {
+		if got, ok := queryLookahead(q, time.Minute); ok {
 			t.Errorf("queryLookahead(%q) = %s, want unknown", q, got)
+		}
+	}
+}
+
+// TestQueryLookaheadSubquery: vmselect evaluates a subquery up to its end
+// plus one subquery step, rounded up to the step (evalRollupFuncWithSubquery),
+// and range_last and the other range_* transforms copy the last of those
+// values back onto earlier points, so a series that starts after the
+// evaluation time can reach the answer.
+func TestQueryLookaheadSubquery(t *testing.T) {
+	for _, q := range []string{`max_over_time(range_last(x)[1h:1h])`, `max_over_time(keep_next_value(x)[1h:1h])`} {
+		got, ok := queryLookahead(q, time.Minute)
+		if !ok || got < 2*time.Hour {
+			t.Errorf("queryLookahead(%q) = %s, %v; want at least two subquery steps", q, got, ok)
 		}
 	}
 }
