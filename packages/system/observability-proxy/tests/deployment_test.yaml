@@ -1,7 +1,7 @@
 suite: observability-proxy Deployment
 # The flags, ports and pod label below are the contract the proxy binary, the
-# Service, the console nginx and the tenant egress policy are written against.
-# A rename on either side breaks routing without failing a render.
+# Service and the console nginx are written against. A rename on either side
+# breaks routing without failing a render.
 templates:
   - templates/deployment.yaml
 
@@ -10,7 +10,7 @@ release:
   namespace: cozy-observability-proxy
 
 tests:
-  - it: labels the pods with the name the tenant egress policy selects on
+  - it: labels the pods with the name the Service selects on
     asserts:
       - isKind:
           of: Deployment

@@ -1,7 +1,7 @@
 suite: observability-proxy Service
-# The console nginx proxies to observability-proxy.<ns>.svc on port 80 and the
-# tenant egress policy allows the pods' 8080, so the name, the port and the
-# selector are pinned here.
+# The console nginx proxies to observability-proxy.<ns>.svc on port 80, which
+# must reach the pods' 8080, so the name, the port and the selector are pinned
+# here.
 templates:
   - templates/service.yaml
 
