@@ -90,6 +90,10 @@ func (r *BackupJobReconciler) objectStore() objectStore {
 	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
 }
 
+func (r *RestoreJobReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
+}
+
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
 	return r.objectStore().lister(conn)
 }

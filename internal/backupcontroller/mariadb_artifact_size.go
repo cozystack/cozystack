@@ -60,21 +60,13 @@ func (r *BackupJobReconciler) attributedMariaDBDump(ctx context.Context, mdbBack
 // from can have been edited since, and pointing at another bucket now says
 // nothing about where this dump went.
 func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
-	s3 := mdbBackup.Spec.Storage.S3
-	if s3 == nil {
-		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
+	lister, s3, err := mariadbStorage(ctx, store, mdbBackup)
+	if err != nil {
+		return mariadbDump{}, err
 	}
 	others, err := finishedMariaDBRuns(ctx, store.reader, mdbBackup)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("list operator Backups: %w", err)
-	}
-	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
-	if err != nil {
-		return mariadbDump{}, fmt.Errorf("resolve S3 credentials: %w", err)
-	}
-	lister, err := store.lister(conn)
-	if err != nil {
-		return mariadbDump{}, fmt.Errorf("build S3 client: %w", err)
 	}
 	// Non-recursive, as mariadb-operator lists it: the default prefix is also
 	// the default CNPG destinationPath, so an app of each kind with the same
@@ -86,6 +78,44 @@ func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbt
 	}
 	own := newMariaDBRun(mdbBackup, mdbBackup.CreationTimestamp.Time, completedAt)
 	return matchMariaDBDump(objects, prefix, own, others)
+}
+
+// mariadbDumpExists reports whether the dump file name is still in the
+// storage mdbBackup wrote to.
+func mariadbDumpExists(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, name string) (bool, error) {
+	lister, s3, err := mariadbStorage(ctx, store, mdbBackup)
+	if err != nil {
+		return false, err
+	}
+	key := mariadbOperatorS3Prefix(s3.Prefix) + name
+	objects, err := lister.ListObjects(ctx, s3.Bucket, key, false)
+	if err != nil {
+		return false, fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, key, err)
+	}
+	for _, obj := range objects {
+		if obj.Key == key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// mariadbStorage opens the bucket mdbBackup wrote to, with the credentials
+// its own spec names.
+func mariadbStorage(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup) (s3ObjectLister, *mariadbtypes.S3Storage, error) {
+	s3 := mdbBackup.Spec.Storage.S3
+	if s3 == nil {
+		return nil, nil, errors.New("the operator Backup does not store to S3")
+	}
+	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve S3 credentials: %w", err)
+	}
+	lister, err := store.lister(conn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build S3 client: %w", err)
+	}
+	return lister, s3, nil
 }
 
 // mariadbRun is the span in which an operator Backup can have written its
