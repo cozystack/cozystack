@@ -222,9 +222,6 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 		// A failed lookup would leave the application's own series out of
 		// a successful answer, so it fails the request instead.
 		{name: "pod lookup fails", pods: []string{"p"}, pvcs: []string{"v"}, podStatus: http.StatusServiceUnavailable, path: "api/v1/query?query=up", wantCode: http.StatusBadGateway},
-		// vmselect refuses a lookup over its own series limits with 422;
-		// the client can act on that by narrowing the window.
-		{name: "pod lookup over the store's limits", pods: []string{"p"}, podStatus: http.StatusUnprocessableEntity, path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "pods over the cap", pods: []string{"p", "q"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "over the cap with an empty name", pods: []string{"", "p"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
@@ -446,6 +443,44 @@ func TestServerApplicationDefaultLookbackServesLongPanels(t *testing.T) {
 		}
 		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/"+tc.path+"?"+q.Encode(), "good"); got != http.StatusOK {
 			t.Errorf("%s step %s answered %d, want 200", tc.query, tc.step, got)
+		}
+	}
+}
+
+// TestServerApplicationLookupStoreErrors: vmselect answers 422 to any error
+// without a status of its own (SendPrometheusError), so only its series
+// limit, which a narrower window fixes, reaches the client as 422.
+func TestServerApplicationLookupStoreErrors(t *testing.T) {
+	for _, tc := range []struct {
+		label, message string
+		want           int
+	}{
+		{"pod", "the number of matching timeseries exceeds 300000; either narrow down the search or increase -search.max* command-line flag values", http.StatusUnprocessableEntity},
+		{"persistentvolumeclaim", "the number of matching timeseries exceeds 300000; either narrow down the search", http.StatusUnprocessableEntity},
+		{"pod", "cannot fetch label values from vmstorage nodes: the number of matching timeseries exceeds 300000", http.StatusUnprocessableEntity},
+		{"pod", "timeout exceeded before starting the query processing: 30s", http.StatusGatewayTimeout},
+		{"pod", "error when searching for label values: cannot obtain data from vmstorage", http.StatusBadGateway},
+	} {
+		h := newPolicyHarness(t, Config{}, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/label/"+tc.label+"/values" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "error", "errorType": "422", "error": tc.message})
+				return
+			}
+			appMetricsUpstream([]string{"p"}, nil, http.StatusOK)(w, r)
+		}, appPolicy, nil)
+		resp := h.do(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?query=up", "good", nil, nil)
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s lookup %q answered %d, want %d", tc.label, tc.message, resp.StatusCode, tc.want)
+		}
+		if tc.want == http.StatusUnprocessableEntity && !strings.Contains(string(body), "the number of matching timeseries exceeds 300000") {
+			t.Errorf("the store's limit message did not reach the client: %q", body)
+		}
+		if strings.Contains(string(body), `"errorType"`) {
+			t.Errorf("the store's raw JSON reached the client: %q", body)
 		}
 	}
 }
