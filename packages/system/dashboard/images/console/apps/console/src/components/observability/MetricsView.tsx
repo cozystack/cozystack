@@ -23,6 +23,8 @@ export function MetricsView({ scope }: { scope: ObservabilityScope }) {
   const client = useK8sClient()
   const root = metricsRoot(scope)
   const [range, setRange] = useState<RangeKey>("1h")
+  const rangeKeys = Object.keys(RANGES) as RangeKey[]
+  const longestRange = range === rangeKeys[rangeKeys.length - 1]
 
   const results = useQueries({
     queries: METRIC_PANELS.map((panel) => ({
@@ -48,7 +50,7 @@ export function MetricsView({ scope }: { scope: ObservabilityScope }) {
     <div className="space-y-4 p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-slate-900">Resource consumption</h2>
-        <RangePicker options={Object.keys(RANGES) as RangeKey[]} value={range} onChange={setRange} />
+        <RangePicker options={rangeKeys} value={range} onChange={setRange} />
       </div>
       {wide ? (
         <ProxyNotice what="Metrics" error={wide} />
@@ -62,7 +64,7 @@ export function MetricsView({ scope }: { scope: ObservabilityScope }) {
               ) : isLoading || !data ? (
                 <EmptyState busy title="Loading…" className={CHART_SLOT} />
               ) : data.series.length === 0 ? (
-                <EmptyState title="No data for this range." hint="Try a longer range." className={CHART_SLOT} />
+                <EmptyState title="No data for this range." hint={longestRange ? undefined : "Try a longer range."} className={CHART_SLOT} />
               ) : (
                 <TimeSeriesChart data={data} format={panel.format} />
               )}

@@ -87,6 +87,17 @@ describe("MetricsView", () => {
     for (const status of screen.getAllByRole("status")) expect(status).toHaveClass("h-[230px]")
   })
 
+  it("suggests a longer range only while one exists", async () => {
+    const { client } = clientWith(() => Response.json({ status: "success", data: { resultType: "matrix", result: [] } }))
+    renderWithK8sProvider(<MetricsView scope={scope} />, { client })
+    await waitFor(() => expect(screen.getAllByText("Try a longer range.")).toHaveLength(3))
+
+    await userEvent.click(screen.getByRole("button", { name: "7d" }))
+
+    await waitFor(() => expect(screen.getAllByText("No data for this range.")).toHaveLength(3))
+    expect(screen.queryByText("Try a longer range.")).toBeNull()
+  })
+
   it("holds each chart's place while it loads", () => {
     const { client } = clientWith(() => new Promise<Response>(() => {}))
 
