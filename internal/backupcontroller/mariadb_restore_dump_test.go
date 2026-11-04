@@ -274,13 +274,128 @@ func TestReconcileMariaDBRestore_RecordedDump(t *testing.T) {
 	})
 }
 
-func TestReconcileMariaDBRestore_NoRecordedDump(t *testing.T) {
-	l := &fakeS3Lister{err: errors.New("Access Denied.")}
-	f := newMariaDBRestoreFixture(t, nil, l, s3CredsSecret("tenant", "creds"))
-	f.reconcile(t)
-	f.wantRestore(t, "")
-	if l.calls != 0 {
-		t.Errorf("S3 listed %d times for a Backup that records no dump", l.calls)
+// TestReconcileMariaDBRestore_LegacyBackup drives Backups that record no
+// dump: one proven to belong to the source run is restored by its
+// timestamp, and anything else restores the newest dump with a Warning.
+func TestReconcileMariaDBRestore_LegacyBackup(t *testing.T) {
+	creds := s3CredsSecret("tenant", "creds")
+	own := s3ObjectInfo{Key: mdbRestorePrefix + mdbRestoreDump, LastModified: mdbRestoreT0.Add(20 * time.Second)}
+	newer := s3ObjectInfo{Key: mdbRestorePrefix + mdbNewerDump, LastModified: mdbRestoreT0.Add(time.Hour)}
+	second := s3ObjectInfo{Key: mdbRestorePrefix + "backup.2026-10-21T10:00:30Z.gzip.sql", LastModified: mdbRestoreT0.Add(35 * time.Second)}
+
+	t.Run("a dump proven to be the run's own is restored by its timestamp", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, nil, &fakeS3Lister{objects: []s3ObjectInfo{own, newer}}, creds)
+		f.reconcile(t)
+		f.wantRestore(t, mdbRestoreTime)
+		if ev := drainEvents(f.events); len(ev) != 0 {
+			t.Errorf("events %q; want none for a proven dump", ev)
+		}
+	})
+
+	cases := []struct {
+		name   string
+		lister *fakeS3Lister
+		cause  string
+	}{
+		{name: "two dumps in the run's lifetime", lister: &fakeS3Lister{objects: []s3ObjectInfo{own, second, newer}}, cause: "cannot be told apart"},
+		{name: "no dump in the run's lifetime", lister: &fakeS3Lister{objects: []s3ObjectInfo{newer}}, cause: "no dump in the bucket belongs"},
+		{name: "a storage that cannot be read", lister: &fakeS3Lister{err: errors.New("Access Denied.")}, cause: "Access Denied."},
+	}
+	wantBestEffort := func(t *testing.T, f *mariadbRestoreFixture, cause string) {
+		t.Helper()
+		f.wantRestore(t, "")
+		ev := drainEvents(f.events)
+		if len(ev) != 1 || !strings.HasPrefix(ev[0], "Warning BestEffortDump ") || !strings.Contains(ev[0], cause) || !strings.Contains(ev[0], "src-bk records no dump") {
+			t.Errorf("events %q; want one BestEffortDump warning naming the Backup and %q", ev, cause)
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" restores the newest dump with a warning", func(t *testing.T) {
+			f := newMariaDBRestoreFixture(t, nil, tc.lister, creds)
+			f.reconcile(t)
+			wantBestEffort(t, f, tc.cause)
+		})
+	}
+
+	t.Run("a hanging endpoint is given up at the check timeout", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, nil, &fakeS3Lister{}, creds)
+		f.r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
+		var err error
+		withShortDumpCheckTimeout(t, func() { _, err = f.r.reconcileMariaDBRestore(context.Background(), f.rj, f.backup) })
+		if err != nil {
+			t.Fatalf("reconcileMariaDBRestore: %v", err)
+		}
+		wantBestEffort(t, f, context.DeadlineExceeded.Error())
+	})
+}
+
+// TestReconcileMariaDBRestore_FailedBackupRun drives a Backup made of an
+// operator Backup whose Job failed: there is no dump of its own to
+// restore, whatever the Backup records.
+func TestReconcileMariaDBRestore_FailedBackupRun(t *testing.T) {
+	creds := s3CredsSecret("tenant", "creds")
+	failed := func(status metav1.ConditionStatus) []metav1.Condition {
+		return []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: status, Reason: mariadbtypes.ConditionReasonJobFailed,
+			Message: "Failed", LastTransitionTime: metav1.NewTime(mdbRestoreT0.Add(3 * time.Minute)),
+		}}
+	}
+	listing := []s3ObjectInfo{{Key: mdbRestorePrefix + mdbRestoreDump, LastModified: mdbRestoreT0.Add(20 * time.Second)}}
+
+	cases := []struct {
+		name     string
+		driverMD map[string]string
+		status   metav1.ConditionStatus
+	}{
+		{name: "Complete=True/JobFailed with no recorded dump", status: metav1.ConditionTrue},
+		{name: "Complete=True/JobFailed with a recorded dump", driverMD: recordedDump(mdbRestoreDump), status: metav1.ConditionTrue},
+		{name: "Complete=False/JobFailed", status: metav1.ConditionFalse},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" fails the RestoreJob", func(t *testing.T) {
+			l := &fakeS3Lister{objects: listing}
+			f := newMariaDBRestoreFixture(t, tc.driverMD, l, creds)
+			f.src.Status.Conditions = failed(tc.status)
+			if err := f.c.Update(context.Background(), f.src); err != nil {
+				t.Fatalf("update operator Backup: %v", err)
+			}
+			f.reconcile(t)
+			f.wantFailed(t, "k8s.mariadb.com/Backup tenant/op-bk failed", "left no dump to restore")
+			if l.calls != 0 {
+				t.Errorf("S3 listed %d times for a failed backup run", l.calls)
+			}
+		})
+	}
+
+	t.Run("an operator Restore created earlier is followed", func(t *testing.T) {
+		existing := &mariadbtypes.Restore{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-abcde",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		}}
+		f := newMariaDBRestoreFixture(t, nil, &fakeS3Lister{objects: listing}, creds, existing)
+		f.src.Status.Conditions = failed(metav1.ConditionTrue)
+		if err := f.c.Update(context.Background(), f.src); err != nil {
+			t.Fatalf("update operator Backup: %v", err)
+		}
+		f.reconcile(t)
+		if f.rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Errorf("RestoreJob failed although its operator Restore was already created: %s", f.rj.Status.Message)
+		}
+	})
+}
+
+func drainEvents(r *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case e := <-r.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
 	}
 }
 

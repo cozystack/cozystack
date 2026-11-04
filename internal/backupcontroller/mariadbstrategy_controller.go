@@ -603,7 +603,7 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 	// The dump is chosen once, as the operator Restore is created; one that
 	// already exists has made its choice.
 	if mdbRestore == nil {
-		targetTime, err := r.mariadbRestoreTargetTime(ctx, backup, srcBackup)
+		targetTime, err := r.mariadbRestoreTargetTime(ctx, restoreJob, backup, srcBackup)
 		var refused mariadbRestoreRefused
 		if errors.As(err, &refused) {
 			return r.markRestoreJobFailed(ctx, restoreJob, refused.Error())
@@ -666,19 +666,26 @@ func (e mariadbRestoreRefused) Error() string { return string(e) }
 // Restore for backup: the timestamp in the name of the dump backup
 // records. mariadb-operator restores the dump whose timestamp equals the
 // target and, when there is none, the nearest one, so the dump is first
-// checked to still exist. Empty when backup records no dump, which leaves
-// the operator to take the newest dump under the prefix.
-func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) (string, error) {
+// checked to still exist. A Backup that records no dump is resolved by
+// legacyMariaDBRestoreTargetTime.
+func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) (string, error) {
+	// A failed Job is Complete=True too, with reason JobFailed, and a
+	// BackupJob that took Complete=True for success made a Backup of it.
+	if cond := apimeta.FindStatusCondition(src.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed {
+		return "", mariadbRestoreRefused(fmt.Sprintf(
+			"the backup run of k8s.mariadb.com/Backup %s/%s failed (Complete=%s/%s) and left no dump to restore; restoring would bring back another run's dump",
+			src.Namespace, src.Name, cond.Status, cond.Reason))
+	}
+	ctx, cancel := context.WithTimeout(ctx, mariadbRestoreDumpCheckTimeout)
+	defer cancel()
 	name := backup.Spec.DriverMetadata[mariadbDumpFileKey]
 	if name == "" {
-		return "", nil
+		return r.legacyMariaDBRestoreTargetTime(ctx, rj, backup, src), nil
 	}
 	ts, ok := parseMariaDBLogicalBackupFile(name)
 	if !ok {
 		return "", mariadbRestoreRefused(fmt.Sprintf("Backup driverMetadata %s=%q is not the name of a mariadb-operator dump", mariadbDumpFileKey, name))
 	}
-	ctx, cancel := context.WithTimeout(ctx, mariadbRestoreDumpCheckTimeout)
-	defer cancel()
 	exists, err := mariadbDumpExists(ctx, r.objectStore(), src, name)
 	if err != nil {
 		return "", fmt.Errorf("cannot check that dump %s of k8s.mariadb.com/Backup %s/%s still exists in storage: %w", name, src.Namespace, src.Name, err)
@@ -690,6 +697,26 @@ func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, bac
 			name, src.Namespace, src.Name, s3.Bucket, mariadbOperatorS3Prefix(s3.Prefix)))
 	}
 	return ts.UTC().Format(time.RFC3339), nil
+}
+
+// legacyMariaDBRestoreTargetTime chooses the dump of a Backup taken before
+// Backups recorded theirs: the one findMariaDBDump proves belongs to src,
+// with the completion time the size probe was given, which takenAt keeps.
+// When none is proven, for any reason, it returns empty, and the operator
+// restores the newest dump under the prefix as such a restore always did:
+// refusing would leave these Backups unrestorable, and the controller may
+// never have been able to reach their storage. A Warning event says the
+// dump is a best effort.
+func (r *RestoreJobReconciler) legacyMariaDBRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) string {
+	dump, err := findMariaDBDump(ctx, r.objectStore(), src, backup.Spec.TakenAt.Time)
+	if err != nil {
+		getLogger(ctx).Info("no dump proven for a MariaDB Backup that records none; restoring the newest", "restorejob", rj.Name, "backup", backup.Name, "error", err)
+		r.Recorder.Eventf(rj, corev1.EventTypeWarning, "BestEffortDump",
+			"Backup %s records no dump and none in storage could be proven to belong to k8s.mariadb.com/Backup %s/%s (%v); mariadb-operator restores the newest dump under its prefix as a best effort, which may be another backup run's",
+			backup.Name, src.Namespace, src.Name, err)
+		return ""
+	}
+	return dump.Timestamp.UTC().Format(time.RFC3339)
 }
 
 // awaitMariaDBDumpCheck keeps the RestoreJob waiting, with Ready=False
