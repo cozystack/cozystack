@@ -86,13 +86,13 @@ describe("LogsView", () => {
       endpoint.endsWith("query") ? new Response("") : defaultHandler(endpoint, params),
     )
     renderWithK8sProvider(<LogsView scope={app} />, { client })
-    const frame = screen.getByRole("region", { name: "Log lines" })
-    expect(await within(frame).findByText("Try a longer range or a broader filter.")).toBeInTheDocument()
+    const frame = () => screen.getByRole("region", { name: "Log lines" })
+    expect(await within(frame()).findByText("Try a longer range or a broader filter.")).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole("button", { name: "24h" }))
 
-    expect(await within(frame).findByText("Try a broader filter.")).toBeInTheDocument()
-    expect(within(frame).queryByText(/longer range/)).toBeNull()
+    await waitFor(() => expect(within(frame()).getByText("Try a broader filter.")).toBeInTheDocument())
+    expect(within(frame()).queryByText(/longer range/)).toBeNull()
   })
 
   it("shows loading inside the log console", () => {
@@ -235,6 +235,23 @@ describe("LogsView", () => {
 
     expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+  })
+
+  it("opens a new history result at its newest line, not the old scroll position", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query")
+        ? new Response(`${line("2026-11-04T10:00:01Z", `result for ${params.get("query")}`)}\n`)
+        : defaultHandler(endpoint, params),
+    )
+    const { queryClient } = renderWithK8sProvider(<LogsView scope={app} />, { client })
+    queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, placeholderData: (prev: unknown) => prev } })
+    await screen.findByText("result for *")
+    const before = screen.getByRole("list")
+
+    await userEvent.type(screen.getByLabelText("LogsQL filter"), "error{Enter}")
+
+    await screen.findByText("result for error")
+    expect(screen.getByRole("list")).not.toBe(before)
   })
 
   it("names the source pod and container of each line", async () => {
