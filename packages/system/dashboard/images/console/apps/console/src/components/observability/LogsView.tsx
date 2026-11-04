@@ -81,9 +81,14 @@ function placeholderFor({ follow, stopped, loading, failed, longestRange, retry 
   return <EmptyState tone="dark" title="No log lines for this range and filter." hint={longestRange ? "Try a broader filter." : "Try a longer range or a broader filter."} />
 }
 
+// Filter, pod and container belong to one scope; a new tenant or application starts clean.
 export function LogsView({ scope }: { scope: ObservabilityScope }) {
-  const client = useK8sClient()
   const root = logsRoot(scope)
+  return <ScopedLogsView key={root} root={root} />
+}
+
+function ScopedLogsView({ root }: { root: string }) {
+  const client = useK8sClient()
   const [range, setRange] = useState<LogRangeKey>("1h")
   const [draft, setDraft] = useState("")
   const [filter, setFilter] = useState("")

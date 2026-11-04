@@ -62,6 +62,26 @@ describe("LogsView with the production query defaults", () => {
     expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["All"])
   })
 
+  it("starts the next tenant with no filter, pod or container of the previous one", async () => {
+    const { client, raw } = clientWith(defaultHandler)
+    const { switchTo } = renderWithProductionDefaults(client, "tenant-reset-a")
+    await userEvent.type(screen.getByLabelText("LogsQL filter"), "error{Enter}")
+    await userEvent.click(screen.getByRole("combobox", { name: "Pod" }))
+    await userEvent.click(await screen.findByRole("option", { name: "db-1" }))
+    await waitFor(() =>
+      expect(raw.mock.calls.some(([p]) => new URL(p, "http://x").searchParams.get("query") === '{kubernetes_pod_name="db-1"} (error)')).toBe(true),
+    )
+
+    switchTo("tenant-reset-b")
+
+    await waitFor(() => expect(raw.mock.calls.some(([p]) => p.includes("/tenant-reset-b/") && p.includes("select/logsql/query?"))).toBe(true))
+    const first = raw.mock.calls.find(([p]) => p.includes("/tenant-reset-b/") && p.includes("select/logsql/query?"))!
+    expect(new URL(first[0], "http://x").searchParams.get("query")).toBe("*")
+    expect(screen.getByRole("combobox", { name: "Pod" })).toHaveTextContent("All")
+    expect(screen.getByRole("combobox", { name: "Container" })).toHaveTextContent("All")
+    expect(screen.getByLabelText("LogsQL filter")).toHaveValue("")
+  })
+
   it("keeps the current lines while a new filter in the same tenant loads", async () => {
     const { client } = clientWith((endpoint, params) =>
       endpoint.endsWith("query") && params.get("query") === "slow" ? new Promise(() => {}) : defaultHandler(endpoint, params),
