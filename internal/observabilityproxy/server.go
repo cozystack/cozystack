@@ -41,6 +41,11 @@ const tailChunkBytes = 64 << 10
 // it wraps DeadlineExceeded so a store that never answered reads as 504.
 var errTailIdle = fmt.Errorf("tail idle: %w", context.DeadlineExceeded)
 
+// errAborted ends a response whose status line already went out by
+// cutting the connection, so a client sees a broken body instead of a
+// complete one with lines missing.
+var errAborted = &HTTPError{Code: http.StatusBadGateway, Message: "response aborted"}
+
 // maxFormBytes bounds a POST body; LogsQL queries are a few KiB at most.
 const maxFormBytes = 1 << 20
 
@@ -129,10 +134,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if herr == nil {
 		herr = s.serve(rec, r, route)
 	}
-	if herr != nil {
+	if herr != nil && herr != errAborted {
 		writeError(rec, herr)
 	}
 	s.requests.WithLabelValues(route.Kind.String(), strconv.Itoa(rec.code)).Inc()
+	if herr == errAborted {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func writeError(w http.ResponseWriter, e *HTTPError) {
@@ -251,8 +259,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	}
 	if tail {
 		s.streamLines(w, rc, resp.Body, idle, arm)
-	} else if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
+	} else if _, err := io.Copy(w, resp.Body); err != nil {
 		slog.Debug("copying upstream response", "error", err)
+		return errAborted
 	}
 	return nil
 }
