@@ -868,6 +868,18 @@
           ]
         }
       }
+    },
+    "lifecycle": {
+      "description": "S3 bucket lifecycle configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Run the SeaweedFS admin server and a worker that applies bucket lifecycle rules, once a day. When disabled, rules are still accepted and stored, but not applied. Ignored with the Client topology, whose rules are enforced by the instance it connects to.",
+          "type": "boolean",
+          "default": true
+        }
+      }
     }
   }
 }
