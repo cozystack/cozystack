@@ -9,11 +9,13 @@ spec:
     matchNames:
     - {{ .Release.Namespace }}
   podMetricsEndpoints:
-  # The series describe the Ingress objects served, in any namespace, not
-  # this controller, so the application identity the vmagent scrape class
-  # stamps from the controller pod would misattribute them; and with
-  # honorLabels an exporter-supplied identity would win over the class. The
-  # target-stage drop also covers up and scrape_*, which skip metric relabeling.
+  # Most series describe the Ingress objects served, in any namespace, so
+  # the application identity the vmagent scrape class stamps from the
+  # controller pod would misattribute them; and with honorLabels an
+  # exporter-supplied identity would win over the class. The controller's
+  # own series (nginx process, reload status, go_*, up, scrape_*) lose the
+  # Ingress application's identity too; that is the accepted cost. The
+  # target-stage drop covers up and scrape_*, which skip metric relabeling.
   - port: metrics
     honorLabels: true
     interval: 30s
