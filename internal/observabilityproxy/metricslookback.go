@@ -169,6 +169,12 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 		if end < 0 {
 			end = len(arg)
 		}
+		// metricsql lexes 1h-30m as one duration whose parts after the
+		// first negative one all subtract (DurationValue), so -1h-30m is
+		// -90m and 1h-2h is -1h; the scan does not read such compounds.
+		if end < len(arg) && arg[end] == '-' {
+			return 0, 0, false
+		}
 		d, ok := parseQueryDuration(arg[:end])
 		if !ok {
 			return 0, 0, false

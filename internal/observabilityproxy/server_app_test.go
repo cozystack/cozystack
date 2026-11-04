@@ -512,3 +512,25 @@ func TestServerApplicationRefusesEveryAt(t *testing.T) {
 		t.Fatalf("upstream saw %d requests for refused queries", n)
 	}
 }
+
+// TestServerApplicationRefusesForwardReads: queries that read past the
+// evaluation time by an amount the scan cannot bound answer 422 and send
+// nothing upstream, rather than answer 200 without pods created in that
+// time.
+func TestServerApplicationRefusesForwardReads(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	for _, query := range []string{
+		"container_cpu_usage_seconds_total offset -1h-30m",
+		"container_cpu_usage_seconds_total offset 1h-2h",
+	} {
+		q := url.Values{"query": {query}, "time": {unix(testNow.Add(-2 * time.Hour))}}
+		resp := h.do(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good", nil, nil)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", query, resp.StatusCode)
+		}
+	}
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("upstream saw %d requests for refused queries", n)
+	}
+}
