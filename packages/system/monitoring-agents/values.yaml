@@ -411,7 +411,7 @@ fluent-bit:
           Host vlinsert-generic.{{ .Values.global.target }}.svc
           port 9481
           compress gzip
-          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
@@ -445,7 +445,7 @@ fluent-bit:
           Host vlinsert-generic.{{ $target }}.svc
           port 9481
           compress gzip
-          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
@@ -467,6 +467,19 @@ fluent-bit:
           Operation lift
           Nested_under kubernetes
           Add_prefix   kubernetes_
+      {{- /*
+        The pod's lineage labels name the application it belongs to. lift
+        cannot pick keys, so every label comes up; all but these three keep
+        the kubernetes_ prefix and fall to Remove_wildcard below. An absent
+        label stays absent, and VictoriaLogs builds _stream from the stream
+        fields that are present, so an unlabelled pod keeps its stream.
+      */}}
+      [FILTER]
+          Name nest
+          Match kube.*
+          Operation lift
+          Nested_under kubernetes_labels
+          Add_prefix kubernetes_labels_
       [FILTER]
           Name modify
           Match kube.*
@@ -507,6 +520,9 @@ fluent-bit:
           Rename kubernetes_pod_name keep_kubernetes_pod_name
           Rename kubernetes_namespace_name keep_kubernetes_namespace_name
           Rename kubernetes_container_name keep_kubernetes_container_name
+          Rename kubernetes_labels_apps.cozystack.io/application.group apps_cozystack_io_application_group
+          Rename kubernetes_labels_apps.cozystack.io/application.kind apps_cozystack_io_application_kind
+          Rename kubernetes_labels_apps.cozystack.io/application.name apps_cozystack_io_application_name
       [FILTER]
           Name modify
           Match kube.*
