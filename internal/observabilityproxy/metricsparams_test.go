@@ -227,7 +227,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	if req.params.Get("end") != "2026-11-04T12:00:00.000Z" || req.params.Get("start") != "2026-11-04T11:55:00.000Z" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
-	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-30*time.Second)) {
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-2*latencyOffset)) {
 		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
 	}
 }
@@ -541,5 +541,21 @@ func TestQueryLookaheadSubquery(t *testing.T) {
 		if !ok || got < 2*time.Hour {
 			t.Errorf("queryLookahead(%q) = %s, %v; want at least two subquery steps", q, got, ok)
 		}
+	}
+}
+
+// TestBuildMetricsParamsInstantStartCoversLatencyOffset: vmselect evaluates
+// an instant query whose time is within 30s of its clock at that clock
+// minus 30s, anywhere in (time-60s, time], so the earliest read the store
+// choice and the lookup rely on starts from time-60s.
+func TestBuildMetricsParamsInstantStartCoversLatencyOffset(t *testing.T) {
+	at := testNow.Add(29 * time.Second)
+	req := buildMetrics(t, "api/v1/query", url.Values{"query": {"x"}, "time": {at.Format(time.RFC3339)}, "step": {"1s"}})
+	lookback, ok := queryLookback("x", time.Second)
+	if !ok {
+		t.Fatal("lookback of x unknown")
+	}
+	if want := at.Add(-2*latencyOffset - lookback); req.start.After(want) {
+		t.Fatalf("start = %s, want at most %s", req.start, want)
 	}
 }

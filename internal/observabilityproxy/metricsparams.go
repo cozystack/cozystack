@@ -144,7 +144,11 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			}
 			out.Set("step", formatSeconds(step))
 		}
-		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
+		// vmselect evaluates an instant query whose time is within the
+		// latency offset of its own clock at that clock minus the offset
+		// (queryOffset in prometheus.go), so the evaluation instant lies in
+		// (time-2*offset, time]; the earlier end needs no clock to agree.
+		req.start = queryStart(out.Get("query"), at.Add(-2*latencyOffset), step)
 		req.from, req.to = at, at
 		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
 			req.last = at.Add(ahead)

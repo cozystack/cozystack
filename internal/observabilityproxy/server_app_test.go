@@ -341,8 +341,7 @@ func TestServerApplicationLookbackBeyondCap(t *testing.T) {
 		t.Fatalf("rate(x[5m]) answered %d, want 200", got)
 	}
 	r := h.requests()[0]
-	// An instant query may be evaluated up to one more latency offset early.
-	want := formatTime(buildMetrics(t, "api/v1/query", q).start.Add(-latencyOffset))
+	want := formatTime(buildMetrics(t, "api/v1/query", q).start)
 	if r.path != "/api/v1/label/pod/values" || r.form.Get("start") != want {
 		t.Fatalf("lookup %s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 	}
@@ -581,7 +580,8 @@ func TestServerApplicationLookupCoversLatencyOffset(t *testing.T) {
 		t.Fatalf("status = %d", got)
 	}
 	// The earliest read of the query evaluated at the earliest instant.
-	want := buildMetrics(t, "api/v1/query", q).start.Add(-latencyOffset)
+	lookback, _ := queryLookback("container_cpu_usage_seconds_total", time.Second)
+	want := at.Add(-2*latencyOffset - lookback)
 	r := h.requests()[0]
 	start, err := time.Parse(time.RFC3339, r.form.Get("start"))
 	if err != nil || start.After(want) {
