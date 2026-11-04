@@ -26,7 +26,7 @@ update:
 	cp ../kubernetes/images/kubectl.tag images/kubectl.tag
 	$(MAKE) generate
 
-# Worker disks for pools on a Kairos NodeGroupClass, one per Kubernetes minor
+# Worker disks for pools on a Kairos WorkerClass, one per Kubernetes minor
 # in files/versions.yaml, each with kubelet and kubeadm of that minor's patch.
 # images/kairos-worker builds the OS, AuroraBoot turns it into a raw EFI disk
 # per architecture, and images/kairos-worker-disk wraps the disks into the

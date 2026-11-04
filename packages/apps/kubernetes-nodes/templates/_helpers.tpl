@@ -306,9 +306,7 @@ Arguments: talosVersion, kubernetesVersion, remedy (what the operator should
 change, appended to the message).
 */}}
 {{- define "kubernetes-nodes.assertTalosSupportsKubernetes" -}}
-{{- $talosK8sSupportMatrix := dict
-      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
--}}
+{{- $talosK8sSupportMatrix := (.root.Files.Get "files/worker-defaults.json" | fromJson).talosKubernetesSupport -}}
 {{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" (.talosVersion | toString) -}}
 {{- with index $talosK8sSupportMatrix $talosMinor -}}
 {{-   if not (has ($.kubernetesVersion | toString) .) -}}
@@ -571,32 +569,29 @@ string this admits parses to a positive duration.
 {{- end -}}
 {{- end -}}
 
-{{- /*
-  The pool's NodeGroupClass, as YAML: name, bootstrap and, for an operator Kairos
-  class, image. talos and kairos are resolved without a lookup, so a pool on
-  either renders offline and does not depend on the object existing; any other
-  name is read from the cluster, and offline it fails like a missing class.
-*/ -}}
-{{- define "kubernetes-nodes.nodeGroupClass" -}}
-{{- $name := .Values.nodeGroupClassName | default "talos" | toString -}}
-{{- $class := dict "name" $name "bootstrap" $name -}}
-{{- if not (has $name (list "talos" "kairos")) -}}
-{{-   $obj := lookup "cozystack.io/v1alpha1" "NodeGroupClass" "" $name -}}
-{{-   if not $obj -}}
-{{-     fail (printf "nodeGroupClassName %q: no NodeGroupClass of that name exists" $name) -}}
-{{-   end -}}
-{{-   $spec := $obj.spec | default dict -}}
-{{-   $_ := set $class "bootstrap" ($spec.bootstrap | default "" | toString) -}}
-{{-   if not (has $class.bootstrap (list "talos" "kairos")) -}}
-{{-     fail (printf "NodeGroupClass %q has bootstrap %q; this chart supports talos and kairos" $name $class.bootstrap) -}}
-{{-   end -}}
-{{-   with $spec.image -}}
-{{-     $classMinor := regexFind "^v[0-9]+\\.[0-9]+" (.kubernetesVersion | default "" | toString) -}}
-{{-     if ne $classMinor ($.Values.version | toString) -}}
-{{-       fail (printf "NodeGroupClass %q carries Kubernetes %s, whose minor differs from the pool's version %s; point nodeGroupClassName at a class for %s, or change version and the class together" $name (.kubernetesVersion | toString) ($.Values.version | toString) ($.Values.version | toString)) -}}
-{{-     end -}}
-{{-     $_ := set $class "image" (dict "kubernetesVersion" .kubernetesVersion "reference" .reference) -}}
-{{-   end -}}
+{{- define "kubernetes-nodes.workerClass" -}}
+{{- $name := get .Values "workerClassName" | default "" | toString -}}
+{{- $class := dict "name" $name "bootstrap" "talos" "legacy" (eq $name "") -}}
+{{- if has $name (list "talos" "kairos") -}}
+{{- $_ := set $class "bootstrap" $name -}}
+{{- else if ne $name "" -}}
+{{- $obj := lookup "cozystack.io/v1alpha1" "WorkerClass" "" $name -}}
+{{- if not $obj -}}
+{{- fail (printf "workerClassName %q: no WorkerClass of that name exists" $name) -}}
+{{- end -}}
+{{- range $k, $v := ($obj.spec | default dict) -}}
+{{- $_ := set $class $k $v -}}
+{{- end -}}
+{{- end -}}
+{{- if not (has $class.bootstrap (list "talos" "kairos")) -}}
+{{- fail (printf "WorkerClass %q has bootstrap %q; this chart supports talos and kairos" $name $class.bootstrap) -}}
+{{- end -}}
+{{- with $class.image -}}
+{{- if ne $class.bootstrap "kairos" -}}{{- fail (printf "WorkerClass %q: image requires bootstrap kairos" $name) -}}{{- end -}}
+{{- $minor := regexFind "^v[0-9]+\\.[0-9]+" (.kubernetesVersion | toString) -}}
+{{- if ne $minor ($.Values.version | toString) -}}
+{{- fail (printf "WorkerClass %q carries Kubernetes %s, whose minor differs from the pool's version %s" $name .kubernetesVersion $.Values.version) -}}
+{{- end -}}
 {{- end -}}
 {{- $class | toYaml -}}
 {{- end -}}
@@ -629,7 +624,7 @@ string this admits parses to a positive duration.
        bootstrap moves onto whichever of the two this render asks for, which
        is what the migration off the kubeadm bootstrap relies on. */ -}}
 {{- if and (has $liveKind (list "TalosConfigTemplate" "KairosConfigTemplate")) (ne $liveKind $wantKind) -}}
-{{- fail (printf "kubernetes-nodes: pool %q already runs workers bootstrapped by a %s, and NodeGroupClass %q selects %s workers. Switching would roll every worker onto the other OS. Create a new pool on that class and scale this one down instead." $groupName $liveKind .class.name .class.bootstrap) -}}
+{{- fail (printf "kubernetes-nodes: pool %q already runs workers bootstrapped by a %s, and WorkerClass %q selects %s workers. Switching would roll every worker onto the other OS. Create a new pool on that class and scale this one down instead." $groupName $liveKind .class.name .class.bootstrap) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

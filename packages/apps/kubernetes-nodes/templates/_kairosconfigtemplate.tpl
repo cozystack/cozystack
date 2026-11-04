@@ -44,9 +44,6 @@ spec:
              account, so sshPublicKey still works. */}}
       userPassword: "*"
       {{- with $root.Values.sshKeys }}
-      {{- if gt (len .) 1 }}
-      {{- fail (printf "sshKeys has %d keys, and a pool on the Kairos NodeGroupClass %q takes one: the Kairos bootstrap provider authorizes a single key" (len .) $.class.name) }}
-      {{- end }}
       sshPublicKey: {{ first . | quote }}
       {{- end }}
       files:
@@ -117,7 +114,7 @@ spec:
 {{- else -}}
 {{- $image = $.root.Files.Get (printf "images/kairos-worker-%s.tag" $.root.Values.version) | trim -}}
 {{- if not $image -}}
-{{- fail (printf "NodeGroupClass %q: this platform ships no Kairos worker disk for Kubernetes %s" $.class.name $.root.Values.version) -}}
+{{- fail (printf "WorkerClass %q: this platform ships no Kairos worker disk for Kubernetes %s" $.class.name $.root.Values.version) -}}
 {{- end -}}
 {{- end -}}
 {{- $image -}}

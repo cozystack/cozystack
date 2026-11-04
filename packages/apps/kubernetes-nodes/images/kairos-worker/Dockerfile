@@ -1,4 +1,4 @@
-# Kairos worker OS on Hadron for pools on a Kairos NodeGroupClass: kubelet, kubeadm and
+# Kairos worker OS on Hadron for pools on a Kairos WorkerClass: kubelet, kubeadm and
 # containerd, joined to the tenant control plane by `kubeadm join` from the
 # Kairos bootstrap provider. The Makefile builds one per Kubernetes minor in
 # files/versions.yaml and turns it into a bootable disk with AuroraBoot.

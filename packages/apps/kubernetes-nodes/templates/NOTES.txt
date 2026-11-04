@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
 
 This pool is a separate release from the control plane. Three operational notes:
@@ -9,7 +10,7 @@ This pool is a separate release from the control plane. Three operational notes:
 
 2. Version skew. Keep this pool's `version` in sync with the parent Kubernetes
    cluster, and on a Talos pool its `talos.*` too; a pool on a Kairos
-   NodeGroupClass that names an image takes its exact release from the class.
+   WorkerClass that names an image takes its exact release from the class.
    A pool on a combination the parent does not run can produce workers the
    control plane will not admit.
 

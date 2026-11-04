@@ -1,4 +1,4 @@
-suite: NodeGroupClass resolution failures
+suite: WorkerClass resolution failures
 # Only nodegroup.yaml: every template that resolves the class does it through
 # the same helper, and the render stops at whichever fails first.
 templates:
@@ -18,25 +18,25 @@ set:
 tests:
   - it: fails the render naming a class that does not exist
     set:
-      nodeGroupClassName: acme-missing
+      workerClassName: acme-missing
     kubernetesProvider:
       scheme: &scheme
-        "cozystack.io/v1alpha1/NodeGroupClass":
-          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "nodegroupclasses"}
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
           namespaced: false
       objects: []
     asserts:
       - failedTemplate:
-          errorPattern: 'nodeGroupClassName "acme-missing": no NodeGroupClass of that name exists'
+          errorPattern: 'workerClassName "acme-missing": no WorkerClass of that name exists'
 
   - it: refuses a class whose Kubernetes minor differs from the pool's version
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
       version: "v1.34"
     kubernetesProvider:
       scheme: *scheme
       objects:
-        - kind: NodeGroupClass
+        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-kairos
@@ -47,16 +47,16 @@ tests:
               reference: registry.example.com/kairos/worker:v1.35.2@sha256:2222222222222222222222222222222222222222222222222222222222222222
     asserts:
       - failedTemplate:
-          errorPattern: 'NodeGroupClass "acme-kairos" carries Kubernetes v1\.35\.2, whose minor differs from the pool''s version v1\.34'
+          errorPattern: 'WorkerClass "acme-kairos" carries Kubernetes v1\.35\.2, whose minor differs from the pool''s version v1\.34'
 
 
   - it: refuses a class whose bootstrap the chart does not support
     set:
-      nodeGroupClassName: acme-flatcar
+      workerClassName: acme-flatcar
     kubernetesProvider:
       scheme: *scheme
       objects:
-        - kind: NodeGroupClass
+        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-flatcar
@@ -64,4 +64,4 @@ tests:
             bootstrap: flatcar
     asserts:
       - failedTemplate:
-          errorPattern: 'NodeGroupClass "acme-flatcar" has bootstrap "flatcar"; this chart supports talos and kairos'
+          errorPattern: 'WorkerClass "acme-flatcar" has bootstrap "flatcar"; this chart supports talos and kairos'

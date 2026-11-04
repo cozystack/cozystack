@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 {{- /*
   Worker node pool for a managed Kubernetes cluster.
 
@@ -21,10 +22,10 @@
   the point it is resolved, below. Both call sites share one table, in
   templates/_helpers.tpl. A Kairos pool reads no talos.* at all.
 */}}
-{{- $class := include "kubernetes-nodes.nodeGroupClass" . | fromYaml }}
+{{- $class := include "kubernetes-nodes.workerClass" . | fromYaml }}
 {{- $isKairos := eq $class.bootstrap "kairos" }}
 {{- if not $isKairos }}
-{{- include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+{{- include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict "root" $
       "talosVersion" .Values.talos.version
       "kubernetesVersion" .Values.version
       "remedy" "Bump 'version' or set talos.version explicitly.") }}
@@ -49,14 +50,14 @@
 {{- $isProxmox := eq $substrate "proxmox" }}
 {{- if $isKairos }}
 {{-   if $isProxmox }}
-{{-     fail (printf "NodeGroupClass %q selects Kairos workers, which are supported on the kubevirt substrate only" $class.name) }}
+{{-     fail (printf "WorkerClass %q selects Kairos workers, which are supported on the kubevirt substrate only" $class.name) }}
 {{-   end }}
 {{-   $_ := include "kubernetes-nodes.kairosImage" (dict "root" . "class" $class) }}
 {{-   if .Values.osImage }}
-{{-     fail (printf "osImage selects a Talos image and does not apply to a pool on the Kairos NodeGroupClass %q" $class.name) }}
+{{-     fail (printf "osImage selects a Talos image and does not apply to a pool on the Kairos WorkerClass %q" $class.name) }}
 {{-   end }}
 {{-   if .Values.kernelModules }}
-{{-     fail (printf "kernelModules are loaded through the Talos machine config and do not apply to a pool on the Kairos NodeGroupClass %q" $class.name) }}
+{{-     fail (printf "kernelModules are loaded through the Talos machine config and do not apply to a pool on the Kairos WorkerClass %q" $class.name) }}
 {{-   end }}
 {{- end }}
 {{- if $isProxmox }}
@@ -229,7 +230,7 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
-      {{- if eq .nodeGroupClass.bootstrap "kairos" }}
+      {{- if eq .workerClass.bootstrap "kairos" }}
       - metadata:
           name: disk-system
           annotations:
@@ -239,7 +240,7 @@ spec:
             registry:
               {{- /* The CDI importer refuses a reference carrying both a tag
                      and a digest; the digest alone pins the same image. */}}
-              url: {{ printf "docker://%s" (regexReplaceAll ":[^/:@]+@" (include "kubernetes-nodes.kairosImage" (dict "root" $ "class" .nodeGroupClass)) "@") | quote }}
+              url: {{ printf "docker://%s" (regexReplaceAll ":[^/:@]+@" (include "kubernetes-nodes.kairosImage" (dict "root" $ "class" .workerClass)) "@") | quote }}
           storage:
             resources:
               requests:
@@ -288,7 +289,7 @@ spec:
              refuse. No-op when osImage pins nothing, since the resolved version is
              then the one already checked above. */}}
       {{- if ne ($reqVersion | toString) ($.Values.talos.version | toString) }}
-      {{-   include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict
+      {{-   include "kubernetes-nodes.assertTalosSupportsKubernetes" (dict "root" $
               "talosVersion" $reqVersion
               "kubernetesVersion" $.Values.version
               "remedy" (printf "nodeGroup %s reaches this Talos release through its osImage override, not through talos.version. Bump 'version', change the osImage version, or drop the override so the pool follows talos.version." .groupName)) }}
@@ -606,7 +607,7 @@ spec:
           domain:
             {{- /* Kairos worker disks are GPT images without a BIOS boot
                    partition; SeaBIOS stops at "Booting from Hard Disk". */}}
-            {{- if eq .nodeGroupClass.bootstrap "kairos" }}
+            {{- if eq .workerClass.bootstrap "kairos" }}
             firmware:
               bootloader:
                 efi:
@@ -965,7 +966,7 @@ spec:
 {{- $_ := set $context "group" $group }}
 {{- $_ := set $context "groupName" $groupName }}
 {{- $_ := set $context "clusterName" $clusterName }}
-{{- $_ := set $context "nodeGroupClass" $class }}
+{{- $_ := set $context "workerClass" $class }}
 {{- /* These variables hold either kind despite their names. The content hash
        below is taken over the rendered template, so the names reach nothing
        outside this block. */}}
@@ -974,6 +975,16 @@ spec:
 {{- $kubevirtmachinetemplateHash := $kubevirtmachinetemplate | sha256sum | trunc 6 }}
 {{- $kubevirtmachinetemplateName := printf "%s-%s-%s" $clusterName $groupName $kubevirtmachinetemplateHash }}
 {{- $kubevirtmachinetemplateNames = append $kubevirtmachinetemplateNames $kubevirtmachinetemplateName }}
+{{- if and (not $isKairos) (ne $class.name "") -}}
+{{- $livePool := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" $.Release.Namespace (printf "%s-%s" $clusterName $groupName) -}}
+{{- if and $livePool (eq (dig "metadata" "annotations" "workerclasses.cozystack.io/class" "" $livePool) "") -}}
+{{- $oldBootstrap := dig "spec" "template" "spec" "bootstrap" "configRef" "name" "" $livePool -}}
+{{- $oldMachine := dig "spec" "template" "spec" "infrastructureRef" "name" "" $livePool -}}
+{{- if or (ne $oldBootstrap $bootstrapConfigName) (ne $oldMachine $kubevirtmachinetemplateName) -}}
+{{- fail (printf "adopting WorkerClass %q changes the legacy pool's bootstrap or infrastructure; preserve its effective Talos configuration first" $class.name) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: {{ $machineTemplateKind }}
 metadata:
@@ -991,6 +1002,9 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
+    {{- if ne $class.name "" }}
+    workerclasses.cozystack.io/class: {{ $class.name | quote }}
+    {{- end }}
     cluster.x-k8s.io/autoscaling-options-maxnodeprovisiontime: {{ include "kubernetes.positiveDuration" (dict "field" "maxNodeProvisionTime" "value" $.Values.maxNodeProvisionTime) | quote }}
     {{- if $effectiveMemory }}
     {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}

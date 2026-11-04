@@ -1,0 +1,13 @@
+{
+  "builtin default modules": "c703f5b023e1e6f8b36cb124bd664fdaf2cd375f84b000b5ac67cf4e1b8ba08c",
+  "builtin module opt-out": "c703f5b023e1e6f8b36cb124bd664fdaf2cd375f84b000b5ac67cf4e1b8ba08c",
+  "factory automatic GPU modules": "638b56db972ec3adbc0ef152e33c58c18ba6123c431688cb72442e3225e15a8f",
+  "factory defaults": "e84c58c631bb918546af8dec7482ba6ce44c18aa2a30c4be6cc305396a76bf3b",
+  "factory explicit module parameters": "000c4410a83caaf1bbe62271c3106ee490ee07837277b35b75de94beea318bc4",
+  "factory module opt-out on GPU": "d851c3dfd4af78de6c444b230422109cd882fcdd31aa8dc60964e76eec674106",
+  "factory selected image overrides": "93c78be845590880392e498025d1951e9fe7230c0a377393cef53f406eefbfb2",
+  "proxmox absent modules": "b5bbdc2d584b835f7b72806c70ba979ff622b31f9e693de62654077a06d14f34",
+  "proxmox empty modules and mirrors": "f3dc74903986888fd016b57bfcaab3e212f71a13ebd93c5b001d97d97d80e8ea",
+  "proxmox explicit modules": "79caa74cdee8d7b957c38ac444603f382742b1bbea06c4371a16e46629656517",
+  "separate mirror import trust installer reachability": "171d0a099d19ae4ba7af1045f53882a01a8dbee6ba3dd9b2da1ac52ccad1c0e5"
+}

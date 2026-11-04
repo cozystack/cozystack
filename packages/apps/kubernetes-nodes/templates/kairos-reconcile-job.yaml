@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 {{- define "kubernetes-nodes.kairos-reconcile-job-spec" -}}
 spec:
   backoffLimit: 30
@@ -79,7 +80,7 @@ spec:
           configMap:
             name: {{ .kctName | quote }}
 {{- end }}
-{{- $class := include "kubernetes-nodes.nodeGroupClass" . | fromYaml }}
+{{- $class := include "kubernetes-nodes.workerClass" . | fromYaml }}
 {{- if eq $class.bootstrap "kairos" }}
 {{- /*
   Main-phase Job that produces a Kairos pool's KairosConfigTemplate, the

@@ -81,7 +81,7 @@ tests:
   - it: keeps the bundled kubectl image in the kairos-reconcile Job when values carry an image override
     template: templates/kairos-reconcile-job.yaml
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
     documentSelector:
       path: kind
       value: Job
@@ -93,7 +93,7 @@ tests:
   - it: routes the kairos-reconcile Job's kubectl image through _cluster.images-registry
     template: templates/kairos-reconcile-job.yaml
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
       _cluster:
         images-registry: registry.airgap.example.test
     documentSelector:

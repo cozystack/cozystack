@@ -1,0 +1,61 @@
+suite: adopting a class cannot reimage a legacy pool
+templates: [templates/nodegroup.yaml]
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  version: v1.35
+  instanceType: ""
+  resources: {cpu: "2", memory: 4Gi}
+  workerClassName: talos
+  _cluster: {cluster-domain: cozy.local}
+tests:
+  - it: preserves the existing infrastructure and bootstrap references
+    kubernetesProvider: &provider
+      scheme:
+        cluster.x-k8s.io/v1beta1/MachineDeployment:
+          gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinedeployments}
+          namespaced: true
+        cluster.x-k8s.io/v1beta1/MachineSet:
+          gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+          namespaced: true
+        infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate:
+          gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+          namespaced: true
+      objects:
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineDeployment
+          metadata: {name: kubernetes-myk8s-md0, namespace: tenant-test}
+          spec:
+            clusterName: kubernetes-myk8s
+            template:
+              spec:
+                bootstrap:
+                  configRef: {kind: TalosConfigTemplate, name: kubernetes-myk8s-md0-ffdbe1}
+                infrastructureRef: {kind: KubevirtMachineTemplate, name: kubernetes-myk8s-md0-2d362e}
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata: {name: scheme-only, namespace: scheme-only}
+          spec: {}
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata: {name: scheme-only, namespace: scheme-only}
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: metadata.annotations["workerclasses.cozystack.io/class"]
+          value: talos
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: kubernetes-myk8s-md0-ffdbe1
+  - it: refuses adoption whose effective image changes
+    kubernetesProvider: *provider
+    set:
+      talos.version: v1.13.7
+    asserts:
+      - failedTemplate:
+          errorPattern: 'adopting WorkerClass.*changes the legacy pool'

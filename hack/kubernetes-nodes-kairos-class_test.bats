@@ -29,13 +29,13 @@ set:
   version: "v1.35"
   instanceType: ""
   resources: {cpu: "2", memory: 4Gi}
-  nodeGroupClassName: $class
+  workerClassName: $class
 tests:
   - it: renders
     kubernetesProvider:
       scheme:
-        "cozystack.io/v1alpha1/NodeGroupClass":
-          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "nodegroupclasses"}
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
           namespaced: false
         "cluster.x-k8s.io/v1beta1/MachineSet":
           gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinesets"}
@@ -68,7 +68,7 @@ render() {
   rm -rf "$dir"
 }
 
-OPERATOR_CLASS='        - kind: NodeGroupClass
+OPERATOR_CLASS='        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata: {name: acme-kairos}
           spec:
@@ -106,10 +106,10 @@ OPERATOR_CLASS='        - kind: NodeGroupClass
   cp -RL "$CHART" "$dir/chart"
   rm "$dir/chart/images/kairos-worker-v1.35.tag"
   if out="$(helm template kubernetes-nodes-myk8s-md0 "$dir/chart" --namespace tenant-test \
-      --set cluster=myk8s --set nodeGroupClassName=kairos --set version=v1.35 2>&1)"; then
+      --set cluster=myk8s --set workerClassName=kairos --set version=v1.35 2>&1)"; then
     echo "rendered without a platform disk" >&2
     exit 1
   fi
   rm -rf "$dir"
-  printf '%s\n' "$out" | grep -qF 'NodeGroupClass "kairos": this platform ships no Kairos worker disk for Kubernetes v1.35'
+  printf '%s\n' "$out" | grep -qF 'WorkerClass "kairos": this platform ships no Kairos worker disk for Kubernetes v1.35'
 }

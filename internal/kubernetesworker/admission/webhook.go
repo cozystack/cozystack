@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 
 	workers "github.com/cozystack/cozystack/api/workers/v1alpha1"
 	"github.com/cozystack/cozystack/internal/kubernetesworker/config"
@@ -163,7 +162,7 @@ func (v *Validator) Handle(ctx context.Context, req ca.Request) ca.Response {
 		if oldResolved.Bootstrap != resolved.Bootstrap {
 			return ca.Denied("workerClassName cannot switch a running pool's bootstrap family; create a new pool")
 		}
-		if oldName == "" && !reflect.DeepEqual(oldResolved, resolved) {
+		if oldName == "" && !config.Equivalent(oldResolved, resolved) {
 			return ca.Denied(fmt.Sprintf("adopting WorkerClass %q changes legacy configuration; preserve the effective Talos settings", name))
 		}
 	}

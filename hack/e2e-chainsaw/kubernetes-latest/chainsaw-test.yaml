@@ -105,7 +105,7 @@ spec:
         check:
           ($error == null): true
     # A Kairos worker pool on the cluster the op above left running and
-    # healthy, on the built-in `kairos` NodeGroupClass. Chainsaw skips it when
+    # healthy, on the built-in `kairos` WorkerClass. Chainsaw skips it when
     # that op failed, and the `finally` below reaps it with the cluster.
     #
     # It runs inside the E2E job's cap, so its ceiling is sized against it.

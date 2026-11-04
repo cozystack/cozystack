@@ -1,4 +1,4 @@
-suite: NodeGroupClass resolution
+suite: WorkerClass resolution
 templates:
   - templates/nodegroup.yaml
   - templates/kairos-reconcile-job.yaml
@@ -42,11 +42,11 @@ tests:
   - it: renders an operator Talos class exactly as the built-in talos class
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-talos
+      workerClassName: acme-talos
     kubernetesProvider:
       scheme: &scheme
-        "cozystack.io/v1alpha1/NodeGroupClass":
-          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "nodegroupclasses"}
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
           namespaced: false
         "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
           gvr: {group: "controlplane.cluster.x-k8s.io", version: "v1alpha1", resource: "kamajicontrolplanes"}
@@ -65,7 +65,7 @@ tests:
           namespaced: true
       objects:
         - &acmeTalos
-          kind: NodeGroupClass
+          kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-talos
@@ -100,7 +100,7 @@ tests:
   - it: resolves the built-in kairos class without reading any object
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -120,14 +120,14 @@ tests:
   - it: takes the Machine version from an operator Kairos class
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
         - *schemeOnlyMs
         - *schemeOnlyKmt
         - &acmeKairos
-          kind: NodeGroupClass
+          kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-kairos
@@ -147,7 +147,7 @@ tests:
   - it: passes the class's Kubernetes version to kubeadm
     template: templates/kairos-reconcile-job.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -168,7 +168,7 @@ tests:
   - it: imports the class's disk, dropping the tag the CDI registry import refuses next to a digest
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -186,13 +186,13 @@ tests:
   - it: boots the platform disk and patch for an operator Kairos class without an image
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-kairos-platform
+      workerClassName: acme-kairos-platform
     kubernetesProvider:
       scheme: *scheme
       objects:
         - *schemeOnlyMs
         - *schemeOnlyKmt
-        - kind: NodeGroupClass
+        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-kairos-platform
@@ -215,13 +215,13 @@ tests:
   - it: refuses a pool on an operator class that is ahead of its control plane
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
         - *schemeOnlyMs
         - *schemeOnlyKmt
-        - kind: NodeGroupClass
+        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-kairos
@@ -241,13 +241,10 @@ tests:
       - failedTemplate:
           errorPattern: 'is ahead of parent cluster'
 
-  # A Kairos pool ignores talos.*: those fields carry non-empty defaults that
-  # the API writes into every stored spec, so a value there cannot be told
-  # from a default. The names pinned here are the render with default talos.*.
-  - it: names the Kairos templates the same with default talos values
+  - it: names the Kairos templates without manufacturing Talos defaults
     template: templates/nodegroup.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -265,10 +262,10 @@ tests:
           path: spec.template.spec.infrastructureRef.name
           value: kubernetes-myk8s-md0-5f0e21
 
-  - it: does not let talos values change a Kairos pool's render
-    template: templates/nodegroup.yaml
+  - it: refuses explicitly supplied Talos configuration on Kairos
+    template: templates/talos-reconcile-job.yaml
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
       talos:
         version: not-a-version
         schematicID: NOT_A_SCHEMATIC
@@ -284,23 +281,14 @@ tests:
         - *schemeOnlyMs
         - *schemeOnlyKmt
         - *acmeKairos
-    documentSelector:
-      path: kind
-      value: MachineDeployment
     asserts:
-      - equal:
-          path: spec.template.spec.bootstrap.configRef.name
-          value: kubernetes-myk8s-md0-kairos-bd33c8
-      - equal:
-          path: spec.template.spec.infrastructureRef.name
-          value: kubernetes-myk8s-md0-5f0e21
+      - failedTemplate:
+          errorPattern: 'talos is Talos-specific and unsupported on Kairos'
 
   - it: renders no Image Factory CA for a Kairos pool
     template: templates/image-factory-ca.yaml
     set:
-      nodeGroupClassName: kairos
-      talos:
-        imageFactoryCA: not a certificate
+      workerClassName: kairos
     asserts:
       - hasDocuments:
           count: 0

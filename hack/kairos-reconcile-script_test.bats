@@ -16,7 +16,7 @@ CHART="$(pwd)/packages/apps/kubernetes-nodes"
   cat > "$dir/values.yaml" <<'VALUES'
 cluster: myk8s
 version: "v1.35"
-nodeGroupClassName: kairos
+workerClassName: kairos
 instanceType: ""
 resources: {cpu: "2", memory: 4Gi}
 diskSize: 30Gi
@@ -66,7 +66,7 @@ KUBECTL
   cat > "$dir/values.yaml" <<'VALUES'
 cluster: myk8s
 version: "v1.35"
-nodeGroupClassName: kairos
+workerClassName: kairos
 instanceType: ""
 resources: {cpu: "2", memory: 4Gi}
 diskSize: 30Gi

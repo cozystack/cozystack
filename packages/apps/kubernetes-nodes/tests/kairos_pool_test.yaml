@@ -19,7 +19,7 @@ set:
     memory: 4Gi
   diskSize: 30Gi
   storageClass: replicated
-  nodeGroupClassName: kairos
+  workerClassName: kairos
 tests:
   - it: imports the system disk from the platform worker disk built for the pool's Kubernetes minor
     template: templates/nodegroup.yaml
@@ -129,16 +129,16 @@ tests:
       substrate: proxmox
     asserts:
       - failedTemplate:
-          errorPattern: 'NodeGroupClass "kairos" selects Kairos workers, which are supported on the kubevirt substrate only'
+          errorPattern: 'WorkerClass "kairos" selects Kairos workers, which are supported on the kubevirt substrate only'
 
   - it: refuses osImage on a Kairos pool
-    template: templates/nodegroup.yaml
+    template: templates/talos-reconcile-job.yaml
     set:
       osImage:
         factory: {}
     asserts:
       - failedTemplate:
-          errorPattern: 'osImage selects a Talos image and does not apply to a pool on the Kairos NodeGroupClass "kairos"'
+          errorPattern: 'osImage is Talos-specific and unsupported on Kairos'
 
   - it: gives the worker user a password no login can match
     template: templates/kairos-reconcile-job.yaml
@@ -184,38 +184,33 @@ tests:
 
   # Provider v0.2.1 takes a single key in sshPublicKey.
   - it: refuses more than one SSH key rather than dropping any
-    template: templates/nodegroup.yaml
+    template: templates/talos-reconcile-job.yaml
     set:
       sshKeys:
         - ssh-ed25519 AAAA one
         - ssh-ed25519 AAAA two
     asserts:
       - failedTemplate:
-          errorPattern: 'sshKeys has 2 keys, and a pool on the Kairos NodeGroupClass "kairos" takes one'
+          errorPattern: 'sshKeys has 2 keys, and a pool on the Kairos WorkerClass "kairos" takes one'
 
-  - it: renders a Talos pool with several SSH keys, on which they have no effect
+  - it: refuses nonempty SSH keys on Talos instead of accepting a no-op
     template: templates/talos-reconcile-job.yaml
     set:
-      nodeGroupClassName: talos
+      workerClassName: talos
       sshKeys:
         - ssh-ed25519 AAAA one
-        - ssh-ed25519 AAAA two
-    documentSelector:
-      path: kind
-      value: Job
     asserts:
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: ssh-ed25519
+      - failedTemplate:
+          errorPattern: 'sshKeys is unsupported because Talos has no SSH server'
 
   - it: refuses kernelModules on a Kairos pool
-    template: templates/nodegroup.yaml
+    template: templates/talos-reconcile-job.yaml
     set:
       kernelModules:
         - name: nvidia
     asserts:
       - failedTemplate:
-          errorPattern: 'kernelModules are loaded through the Talos machine config and do not apply to a pool on the Kairos NodeGroupClass "kairos"'
+          errorPattern: 'kernelModules is Talos-specific and unsupported on Kairos'
 
   # Whether the guest can drive the device is a property of the class's image.
   - it: passes GPUs through to the worker VM

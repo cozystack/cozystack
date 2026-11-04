@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 {{- /*
 CA bundle CDI verifies the Talos Image Factory against while importing a
 worker's OS disk image.
@@ -22,7 +23,7 @@ The key name is arbitrary — CDI mounts the whole ConfigMap into the importer's
 cert directory and reads every file in it — so ca.pem follows the upstream
 example in kubevirt/containerized-data-importer manifests/example/cert-configmap.yaml.
 */}}
-{{- if eq (include "kubernetes-nodes.nodeGroupClass" . | fromYaml).bootstrap "talos" }}
+{{- if eq (include "kubernetes-nodes.workerClass" . | fromYaml).bootstrap "talos" }}
 {{- $resolved := dict -}}
 {{- include "kubernetes-nodes.resolveOsImage" (dict
       "osImage" .Values.osImage

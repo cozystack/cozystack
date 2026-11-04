@@ -1,20 +1,399 @@
 [
- {"name":"legacy factory defaults","pool":{"version":"v1.35"},"version":"v1.13.6","schematicID":"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515","source":"factory","modules":[]},
- {"name":"baseline and partial tenant scalar","class":{"bootstrap":"talos","talos":{"version":"v1.13.7","imageFactoryURL":"https://baseline.example.com"}},"pool":{"workerClassName":"custom","version":"v1.35","talos":{"schematicID":"tenant123"}},"version":"v1.13.7","schematicID":"tenant123","source":"factory","modules":[]},
- {"name":"explicit empty scalar rejected","class":{"bootstrap":"talos","talos":{"version":"v1.13.7"}},"pool":{"workerClassName":"custom","talos":{"version":""}},"error":"talos.version"},
- {"name":"module baseline cleared","class":{"bootstrap":"talos","kernelModules":[{"name":"nvme_tcp"}]},"pool":{"workerClassName":"custom","kernelModules":[]},"version":"v1.13.6","schematicID":"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515","source":"factory","modules":[]},
- {"name":"automatic NVIDIA when lists absent","class":{"bootstrap":"talos"},"pool":{"workerClassName":"custom","gpus":[{"name":"nvidia.com/GH200"}]},"version":"v1.13.6","schematicID":"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515","source":"factory","modules":["nvidia","nvidia_uvm","nvidia_drm","nvidia_modeset"]},
- {"name":"empty source replaces builtin","class":{"bootstrap":"talos","substrates":{"kubevirt":{"osImage":{"builtin":{"version":"v1.13.6","schematicID":"fixed123"}}}}},"pool":{"workerClassName":"custom","osImage":{}},"error":"fixed"},
- {"name":"fixed builtin matching empty overrides","class":{"bootstrap":"talos","substrates":{"kubevirt":{"osImage":{"builtin":{"version":"v1.13.6","schematicID":"fixed123"}}}}},"pool":{"workerClassName":"custom","talos":{"schematicID":"fixed123"},"osImage":{"builtin":{}}},"version":"v1.13.6","schematicID":"fixed123","source":"builtin","modules":[]},
- {"name":"fixed builtin version conflict","class":{"bootstrap":"talos","substrates":{"kubevirt":{"osImage":{"builtin":{"version":"v1.13.6","schematicID":"fixed123"}}}}},"pool":{"workerClassName":"custom","osImage":{"builtin":{"version":"v1.13.7"}}},"error":"fixed"},
- {"name":"factory source override fallback","class":{"bootstrap":"talos","talos":{"version":"v1.13.7","schematicID":"class123"},"substrates":{"kubevirt":{"osImage":{"factory":{"version":"v1.13.8"}}}}},"pool":{"workerClassName":"custom","osImage":{"factory":{"version":"","schematicID":"","imageFactoryURL":"https://tenant.example.com"}}},"version":"v1.13.7","schematicID":"class123","source":"factory","modules":[]},
- {"name":"proxmox fixed matching","class":{"bootstrap":"talos","talos":{"version":"v1.13.6","schematicID":"fixed123"},"substrates":{"proxmox":{"templateTags":["template"]}}},"pool":{"workerClassName":"custom","substrate":"proxmox"},"version":"v1.13.6","schematicID":"fixed123","source":"proxmox","modules":[]},
- {"name":"proxmox template override conflict","class":{"bootstrap":"talos","talos":{"version":"v1.13.6","schematicID":"fixed123"},"substrates":{"proxmox":{"templateTags":["template"]}}},"pool":{"workerClassName":"custom","substrate":"proxmox","proxmox":{"templateTags":["other"]}},"error":"fixed"},
- {"name":"talos SSH keys rejected","class":{"bootstrap":"talos"},"pool":{"workerClassName":"custom","sshKeys":["ssh-ed25519 AAAA"]},"error":"sshKeys"},
- {"name":"kairos ignores no manufactured Talos defaults","class":{"bootstrap":"kairos"},"pool":{"workerClassName":"custom","version":"v1.35","sshKeys":["ssh-ed25519 AAAA"]},"source":"kairos","modules":[]},
- {"name":"kairos refuses Talos settings","class":{"bootstrap":"kairos"},"pool":{"workerClassName":"custom","talos":{"version":"v1.13.6"}},"error":"talos"},
- {"name":"kairos refuses multiple keys","class":{"bootstrap":"kairos"},"pool":{"workerClassName":"custom","sshKeys":["one","two"]},"error":"sshKeys"},
- {"name":"kairos fixed minor conflict","class":{"bootstrap":"kairos","image":{"kubernetesVersion":"v1.34.9","reference":"registry.example.com/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}},"pool":{"workerClassName":"custom","version":"v1.35"},"error":"minor"},
- {"name":"mirrors map replaces baseline","class":{"bootstrap":"talos","talos":{"registryMirrors":{"ghcr.io":{"endpoints":["https://baseline.example.com"]}}}},"pool":{"workerClassName":"custom","talos":{"registryMirrors":{}}},"version":"v1.13.6","schematicID":"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515","source":"factory","modules":[],"mirrors":{}},
- {"name":"both source branches refused","class":{"bootstrap":"talos"},"pool":{"workerClassName":"custom","osImage":{"factory":{},"builtin":{}}},"error":"osImage"}
+  {
+    "name": "legacy factory defaults",
+    "pool": {
+      "version": "v1.35"
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "baseline and partial tenant scalar",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7",
+        "imageFactoryURL": "https://baseline.example.com"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35",
+      "talos": {
+        "schematicID": "tenant123"
+      }
+    },
+    "version": "v1.13.7",
+    "schematicID": "tenant123",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "explicit empty scalar rejected",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": ""
+      }
+    },
+    "error": "talos.version"
+  },
+  {
+    "name": "module baseline cleared",
+    "class": {
+      "bootstrap": "talos",
+      "kernelModules": [
+        {
+          "name": "nvme_tcp"
+        }
+      ]
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": []
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "automatic NVIDIA when lists absent",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "gpus": [
+        {
+          "name": "nvidia.com/GH200"
+        }
+      ]
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [
+      "nvidia",
+      "nvidia_uvm",
+      "nvidia_drm",
+      "nvidia_modeset"
+    ],
+    "moduleParameters": {
+      "nvidia": [
+        "NVreg_NvLinkDisable=1"
+      ]
+    }
+  },
+  {
+    "name": "empty source replaces builtin",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {}
+    },
+    "error": "fixed"
+  },
+  {
+    "name": "fixed builtin matching empty overrides",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "schematicID": "fixed123"
+      },
+      "osImage": {
+        "builtin": {}
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "builtin",
+    "modules": []
+  },
+  {
+    "name": "fixed builtin version conflict",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "builtin": {
+          "version": "v1.13.7"
+        }
+      }
+    },
+    "error": "fixed"
+  },
+  {
+    "name": "factory source override fallback",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7",
+        "schematicID": "class123"
+      },
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "factory": {
+              "version": "v1.13.8"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "factory": {
+          "version": "",
+          "schematicID": "",
+          "imageFactoryURL": "https://tenant.example.com"
+        }
+      }
+    },
+    "version": "v1.13.7",
+    "schematicID": "class123",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "proxmox fixed matching",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox"
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "proxmox",
+    "modules": []
+  },
+  {
+    "name": "proxmox template override conflict",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "other"
+        ]
+      }
+    },
+    "error": "fixed"
+  },
+  {
+    "name": "talos SSH keys rejected",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "ssh-ed25519 AAAA"
+      ]
+    },
+    "error": "sshKeys"
+  },
+  {
+    "name": "kairos ignores no manufactured Talos defaults",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35",
+      "sshKeys": [
+        "ssh-ed25519 AAAA"
+      ]
+    },
+    "source": "kairos",
+    "modules": []
+  },
+  {
+    "name": "kairos refuses Talos settings",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6"
+      }
+    },
+    "error": "talos"
+  },
+  {
+    "name": "kairos refuses multiple keys",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "one",
+        "two"
+      ]
+    },
+    "error": "sshKeys"
+  },
+  {
+    "name": "kairos fixed minor conflict",
+    "class": {
+      "bootstrap": "kairos",
+      "image": {
+        "kubernetesVersion": "v1.34.9",
+        "reference": "registry.example.com/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35"
+    },
+    "error": "minor"
+  },
+  {
+    "name": "mirrors map replaces baseline",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://baseline.example.com"
+            ]
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "registryMirrors": {}
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "mirrors": {}
+  },
+  {
+    "name": "both source branches refused",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "factory": {},
+        "builtin": {}
+      }
+    },
+    "error": "osImage"
+  },
+  {
+    "name": "module name validation",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": [
+        {
+          "name": "nvme$(id)"
+        }
+      ]
+    },
+    "error": "kernelModules"
+  },
+  {
+    "name": "module parameter validation",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": [
+        {
+          "name": "nvme_tcp",
+          "parameters": [
+            "bad$(id)"
+          ]
+        }
+      ]
+    },
+    "error": "kernelModules"
+  }
 ]

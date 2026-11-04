@@ -68,7 +68,7 @@ diagnostics_collected() {
 @test "a pool that joins passes and runs a pod on the Kairos node" {
   kairos_setup
   run_kairos_pool_test t
-  grep -qxF '  nodeGroupClassName: kairos' "${KSTUB_LOG}.applied"
+  grep -qxF '  workerClassName: kairos' "${KSTUB_LOG}.applied"
   grep -qxF '  nodeName: kairos-node-0' "${KSTUB_LOG}.applied"
   grep -qF 'wait machines -n tenant-test -l cluster.x-k8s.io/deployment-name=kubernetes-t-kairos' "${KSTUB_LOG}"
   grep -qF 'wait --kubeconfig tenantkubeconfig-t-kairos -n default pod kairos-probe' "${KSTUB_LOG}"

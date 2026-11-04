@@ -1,6 +1,6 @@
 suite: os switch guard (assertOsMatches)
 
-# Moving a running pool between a Talos and a Kairos NodeGroupClass would roll
+# Moving a running pool between a Talos and a Kairos WorkerClass would roll
 # every worker onto the other OS, so the chart refuses it against the live
 # MachineDeployment, in both directions and for operator classes as well as
 # the built-in ones. Offline the check is inert.
@@ -25,7 +25,7 @@ set:
 tests:
   - it: refuses to turn a running Talos pool into a Kairos one
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
     kubernetesProvider:
       scheme: &scheme
         "cluster.x-k8s.io/v1beta1/MachineDeployment":
@@ -40,8 +40,8 @@ tests:
         "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
           gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "kubevirtmachinetemplates"}
           namespaced: true
-        "cozystack.io/v1alpha1/NodeGroupClass":
-          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "nodegroupclasses"}
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
           namespaced: false
       objects:
         - kind: MachineDeployment
@@ -49,6 +49,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -57,11 +59,11 @@ tests:
                     kind: TalosConfigTemplate
     asserts:
       - failedTemplate:
-          errorPattern: 'pool "md0" already runs workers bootstrapped by a TalosConfigTemplate, and NodeGroupClass "kairos" selects kairos workers'
+          errorPattern: 'pool "md0" already runs workers bootstrapped by a TalosConfigTemplate, and WorkerClass "kairos" selects kairos workers'
 
   - it: refuses to turn a running Kairos pool into a Talos one
     set:
-      nodeGroupClassName: talos
+      workerClassName: talos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -70,6 +72,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -78,11 +82,11 @@ tests:
                     kind: KairosConfigTemplate
     asserts:
       - failedTemplate:
-          errorPattern: 'pool "md0" already runs workers bootstrapped by a KairosConfigTemplate, and NodeGroupClass "talos" selects talos workers'
+          errorPattern: 'pool "md0" already runs workers bootstrapped by a KairosConfigTemplate, and WorkerClass "talos" selects talos workers'
 
   - it: renders a running Kairos pool that stays on Kairos
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -91,6 +95,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -129,6 +135,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -160,7 +168,7 @@ tests:
 
   - it: renders a running Talos pool that stays on Talos
     set:
-      nodeGroupClassName: talos
+      workerClassName: talos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -169,6 +177,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -200,7 +210,7 @@ tests:
 
   - it: moves a pool still on the kubeadm bootstrap onto Kairos when it asks for Kairos
     set:
-      nodeGroupClassName: kairos
+      workerClassName: kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -209,6 +219,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -240,7 +252,7 @@ tests:
 
   - it: refuses to move a running Talos pool onto an operator Kairos class
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -249,6 +261,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
@@ -256,7 +270,7 @@ tests:
                   configRef:
                     kind: TalosConfigTemplate
         - &acmeKairos
-          kind: NodeGroupClass
+          kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-kairos
@@ -267,11 +281,11 @@ tests:
               reference: registry.example.com/kairos/worker:v1.35.2@sha256:2222222222222222222222222222222222222222222222222222222222222222
     asserts:
       - failedTemplate:
-          errorPattern: 'already runs workers bootstrapped by a TalosConfigTemplate, and NodeGroupClass "acme-kairos" selects kairos workers'
+          errorPattern: 'already runs workers bootstrapped by a TalosConfigTemplate, and WorkerClass "acme-kairos" selects kairos workers'
 
   - it: refuses to move a running Kairos pool onto an operator Talos class
     set:
-      nodeGroupClassName: acme-talos
+      workerClassName: acme-talos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -280,13 +294,15 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:
                 bootstrap:
                   configRef:
                     kind: KairosConfigTemplate
-        - kind: NodeGroupClass
+        - kind: WorkerClass
           apiVersion: cozystack.io/v1alpha1
           metadata:
             name: acme-talos
@@ -294,11 +310,11 @@ tests:
             bootstrap: talos
     asserts:
       - failedTemplate:
-          errorPattern: 'already runs workers bootstrapped by a KairosConfigTemplate, and NodeGroupClass "acme-talos" selects talos workers'
+          errorPattern: 'already runs workers bootstrapped by a KairosConfigTemplate, and WorkerClass "acme-talos" selects talos workers'
 
   - it: moves a running Kairos pool between two Kairos classes
     set:
-      nodeGroupClassName: acme-kairos
+      workerClassName: acme-kairos
     kubernetesProvider:
       scheme: *scheme
       objects:
@@ -307,6 +323,8 @@ tests:
           metadata:
             name: kubernetes-myk8s-md0
             namespace: tenant-test
+            annotations:
+              workerclasses.cozystack.io/class: existing-class
           spec:
             template:
               spec:

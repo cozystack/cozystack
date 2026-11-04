@@ -168,7 +168,7 @@ tests:
       osImage:
         factory:
           version: v1.12.6
-    template: templates/nodegroup.yaml
+    template: templates/talos-reconcile-job.yaml
     asserts:
       - failedTemplate:
           errorPattern: "substrate proxmox does not take osImage"

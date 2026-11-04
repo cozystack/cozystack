@@ -1,0 +1,153 @@
+[
+  {
+    "name": "factory defaults",
+    "values": {}
+  },
+  {
+    "name": "factory module opt-out on GPU",
+    "values": {
+      "gpus": [
+        {
+          "name": "nvidia.com/GH200"
+        }
+      ],
+      "kernelModules": []
+    }
+  },
+  {
+    "name": "factory automatic GPU modules",
+    "values": {
+      "gpus": [
+        {
+          "name": "nvidia.com/GH200"
+        }
+      ]
+    }
+  },
+  {
+    "name": "factory explicit module parameters",
+    "values": {
+      "kernelModules": [
+        {
+          "name": "nvme_tcp",
+          "parameters": [
+            "io_queue_depth=128"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "separate mirror import trust installer reachability",
+    "values": {
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://mirror.example.com"
+            ],
+            "skipFallback": true
+          }
+        },
+        "imageFactoryURL": "https://factory.example.com",
+        "imageFactoryCA": "-----BEGIN CERTIFICATE-----\nMIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw\nHDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP\nMjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI\nqoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD\nVR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb\n2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh\nANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0\nuDdynL2YtgHPfcQVfBb98CKq7yI=\n-----END CERTIFICATE-----\n",
+        "installerRepository": "registry.example.com/installer"
+      }
+    }
+  },
+  {
+    "name": "factory selected image overrides",
+    "values": {
+      "osImage": {
+        "factory": {
+          "version": "v1.13.7",
+          "schematicID": "abc123",
+          "imageFactoryURL": "https://factory.example.com"
+        }
+      }
+    }
+  },
+  {
+    "name": "builtin default modules",
+    "values": {
+      "osImage": {
+        "builtin": {}
+      }
+    }
+  },
+  {
+    "name": "builtin module opt-out",
+    "values": {
+      "osImage": {
+        "builtin": {}
+      },
+      "kernelModules": []
+    }
+  },
+  {
+    "name": "proxmox absent modules",
+    "values": {
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ],
+        "network": {
+          "bridge": "vmbr0"
+        },
+        "dnsServers": [
+          "192.0.2.53"
+        ]
+      }
+    }
+  },
+  {
+    "name": "proxmox empty modules and mirrors",
+    "values": {
+      "substrate": "proxmox",
+      "kernelModules": [],
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ],
+        "network": {
+          "bridge": "vmbr0"
+        },
+        "dnsServers": [
+          "192.0.2.53"
+        ]
+      },
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://mirror.example.com"
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "proxmox explicit modules",
+    "values": {
+      "substrate": "proxmox",
+      "kernelModules": [
+        {
+          "name": "nvme_tcp"
+        }
+      ],
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ],
+        "network": {
+          "bridge": "vmbr0"
+        },
+        "dnsServers": [
+          "192.0.2.53"
+        ]
+      }
+    }
+  }
+]

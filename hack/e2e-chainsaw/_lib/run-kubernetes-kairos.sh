@@ -1,6 +1,6 @@
 #!/bin/sh
 # A Kairos worker pool on a tenant cluster that run_kubernetes_test brought up
-# and proved healthy. The pool names the built-in `kairos` NodeGroupClass, so
+# and proved healthy. The pool names the built-in `kairos` WorkerClass, so
 # it boots the platform worker disk for the cluster's minor and joins through
 # the Kairos bootstrap provider; the suite asserts what Talos workers get from
 # the same path: a Ready Node linked to its Machine, and a pod running on it.
@@ -151,7 +151,7 @@ metadata:
   namespace: tenant-test
 spec:
   cluster: "${_kp_test}"
-  nodeGroupClassName: kairos
+  workerClassName: kairos
   diskSize: 20Gi
   gpus: []
   instanceType: u1.medium

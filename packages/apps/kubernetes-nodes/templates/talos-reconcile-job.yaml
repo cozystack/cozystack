@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 {{- /* Job spec rendered through a named template so the Job name can carry
        a content hash of the whole spec. $.Release is the pool release (used for
        the SA it runs as and its network-policy label); .clusterName targets the
@@ -185,7 +186,7 @@ spec:
             seccompProfile:
               type: RuntimeDefault
 {{- end }}
-{{- if eq (include "kubernetes-nodes.nodeGroupClass" . | fromYaml).bootstrap "talos" }}
+{{- if eq (include "kubernetes-nodes.workerClass" . | fromYaml).bootstrap "talos" }}
 {{- if eq (.Values.substrate | default "kubevirt") "proxmox" }}
 {{- include "kubernetes-nodes.assertDnsServersAreAddresses" . }}
 {{- end }}

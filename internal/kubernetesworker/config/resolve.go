@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -200,16 +201,20 @@ func resolveModules(class *workers.WorkerClassSpec, pool map[string]any, out *Re
 		if err = json.Unmarshal(data, &out.KernelModules); err != nil {
 			return fmt.Errorf("kernelModules: %w", err)
 		}
-		return nil
+		return validateModules(out.KernelModules)
 	}
 	if class != nil && class.KernelModules != nil {
-		return nil
+		return validateModules(out.KernelModules)
 	}
 	gpus, _ := pool["gpus"].([]any)
 	for _, raw := range gpus {
 		if name, _ := asMap(raw)["name"].(string); strings.HasPrefix(name, "nvidia.com/") {
 			for _, m := range []string{"nvidia", "nvidia_uvm", "nvidia_drm", "nvidia_modeset"} {
-				out.KernelModules = append(out.KernelModules, workers.KernelModule{Name: m})
+				module := workers.KernelModule{Name: m}
+				if m == "nvidia" {
+					module.Parameters = []string{"NVreg_NvLinkDisable=1"}
+				}
+				out.KernelModules = append(out.KernelModules, module)
 			}
 			break
 		}
@@ -319,4 +324,32 @@ func stringList(v any) ([]string, error) {
 		return nil, fmt.Errorf("must be a string list: %w", err)
 	}
 	return list, nil
+}
+
+func validateModules(modules []workers.KernelModule) error {
+	namePattern := regexp.MustCompile(`^[a-z0-9_-]+$`)
+	parameterPattern := regexp.MustCompile("^[^$`\\\\'\"]+$")
+	graphic := regexp.MustCompile(`^[[:graph:]]+$`)
+	for _, m := range modules {
+		if !namePattern.MatchString(m.Name) {
+			return fmt.Errorf("invalid kernelModules name %q", m.Name)
+		}
+		for _, p := range m.Parameters {
+			if !graphic.MatchString(p) || !parameterPattern.MatchString(p) {
+				return fmt.Errorf("invalid kernelModules parameter %q", p)
+			}
+		}
+	}
+	return nil
+}
+
+// Equivalent compares resolved consumers, not the syntactic source selector.
+// An absent factory selector and an explicit empty factory render identically.
+func Equivalent(a, b *Resolved) bool {
+	left, right := *a, *b
+	left.OSImage = nil
+	right.OSImage = nil
+	l, le := json.Marshal(left)
+	r, re := json.Marshal(right)
+	return le == nil && re == nil && bytes.Equal(l, r)
 }
