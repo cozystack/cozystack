@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { screen, waitFor } from "@testing-library/react"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { K8sClient } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
@@ -96,6 +96,31 @@ describe("MetricsView", () => {
 
     await waitFor(() => expect(screen.getAllByText("No data for this range.")).toHaveLength(3))
     expect(screen.queryByText("Try a longer range.")).toBeNull()
+  })
+
+  it("shows a panel's samples as a table on request", async () => {
+    const { client } = clientWith(() => matrix("db-0"))
+    renderWithK8sProvider(<MetricsView scope={scope} />, { client })
+    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(3))
+    const toggle = screen.getByRole("button", { name: "Show data for CPU (cores)" })
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
+
+    await userEvent.click(toggle)
+
+    const table = screen.getByRole("region", { name: "CPU (cores) data" })
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    expect(toggle).toHaveAttribute("aria-controls", table.id)
+    expect(toggle).toHaveTextContent("Hide data")
+    expect(within(table).getByRole("columnheader", { name: "db-0" })).toBeInTheDocument()
+    expect(screen.queryByRole("region", { name: "Memory (working set) data" })).toBeNull()
+  })
+
+  it("offers no table while a panel has no samples", () => {
+    const { client } = clientWith(() => new Promise<Response>(() => {}))
+
+    renderWithK8sProvider(<MetricsView scope={scope} />, { client })
+
+    expect(screen.getByRole("button", { name: "Show data for Network" })).toBeDisabled()
   })
 
   it("holds each chart's place while it loads", () => {

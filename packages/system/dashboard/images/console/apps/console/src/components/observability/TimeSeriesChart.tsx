@@ -18,6 +18,7 @@ export function TimeSeriesChart({ data, format }: TimeSeriesChartProps) {
     const el = ref.current
     if (!el) return
     const fmt = (v: number | null) => (v === null ? "–" : format(v))
+    const latest = data.series.map((s) => s.values.findLast((v) => v !== null) ?? null)
     const chart = new uPlot(
       {
         width: el.clientWidth || 600,
@@ -30,7 +31,8 @@ export function TimeSeriesChart({ data, format }: TimeSeriesChartProps) {
             label: s.label,
             stroke: COLORS[i % COLORS.length],
             width: 1.5,
-            value: (_: uPlot, v: number | null) => fmt(v),
+            // Without a hovered point the legend shows the latest sample instead of a dash.
+            value: (_: uPlot, v: number | null, sidx: number, idx: number | null) => fmt(idx === null ? latest[sidx - 1] : v),
           })),
         ],
         axes: [{}, { size: 84, values: (_: uPlot, splits: number[]) => splits.map(format) }],
