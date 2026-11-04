@@ -116,7 +116,7 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		code     int
 	}{
 		{"unknown endpoint", "tenant_ids", url.Values{}, http.StatusNotFound},
-		// An empty value used to reach vlselect as fields_limit=0.
+		// vlselect reads fields_limit=0 as no limit on the groups.
 		{"empty fields_limit", "hits", url.Values{"field": {"level"}, "fields_limit": {""}}, http.StatusBadRequest},
 		{"stats_query is not proxied", "stats_query", url.Values{}, http.StatusNotFound},
 		{"ignore_global_time_filter", "query", url.Values{"query": {`* options(ignore_global_time_filter=true)`}}, http.StatusBadRequest},
@@ -263,6 +263,11 @@ func TestBuildLogsParamsStepAndLimit(t *testing.T) {
 	facets := build(t, "facets", url.Values{"max_values_per_field": {"99999"}, "max_value_len": {"99999"}})
 	if facets.Get("max_values_per_field") != "5000" || facets.Get("max_value_len") != "5000" {
 		t.Errorf("facets caps not clamped: %v", facets)
+	}
+	// Without fields_limit vlselect returns every group, so the cap is
+	// sent even when the client sends none.
+	if got := build(t, "hits", url.Values{"field": {"level"}}).Get("fields_limit"); got != "5000" {
+		t.Errorf("hits without fields_limit forwards %q, want the 5000 cap", got)
 	}
 	hits := build(t, "hits", url.Values{"field": {"b", "a"}, "fields_limit": {"99999"}})
 	fields := hits["field"]
