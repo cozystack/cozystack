@@ -49,6 +49,10 @@ var (
 	querySeconds      = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 )
 
+// negativeDurationPart is what metricsql's scanSingleDuration accepts
+// after a minus inside one duration token.
+var negativeDurationPart = regexp.MustCompile(`^(?:\d+(?:\.\d+)?(?:ms|s|m|h|d|w|y|i)|\$__interval)`)
+
 var queryDurationUnits = map[string]time.Duration{
 	"ms": time.Millisecond, "s": time.Second, "m": time.Minute, "h": time.Hour,
 	"d": 24 * time.Hour, "w": 7 * 24 * time.Hour, "y": 365 * 24 * time.Hour,
@@ -212,7 +216,8 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 		// metricsql lexes 1h-30m as one duration whose parts after the
 		// first negative one all subtract (DurationValue), so -1h-30m is
 		// -90m and 1h-2h is -1h; the scan does not read such compounds.
-		if end < len(arg) && arg[end] == '-' {
+		// A minus not followed by a duration part is an operator.
+		if end < len(arg) && arg[end] == '-' && negativeDurationPart.MatchString(arg[end+1:]) {
 			return 0, 0, false
 		}
 		d, ok := parseQueryDuration(arg[:end])

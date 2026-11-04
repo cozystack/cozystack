@@ -450,6 +450,9 @@ func TestQueryLookahead(t *testing.T) {
 		{`x offset 1h - 30m`, 0},
 		{`x offset -1h + 30m`, time.Hour},
 		{`x offset -1h30m`, 90 * time.Minute},
+		// A minus not followed by a duration is an operator.
+		{`x offset 1h-1`, 0},
+		{`x offset 5m-y`, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
