@@ -104,11 +104,7 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 			}
 		}
 		// vlselect returns every group without fields_limit or with 0, so
-		// the cap is sent either way; an empty value is malformed rather
-		// than a request for the default.
-		if in.Has("fields_limit") && in.Get("fields_limit") == "" {
-			return nil, errorf(http.StatusBadRequest, "invalid fields_limit \"\"")
-		}
+		// the cap is sent either way.
 		herr = setLimit(out, in, "fields_limit", lim.MaxLimit, lim.MaxLimit)
 	case "stats_query_range":
 		herr = setStep(out, in, start, end, lim)
@@ -200,8 +196,14 @@ func setStep(out, in url.Values, start, end time.Time, lim LogsLimits) *HTTPErro
 	return nil
 }
 
+// setLimit refuses an empty value rather than read it as the default: a
+// cap the client sent but left blank is malformed, the same for every cap,
+// where reading it as the default would hide a client bug.
 func setLimit(out, in url.Values, key string, def, maxv int) *HTTPError {
 	n := def
+	if in.Has(key) && in.Get(key) == "" {
+		return errorf(http.StatusBadRequest, "invalid %s \"\"", key)
+	}
 	if v := in.Get(key); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil || parsed <= 0 {
