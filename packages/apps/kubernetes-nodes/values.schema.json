@@ -245,7 +245,7 @@
       ]
     },
     "osImage": {
-      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.",
+      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool. The object is atomic: its two sources exclude each other, so a value that sets one of them replaces the whole object and is never completed from a default.",
       "type": "object",
       "default": {},
       "properties": {
@@ -281,7 +281,8 @@
             }
           }
         }
-      }
+      },
+      "x-kubernetes-map-type": "atomic"
     },
     "talos": {
       "description": "Talos worker image configuration. Keep in sync with the parent cluster's `talos`.",

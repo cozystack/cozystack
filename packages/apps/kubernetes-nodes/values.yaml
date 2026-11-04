@@ -131,7 +131,8 @@ version: "v1.35"
 ## @field {*WorkerImageBuiltin} [builtin] - Clone a golden image from the worker image catalog. Requires a StorageClass whose volumes are reachable from any node, in practice a replicated/DRBD class: the clone is a storage-layer copy, and on a node-pinned class its two ends land on unrelated nodes -- the golden binds where CDI imported it, a worker disk where its VM is scheduled.
 ## @field {*WorkerImageFactory} [factory] - Import from an Image Factory / mirror (default).
 
-## @param {WorkerImage} [osImage] - Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.
+## @param {WorkerImage} [osImage] - Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool. The object is atomic: its two sources exclude each other, so a value that sets one of them replaces the whole object and is never completed from a default.
+## @x-kubernetes-map-type atomic
 osImage: {}
 
 ## @typedef {struct} Talos - Talos worker image configuration.
