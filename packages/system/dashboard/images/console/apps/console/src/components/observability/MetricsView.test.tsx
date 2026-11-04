@@ -22,7 +22,7 @@ function matrix(pod: string) {
   })
 }
 
-function clientWith(handler: (url: URL) => Response) {
+function clientWith(handler: (url: URL) => Response | Promise<Response>) {
   const client = new K8sClient()
   const raw = vi.spyOn(client, "raw").mockImplementation(async (path) => handler(new URL(path, "http://x")))
   return { client, raw }
@@ -84,5 +84,19 @@ describe("MetricsView", () => {
     renderWithK8sProvider(<MetricsView scope={scope} />, { client })
 
     await waitFor(() => expect(screen.getAllByText("No data for this range.")).toHaveLength(3))
+    for (const status of screen.getAllByRole("status")) expect(status).toHaveClass("h-[230px]")
+  })
+
+  it("holds each chart's place while it loads", () => {
+    const { client } = clientWith(() => new Promise<Response>(() => {}))
+
+    renderWithK8sProvider(<MetricsView scope={scope} />, { client })
+
+    const statuses = screen.getAllByRole("status")
+    expect(statuses).toHaveLength(3)
+    for (const status of statuses) {
+      expect(status).toHaveAttribute("aria-busy", "true")
+      expect(status).toHaveClass("h-[230px]")
+    }
   })
 })
