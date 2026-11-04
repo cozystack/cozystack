@@ -9,7 +9,7 @@ import {
   toChartData,
   type RangeKey,
 } from "../../lib/observability/metrics.ts"
-import { isScopeWide, metricsRoot, queryRange, type ObservabilityScope } from "../../lib/observability/proxy.ts"
+import { isScopeWide, keepWithinScope, metricsRoot, queryRange, type ObservabilityScope } from "../../lib/observability/proxy.ts"
 import { ProxyNotice } from "./ProxyNotice.tsx"
 import { TimeSeriesChart } from "./TimeSeriesChart.tsx"
 import { RangePicker } from "./RangePicker.tsx"
@@ -42,6 +42,7 @@ export function MetricsView({ scope }: { scope: ObservabilityScope }) {
         )
         return toChartData(series)
       },
+      placeholderData: keepWithinScope(root),
       retry: false,
       refetchInterval: REFRESH_MS,
     })),

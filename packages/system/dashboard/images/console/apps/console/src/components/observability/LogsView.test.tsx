@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
-import { screen, waitFor, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { K8sClient } from "@cozystack/k8s-client"
+import { K8sClient, K8sProvider } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
 import { LogsView } from "./LogsView.tsx"
 
@@ -29,6 +29,51 @@ function defaultHandler(endpoint: string, params?: URLSearchParams): Response | 
   if (endpoint.endsWith("query")) return new Response(`${line("2026-11-04T10:00:01Z", "ready to accept connections")}\n`)
   return new Promise(() => {})
 }
+
+// The provider's own QueryClient keeps the previous result while a key changes; it is
+// shared across tests, so each test below uses namespaces no other test reads.
+function renderWithProductionDefaults(client: K8sClient, namespace: string) {
+  const view = (ns: string) => (
+    <K8sProvider client={client}>
+      <LogsView scope={{ namespace: ns }} />
+    </K8sProvider>
+  )
+  const result = render(view(namespace))
+  return { switchTo: (ns: string) => result.rerender(view(ns)) }
+}
+
+describe("LogsView with the production query defaults", () => {
+  it("drops the previous tenant's lines and pods while the next tenant loads", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.includes("/tenant-switch-b/") ? new Promise(() => {}) : defaultHandler(endpoint, params),
+    )
+    const { switchTo } = renderWithProductionDefaults(client, "tenant-switch-a")
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("combobox", { name: "Pod" }))
+    await screen.findByRole("option", { name: "db-1" })
+    await userEvent.keyboard("{Escape}")
+
+    switchTo("tenant-switch-b")
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(within(frame).getByText("Loading log lines…")).toBeInTheDocument()
+    expect(screen.queryByText("ready to accept connections")).toBeNull()
+    await userEvent.click(screen.getByRole("combobox", { name: "Pod" }))
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["All"])
+  })
+
+  it("keeps the current lines while a new filter in the same tenant loads", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") && params.get("query") === "slow" ? new Promise(() => {}) : defaultHandler(endpoint, params),
+    )
+    renderWithProductionDefaults(client, "tenant-filter-a")
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText("LogsQL filter"), "slow{Enter}")
+
+    expect(screen.getByText("ready to accept connections")).toBeInTheDocument()
+  })
+})
 
 describe("LogsView", () => {
   it("shows recent lines from the application root", async () => {

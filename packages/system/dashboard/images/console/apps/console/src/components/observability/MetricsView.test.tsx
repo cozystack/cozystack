@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
-import { screen, waitFor, within } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { K8sClient } from "@cozystack/k8s-client"
+import { K8sClient, K8sProvider } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
 import type { ChartData } from "../../lib/observability/metrics.ts"
 
@@ -136,6 +136,22 @@ describe("MetricsView", () => {
     for (const title of ["CPU (cores)", "Memory (working set)", "Network"]) {
       expect(screen.getByRole("button", { name: `Show data for ${title}` })).toBeDisabled()
     }
+  })
+
+  it("drops the previous application's charts while the next one loads, with the production query defaults", async () => {
+    const { client } = clientWith((url) => (url.pathname.includes("/switch-b/") ? new Promise<Response>(() => {}) : matrix("db-0")))
+    const view = (name: string) => (
+      <K8sProvider client={client}>
+        <MetricsView scope={{ ...scope, name }} />
+      </K8sProvider>
+    )
+    const { rerender } = render(view("switch-a"))
+    await waitFor(() => expect(screen.getAllByTestId("chart")).toHaveLength(3))
+
+    rerender(view("switch-b"))
+
+    expect(screen.queryAllByTestId("chart")).toHaveLength(0)
+    expect(screen.getAllByText("Loading…")).toHaveLength(3)
   })
 
   it("holds each chart's place while it loads", () => {

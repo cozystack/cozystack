@@ -14,6 +14,7 @@ import {
 import {
   fieldValues,
   isScopeWide,
+  keepWithinScope,
   logsRoot,
   queryLogs,
   type ObservabilityScope,
@@ -101,6 +102,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
         query: buildLogsQuery({ filter: "", pod: narrowTo }),
         ...windowFor(range),
       }, signal),
+    placeholderData: keepWithinScope(root),
     retry: false,
   })
   const pods = useQuery(pickerQuery(POD_FIELD))
@@ -110,6 +112,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
     queryKey: ["observability", "logs", root, query, range],
     queryFn: ({ signal }) => queryLogs(client, root, { query, limit: HISTORY_LIMIT, ...windowFor(range) }, signal),
     enabled: !follow,
+    placeholderData: keepWithinScope(root),
     retry: false,
   })
   const tail = useLogTail(root, query, followRun, { cap: FOLLOW_CAP })
