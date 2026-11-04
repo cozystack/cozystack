@@ -212,6 +212,18 @@ describe("LogsView", () => {
     expect(within(frame).queryByText(/No log lines/)).toBeNull()
   })
 
+  it("keeps the view when only the pod list is refused", async () => {
+    const status = JSON.stringify({ kind: "Status", apiVersion: "v1", status: "Failure", code: 404 })
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("stream_field_values") ? new Response(status, { status: 404 }) : defaultHandler(endpoint, params),
+    )
+
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+    expect(screen.queryByText("Logs are not available on this cluster.")).toBeNull()
+  })
+
   it("names the source pod and container of each line", async () => {
     const { client } = clientWith(defaultHandler)
 

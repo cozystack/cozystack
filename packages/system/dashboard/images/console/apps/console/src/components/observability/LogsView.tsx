@@ -106,7 +106,8 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
   })
   const tail = useLogTail(root, query, followRun, { cap: FOLLOW_CAP })
 
-  const wide = [pods.error, history.error, tail.error].find(isScopeWide)
+  // The pod list is optional: refusing it alone must not hide lines the query can still read.
+  const wide = [history.error, tail.error].find(isScopeWide)
   if (wide) {
     return (
       <div className="p-6">
