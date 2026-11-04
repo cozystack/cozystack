@@ -264,7 +264,8 @@ func parseMetricsDuration(key, v string) (time.Duration, *HTTPError) {
 // parseMetricsTime takes the two forms the Prometheus API defines: float
 // unix seconds and RFC3339. vmselect would also guess milliseconds from the
 // digit count and accept relative times; a guessed unit silently moves the
-// window, so those are refused.
+// window, so those are refused. The result is cut to the millisecond, as
+// formatTime sends it, so the limits see the window vmselect will use.
 func parseMetricsTime(key, v string) (time.Time, *HTTPError) {
 	if sec, frac, ok := strings.Cut(v, "."); isDigits(sec) && (!ok || isDigits(frac)) {
 		if len(sec) > 10 {
@@ -275,13 +276,13 @@ func parseMetricsTime(key, v string) (time.Time, *HTTPError) {
 		if ok {
 			nanos, _ = strconv.ParseInt((frac + "000000000")[:9], 10, 64)
 		}
-		return time.Unix(secs, nanos).UTC(), nil
+		return time.UnixMilli(time.Unix(secs, nanos).UnixMilli()).UTC(), nil
 	}
 	t, err := time.Parse(time.RFC3339Nano, v)
 	if err != nil || t.Before(time.Unix(0, 0)) {
 		return time.Time{}, errorf(http.StatusBadRequest, "invalid %s %q", key, v)
 	}
-	return t.UTC(), nil
+	return time.UnixMilli(t.UnixMilli()).UTC(), nil
 }
 
 func formatTime(t time.Time) string {
