@@ -13,6 +13,7 @@ vi.mock("uplot", () => ({
       created.push({ opts, data, destroy: this.destroy })
     }
     setSize() {}
+    static fmtDate = () => (d: Date) => d.toISOString()
   },
 }))
 
@@ -47,6 +48,15 @@ describe("TimeSeriesChart", () => {
     expect(legend(null, null, 1, null)).toBe("2 B")
     expect(legend(null, 1, 1, 0)).toBe("1 B")
     expect(legend(null, null, 1, 2)).toBe("–")
+  })
+
+  it("labels the legend's time as latest while nothing is hovered", () => {
+    render(<TimeSeriesChart data={data} format={String} />)
+
+    const time = created[0].opts.series[0].value!
+
+    expect(time(null, null, 0, null)).toBe("latest")
+    expect(time(null, 2, 0, 1)).toBe(new Date(2000).toISOString())
   })
 
   it("destroys the chart on unmount", () => {

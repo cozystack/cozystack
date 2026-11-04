@@ -8,7 +8,7 @@ interface SeriesTableProps {
 }
 
 const formatTime = (seconds: number) =>
-  new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+  new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 
 export function SeriesTable({ id, title, data, format }: SeriesTableProps) {
   const newestFirst = data.timestamps.map((t, i) => ({ t, i })).reverse()

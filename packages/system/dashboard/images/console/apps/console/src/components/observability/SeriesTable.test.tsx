@@ -32,6 +32,6 @@ describe("SeriesTable", () => {
     expect(rows).toHaveLength(2)
     expect(within(rows[0]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["2 B", "3 B"])
     expect(within(rows[1]).getAllByRole("cell").map((c) => c.textContent)).toEqual(["1 B", "–"])
-    expect(within(rows[0]).getByRole("rowheader")).toHaveTextContent(new Date(1_700_000_060_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    expect(within(rows[0]).getByRole("rowheader")).toHaveTextContent(new Date(1_700_000_060_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
   })
 })
