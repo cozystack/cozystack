@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1101,7 +1102,7 @@ func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing", true, true)
+	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing", true, true, "")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1741,7 +1742,7 @@ func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
 		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 	}
 
-	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true)
+	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1951,7 +1952,7 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 			}
 
-			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true)
+			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true, "")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -2120,7 +2121,7 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app", true, true); err != nil {
+	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app", true, true, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -2543,6 +2544,18 @@ func (f *cnpgRolloutFixture) setJobCondition(cond metav1.Condition) {
 	}
 }
 
+func (f *cnpgRolloutFixture) finishOtherBackupJob(name string) {
+	f.t.Helper()
+	other := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: name}, other); err != nil {
+		f.t.Fatalf("get BackupJob %s: %v", name, err)
+	}
+	other.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
+	if err := f.c.Status().Update(context.Background(), other); err != nil {
+		f.t.Fatalf("finish BackupJob %s: %v", name, err)
+	}
+}
+
 func (f *cnpgRolloutFixture) seedOtherBackupJob(name string, phase backupsv1alpha1.BackupJobPhase) {
 	f.t.Helper()
 	other := newRolloutBackupJob(time.Now().Add(-time.Hour))
@@ -2585,8 +2598,10 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 	}{
 		{name: "another running job with a running Backup holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: "running", wantWait: true},
 		{name: "another running job with a pending Backup holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: "pending", wantWait: true},
-		{name: "a completed Backup of another job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: cnpgBackupPhaseComplete},
-		{name: "a failed Backup of another job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: cnpgBackupPhaseFailed},
+		// The other job records or restores the destination on its next pass.
+		{name: "a completed Backup of a still running job holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: cnpgBackupPhaseComplete, wantWait: true},
+		{name: "a failed Backup of a still running job holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: cnpgBackupPhaseFailed, wantWait: true},
+		{name: "a completed Backup of a succeeded job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseSucceeded, otherBackup: cnpgBackupPhaseComplete},
 		{name: "a Backup of a failed job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseFailed, otherBackup: "pending"},
 		{name: "a Backup of a succeeded job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseSucceeded, otherBackup: "pending"},
 		{name: "a Backup whose job is gone does not", otherBackup: "pending"},
@@ -2658,6 +2673,11 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 				if err := f.c.Update(context.Background(), held); err != nil {
 					t.Fatalf("complete holder Backup: %v", err)
 				}
+				j, _ = f.pass()
+				if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" {
+					t.Errorf("released by a finished Backup whose job has not recorded its outcome yet: Ready = %+v", ready)
+				}
+				f.finishOtherBackupJob("bj-other")
 				j, _ = f.pass()
 				if got := f.liveDestination(); got != "s3://bucket/" {
 					t.Errorf("once the holder finished, destination = %q, want the job's own s3://bucket/", got)
@@ -2807,9 +2827,15 @@ func TestReconcileCNPG_PluginRolloutDeadlineCountsFromAttach(t *testing.T) {
 	if err := f.c.Status().Update(context.Background(), j); err != nil {
 		t.Fatalf("age the rollout: %v", err)
 	}
+	annotations := f.objectStore().Annotations
+	annotations[cnpgLastGoodDestinationAnnotation] = lastGoodAnnotation(t, "s3://good/")
+	f.annotateObjectStore(annotations)
 	j, _ = f.pass()
 	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, "rollout did not finish") {
 		t.Fatalf("phase = %q (%s), want Failed on a rollout older than the deadline", j.Status.Phase, j.Status.Message)
+	}
+	if got := f.liveDestination(); got != "s3://good/" {
+		t.Errorf("destination after the rollout gave up = %q, want s3://good/ restored", got)
 	}
 }
 
@@ -2838,6 +2864,7 @@ func TestReconcileCNPG_QueueResetsDestinationRetryBudget(t *testing.T) {
 	if err := f.c.Update(context.Background(), held); err != nil {
 		t.Fatalf("complete holder Backup: %v", err)
 	}
+	f.finishOtherBackupJob("bj-other")
 	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
 		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 			if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
@@ -2907,6 +2934,314 @@ func testClusterReadErrorKeepsBackup(t *testing.T, readErr error) {
 	}
 	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 		t.Fatalf("a failed Cluster read failed the running backup: %s", persisted.Status.Message)
+	}
+}
+
+func (f *cnpgRolloutFixture) objectStore() *cnpgtypes.ObjectStore {
+	f.t.Helper()
+	store := &cnpgtypes.ObjectStore{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, store); err != nil {
+		f.t.Fatalf("get ObjectStore: %v", err)
+	}
+	return store
+}
+
+func (f *cnpgRolloutFixture) setCNPGBackupPhase(phase string) {
+	f.t.Helper()
+	list := &cnpgtypes.BackupList{}
+	if err := f.c.List(context.Background(), list, client.InNamespace(rolloutNS), client.MatchingLabels{backupsv1alpha1.OwningJobNameLabel: "bj"}); err != nil || len(list.Items) != 1 {
+		f.t.Fatalf("list the job's cnpg.io/Backup: %v (%d found)", err, len(list.Items))
+	}
+	b := &list.Items[0]
+	b.Status.Phase = phase
+	if err := f.c.Update(context.Background(), b); err != nil {
+		f.t.Fatalf("set cnpg.io/Backup phase: %v", err)
+	}
+}
+
+func (f *cnpgRolloutFixture) annotateObjectStore(annotations map[string]string) {
+	f.t.Helper()
+	store := f.objectStore()
+	store.Annotations = annotations
+	if err := f.c.Update(context.Background(), store); err != nil {
+		f.t.Fatalf("annotate ObjectStore: %v", err)
+	}
+}
+
+func lastGoodAnnotation(t *testing.T, destination string) string {
+	t.Helper()
+	raw, err := json.Marshal(cnpgtypes.ObjectStoreSpec{Configuration: cnpgtypes.BarmanObjectStoreConfiguration{DestinationPath: destination}})
+	if err != nil {
+		t.Fatalf("marshal last good spec: %v", err)
+	}
+	return string(raw)
+}
+
+func TestReconcileCNPG_SuccessfulBackupRecordsTheDestination(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.pass() // writes s3://bucket/ and creates the Backup
+	f.setCNPGBackupPhase(cnpgBackupPhaseComplete)
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	recorded := f.objectStore().Annotations[cnpgLastGoodDestinationAnnotation]
+	var spec cnpgtypes.ObjectStoreSpec
+	if err := json.Unmarshal([]byte(recorded), &spec); err != nil {
+		t.Fatalf("last good destination %q is not an ObjectStore spec: %v", recorded, err)
+	}
+	if spec.Configuration.DestinationPath != "s3://bucket/" {
+		t.Fatalf("recorded destination = %q, want the one the backup succeeded with", spec.Configuration.DestinationPath)
+	}
+}
+
+func TestReconcileCNPG_SuccessDoesNotRecordAnotherJobsDestination(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.pass()
+	f.annotateObjectStore(map[string]string{cnpgDestinationWriterAnnotation: "bj-other"})
+	f.setCNPGBackupPhase(cnpgBackupPhaseComplete)
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	if recorded := f.objectStore().Annotations[cnpgLastGoodDestinationAnnotation]; recorded != "" {
+		t.Fatalf("recorded %q, a destination another job wrote and nobody backed up with", recorded)
+	}
+}
+
+func TestReconcileCNPG_FailedBackupRestoresTheLastGoodDestination(t *testing.T) {
+	cases := []struct {
+		name        string
+		lastGood    string
+		otherWriter bool
+		want        string
+		wantRestore bool
+	}{
+		{name: "restores the last good destination", lastGood: "s3://good/", want: "s3://good/", wantRestore: true},
+		{name: "leaves it without a last good one", want: "s3://bucket/"},
+		{name: "leaves one another job wrote since", lastGood: "s3://good/", otherWriter: true, want: "s3://bucket/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+			f.pass() // writes s3://bucket/ and creates the Backup
+			annotations := f.objectStore().Annotations
+			if annotations == nil {
+				annotations = map[string]string{}
+			}
+			if tc.lastGood != "" {
+				annotations[cnpgLastGoodDestinationAnnotation] = lastGoodAnnotation(t, tc.lastGood)
+			}
+			if tc.otherWriter {
+				annotations[cnpgDestinationWriterAnnotation] = "bj-other"
+			}
+			f.annotateObjectStore(annotations)
+			f.setCNPGBackupPhase(cnpgBackupPhaseFailed)
+
+			j, _ := f.pass()
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("phase = %q, want Failed", j.Status.Phase)
+			}
+			store := f.objectStore()
+			if got := store.Spec.Configuration.DestinationPath; got != tc.want {
+				t.Fatalf("destination after the failure = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(j.Status.Message, "could not restore") {
+				t.Errorf("message %q reports a failed restore", j.Status.Message)
+			}
+			restored := strings.Contains(j.Status.Message, "restored")
+			if restored != tc.wantRestore {
+				t.Errorf("message %q: restored mention = %v, want %v", j.Status.Message, restored, tc.wantRestore)
+			}
+			if tc.wantRestore {
+				if w := store.Annotations[cnpgDestinationWriterAnnotation]; w == "bj" {
+					t.Errorf("the restored ObjectStore still names the failed job as its writer")
+				}
+				if len(store.OwnerReferences) != 1 {
+					t.Errorf("owner references after the restore = %v, want the Cluster", store.OwnerReferences)
+				}
+			}
+		})
+	}
+}
+
+// A job that wrote the destination and failed before its backup ran puts
+// the last good one back too.
+func TestReconcileCNPG_FailedPluginAttachRestoresTheLastGoodDestination(t *testing.T) {
+	expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute))
+	clusterPatchFails := func(err error) interceptor.Funcs {
+		return interceptor.Funcs{
+			Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*cnpgtypes.Cluster); ok {
+					return err
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}
+	}
+	cases := []struct {
+		name         string
+		failingSince time.Time
+		funcs        interceptor.Funcs
+	}{
+		{name: "the Cluster patch is refused", funcs: clusterPatchFails(apierrors.NewInvalid(schema.GroupKind{Group: cnpgtypes.GroupName, Kind: "Cluster"}, rolloutCluster, nil))},
+		{name: "the Cluster patch kept failing past the deadline", failingSince: expired, funcs: clusterPatchFails(apierrors.NewInternalError(errors.New("webhook down")))},
+		{name: "the Backup cannot be created", funcs: interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*cnpgtypes.Backup); ok {
+					return apierrors.NewForbidden(schema.GroupResource{Group: cnpgtypes.GroupName, Resource: "backups"}, "", errors.New("denied"))
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { testFailedWriteRestores(t, tc.failingSince, tc.funcs) })
+	}
+}
+
+func testFailedWriteRestores(t *testing.T, failingSince time.Time, funcs interceptor.Funcs) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://good/")
+	f.annotateObjectStore(map[string]string{cnpgLastGoodDestinationAnnotation: lastGoodAnnotation(t, "s3://good/")})
+	if !failingSince.IsZero() {
+		f.setJobCondition(metav1.Condition{
+			Type: backupCondDestinationApplied, Status: metav1.ConditionFalse, Reason: "ClusterPluginApplyRetrying",
+			Message: "earlier failure", LastTransitionTime: metav1.NewTime(failingSince),
+		})
+	}
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), funcs)
+
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", j.Status.Phase)
+	}
+	if got := f.liveDestination(); got != "s3://good/" {
+		t.Fatalf("destination after the failed attach = %q, want s3://good/ restored", got)
+	}
+	if !strings.Contains(j.Status.Message, "restored") {
+		t.Errorf("message %q does not say the destination was restored", j.Status.Message)
+	}
+}
+
+// The restore reads the ObjectStore live: the cache may not show the writer
+// annotation this pass just set.
+func TestReconcileCNPG_RestoreReadsTheObjectStoreLive(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://good/")
+	f.annotateObjectStore(map[string]string{cnpgLastGoodDestinationAnnotation: lastGoodAnnotation(t, "s3://good/")})
+	f.r.APIReader = f.c
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := cl.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			if store, ok := obj.(*cnpgtypes.ObjectStore); ok {
+				store.Annotations = nil // a cache that has not caught up
+			}
+			return nil
+		},
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*cnpgtypes.Cluster); ok {
+				return apierrors.NewInvalid(schema.GroupKind{Group: cnpgtypes.GroupName, Kind: "Cluster"}, rolloutCluster, nil)
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", j.Status.Phase)
+	}
+	if got := f.liveDestination(); got != "s3://good/" {
+		t.Fatalf("destination = %q, want s3://good/ restored from a live read", got)
+	}
+}
+
+// A restore that cannot be done still fails the job, and says why.
+func TestReconcileCNPG_FailedRestoreIsReported(t *testing.T) {
+	objectStoreGetFails := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+				return apierrors.NewServiceUnavailable("apiserver unavailable")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}
+	objectStorePatchFails := interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+				return apierrors.NewInternalError(errors.New("webhook down"))
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	}
+	cases := []struct {
+		name     string
+		lastGood string
+		reader   *interceptor.Funcs
+		client   *interceptor.Funcs
+	}{
+		{name: "the ObjectStore cannot be read", reader: &objectStoreGetFails},
+		{name: "the last good spec is not readable", lastGood: "{not json"},
+		{name: "the restore cannot be applied", client: &objectStorePatchFails},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://good/")
+			f.pass()
+			lastGood := tc.lastGood
+			if lastGood == "" {
+				lastGood = lastGoodAnnotation(t, "s3://good/")
+			}
+			annotations := f.objectStore().Annotations
+			annotations[cnpgLastGoodDestinationAnnotation] = lastGood
+			f.annotateObjectStore(annotations)
+			f.setCNPGBackupPhase(cnpgBackupPhaseFailed)
+			if tc.reader != nil {
+				f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), *tc.reader)
+			}
+			if tc.client != nil {
+				f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), *tc.client)
+			}
+
+			j, _ := f.pass()
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("phase = %q, want Failed although the restore could not be done", j.Status.Phase)
+			}
+			if !strings.Contains(j.Status.Message, "could not restore") {
+				t.Errorf("message %q does not report the failed restore", j.Status.Message)
+			}
+		})
+	}
+}
+
+// The destination a successful backup ran with is recorded before the job
+// is marked Succeeded, because a Succeeded job is not reconciled again; a
+// failed record is retried rather than skipped.
+func TestReconcileCNPG_FailedRecordIsRetried(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.pass()
+	f.setCNPGBackupPhase(cnpgBackupPhaseComplete)
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+				return apierrors.NewInternalError(errors.New("webhook down"))
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+		t.Fatalf("a failed record of the last good destination was not returned for a retry")
+	}
+	persisted := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, persisted); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("the job succeeded without recording the destination it succeeded with")
 	}
 }
 
