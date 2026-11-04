@@ -113,10 +113,55 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		sum += d
 	}
 	lower := strings.ToLower(query)
+	back, _, ok := scanOffsets(lower)
+	if !ok {
+		return 0, false
+	}
+	sum += back
+	if hasKeyword(lower, "with") {
+		return 0, false
+	}
+	n := float64(subqueries + strings.Count(query, "("))
+	sum += (2+3*n)*maxStep + (1+n)*float64(silenceInterval)
+	if sum > float64(maxMetricsDuration) {
+		return 0, false
+	}
+	return time.Duration(sum), true
+}
+
+// queryLookahead is an upper bound on how far after its evaluation window
+// a query reads, from the same lexical scan. Only a negative offset reads
+// forward; the negative offsets are summed, which covers nesting. An @
+// modifier pins samples to any instant unless it names start() or end(),
+// which lie in the window, and WITH can apply one offset several times;
+// either makes the bound unknown.
+func queryLookahead(query string) (time.Duration, bool) {
+	lower := strings.ToLower(query)
+	for rest := lower; ; {
+		at := strings.IndexByte(rest, '@')
+		if at < 0 {
+			break
+		}
+		rest = strings.TrimLeft(rest[at+1:], " \t\n\r")
+		if !strings.HasPrefix(rest, "start()") && !strings.HasPrefix(rest, "end()") {
+			return 0, false
+		}
+	}
+	_, ahead, ok := scanOffsets(lower)
+	if !ok || ahead > 0 && hasKeyword(lower, "with") || ahead > float64(maxMetricsDuration) {
+		return 0, false
+	}
+	return time.Duration(ahead), true
+}
+
+// scanOffsets sums every offset of the lowercased query, the positive ones
+// into back and the negative ones into ahead, in nanoseconds; ok is false
+// when one is not a plain duration.
+func scanOffsets(lower string) (back, ahead float64, ok bool) {
 	for i := 0; ; {
 		k := strings.Index(lower[i:], "offset")
 		if k < 0 {
-			break
+			return back, ahead, true
 		}
 		k += i
 		i = k + len("offset")
@@ -136,21 +181,14 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		}
 		d, ok := parseQueryDuration(arg[:end])
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
-		if !negative {
-			sum += d
+		if negative {
+			ahead += d
+		} else {
+			back += d
 		}
 	}
-	if hasKeyword(lower, "with") {
-		return 0, false
-	}
-	n := float64(subqueries + strings.Count(query, "("))
-	sum += (2+3*n)*maxStep + (1+n)*float64(silenceInterval)
-	if sum > float64(maxMetricsDuration) {
-		return 0, false
-	}
-	return time.Duration(sum), true
 }
 
 // isKeyword reports whether lower[start:end] stands on its own rather than

@@ -81,6 +81,9 @@ type metricsRequest struct {
 	// from and to are the window the query is evaluated over, without the
 	// lookback of its expression.
 	from, to time.Time
+	// last is the latest instant the request reads, past to by a negative
+	// offset; zero when that is unknown.
+	last time.Time
 	// scopedMatch is set when match[] holds the scope, not client matchers.
 	scopedMatch bool
 }
@@ -143,6 +146,9 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		}
 		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
 		req.from, req.to = at, at
+		if ahead, ok := queryLookahead(out.Get("query")); ok {
+			req.last = at.Add(ahead)
+		}
 		return req, nil
 
 	case "api/v1/query_range":
@@ -167,6 +173,9 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		}
 		req.start = queryStart(out.Get("query"), start, step)
 		req.from, req.to = start, end
+		if ahead, ok := queryLookahead(out.Get("query")); ok {
+			req.last = end.Add(ahead)
+		}
 		out.Set("start", formatTime(start))
 		out.Set("end", formatTime(end))
 		out.Set("step", formatSeconds(step))
@@ -189,7 +198,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 	if herr != nil {
 		return req, herr
 	}
-	req.start, req.from, req.to = start, start, end
+	req.start, req.from, req.to, req.last = start, start, end, end
 	out.Set("start", formatTime(start))
 	out.Set("end", formatTime(end))
 
