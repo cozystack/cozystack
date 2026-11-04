@@ -486,6 +486,33 @@ pod_cidrs_of() {
   rm -rf "$STATE"
 }
 
+@test "a CiliumNode list larger than one argument may hold still moves every node and names the pod on an old Ingress IP" {
+  init_state
+  add_ip web-0.tenant-c ovn-default 10.244.1.135
+  add_ip web-1.tenant-c ovn-default 10.244.4.135
+  add_ip db-0.tenant-c ovn-default 10.244.9.9
+  # Cilium copies every Node label onto the CiliumNode, which takes six real
+  # ones past the 128 KiB Linux allows a single argument. One annotation stands
+  # in for the labels and keeps the list over that limit even printed compact.
+  for i in 1 2 3 4 5 6; do
+    add_node "n$i" "10.244.$i.0/24" "10.244.$i.223" "10.244.$i.135"
+    jq '.metadata.annotations.padding = ("x" * 24576)' "$STATE/ciliumnodes/n$i.json" > "$STATE/node.tmp"
+    mv "$STATE/node.tmp" "$STATE/ciliumnodes/n$i.json"
+  done
+  [ "$(kubectl get ciliumnodes -o json | jq -c . | wc -c)" -gt 131072 ]
+  "$SCRIPT" > "$STATE/out" 2>&1
+  # Each pod is named with the node whose Ingress IP it holds, and a pod on an
+  # address that is no node's Ingress IP is not named at all.
+  grep -q "web-0.tenant-c holds 10.244.1.135, the Ingress IP of n1 before the move" "$STATE/out"
+  grep -q "web-1.tenant-c holds 10.244.4.135, the Ingress IP of n4 before the move" "$STATE/out"
+  if grep -q "db-0.tenant-c" "$STATE/out"; then
+    cat "$STATE/out"
+    false
+  fi
+  [ "$(pod_cidrs_of n6)" = '["10.244.248.40/29"]' ]
+  rm -rf "$STATE"
+}
+
 @test "a cluster without kube-ovn skips the exclusion and still moves its nodes" {
   init_state
   rm "$STATE/subnet.json"
