@@ -31,11 +31,18 @@ import (
 
 const appRoot = "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/"
 
-// appPolicy lets alice read every postgres in tenant-a, as the view role's
-// apps.cozystack.io wildcard does, and bob only "a", as a grant narrowed
-// with resourceNames does.
+// appPolicy lets alice read every postgres in tenant-a and the namespace
+// roots, as the view role does. bob and carol may read only postgres "a",
+// as a grant narrowed with resourceNames does; carol may also read the
+// namespace roots.
 func appPolicy(user string, a *authorizationv1.ResourceAttributes) bool {
-	if a.Namespace != "tenant-a" || a.Verb != "get" || a.Group != "apps.cozystack.io" || a.Resource != "postgreses" ||
+	if a.Namespace != "tenant-a" {
+		return false
+	}
+	if a.Verb == "list" && a.Group == "cozystack.io" && (a.Resource == "logs" || a.Resource == "metrics") && a.Name == "" && a.Subresource == "" {
+		return user == "alice" || user == "carol"
+	}
+	if a.Verb != "get" || a.Group != "apps.cozystack.io" || a.Resource != "postgreses" ||
 		(a.Subresource != "log" && a.Subresource != "metrics") {
 		return false
 	}
@@ -270,7 +277,10 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 }
 
 // A grant narrowed to application "a" by resourceNames must not reach "b"
-// through any endpoint of either root.
+// through any endpoint of either root. Without read access to the
+// namespace roots it does not reach "a" either: the pod and PVC branches
+// match by name, and a name another application used earlier in the
+// window would pull its series in.
 func TestServerApplicationNarrowedGrant(t *testing.T) {
 	h := newPolicyHarness(t, Config{}, appMetricsUpstream([]string{"a-0"}, nil, http.StatusOK), appPolicy, nil)
 	paths := []string{
@@ -288,15 +298,17 @@ func TestServerApplicationNarrowedGrant(t *testing.T) {
 		"log/select/logsql/facets",
 	}
 	for _, p := range paths {
-		if got := h.status(http.MethodGet, appRoot+"b/"+p, "bob-token"); got != http.StatusForbidden {
-			t.Errorf("b/%s answered %d, want 403", p, got)
+		for _, denied := range []struct{ app, token string }{{"b", "bob-token"}, {"b", "carol-token"}, {"a", "bob-token"}} {
+			if got := h.status(http.MethodGet, appRoot+denied.app+"/"+p, denied.token); got != http.StatusForbidden {
+				t.Errorf("%s on %s/%s answered %d, want 403", denied.token, denied.app, p, got)
+			}
 		}
 	}
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("upstream saw %d requests for a denied application", n)
 	}
 	for _, p := range []string{"metrics/api/v1/labels", "log/select/logsql/query"} {
-		if got := h.status(http.MethodGet, appRoot+"a/"+p, "bob-token"); got != http.StatusOK {
+		if got := h.status(http.MethodGet, appRoot+"a/"+p, "carol-token"); got != http.StatusOK {
 			t.Errorf("a/%s answered %d, want 200", p, got)
 		}
 	}

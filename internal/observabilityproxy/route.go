@@ -133,6 +133,21 @@ func ParseRoute(escapedPath string) (Route, *HTTPError) {
 
 // ResourceAttributes is the single SubjectAccessReview a route requires. It
 // depends on the path only, so a POST query authorizes exactly like a GET.
+// Reviews lists every access a request on the route needs. An application
+// root also needs read access to its namespace root: its pod and PVC
+// branches match by name across the window, so a name another application
+// held earlier reaches that application's series, and a grant narrowed by
+// resourceNames would read more than it names.
+func (r Route) Reviews() []authorizationv1.ResourceAttributes {
+	switch r.Kind {
+	case ApplicationLog:
+		return []authorizationv1.ResourceAttributes{Route{Kind: NamespaceLogs, Namespace: r.Namespace}.ResourceAttributes(), r.ResourceAttributes()}
+	case ApplicationMetrics:
+		return []authorizationv1.ResourceAttributes{Route{Kind: NamespaceMetrics, Namespace: r.Namespace}.ResourceAttributes(), r.ResourceAttributes()}
+	}
+	return []authorizationv1.ResourceAttributes{r.ResourceAttributes()}
+}
+
 func (r Route) ResourceAttributes() authorizationv1.ResourceAttributes {
 	switch r.Kind {
 	case NamespaceLogs:

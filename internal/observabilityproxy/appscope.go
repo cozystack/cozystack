@@ -76,11 +76,12 @@ func nameBranch(ns, label string, names []string) string {
 // stamped (cAdvisor, kubelet volume stats). Every branch carries the
 // namespace, so their OR stays inside it.
 //
-// Within the namespace, both the identity and the pod and PVC lists come
-// from lineage labels on pods and PVCs. They separate applications for a
-// grant narrowed by resourceNames only while whoever creates a pod or PVC
-// cannot choose those labels; the lineage webhook keeps them as set on an
-// object it finds no owner for, and the logs scope rests on the same.
+// Within the namespace this narrows, it does not isolate: the identity and
+// the pod and PVC lists come from lineage labels that the lineage webhook
+// keeps as set on an object it finds no owner for, and the pod and PVC
+// branches match by name, so a name another application held within the
+// lookup window pulls that application's series in. Route.Reviews makes
+// the application roots require read access to the namespace root too.
 func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 	out := []string{identitySelector(ns, seriesKindLabel, seriesNameLabel, kind, name)}
 	for _, b := range []string{nameBranch(ns, "pod", pods), nameBranch(ns, "persistentvolumeclaim", pvcs)} {
