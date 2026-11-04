@@ -17,10 +17,12 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,5 +114,16 @@ func TestMetricsRequestScope(t *testing.T) {
 	rng := buildMetrics(t, "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-time.Hour))}, "end": {unix(testNow)}, "step": {"60"}})
 	if !rng.from.Equal(testNow.Add(-time.Hour)) || !rng.to.Equal(testNow) {
 		t.Errorf("range window = [%s, %s]", rng.from, rng.to)
+	}
+}
+
+// TestLookupRefusalKeepsStoreErrorsInternal: a store error other than the
+// series limit may name vmstorage nodes; it goes to the log, not into a
+// message that could reach the client.
+func TestLookupRefusalKeepsStoreErrorsInternal(t *testing.T) {
+	body := strings.NewReader(`{"status":"error","error":"cannot fetch from vmstorage-longterm-0.vmstorage:8401: connection refused"}`)
+	herr := lookupRefusal("pod", body)
+	if herr.Code != http.StatusBadGateway || strings.Contains(herr.Message, "vmstorage") {
+		t.Fatalf("lookupRefusal = %d %q, want 502 without the store's text", herr.Code, herr.Message)
 	}
 }
