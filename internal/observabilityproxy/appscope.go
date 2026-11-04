@@ -95,14 +95,15 @@ func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 
 // applicationScope looks the application's pods and PVCs up in store over
 // the samples the request reads: back by the query's own lookback, and
-// forward to the latest sample a negative offset reads. A query that reads
+// forward to the latest sample a negative offset or a subquery's
+// evaluation past its end reads. A query that reads
 // further back than the configured lookback, or whose earliest or latest
 // sample is unknown, a failed lookup, and a list over its cap all fail the
 // request, because a successful answer would silently miss the
 // application's series.
 func (s *Server) applicationScope(ctx context.Context, r *http.Request, store string, req metricsRequest, ns, kind, name string) ([]string, *HTTPError) {
 	if req.last.IsZero() {
-		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ anywhere in the query, rollup_candlestick, WITH with a negative offset, or an offset that is not a plain duration); use the namespace root")
+		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ anywhere in the query, rollup_candlestick, WITH with a negative offset, an offset that is not a plain duration, or a subquery step that is not one); use the namespace root")
 	}
 	lim := s.cfg.Metrics.App
 	if req.start.IsZero() || req.start.Before(req.from.Add(-lim.Lookback)) {

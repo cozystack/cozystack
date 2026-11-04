@@ -553,3 +553,15 @@ func TestServerApplicationLookupCoversSubquery(t *testing.T) {
 		t.Fatalf("lookup %s end = %s, want at least %s", r.path, r.form.Get("end"), formatTime(at.Add(2*time.Hour)))
 	}
 }
+
+// TestServerApplicationNamesUnreadableSubqueryStep: the refusal names the
+// cause when a subquery step is what the scan cannot read.
+func TestServerApplicationNamesUnreadableSubqueryStep(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	resp := h.do(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+url.Values{"query": {"max_over_time(x[1h:5i])"}}.Encode(), "good", nil, nil)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "subquery step") {
+		t.Fatalf("answered %d %q, want 422 naming the subquery step", resp.StatusCode, body)
+	}
+}
