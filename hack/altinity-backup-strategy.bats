@@ -117,8 +117,15 @@ run_script() {
   render_script "$tmp/s.sh" backup myapp
   run_script "$tmp"
   grep -q '^POST .*/backup/create_remote?name=clickhouse-myapp-' "$tmp/state/requests"
-  # All three busy answers were consumed before the operation was started.
   [ "$(cat "$tmp/state/busy")" = 0 ]
+}
+
+@test "restore on an idle sidecar starts restore_remote of the listed archive" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" restore myapp
+  run_script "$tmp"
+  grep -q '^POST .*/backup/restore_remote/clickhouse-myapp-20260101T000000Z$' "$tmp/state/requests"
 }
 
 @test "backup fails without starting create_remote when the sidecar stays busy" {
