@@ -1,0 +1,52 @@
+{
+  "bypass_actors": [
+    {
+      "actor_id": 3297617,
+      "actor_type": "Integration",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "exclude": [
+        "refs/heads/release-*.*.*"
+      ],
+      "include": [
+        "refs/heads/release-*"
+      ]
+    }
+  },
+  "enforcement": "active",
+  "name": "Protect release lines (release-X.Y)",
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "creation"
+    },
+    {
+      "parameters": {
+        "allowed_merge_methods": [
+          "merge"
+        ],
+        "dismiss_stale_reviews_on_push": true,
+        "dismissal_restriction": {
+          "allowed_actors": [],
+          "enabled": false
+        },
+        "require_code_owner_review": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 1,
+        "required_review_thread_resolution": false,
+        "required_reviewers": []
+      },
+      "type": "pull_request"
+    }
+  ],
+  "target": "branch"
+}

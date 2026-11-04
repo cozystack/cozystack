@@ -1,0 +1,26 @@
+{
+  "bypass_actors": [
+    {
+      "actor_id": 3297617,
+      "actor_type": "Integration",
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*",
+        "refs/tags/api/apps/v1alpha1/v*"
+      ]
+    }
+  },
+  "enforcement": "active",
+  "name": "Release tags are created by CI only (v*, api/apps/v1alpha1/v*)",
+  "rules": [
+    {
+      "type": "creation"
+    }
+  ],
+  "target": "tag"
+}
