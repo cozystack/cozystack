@@ -348,3 +348,59 @@ func TestServerEarlyRefusalWithUnreadBody(t *testing.T) {
 		}
 	}
 }
+
+// TestServerMetricsRequestLifetime repeats the body, write and break-off
+// checks on the metrics root, which has its own handler.
+func TestServerMetricsRequestLifetime(t *testing.T) {
+	query := metricsRoot + "api/v1/query?query=up"
+	t.Run("slow body", func(t *testing.T) {
+		h := newHarness(t, Config{
+			RequestTimeout: 200 * time.Millisecond,
+			Limiter:        LimiterConfig{MaxConcurrentPerUser: 1},
+		}, promUpstream)
+		pipe := servePipe(t, h.server)
+		conn := pipe.send(t, "POST "+metricsRoot+"api/v1/query HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n"+
+			"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nquery=")
+		eventually(t, time.Second, func() bool {
+			return h.status(http.MethodGet, query, "good") == http.StatusTooManyRequests
+		}, "a metrics request with an unfinished body does not hold a concurrency slot")
+		if resp := readResponse(t, conn); resp.StatusCode != http.StatusRequestTimeout {
+			t.Fatalf("unfinished body answered %d, want 408", resp.StatusCode)
+		}
+	})
+	t.Run("stalled client", func(t *testing.T) {
+		// Larger than the server's write buffer, so the handler itself
+		// blocks on the client.
+		big := `{"status":"success","data":"` + strings.Repeat("x", 64<<10) + `"}`
+		h := newHarness(t, Config{
+			RequestTimeout: 200 * time.Millisecond,
+			Limiter:        LimiterConfig{MaxConcurrentPerUser: 1},
+		}, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, big) })
+		pipe := servePipe(t, h.server)
+		pipe.send(t, "GET "+query+" HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
+		eventually(t, time.Second, func() bool {
+			return h.status(http.MethodGet, query, "good") == http.StatusTooManyRequests
+		}, "the stalled metrics request never held its slot")
+		eventually(t, 2*time.Second, func() bool {
+			return h.status(http.MethodGet, query, "good") == http.StatusOK
+		}, "a metrics client that stopped reading keeps its concurrency slot")
+	})
+	t.Run("truncated answer", func(t *testing.T) {
+		h := newHarness(t, Config{}, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			_, _ = io.WriteString(w, `{"status":"success",`)
+		})
+		// Nothing has been flushed yet when the copy fails, so the
+		// connection may close before the status line.
+		req, _ := http.NewRequest(http.MethodGet, h.proxy.URL+query, nil)
+		req.Header.Set("Authorization", "Bearer good")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if _, err := io.ReadAll(resp.Body); err == nil {
+			t.Fatal("a truncated store answer reached the client as a complete response")
+		}
+	})
+}

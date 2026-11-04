@@ -280,20 +280,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 }
 
 func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Route, user string) *HTTPError {
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
-		return errorf(http.StatusBadRequest, "invalid form: %v", err)
+	release, ok := s.limits.acquire(user)
+	if !ok {
+		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
+	}
+	defer release()
+	if herr := s.readForm(w, r); herr != nil {
+		return herr
 	}
 	now := s.now()
 	req, herr := BuildMetricsParams(route.Endpoint, r.Form, route.Namespace, now, s.cfg.Metrics.Limits)
 	if herr != nil {
 		return herr
 	}
-	release, ok := s.limits.acquire(user)
-	if !ok {
-		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
-	}
-	defer release()
 
 	ctx := r.Context()
 	if s.cfg.RequestTimeout > 0 {
@@ -310,9 +309,15 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Rout
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+	// As for a bounded logs answer: the client must take it by the request
+	// deadline, and a break-off cuts the connection.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = http.NewResponseController(w).SetWriteDeadline(deadline)
+	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
+	if _, err := io.Copy(w, resp.Body); err != nil {
 		slog.Debug("copying upstream response", "error", err)
+		return errAborted
 	}
 	return nil
 }
