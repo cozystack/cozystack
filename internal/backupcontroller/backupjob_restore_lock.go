@@ -32,12 +32,12 @@ const ConditionReasonRestoreInProgress = "RestoreInProgress"
 //
 // A backup must not start against an application a restore is rewriting. It
 // would capture a half-restored state at best, and on the CNPG path it does
-// worse: every BackupJob reconcile re-applies the Cluster's barman plugin, and
-// one landing between the restore re-rendering the Cluster with its new
-// serverName and the plugin being attached can put the restored cluster back
-// on the source's WAL prefix, where its recovery fails with "Expected empty
-// archive". Plan-created runs are the ones that hit this, since nothing else
-// looks at restores before creating a BackupJob.
+// worse: a BackupJob applies the Cluster's barman plugin before it creates
+// its Backup, and an apply landing between the restore re-rendering the
+// Cluster with its new serverName and the plugin being attached can put the
+// restored cluster back on the source's WAL prefix, where its recovery fails
+// with "Expected empty archive". Plan-created runs are the ones that hit
+// this, since nothing else looks at restores before creating a BackupJob.
 func activeRestoreTargeting(ctx context.Context, c client.Client, namespace string, app corev1.TypedLocalObjectReference) (string, error) {
 	app = NormalizeApplicationRef(app)
 	list := &backupsv1alpha1.RestoreJobList{}
