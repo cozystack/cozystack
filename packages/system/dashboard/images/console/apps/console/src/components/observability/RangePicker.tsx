@@ -18,7 +18,7 @@ export function RangePicker<K extends string>({
           aria-pressed={value === key}
           onClick={() => onChange(key)}
           className={cn(
-            "h-full rounded-md px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
+            "h-full rounded-md px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2",
             value === key ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100",
           )}
         >

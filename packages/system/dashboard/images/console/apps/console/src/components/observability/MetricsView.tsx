@@ -62,7 +62,7 @@ export function MetricsView({ scope }: { scope: ObservabilityScope }) {
               ) : isLoading || !data ? (
                 <EmptyState busy title="Loading…" className={CHART_SLOT} />
               ) : data.series.length === 0 ? (
-                <EmptyState title="No data for this range." hint="Nothing was recorded in the selected range." className={CHART_SLOT} />
+                <EmptyState title="No data for this range." hint="Try a longer range." className={CHART_SLOT} />
               ) : (
                 <TimeSeriesChart data={data} format={panel.format} />
               )}
