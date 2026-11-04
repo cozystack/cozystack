@@ -218,8 +218,9 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 		want       []string
 	}{
 		{name: "no pods or pvcs", path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
-		{name: "pod lookup fails", pods: []string{"p"}, pvcs: []string{"v"}, podStatus: http.StatusServiceUnavailable, path: "api/v1/query?query=up", wantCode: http.StatusOK,
-			want: []string{wantIdentityBranch, `{namespace="tenant-a",persistentvolumeclaim=~"^(v)$"}`}},
+		// A failed lookup would leave the application's own series out of
+		// a successful answer, so it fails the request instead.
+		{name: "pod lookup fails", pods: []string{"p"}, pvcs: []string{"v"}, podStatus: http.StatusServiceUnavailable, path: "api/v1/query?query=up", wantCode: http.StatusBadGateway},
 		{name: "pods over the cap", pods: []string{"p", "q"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "over the cap with an empty name", pods: []string{"", "p"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
@@ -232,8 +233,8 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 		// series without a pod label.
 		{name: "empty pod name dropped", pods: []string{"", "p"}, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch, podBranch}},
 		{name: "only empty pod names", pods: []string{""}, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
-		{name: "lookup status error", podBody: `{"status":"error","data":["p"]}`, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
-		{name: "truncated lookup answer", podBody: `{"status":"success","data":["p"`, path: "api/v1/query?query=up", wantCode: http.StatusOK, want: []string{wantIdentityBranch}},
+		{name: "lookup status error", podBody: `{"status":"error","data":["p"]}`, path: "api/v1/query?query=up", wantCode: http.StatusBadGateway},
+		{name: "truncated lookup answer", podBody: `{"status":"success","data":["p"`, path: "api/v1/query?query=up", wantCode: http.StatusBadGateway},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

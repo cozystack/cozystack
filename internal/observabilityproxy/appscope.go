@@ -95,9 +95,9 @@ func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 // applicationScope looks the application's pods and PVCs up in store over
 // the request window, reaching back by the query's own lookback up to the
 // configured limit and forward to the latest sample a negative offset
-// reads. A failed lookup drops its branch, which only narrows the answer;
-// a list over its cap, or a query whose latest sample is unknown, is
-// refused, because the answer would silently miss series.
+// reads. A failed lookup, a list over its cap, or a query whose latest
+// sample is unknown fails the request, because a successful answer would
+// silently miss the application's series.
 func (s *Server) applicationScope(ctx context.Context, r *http.Request, store string, req metricsRequest, ns, kind, name string) ([]string, *HTTPError) {
 	if req.last.IsZero() {
 		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ other than start() or end(), or an offset that is not a plain duration); use the namespace root")
@@ -115,8 +115,11 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 		match := l.metric + identitySelector(ns, ksmKindLabel, ksmNameLabel, kind, name)
 		names, err := s.lookupNames(ctx, r, store, l.label, match, ns, start, req.last, l.max)
 		if err != nil {
-			slog.Warn("application lookup failed; its branch is left out", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
-			continue
+			slog.Warn("application lookup failed", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
+			if herr, ok := err.(*HTTPError); ok && herr.Code == http.StatusGatewayTimeout {
+				return nil, herr
+			}
+			return nil, errorf(http.StatusBadGateway, "the application's %s lookup failed", l.label)
 		}
 		if len(names) > l.max {
 			return nil, errorf(http.StatusUnprocessableEntity, "the application has more than %d %ss in this window; use a shorter range", l.max, l.label)
