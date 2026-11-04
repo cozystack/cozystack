@@ -442,6 +442,12 @@ func TestQueryLookahead(t *testing.T) {
 		{`rate(x[5m] offset -30m) offset -1h`, 90 * time.Minute},
 		{`x offset -1h + y offset 2h`, time.Hour},
 		{`node_offset_seconds - 1`, 0},
+		// metricsql lexes a duration as one token, so a sign with spaces,
+		// or a plus, is an operator after the offset, not part of it.
+		{`x offset 1h+30m`, 0},
+		{`x offset 1h - 30m`, 0},
+		{`x offset -1h + 30m`, time.Hour},
+		{`x offset -1h30m`, 90 * time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
@@ -460,6 +466,13 @@ func TestQueryLookahead(t *testing.T) {
 		`x @ (end() - 1h)`,
 		`x{a="a@b"}`,
 		`x offset -5i`,
+		// Compound durations with a negative part (metricsql DurationValue):
+		// -1h-30m is -90m and 1h-2h is -1h, neither of which the scan reads.
+		`x offset -1h-30m`,
+		`x offset - 1h-30m`,
+		`x offset 1h-2h`,
+		`x offset 1h-30m`,
+		`rate(x[5m] offset 1h-30m)`,
 		`x offset -$__interval`,
 		`with (f(a) = a offset -1h) f(f(x))`,
 	} {
