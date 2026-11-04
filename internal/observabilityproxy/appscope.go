@@ -196,7 +196,10 @@ func lookupRefusal(label string, body io.Reader) *HTTPError {
 	_ = json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&answer)
 	switch {
 	case strings.Contains(answer.Error, seriesLimitError):
-		return errorf(http.StatusUnprocessableEntity, "the application's %s lookup: %s", label, answer.Error)
+		// From the limit on: what precedes it is cluster vmselect's context,
+		// which can name vmstorage nodes.
+		limit := answer.Error[strings.Index(answer.Error, seriesLimitError):]
+		return errorf(http.StatusUnprocessableEntity, "the application's %s lookup: %s", label, limit)
 	case strings.Contains(answer.Error, "timeout exceeded"):
 		return errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", label)
 	default:

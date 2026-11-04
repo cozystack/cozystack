@@ -487,7 +487,7 @@ func TestServerApplicationLookupStoreErrors(t *testing.T) {
 		}
 		// Other store errors may name vmstorage nodes; only the limit
 		// message, which the client can act on, is passed on.
-		if tc.want != http.StatusUnprocessableEntity && strings.Contains(string(body), "vmstorage") {
+		if strings.Contains(string(body), "vmstorage") {
 			t.Errorf("the store's error text reached the client: %q", body)
 		}
 	}
