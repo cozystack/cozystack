@@ -431,6 +431,26 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 	}
 }
 
+// A cleanup Job left by an earlier Backup of the same name, released while
+// its Job ran, deleted a different archive: its completion is not this one's.
+func TestCleanupAltinityBackup_StaleJobForAnotherArchiveIsReplaced(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	stale := buildAltinityCleanupJob("tenant-test", "ch-bk-cleanup", "img", "host", "secret", "clickhouse-ch-test-earlier")
+	stale.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), stale)...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("a Job for another archive must not release the Backup")
+	}
+	if left := listJobs(t, c); len(left) != 0 {
+		t.Errorf("expected the stale Job collected so a fresh one runs, %d left", len(left))
+	}
+}
+
 func TestCleanupAltinityBackup_RunningJobRequeues(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), ownCleanupJob(backup))...)

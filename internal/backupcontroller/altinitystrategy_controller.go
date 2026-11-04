@@ -865,6 +865,14 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 	if !job.DeletionTimestamp.IsZero() {
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
+	if altinityCleanupJobArchive(job) != archive {
+		// Left by an earlier Backup of the same name that was released while
+		// its Job ran; its outcome is about another archive.
+		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
+			return ctrl.Result{}, derr
+		}
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
 	switch jobConditionState(job) {
 	case batchv1.JobComplete:
 		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
@@ -914,6 +922,17 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return v, true, nil
+}
+
+func altinityCleanupJobArchive(job *batchv1.Job) string {
+	for _, c := range job.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == "ARCHIVE_NAME" {
+				return e.Value
+			}
+		}
+	}
+	return ""
 }
 
 func (r *BackupReconciler) deleteAltinityCleanupJob(ctx context.Context, job *batchv1.Job) error {
