@@ -120,11 +120,11 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 			slog.Warn("application lookup failed", "label", l.label, "namespace", ns, "kind", kind, "name", name, "error", err)
 			// The deadline can also expire while the answer is read, after
 			// post has handed it over.
-			if herr, ok := err.(*HTTPError); ok && herr.Code == http.StatusUnprocessableEntity {
-				return nil, herr
-			}
 			if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
 				return nil, errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", l.label)
+			}
+			if herr, ok := err.(*HTTPError); ok && (herr.Code == http.StatusUnprocessableEntity || herr.Code == http.StatusGatewayTimeout) {
+				return nil, herr
 			}
 			return nil, errorf(http.StatusBadGateway, "the application's %s lookup failed", l.label)
 		}
@@ -151,10 +151,7 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnprocessableEntity {
-		// vmselect's refusal of a lookup over its own limits; the client
-		// can act on it by narrowing the window.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return nil, errorf(http.StatusUnprocessableEntity, "the application's %s lookup: %s", label, strings.TrimSpace(string(msg)))
+		return nil, lookupRefusal(label, resp.Body)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, errorf(resp.StatusCode, "metrics store answered %s", resp.Status)
@@ -181,4 +178,28 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 		}
 	}
 	return names, nil
+}
+
+// seriesLimitError is the message vmstorage gives when a search matches
+// more series than the -search.max* flags allow (lib/storage/index_db.go);
+// cluster vmselect wraps it in its own context, hence a substring match.
+const seriesLimitError = "the number of matching timeseries exceeds"
+
+// lookupRefusal reads a vmselect 422. vmselect answers 422 to any error
+// without a status of its own (httpserver.SendPrometheusError), storage
+// failures and its own timeout included, so only the series limit, which
+// a narrower window fixes, stays a 422 for the client.
+func lookupRefusal(label string, body io.Reader) *HTTPError {
+	var answer struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&answer)
+	switch {
+	case strings.Contains(answer.Error, seriesLimitError):
+		return errorf(http.StatusUnprocessableEntity, "the application's %s lookup: %s", label, answer.Error)
+	case strings.Contains(answer.Error, "timeout exceeded"):
+		return errorf(http.StatusGatewayTimeout, "the application's %s lookup did not answer in time", label)
+	default:
+		return errorf(http.StatusBadGateway, "the application's %s lookup failed: %s", label, answer.Error)
+	}
 }
