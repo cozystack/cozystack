@@ -34,3 +34,12 @@ spec:
         releaseName: cert-manager-issuers
         dependsOn:
         - cert-manager
+        # A ClusterIssuer is Ready only after cert-manager has registered an
+        # ACME account with the CA. Under kstatus that holds this release, and
+        # through dependsOn every package behind cozystack.cert-manager, for as
+        # long as the CA is unreachable. Issuance fails and recovers on its own
+        # in that window; the platform rollout must not wait for it.
+        healthCheckExprs:
+        - apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          current: "true"
