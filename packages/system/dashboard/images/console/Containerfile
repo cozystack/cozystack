@@ -64,9 +64,9 @@ server {
     # Logs and metrics roots of a namespace or of one application, served by
     # the observability proxy rather than the API server. A regex location wins
     # over the /apis prefix below. The upstream is a variable so nginx resolves
-    # it per request: on a cluster without the proxy these paths answer 502
-    # instead of nginx refusing to start. The resolver does not apply search
-    # domains, hence the fully qualified name.
+    # it per request: on a cluster without the proxy nginx still starts, and a
+    # request it cannot deliver gets the not-installed answer below. The
+    # resolver does not apply search domains, hence the fully qualified name.
     location ~ ^/apis/(?:cozystack\.io/v1alpha1/namespaces/[^/]+/(?:logs|metrics)|apps\.cozystack\.io/v1alpha1/namespaces/[^/]+/[^/]+/[^/]+/(?:log|metrics))/ {
         resolver ${NGINX_LOCAL_RESOLVERS};
         set $observability_proxy observability-proxy.cozy-observability-proxy.svc.${CLUSTER_DOMAIN}:80;
@@ -75,7 +75,19 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
+        # With proxy_intercept_errors off this catches only the 502 and 504
+        # nginx makes itself when the proxy cannot be resolved or reached;
+        # the proxy's own 502 and 504 for an unreachable store pass through.
+        proxy_intercept_errors off;
+        error_page 502 504 = @observability_proxy_unavailable;
         proxy_pass http://$observability_proxy;
+    }
+
+    # The console reads a Kubernetes Status body as "not installed", the same
+    # answer kube-apiserver gives for a root nothing serves.
+    location @observability_proxy_unavailable {
+        default_type application/json;
+        return 404 '{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"the observability proxy is not available on this cluster","reason":"NotFound","code":404}';
     }
 
     # Kubernetes API proxy for both core and aggregated groups.

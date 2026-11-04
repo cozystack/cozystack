@@ -144,3 +144,93 @@ matches() {
     [ "$used" = "$expected" ] \
         || { echo "template substitutes: $used; the image defines: $expected" >&2; exit 1; }
 }
+
+# Prints the named location $2 of the template $1, braces included.
+named_location() {
+    printf '%s\n' "$1" | LOCATION_NAME="$2" awk '
+        $1 == "location" && $2 == ENVIRON["LOCATION_NAME"] { inblock = 1 }
+        inblock { print }
+        inblock && $1 == "}" { exit }
+    '
+}
+
+free_port() {
+    python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
+}
+
+# Starts nginx with the observability locations of the console template, the
+# upstream pointed at 127.0.0.1:$1, and a stand-in proxy on 127.0.0.1:$2
+# that answers 502 itself. Prints the console port.
+start_console_nginx() {
+    upstream_port=$1 standin_port=$2
+    conf=$(console_nginx_template)
+    re=$(regex_locations "$conf")
+    console_port=$(free_port)
+    {
+        echo "pid $BATS_TEST_TMPDIR/nginx.pid;"
+        echo "error_log $BATS_TEST_TMPDIR/error.log;"
+        echo "events {}"
+        echo "http {"
+        echo "  access_log off;"
+        echo "  client_body_temp_path $BATS_TEST_TMPDIR; proxy_temp_path $BATS_TEST_TMPDIR;"
+        echo "  fastcgi_temp_path $BATS_TEST_TMPDIR; uwsgi_temp_path $BATS_TEST_TMPDIR; scgi_temp_path $BATS_TEST_TMPDIR;"
+        echo "  server {"
+        echo "    listen 127.0.0.1:$console_port;"
+        echo "    location ~ $re {"
+        # The test upstream is an address, so the resolver is never asked.
+        location_body "$conf" "$re" \
+            | sed -e 's/\${NGINX_LOCAL_RESOLVERS}/127.0.0.1/' \
+                  -e "s/^\([[:space:]]*set[[:space:]]*\$observability_proxy[[:space:]]\).*/\1127.0.0.1:$upstream_port;/"
+        echo "    }"
+        named_location "$conf" "@observability_proxy_unavailable"
+        echo "  }"
+        echo "  server {"
+        echo "    listen 127.0.0.1:$standin_port;"
+        echo "    location / { return 502 'log store unreachable'; }"
+        echo "  }"
+        echo "}"
+    } > "$BATS_TEST_TMPDIR/nginx.conf"
+    nginx -p "$BATS_TEST_TMPDIR" -c "$BATS_TEST_TMPDIR/nginx.conf" \
+        || { cat "$BATS_TEST_TMPDIR/error.log" >&2; return 1; }
+    echo "$console_port"
+}
+
+teardown() {
+    if [ -f "${BATS_TEST_TMPDIR:-}/nginx.pid" ]; then
+        kill "$(cat "$BATS_TEST_TMPDIR/nginx.pid")" 2>/dev/null || true
+    fi
+}
+
+@test "a cluster without the proxy answers the console's not-installed Status, the proxy's own 502 passes through" {
+    command -v nginx >/dev/null 2>&1 || skip "nginx is not installed"
+    command -v curl >/dev/null 2>&1 || skip "curl is not installed"
+    path=/apis/cozystack.io/v1alpha1/namespaces/tenant-foo/logs/select/logsql/query
+
+    # Nothing listens on the upstream port: nginx itself fails the request.
+    standin=$(free_port)
+    port=$(start_console_nginx "$(free_port)" "$standin")
+    out=$(curl --silent --show-error --include --max-time 10 "http://127.0.0.1:$port$path")
+    printf '%s\n' "$out" | head -n 1 | grep -q ' 404' \
+        || { echo "FAIL: an unreachable proxy did not answer 404: $out" >&2; false; }
+    printf '%s\n' "$out" | grep -iq '^content-type: application/json' \
+        || { echo "FAIL: the not-installed answer is not JSON: $out" >&2; false; }
+    body=$(printf '%s\n' "$out" | tail -n 1)
+    printf '%s' "$body" | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+assert s["kind"] == "Status" and s["apiVersion"] == "v1" and s["status"] == "Failure", s
+assert s["reason"] == "NotFound" and s["code"] == 404, s
+assert s["message"] == "the observability proxy is not available on this cluster", s
+' || { echo "FAIL: the not-installed body is not the expected Status: $body" >&2; false; }
+    kill "$(cat "$BATS_TEST_TMPDIR/nginx.pid")"
+    rm -f "$BATS_TEST_TMPDIR/nginx.pid"
+    sleep 0.2
+
+    # The proxy answers 502 itself: the console must see that answer.
+    port=$(start_console_nginx "$standin" "$standin")
+    out=$(curl --silent --show-error --include --max-time 10 "http://127.0.0.1:$port$path")
+    printf '%s\n' "$out" | head -n 1 | grep -q ' 502' \
+        || { echo "FAIL: the proxy's own 502 did not pass through: $out" >&2; false; }
+    printf '%s\n' "$out" | tail -n 1 | grep -qx 'log store unreachable' \
+        || { echo "FAIL: the proxy's own 502 body was replaced: $out" >&2; false; }
+}
