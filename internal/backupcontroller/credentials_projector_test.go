@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -732,3 +733,58 @@ func TestProject_RejectsMalformedForcePathStyle(t *testing.T) {
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+// Consumers that read the Secret through a mounted volume need to know when
+// its content last changed; an unchanged re-projection must keep the time.
+func TestProject_StampsWhenContentChanges(t *testing.T) {
+	src := flatSourceSecret()
+	c := newFakeClient(src)
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}
+	stamp := func() string {
+		got := &corev1.Secret{}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatalf("projected Secret not found: %v", err)
+		}
+		return got.Annotations[credentialsUpdatedAtAnnotation]
+	}
+
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("first projection: %v", err)
+	}
+	first := stamp()
+	at, err := time.Parse(time.RFC3339, first)
+	if err != nil || time.Since(at) > time.Minute {
+		t.Fatalf("first projection stamp %q is not a recent RFC3339 time: %v", first, err)
+	}
+
+	old := &corev1.Secret{}
+	if err := c.Get(ctx, key, old); err != nil {
+		t.Fatalf("get projected Secret: %v", err)
+	}
+	old.Annotations[credentialsUpdatedAtAnnotation] = "2000-01-01T00:00:00Z"
+	if err := c.Update(ctx, old); err != nil {
+		t.Fatalf("age the stamp: %v", err)
+	}
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("unchanged re-projection: %v", err)
+	}
+	if got := stamp(); got != "2000-01-01T00:00:00Z" {
+		t.Fatalf("an unchanged re-projection moved the stamp to %q", got)
+	}
+
+	rotated := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: src.Name}, rotated); err != nil {
+		t.Fatalf("get source Secret: %v", err)
+	}
+	rotated.Data["secretKey"] = []byte("SK2")
+	if err := c.Update(ctx, rotated); err != nil {
+		t.Fatalf("rotate source Secret: %v", err)
+	}
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("rotated re-projection: %v", err)
+	}
+	if got := stamp(); got == "2000-01-01T00:00:00Z" {
+		t.Fatalf("a rotation did not move the stamp")
+	}
+}

@@ -1,10 +1,12 @@
 package backupcontroller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strconv"
 	"strings"
@@ -240,6 +242,7 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 		if target.Data == nil {
 			target.Data = map[string][]byte{}
 		}
+		before := maps.Clone(target.Data)
 		target.Data["AWS_ACCESS_KEY_ID"] = []byte(creds.accessKey)
 		target.Data["AWS_SECRET_ACCESS_KEY"] = []byte(creds.secretKey)
 		// Mirror under the legacy bucket-controller key names so the Redis
@@ -263,6 +266,12 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 		// S3_FORCE_PATH_STYLE because the app chart cannot see
 		// backupStorage.* directly.
 		setOrDelete(target.Data, "forcePathStyle", cfg.ForcePathStyle)
+		if !maps.EqualFunc(before, target.Data, bytes.Equal) {
+			if target.Annotations == nil {
+				target.Annotations = map[string]string{}
+			}
+			target.Annotations[credentialsUpdatedAtAnnotation] = time.Now().UTC().Format(time.RFC3339)
+		}
 		return nil
 	}); err != nil {
 		// If the mutator refused to overwrite an unowned Secret, surface
@@ -423,6 +432,12 @@ func buildFDBBlobCredentials(endpoint, accessKey, secretKey string) ([]byte, err
 	}
 	return json.Marshal(doc)
 }
+
+// credentialsUpdatedAtAnnotation records when the projected content last
+// changed. A consumer that mounts the Secret as a volume sees a change only
+// once kubelet rewrites the volume, so it uses this to tell how fresh its
+// copy can be.
+const credentialsUpdatedAtAnnotation = "backups.cozystack.io/credentials-updated-at"
 
 // clickHouseBackupConfigKey holds the s3 section of a clickhouse-backup
 // config. The ClickHouse chart mounts it as the sidecar's config file
