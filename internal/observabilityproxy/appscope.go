@@ -110,6 +110,14 @@ func (s *Server) applicationScope(ctx context.Context, r *http.Request, store st
 		return nil, errorf(http.StatusUnprocessableEntity, "the query reads further back than the application scope looks up pods (%s before the window, or an unknown lookback); use a shorter window or the namespace root", lim.Lookback)
 	}
 	start := req.start
+	// vmselect evaluates an instant query whose time is within 30s of its
+	// own clock at that clock minus 30s (queryOffset in prometheus.go), so
+	// the evaluation instant lies anywhere in (time-60s, time], while
+	// req.start assumes time-30s. One more latency offset covers it without
+	// trusting the proxy's clock to match vmselect's.
+	if req.path == "api/v1/query" {
+		start = start.Add(-latencyOffset)
+	}
 	var lists [2][]string
 	for i, l := range []struct {
 		label, metric string

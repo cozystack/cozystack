@@ -341,7 +341,8 @@ func TestServerApplicationLookbackBeyondCap(t *testing.T) {
 		t.Fatalf("rate(x[5m]) answered %d, want 200", got)
 	}
 	r := h.requests()[0]
-	want := formatTime(buildMetrics(t, "api/v1/query", q).start)
+	// An instant query may be evaluated up to one more latency offset early.
+	want := formatTime(buildMetrics(t, "api/v1/query", q).start.Add(-latencyOffset))
 	if r.path != "/api/v1/label/pod/values" || r.form.Get("start") != want {
 		t.Fatalf("lookup %s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 	}
@@ -564,5 +565,26 @@ func TestServerApplicationNamesUnreadableSubqueryStep(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "subquery step") {
 		t.Fatalf("answered %d %q, want 422 naming the subquery step", resp.StatusCode, body)
+	}
+}
+
+// TestServerApplicationLookupCoversLatencyOffset: vmselect evaluates an
+// instant query whose time is within 30s of its own clock at its clock
+// minus 30s (prometheus.go, queryOffset), so for a time slightly in the
+// future it reads from earlier than time minus 30s. The lookup starts
+// early enough for any evaluation instant in (time-60s, time].
+func TestServerApplicationLookupCoversLatencyOffset(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	at := testNow.Add(29 * time.Second)
+	q := url.Values{"query": {"container_cpu_usage_seconds_total"}, "time": {at.Format(time.RFC3339)}, "step": {"1s"}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	// The earliest read of the query evaluated at the earliest instant.
+	want := buildMetrics(t, "api/v1/query", q).start.Add(-latencyOffset)
+	r := h.requests()[0]
+	start, err := time.Parse(time.RFC3339, r.form.Get("start"))
+	if err != nil || start.After(want) {
+		t.Fatalf("lookup start = %s, want at most %s", r.form.Get("start"), formatTime(want))
 	}
 }
