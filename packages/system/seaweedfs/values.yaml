@@ -207,6 +207,14 @@ seaweedfs:
     # weed skip startLanceServer and drops the container port and Service port
     # with it.
     lancePort: 0
+    # patches/s3-grpc-tls.patch adds [grpc.s3] to security.toml, which the s3
+    # pods mount by subPath and so never re-read. This annotation changes the
+    # pod template in the release that brings the section, so an upgrade
+    # restarts s3 onto it instead of leaving its gRPC in plaintext. The
+    # upstream s3 template carries no checksum of that ConfigMap, and adding
+    # one would be another vendored patch for a change made once.
+    podAnnotations:
+      seaweedfs.cozystack.io/grpc-s3-tls: "true"
     # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
     # (replaces the former s3-traffic-distribution.patch); the chart gates the
     # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
