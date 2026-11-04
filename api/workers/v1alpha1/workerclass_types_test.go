@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	coreapi "github.com/cozystack/cozystack/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"testing"
 )
@@ -47,5 +48,15 @@ func TestIndependentScheme(t *testing.T) {
 	}
 	if _, ok := obj.(*WorkerClass); !ok {
 		t.Fatalf("registered type %T", obj)
+	}
+}
+
+func TestCoreSchemeDoesNotRegisterWorkerClasses(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := coreapi.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheme.New(GroupVersion.WithKind("WorkerClass")); !runtime.IsNotRegisteredError(err) {
+		t.Fatalf("core unexpectedly registered WorkerClass: %v", err)
 	}
 }

@@ -5,15 +5,14 @@ release:
   name: cozystack
   namespace: cozy-system
 tests:
-  # kubernetes-nodes-rd ships the built-in NodeGroupClass objects, whose CRD
-  # cozystack-controller installs. A variant dependency becomes a HelmRelease
-  # dependsOn on every enabled release of that package, so this edge is what
-  # orders the objects after their CRD.
-  - it: kubernetes-nodes depends on the package that installs the NodeGroupClass CRD
+  - it: waits for the worker package and the core application API
     documentSelector:
       path: metadata.name
       value: cozystack.kubernetes-nodes-application
     asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubernetes-worker-classes
       - contains:
           path: spec.variants[0].dependsOn
           content: cozystack.cozystack-engine
