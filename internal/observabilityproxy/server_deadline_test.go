@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -242,5 +243,57 @@ func TestServerAbortsTruncatedResponse(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if _, err := io.ReadAll(resp.Body); err == nil {
 		t.Fatal("a truncated store answer reached the client as a complete response")
+	}
+}
+
+// TestServerUndeliveredBodyReleasesSlot declares a body that never comes
+// on requests whose form parsing does not read it: a GET, a POST that is
+// not a form, and a GET tail. net/http would drain that body with no
+// deadline once the headers go out, so the slot must still come back.
+func TestServerUndeliveredBodyReleasesSlot(t *testing.T) {
+	for name, raw := range map[string]string{
+		"get query":       "GET " + logsRoot + "query?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\nContent-Length: 10\r\n\r\n",
+		"post text query": "POST " + logsRoot + "query?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\n",
+		"get tail":        "GET " + logsRoot + "tail?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\nContent-Length: 10\r\n\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			lines := make(chan string, 1)
+			done := make(chan struct{})
+			h := newHarness(t, Config{
+				RequestTimeout:  200 * time.Millisecond,
+				TailIdleTimeout: 200 * time.Millisecond,
+				Limiter:         LimiterConfig{MaxConcurrentPerUser: 1, MaxTails: 1},
+			}, tailUpstream(lines, done))
+			t.Cleanup(func() { close(done) })
+			pipe := servePipe(t, h.server)
+			conn := pipe.send(t, raw)
+			held := func() bool {
+				h.server.limits.mu.Lock()
+				defer h.server.limits.mu.Unlock()
+				return h.server.limits.active["alice"]+h.server.limits.total > 0
+			}
+			eventually(t, time.Second, held, "the request never took a slot")
+			if resp := readResponse(t, conn); resp.StatusCode != http.StatusRequestTimeout {
+				t.Fatalf("undelivered body answered %d, want 408", resp.StatusCode)
+			}
+			eventually(t, time.Second, func() bool { return !held() }, "an undelivered body keeps its slot")
+		})
+	}
+}
+
+func TestServerOversizedBody(t *testing.T) {
+	h := newHarness(t, Config{}, nil)
+	for _, ct := range []string{"application/x-www-form-urlencoded", "text/plain"} {
+		req, _ := http.NewRequest(http.MethodPost, h.proxy.URL+logsRoot+"query?query=*", strings.NewReader("query="+strings.Repeat("x", maxFormBytes)))
+		req.Header.Set("Authorization", "Bearer good")
+		req.Header.Set("Content-Type", ct)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s body over the cap answered %d, want 413", ct, resp.StatusCode)
+		}
 	}
 }

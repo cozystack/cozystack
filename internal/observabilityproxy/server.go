@@ -266,8 +266,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	return nil
 }
 
-// readForm reads the body under the request timeout, so a client that
-// sends it slowly holds its slot only that long. Once the body is read the
+// readForm reads the whole body under the request timeout, so a client
+// that sends it slowly holds its slot only that long. ParseForm leaves the
+// body of a GET or of a POST that is not a form unread, and net/http
+// drains a leftover body with no deadline once the headers go out, so the
+// rest is read here as well; draining rather than refusing a declared
+// body keeps any client that sends one working. Once the body is read the
 // deadline is lifted: the server's background read would take a later
 // expiry for a client that went away and cancel a tail. After a failed
 // read it stays, so the server's drain of the unread body is bounded too.
@@ -278,7 +282,13 @@ func (s *Server) readForm(w http.ResponseWriter, r *http.Request) *HTTPError {
 		_ = rc.SetReadDeadline(time.Now().Add(s.cfg.RequestTimeout))
 	}
 	err := r.ParseForm()
+	if err == nil {
+		_, err = io.Copy(io.Discard, r.Body)
+	}
+	var tooLarge *http.MaxBytesError
 	switch {
+	case errors.As(err, &tooLarge):
+		return errorf(http.StatusRequestEntityTooLarge, "request body larger than %d bytes", tooLarge.Limit)
 	case err == nil:
 		_ = rc.SetReadDeadline(time.Time{})
 		return nil
