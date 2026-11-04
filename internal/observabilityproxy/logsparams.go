@@ -325,6 +325,19 @@ func scaleDuration(f float64, unit time.Duration) (time.Duration, bool) {
 // and a duration meaning that long before now (VictoriaLogs' "start=3h").
 // Anything else is refused rather than guessed, since a misread timestamp
 // silently moves the window.
+// maxLogsTime is the last instant int64 nanoseconds hold.
+var maxLogsTime = time.Unix(0, math.MaxInt64)
+
+// absoluteLogsTime refuses a time vlselect cannot hold: it keeps times as
+// int64 nanoseconds (time.UnixNano), which is undefined outside 1678..2262
+// and would move the window anywhere; nothing was logged before 1970.
+func absoluteLogsTime(s string, t time.Time) (time.Time, error) {
+	if t.Before(time.Unix(0, 0)) || !t.Before(maxLogsTime) {
+		return time.Time{}, fmt.Errorf("time %q is outside 1970..2262", s)
+	}
+	return t, nil
+}
+
 func parseTime(s string, now time.Time) (time.Time, error) {
 	if s == "now" {
 		return now, nil
@@ -344,10 +357,10 @@ func parseTime(s string, now time.Time) (time.Time, error) {
 			frac = (frac + "000000000")[:9]
 			nanos, _ = strconv.ParseInt(frac, 10, 64)
 		}
-		return time.Unix(secs, nanos), nil
+		return absoluteLogsTime(s, time.Unix(secs, nanos))
 	}
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t, nil
+		return absoluteLogsTime(s, t)
 	}
 	if d, err := parseDuration(s); err == nil {
 		return now.Add(-d), nil
