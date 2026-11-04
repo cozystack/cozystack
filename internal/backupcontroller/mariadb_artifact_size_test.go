@@ -239,8 +239,9 @@ func TestMatchMariaDBDump(t *testing.T) {
 	completed := created.Add(3 * time.Minute)
 	const prefix = "tenant/db/"
 	own := s3ObjectInfo{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4242, LastModified: created.Add(2 * time.Minute)}
+	run := newMariaDBRun(&mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk"}}, created, completed)
 
-	got, err := matchMariaDBDump([]s3ObjectInfo{own}, prefix, created, completed)
+	got, err := matchMariaDBDump([]s3ObjectInfo{own}, prefix, run, nil)
 	if err != nil {
 		t.Fatalf("matchMariaDBDump: %v", err)
 	}
@@ -255,11 +256,11 @@ func TestMatchMariaDBDump(t *testing.T) {
 		t.Errorf("matchMariaDBDump = %+v, want %+v", got, want)
 	}
 
-	if _, err := matchMariaDBDump(nil, prefix, created, completed); !errors.Is(err, errMariaDBDumpNotFound) {
+	if _, err := matchMariaDBDump(nil, prefix, run, nil); !errors.Is(err, errMariaDBDumpNotFound) {
 		t.Errorf("no dump: err = %v, want errMariaDBDumpNotFound", err)
 	}
 	second := s3ObjectInfo{Key: dumpKey(prefix, created.Add(2*time.Minute), "gzip"), Size: 1, LastModified: created.Add(2 * time.Minute)}
-	if _, err := matchMariaDBDump([]s3ObjectInfo{own, second}, prefix, created, completed); !errors.Is(err, errMariaDBDumpAmbiguous) {
+	if _, err := matchMariaDBDump([]s3ObjectInfo{own, second}, prefix, run, nil); !errors.Is(err, errMariaDBDumpAmbiguous) {
 		t.Errorf("two dumps: err = %v, want errMariaDBDumpAmbiguous", err)
 	}
 }
@@ -301,6 +302,154 @@ func TestFindMariaDBDump(t *testing.T) {
 	if l.calls != 1 {
 		t.Errorf("S3 listed %d times, want once: a PVC-backed Backup has nothing to list", l.calls)
 	}
+}
+
+// TestFindMariaDBDump_Ownership drives runs of one application that share
+// a prefix. This run lives from t0 to t0+40s, so its window with the
+// one-minute slack is [t0-1m, t0+1m40s]; its own dump is 123 bytes and a
+// neighbour's is 666 or 777. A neighbour's dump must never be returned.
+func TestFindMariaDBDump_Ownership(t *testing.T) {
+	t0 := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	s3 := newRenderedMariaDBTemplate().Storage.S3
+	s3.Prefix = "tenant/db"
+	const prefix = "tenant/db/"
+	run := func(name string, created, completed time.Time) *mariadbtypes.Backup {
+		b := operatorBackupStoringTo(t, s3, created)
+		b.Name = name
+		b.Status.Conditions = []metav1.Condition{mariadbBackupSucceeded(metav1.NewTime(completed))}
+		return b
+	}
+	dump := func(named, uploaded time.Time, size int64) s3ObjectInfo {
+		return s3ObjectInfo{Key: dumpKey(prefix, named, "gzip"), Size: size, LastModified: uploaded}
+	}
+	own := run("op-bk", t0, t0.Add(40*time.Second))
+	find := func(t *testing.T, objects []s3ObjectInfo, operatorBackups ...client.Object) (mariadbDump, error) {
+		t.Helper()
+		store := objectStore{
+			reader: newMariaDBStrategyTestClient(t, append(operatorBackups, own, s3CredsSecret("tenant", "creds"))...),
+			newLister: func(s3Connection) (s3ObjectLister, error) {
+				return &fakeS3Lister{objects: objects}, nil
+			},
+		}
+		return findMariaDBDump(context.Background(), store, own, t0.Add(40*time.Second))
+	}
+	wantAmbiguous := func(t *testing.T, got mariadbDump, err error) {
+		t.Helper()
+		if !errors.Is(err, errMariaDBDumpAmbiguous) {
+			t.Errorf("findMariaDBDump = %+v, %v; want errMariaDBDumpAmbiguous", got, err)
+		}
+	}
+	wantOwn := func(t *testing.T, got mariadbDump, err error) {
+		t.Helper()
+		if err != nil || got.Size != 123 {
+			t.Errorf("findMariaDBDump = %+v, %v; want this run's 123-byte dump", got, err)
+		}
+	}
+
+	t.Run("a pod clock behind does not hand this run the previous run's dump", func(t *testing.T) {
+		// The previous run finished 20s before this one was created and its
+		// operator Backup is gone. This run's pod clock is 5m behind, so its
+		// own dump is named outside the window and uploaded inside it.
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(-30*time.Second), t0.Add(-20*time.Second), 666),
+			dump(t0.Add(5*time.Second-5*time.Minute), t0.Add(30*time.Second), 123),
+		})
+		wantAmbiguous(t, got, err)
+	})
+
+	t.Run("a pod clock ahead does not hand this run the next run's dump", func(t *testing.T) {
+		// The next run started 5s after this one completed and has uploaded
+		// its dump by the time this one is probed; it has not completed yet.
+		next := operatorBackupStoringTo(t, s3, t0.Add(45*time.Second))
+		next.Name = "op-next"
+		next.Status.Conditions = []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionFalse,
+			Reason: mariadbtypes.ConditionReasonJobRunning, Message: "Running", LastTransitionTime: metav1.NewTime(t0.Add(45 * time.Second)),
+		}}
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(5*time.Second+5*time.Minute), t0.Add(30*time.Second), 123),
+			dump(t0.Add(50*time.Second), t0.Add(80*time.Second), 777),
+		}, next)
+		wantAmbiguous(t, got, err)
+	})
+
+	t.Run("an object store clock behind does not hand this run the next run's dump", func(t *testing.T) {
+		// The store clock is 2m behind: this run's upload is stamped before
+		// the window opens, the next run's is pulled back into it.
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(5*time.Second), t0.Add(30*time.Second-2*time.Minute), 123),
+			dump(t0.Add(50*time.Second), t0.Add(3*time.Minute-2*time.Minute), 777),
+		})
+		wantAmbiguous(t, got, err)
+	})
+
+	t.Run("a dump another finished run wrote is not taken when this run's own is gone", func(t *testing.T) {
+		// This run's dump was pruned; the next run's falls in this run's
+		// window on both clocks, and in its own.
+		next := run("op-next", t0.Add(45*time.Second), t0.Add(85*time.Second))
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(50*time.Second), t0.Add(75*time.Second), 777),
+		}, next)
+		wantAmbiguous(t, got, err)
+	})
+
+	t.Run("a dump the window holds on one clock only is not taken", func(t *testing.T) {
+		// This run's dump is gone; the previous run's operator Backup is too,
+		// and its dump, started 2m before this run, finished uploading 20s
+		// before it.
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(-2*time.Minute), t0.Add(-20*time.Second), 666),
+		})
+		if err == nil {
+			t.Errorf("findMariaDBDump = %+v; want no dump attributed", got)
+		}
+	})
+
+	t.Run("a run still in progress does not contest this run's dump", func(t *testing.T) {
+		// A concurrent run created 30s before this one has not uploaded yet.
+		running := operatorBackupStoringTo(t, s3, t0.Add(-30*time.Second))
+		running.Name = "op-running"
+		running.Status.Conditions = []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionFalse,
+			Reason: mariadbtypes.ConditionReasonJobRunning, Message: "Running", LastTransitionTime: metav1.NewTime(t0.Add(-30 * time.Second)),
+		}}
+		got, err := find(t, []s3ObjectInfo{dump(t0.Add(5*time.Second), t0.Add(30*time.Second), 123)}, running)
+		wantOwn(t, got, err)
+	})
+
+	t.Run("runs minutes apart each keep their own dump", func(t *testing.T) {
+		previous := run("op-previous", t0.Add(-4*time.Minute), t0.Add(-3*time.Minute))
+		next := run("op-next", t0.Add(3*time.Minute), t0.Add(4*time.Minute))
+		got, err := find(t, []s3ObjectInfo{
+			dump(t0.Add(-230*time.Second), t0.Add(-190*time.Second), 666),
+			dump(t0.Add(5*time.Second), t0.Add(30*time.Second), 123),
+			dump(t0.Add(185*time.Second), t0.Add(220*time.Second), 777),
+		}, previous, next)
+		wantOwn(t, got, err)
+	})
+
+	t.Run("a run that writes elsewhere does not contest this run's dump", func(t *testing.T) {
+		other := newRenderedMariaDBTemplate().Storage.S3
+		other.Prefix = "tenant/other"
+		elsewhere := operatorBackupStoringTo(t, other, t0)
+		elsewhere.Name = "op-elsewhere"
+		elsewhere.Status.Conditions = []metav1.Condition{mariadbBackupSucceeded(metav1.NewTime(t0.Add(40 * time.Second)))}
+		got, err := find(t, []s3ObjectInfo{dump(t0.Add(5*time.Second), t0.Add(30*time.Second), 123)}, elsewhere)
+		wantOwn(t, got, err)
+	})
+
+	t.Run("a run stuck short of Complete does not contest later runs", func(t *testing.T) {
+		// A backup Job whose pod never starts leaves its operator Backup
+		// JobRunning for good.
+		stuck := operatorBackupStoringTo(t, s3, t0.Add(-3*time.Hour))
+		stuck.Name = "op-stuck"
+		stuck.Status.Conditions = []metav1.Condition{{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionFalse,
+			Reason: mariadbtypes.ConditionReasonJobRunning, Message: "Running", LastTransitionTime: metav1.NewTime(t0.Add(-3 * time.Hour)),
+		}}
+		got, err := find(t, []s3ObjectInfo{dump(t0.Add(5*time.Second), t0.Add(30*time.Second), 123)}, stuck)
+		wantOwn(t, got, err)
+	})
 }
 
 // TestMariaDBArtifactSizeBytes_MinioClient drives the real minio client

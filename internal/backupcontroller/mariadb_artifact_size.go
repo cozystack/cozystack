@@ -8,6 +8,10 @@ import (
 	"strings"
 	"time"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 )
 
@@ -60,6 +64,10 @@ func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbt
 	if s3 == nil {
 		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
 	}
+	others, err := finishedMariaDBRuns(ctx, store.reader, mdbBackup)
+	if err != nil {
+		return mariadbDump{}, fmt.Errorf("list operator Backups: %w", err)
+	}
 	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("resolve S3 credentials: %w", err)
@@ -76,35 +84,104 @@ func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbt
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, prefix, err)
 	}
-	return matchMariaDBDump(objects, prefix, mdbBackup.CreationTimestamp.Time, completedAt)
+	own := newMariaDBRun(mdbBackup, mdbBackup.CreationTimestamp.Time, completedAt)
+	return matchMariaDBDump(objects, prefix, own, others)
 }
 
-// matchMariaDBDump picks the dump of the run that lived from created to
-// completed. The prefix is shared by every backup of the application, so
-// the dump is identified by both the timestamp in its file name and its
-// LastModified falling inside that lifetime: the two come from different
-// clocks, so a skewed pod clock alone cannot pull a neighbouring run's dump
-// into the window.
-func matchMariaDBDump(objects []s3ObjectInfo, prefix string, created, completed time.Time) (mariadbDump, error) {
-	lower := created.Add(-mariadbSizeProbeClockSkew)
-	upper := completed.Add(mariadbSizeProbeClockSkew)
-	var matched []mariadbDump
+// mariadbRun is the span in which an operator Backup can have written its
+// dump: its lifetime, widened by mariadbSizeProbeClockSkew on each side.
+type mariadbRun struct {
+	name         string
+	lower, upper time.Time
+}
+
+func newMariaDBRun(b *mariadbtypes.Backup, created, completed time.Time) mariadbRun {
+	return mariadbRun{
+		name:  b.Namespace + "/" + b.Name,
+		lower: created.Add(-mariadbSizeProbeClockSkew),
+		upper: completed.Add(mariadbSizeProbeClockSkew),
+	}
+}
+
+func (r mariadbRun) placesOnBothClocks(d mariadbDump) bool {
+	return inWindow(d.Timestamp, r.lower, r.upper) && inWindow(d.LastModified, r.lower, r.upper)
+}
+
+func (r mariadbRun) placesOnEitherClock(d mariadbDump) bool {
+	return inWindow(d.Timestamp, r.lower, r.upper) || inWindow(d.LastModified, r.lower, r.upper)
+}
+
+// matchMariaDBDump picks the dump of run own among objects, which share a
+// prefix with every other run of the application. A dump carries two
+// clocks, the backup pod's in its file name and the object store's in its
+// LastModified, and either can be skewed. A dump is taken only when it is
+// the one dump either clock places in own's window, both clocks place it
+// there, and neither places it in the window of another finished run: a
+// dump in the window on one clock only may be this run's own, misplaced by
+// a skewed clock, which leaves any other candidate unproven. A neighbour's
+// dump is still taken if this run's own is missing from the listing, or
+// misplaced on both clocks, and the neighbour's operator Backup is gone or
+// has not completed.
+func matchMariaDBDump(objects []s3ObjectInfo, prefix string, own mariadbRun, others []mariadbRun) (mariadbDump, error) {
+	var near []mariadbDump
 	for _, obj := range objects {
 		name := strings.TrimPrefix(obj.Key, prefix)
 		ts, ok := parseMariaDBLogicalBackupFile(name)
-		if !ok || !inWindow(ts, lower, upper) || !inWindow(obj.LastModified, lower, upper) {
+		if !ok {
 			continue
 		}
-		matched = append(matched, mariadbDump{Key: obj.Key, Name: name, Timestamp: ts, Size: obj.Size, LastModified: obj.LastModified})
+		d := mariadbDump{Key: obj.Key, Name: name, Timestamp: ts, Size: obj.Size, LastModified: obj.LastModified}
+		if own.placesOnEitherClock(d) {
+			near = append(near, d)
+		}
 	}
-	switch len(matched) {
-	case 0:
+	if len(near) == 0 {
 		return mariadbDump{}, errMariaDBDumpNotFound
-	case 1:
-		return matched[0], nil
-	default:
-		return mariadbDump{}, fmt.Errorf("%w: %d dumps fall in its lifetime", errMariaDBDumpAmbiguous, len(matched))
 	}
+	if len(near) > 1 {
+		return mariadbDump{}, fmt.Errorf("%w: %d dumps fall in its lifetime on at least one clock", errMariaDBDumpAmbiguous, len(near))
+	}
+	d := near[0]
+	if !own.placesOnBothClocks(d) {
+		return mariadbDump{}, fmt.Errorf("%w: %s falls in its lifetime on one clock only", errMariaDBDumpAmbiguous, d.Name)
+	}
+	for _, other := range others {
+		if other.placesOnEitherClock(d) {
+			return mariadbDump{}, fmt.Errorf("%w: %s also falls in the lifetime of operator Backup %s", errMariaDBDumpAmbiguous, d.Name, other.name)
+		}
+	}
+	return d, nil
+}
+
+// finishedMariaDBRuns returns the runs of the other operator Backups that
+// write under the same bucket and prefix as b and have completed, whether
+// their Job succeeded or failed. One still running is left out: its window
+// has no end yet, and an operator Backup stuck short of Complete, as one
+// whose Job pod never starts is, would otherwise contest every later run of
+// the application for good. The endpoint is not compared, since one has
+// several spellings, and a false neighbour only leaves a size unset.
+func finishedMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbtypes.Backup) ([]mariadbRun, error) {
+	list := &mariadbtypes.BackupList{}
+	if err := reader.List(ctx, list); err != nil {
+		return nil, err
+	}
+	var runs []mariadbRun
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Namespace == b.Namespace && other.Name == b.Name {
+			continue
+		}
+		s3 := other.Spec.Storage.S3
+		if s3 == nil || s3.Bucket != b.Spec.Storage.S3.Bucket || mariadbOperatorS3Prefix(s3.Prefix) != mariadbOperatorS3Prefix(b.Spec.Storage.S3.Prefix) {
+			continue
+		}
+		cond := apimeta.FindStatusCondition(other.Status.Conditions, mariadbtypes.ConditionTypeComplete)
+		if cond == nil || cond.Status != metav1.ConditionTrue {
+			continue
+		}
+		runs = append(runs, newMariaDBRun(other, other.CreationTimestamp.Time, cond.LastTransitionTime.Time))
+	}
+	return runs, nil
 }
 
 // mariadbS3Connection resolves the Secrets and TLS settings of the operator

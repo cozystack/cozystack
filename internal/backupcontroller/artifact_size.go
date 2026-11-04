@@ -60,7 +60,8 @@ type s3Connection struct {
 // so that the restore path, which has a reconciler of its own, can read
 // the same objects.
 type objectStore struct {
-	// reader must reach Secrets; the manager's client reads them uncached.
+	// reader reads Secrets, which the manager's client fetches uncached,
+	// and lists operator Backups, which it serves from the cache.
 	reader client.Reader
 	// newLister overrides the S3 client; nil means a real minio client.
 	newLister func(conn s3Connection) (s3ObjectLister, error)
