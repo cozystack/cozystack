@@ -81,6 +81,7 @@ the apiserver checks that user's RBAC.
    to a chunked-encoding WATCH against the same `resourceVersion`. Don't
    poll. Don't add `refetchInterval`. If you need a one-shot, pass
    `{ watch: false }`.
+   The one exception is the metrics panels in `components/observability`: the observability proxy serves the Prometheus query API, which has no watch, so they refresh on a fixed interval instead. Log lines stream through the tail endpoint and are not polled.
 4. **Tenant scoping.** Most resources live in `tenant-<name>` namespaces.
    Pull the active tenant from `useTenantContext()` — never read the
    namespace from a URL param or guess it.
