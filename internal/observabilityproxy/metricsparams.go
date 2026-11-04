@@ -26,7 +26,10 @@ import (
 	"time"
 )
 
-// MetricsLimits bound what one metrics request may make vmselect do.
+// MetricsLimits bound the window, resolution and timeout a metrics request
+// asks vmselect for. Windows and offsets inside the expression are not
+// limited here: they cannot read past the store's retention, and vmselect
+// caps the series and samples one query may touch.
 type MetricsLimits struct {
 	MaxRange   time.Duration
 	MaxPoints  int
