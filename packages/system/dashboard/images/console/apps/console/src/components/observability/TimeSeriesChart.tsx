@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
 import uPlot from "uplot"
 import "uplot/dist/uPlot.min.css"
-import type { ChartData } from "../../lib/observability/metrics.ts"
+import { formatSampleTime, type ChartData } from "../../lib/observability/metrics.ts"
 
 const COLORS = ["#2563eb", "#16a34a", "#d97706", "#9333ea", "#dc2626", "#0891b2", "#4b5563", "#db2777"]
 const HEIGHT = 200
@@ -19,7 +19,6 @@ export function TimeSeriesChart({ data, format }: TimeSeriesChartProps) {
     if (!el) return
     const fmt = (v: number | null) => (v === null ? "–" : format(v))
     const latest = data.series.map((s) => s.values.findLast((v) => v !== null) ?? null)
-    const stamp = uPlot.fmtDate("{M}/{D}/{YY} {h}:{mm}:{ss} {AA}")
     const chart = new uPlot(
       {
         width: el.clientWidth || 600,
@@ -27,7 +26,7 @@ export function TimeSeriesChart({ data, format }: TimeSeriesChartProps) {
         scales: { x: { time: true } },
         legend: { live: true },
         series: [
-          { value: (_: uPlot, v: number | null, _sidx: number, idx: number | null) => (idx === null || v === null ? "latest" : stamp(new Date(v * 1000))) },
+          { value: (_: uPlot, v: number | null, _sidx: number, idx: number | null) => (idx === null || v === null ? "latest" : formatSampleTime(v)) },
           ...data.series.map((s, i) => ({
             label: s.label,
             stroke: COLORS[i % COLORS.length],

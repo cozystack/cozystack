@@ -93,6 +93,10 @@ export const METRIC_PANELS: MetricPanel[] = [
   },
 ]
 
+export function formatSampleTime(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
 export interface ChartSeries {
   label: string
   values: (number | null)[]

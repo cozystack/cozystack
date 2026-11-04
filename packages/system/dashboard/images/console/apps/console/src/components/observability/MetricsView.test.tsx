@@ -123,6 +123,21 @@ describe("MetricsView", () => {
     expect(screen.getByRole("button", { name: "Show data for Network" })).toBeDisabled()
   })
 
+  it("offers no table for a panel with no series or an error", async () => {
+    const { client } = clientWith((url) =>
+      url.searchParams.get("query")?.includes("memory")
+        ? Response.json({ status: "error", error: "too many series" }, { status: 422 })
+        : Response.json({ status: "success", data: { resultType: "matrix", result: [] } }),
+    )
+    renderWithK8sProvider(<MetricsView scope={scope} />, { client })
+
+    await screen.findByText("too many series. Choose a shorter range.")
+    await waitFor(() => expect(screen.getAllByText("No data for this range.")).toHaveLength(2))
+    for (const title of ["CPU (cores)", "Memory (working set)", "Network"]) {
+      expect(screen.getByRole("button", { name: `Show data for ${title}` })).toBeDisabled()
+    }
+  })
+
   it("holds each chart's place while it loads", () => {
     const { client } = clientWith(() => new Promise<Response>(() => {}))
 

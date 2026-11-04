@@ -13,11 +13,11 @@ vi.mock("uplot", () => ({
       created.push({ opts, data, destroy: this.destroy })
     }
     setSize() {}
-    static fmtDate = () => (d: Date) => d.toISOString()
   },
 }))
 
 const { TimeSeriesChart } = await import("./TimeSeriesChart.tsx")
+const { formatSampleTime } = await import("../../lib/observability/metrics.ts")
 
 beforeEach(() => {
   created.length = 0
@@ -56,7 +56,7 @@ describe("TimeSeriesChart", () => {
     const time = created[0].opts.series[0].value!
 
     expect(time(null, null, 0, null)).toBe("latest")
-    expect(time(null, 2, 0, 1)).toBe(new Date(2000).toISOString())
+    expect(time(null, 2, 0, 1)).toBe(formatSampleTime(2))
   })
 
   it("destroys the chart on unmount", () => {

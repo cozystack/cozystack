@@ -1,4 +1,4 @@
-import type { ChartData } from "../../lib/observability/metrics.ts"
+import { formatSampleTime, type ChartData } from "../../lib/observability/metrics.ts"
 
 interface SeriesTableProps {
   id: string
@@ -6,9 +6,6 @@ interface SeriesTableProps {
   data: ChartData
   format: (value: number) => string
 }
-
-const formatTime = (seconds: number) =>
-  new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
 
 export function SeriesTable({ id, title, data, format }: SeriesTableProps) {
   const newestFirst = data.timestamps.map((t, i) => ({ t, i })).reverse()
@@ -33,7 +30,7 @@ export function SeriesTable({ id, title, data, format }: SeriesTableProps) {
         <tbody className="divide-y divide-slate-100 text-slate-700">
           {newestFirst.map(({ t, i }) => (
             <tr key={t}>
-              <th scope="row" className="px-3 py-1 text-left font-normal whitespace-nowrap">{formatTime(t)}</th>
+              <th scope="row" className="px-3 py-1 text-left font-normal whitespace-nowrap">{formatSampleTime(t)}</th>
               {data.series.map((s, j) => {
                 const v = s.values[i]
                 return <td key={j} className="px-3 py-1 text-right">{v === null ? "–" : format(v)}</td>
