@@ -160,6 +160,11 @@ func window(in url.Values, now time.Time, lim LogsLimits) (time.Time, time.Time,
 	if end.Sub(start) > lim.MaxRange {
 		start = end.Add(-lim.MaxRange)
 	}
+	for k, t := range map[string]time.Time{"start": start, "end": end} {
+		if herr := sendableTime(k, t); herr != nil {
+			return time.Time{}, time.Time{}, herr
+		}
+	}
 	return start.UTC(), end.UTC(), nil
 }
 
@@ -227,6 +232,9 @@ func tailParams(in, out url.Values, now time.Time, lim LogsLimits) *HTTPError {
 		t, err := parseTime(v, now)
 		if err != nil {
 			return errorf(http.StatusBadRequest, "invalid %s: %v", k, err)
+		}
+		if herr := sendableTime(k, t); herr != nil {
+			return herr
 		}
 		out.Set(k, t.UTC().Format(time.RFC3339Nano))
 		if k == "start" {
@@ -323,23 +331,21 @@ func scaleDuration(f float64, unit time.Duration) (time.Duration, bool) {
 	return time.Duration(v), true
 }
 
+// sendableTime refuses a time vlselect cannot hold: it reads the RFC3339
+// the proxy sends through time.UnixNano, which is undefined outside the
+// int64 range (1677..2262) and would move the window anywhere. Only times
+// actually sent are checked; an older start is clamped first.
+func sendableTime(key string, t time.Time) *HTTPError {
+	if t.Before(time.Unix(0, math.MinInt64)) || t.After(time.Unix(0, math.MaxInt64)) {
+		return errorf(http.StatusBadRequest, "invalid %s: %s is outside 1677..2262", key, t.Format(time.RFC3339))
+	}
+	return nil
+}
+
 // parseTime accepts "now", unix seconds with an optional fraction, RFC3339,
 // and a duration meaning that long before now (VictoriaLogs' "start=3h").
 // Anything else is refused rather than guessed, since a misread timestamp
 // silently moves the window.
-// maxLogsTime is the last instant int64 nanoseconds hold.
-var maxLogsTime = time.Unix(0, math.MaxInt64)
-
-// absoluteLogsTime refuses a time vlselect cannot hold: it keeps times as
-// int64 nanoseconds (time.UnixNano), which is undefined outside 1678..2262
-// and would move the window anywhere; nothing was logged before 1970.
-func absoluteLogsTime(s string, t time.Time) (time.Time, error) {
-	if t.Before(time.Unix(0, 0)) || !t.Before(maxLogsTime) {
-		return time.Time{}, fmt.Errorf("time %q is outside 1970..2262", s)
-	}
-	return t, nil
-}
-
 func parseTime(s string, now time.Time) (time.Time, error) {
 	if s == "now" {
 		return now, nil
@@ -359,10 +365,10 @@ func parseTime(s string, now time.Time) (time.Time, error) {
 			frac = (frac + "000000000")[:9]
 			nanos, _ = strconv.ParseInt(frac, 10, 64)
 		}
-		return absoluteLogsTime(s, time.Unix(secs, nanos))
+		return time.Unix(secs, nanos), nil
 	}
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return absoluteLogsTime(s, t)
+		return t, nil
 	}
 	if d, err := parseDuration(s); err == nil {
 		return now.Add(-d), nil
