@@ -179,12 +179,16 @@ func TestServerMetricsConcurrency(t *testing.T) {
 		}
 	}
 	hold("good")
-	refused := make(chan int, 1)
-	go func() { refused <- h.status(http.MethodPost, metricsRoot+"api/v1/query?query=up", "good") }()
+	refused := make(chan *http.Response, 1)
+	go func() {
+		resp := h.do(http.MethodPost, metricsRoot+"api/v1/query?query=up", "good", nil, nil)
+		_ = resp.Body.Close()
+		refused <- resp
+	}()
 	select {
 	case got := <-refused:
-		if got != http.StatusTooManyRequests {
-			t.Fatalf("concurrent request answered %d, want 429", got)
+		if got.StatusCode != http.StatusTooManyRequests || got.Header.Get("Retry-After") == "" {
+			t.Fatalf("concurrent request answered %d with Retry-After %q, want 429 with a value", got.StatusCode, got.Header.Get("Retry-After"))
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent request of the same user reached the upstream")

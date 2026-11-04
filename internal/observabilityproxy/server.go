@@ -282,7 +282,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Route, user string) *HTTPError {
 	release, ok := s.limits.acquire(user)
 	if !ok {
-		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
+		return tooManyConcurrent(w)
 	}
 	defer release()
 	if herr := s.readForm(w, r); herr != nil {
