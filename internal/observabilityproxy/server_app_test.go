@@ -324,7 +324,9 @@ func TestServerApplicationNarrowedGrant(t *testing.T) {
 func TestServerApplicationLookbackBeyondCap(t *testing.T) {
 	cfg := Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 100, MaxPVCs: 100}}}
 	h := newPolicyHarness(t, cfg, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
-	for _, query := range []string{"rate(x[7d])", "x[30d] @ end()", "rate(x[5i])"} {
+	// max_over_time(x[2h]) reads just past the 1h cap; rate(x[5i]) has an
+	// unknown lookback.
+	for _, query := range []string{"rate(x[7d])", "max_over_time(x[2h])", "rate(x[5i])"} {
 		q := url.Values{"query": {query}, "time": {unix(testNow)}}
 		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusUnprocessableEntity {
 			t.Errorf("%s answered %d, want 422", query, got)
@@ -483,5 +485,25 @@ func TestServerApplicationLookupStoreErrors(t *testing.T) {
 		if strings.Contains(string(body), `"errorType"`) {
 			t.Errorf("the store's raw JSON reached the client: %q", body)
 		}
+	}
+}
+
+// TestServerApplicationRefusesEveryAt: no @ form can be bounded, and the
+// answer says so rather than naming forms that would pass.
+func TestServerApplicationRefusesEveryAt(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	for _, query := range []string{"up @ end()", "up @ start()", "up @ 1700000000"} {
+		resp := h.do(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+url.Values{"query": {query}}.Encode(), "good", nil, nil)
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", query, resp.StatusCode)
+		}
+		if strings.Contains(string(body), "start() or end()") {
+			t.Errorf("%s: the refusal names @ forms as allowed: %q", query, body)
+		}
+	}
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("upstream saw %d requests for refused queries", n)
 	}
 }
