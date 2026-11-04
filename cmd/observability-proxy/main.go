@@ -98,6 +98,9 @@ func parseFlags(args []string) (options, error) {
 	fs.IntVar(&o.metrics.App.MaxPods, "metrics-app-max-pods", 500, "most pods of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.metrics.App.MaxPVCs, "metrics-app-max-pvcs", 500, "most PVCs of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
+	// Counted per client request: an application metrics request costs the
+	// store three calls (the pod and PVC lookups and the query) for one
+	// token, so the store load per user can be three times this rate.
 	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained requests per second per user; 0 disables")
 	fs.IntVar(&o.limiter.RateBurst, "rate-limit-burst", 20, "request burst per user")
 	fs.IntVar(&o.limiter.MaxTailsPerUser, "max-tails-per-user", 5, "open tails per user; 0 disables")
