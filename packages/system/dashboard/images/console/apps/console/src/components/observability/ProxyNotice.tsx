@@ -20,7 +20,8 @@ function describe(what: ProxyNoticeProps["what"], error: unknown): { quiet: bool
     case "forbidden":
       return { quiet: false, text: `You do not have permission to read ${lower} here.` }
     case "limit":
-      return { quiet: false, text: `${error.message}. Choose a shorter range.` }
+      // The proxy puts its own remedy after "; " (e.g. "use a shorter range", "raise step").
+      return { quiet: false, text: error.message.includes("; ") ? `${error.message}.` : `${error.message}. Choose a shorter range.` }
     case "rate-limited":
       return { quiet: false, text: "Too many requests. Try again in a moment." }
     case "timeout":
