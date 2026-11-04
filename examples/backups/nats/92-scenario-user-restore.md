@@ -55,9 +55,6 @@ The script:
 
 - Both flows rely on the strategy template branching on `.Mode`. See
   `01-create-strategy.sh`.
-- The tarball in object storage is not managed by the Cozystack `Backup`
-  lifecycle: deleting the `Backup` CR removes the reference but leaves the S3
-  object in place. Tenants who need to reclaim space should delete the object
-  (or set a bucket lifecycle policy).
+- The tarball in object storage is not managed by the Cozystack `Backup` lifecycle: deleting the `Backup` CR removes the reference but leaves the S3 object in place. Tenants who need to reclaim space should delete the object, or set a lifecycle rule on the bucket. The Cozystack SeaweedFS applies such rules once a day while its `lifecycle.enabled` is on, which is the default; another object store applies them only if it implements bucket lifecycle.
 - `nats stream restore` recreates the stream's configuration from the snapshot;
   consumers are restored as captured at backup time.
