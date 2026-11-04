@@ -134,6 +134,10 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--metrics-max-points must be at least 2")
 	case o.logs.MaxTailResume < 0:
 		return o, errors.New("--logs-max-tail-resume must not be negative")
+	// Past the request timeout the proxy cuts a query vmselect is still
+	// allowed to run, and answers 504 for a store that is within its time.
+	case o.requestTimeout > 0 && o.metrics.Limits.MaxTimeout > o.requestTimeout:
+		return o, errors.New("--metrics-max-timeout must not exceed --request-timeout")
 	case o.requestTimeout < 0 || o.tailIdleTimeout < 0 || o.authCacheTTL < 0 || o.shutdownTimeout < 0:
 		return o, errors.New("timeouts and the auth cache TTL must not be negative")
 	// NaN passes every comparison and +Inf never empties a bucket; either
