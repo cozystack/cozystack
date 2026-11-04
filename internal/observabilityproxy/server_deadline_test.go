@@ -197,3 +197,34 @@ func TestServerActiveTailOutlivesWriteDeadline(t *testing.T) {
 		time.Sleep(75 * time.Millisecond)
 	}
 }
+
+// TestServerTailUpstreamWithoutHeaders gives up on a store that accepts a
+// tail but never answers it, instead of holding the slot until the client
+// leaves.
+func TestServerTailUpstreamWithoutHeaders(t *testing.T) {
+	release := make(chan struct{})
+	h := newHarness(t, Config{
+		TailIdleTimeout: 200 * time.Millisecond,
+		Limiter:         LimiterConfig{MaxTails: 1},
+	}, func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	// After the harness, so it runs before the servers wait for handlers.
+	t.Cleanup(func() { close(release) })
+	got := make(chan int, 1)
+	go func() { got <- h.status(http.MethodGet, logsRoot+"tail?query=*", "good") }()
+	select {
+	case code := <-got:
+		if code != http.StatusGatewayTimeout {
+			t.Fatalf("silent store answered %d, want 504", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a tail waits for upstream headers without bound")
+	}
+	if n := h.server.limits.openTails(); n != 0 {
+		t.Fatalf("open tails = %d after the tail ended", n)
+	}
+}
